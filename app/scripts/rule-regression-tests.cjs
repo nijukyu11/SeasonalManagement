@@ -5,6 +5,15 @@ const ts = require('typescript');
 
 const root = path.resolve(__dirname, '..');
 const tempDir = path.join(root, '.tmp-rule-tests');
+const readFileSync = fs.readFileSync.bind(fs);
+
+fs.readFileSync = function readTextFileSyncWithNormalizedNewlines(filePath, options) {
+  const content = readFileSync(filePath, options);
+  const encoding = typeof options === 'string' ? options : options?.encoding;
+  return typeof content === 'string' && encoding?.toLowerCase().replace('-', '') === 'utf8'
+    ? content.replace(/\r\n/g, '\n')
+    : content;
+};
 
 function compileFixtureModules() {
   fs.rmSync(tempDir, { recursive: true, force: true });
