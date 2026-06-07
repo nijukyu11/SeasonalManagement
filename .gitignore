@@ -1,0 +1,17 @@
+app/updater-private.key
+app/updater-private.key.pub
+app/src-tauri/target/
+app/node_modules/
+app/.next/
+app/out/
+.gitnexus/
+_backups/
+_codex_backups/
+backup_ui_refactor/
+supabase/.temp/
+firebase-debug.log
+*.log
+/*.xlsx
+/*.xls
+/*.xlsm
+/*.png

@@ -1,0 +1,31 @@
+[package]
+name = "seasonal-management"
+version = "0.1.0"
+description = "Seasonal Management native desktop shell"
+authors = ["Seasonal Management"]
+edition = "2021"
+
+[lib]
+name = "seasonal_management_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+base64 = "0.22"
+dirs = "6"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-process = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+tauri-plugin-updater = "2"
+tokio = { version = "1", features = ["sync", "time"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,335 @@
+import type { SyncResult } from './seasonSync';
+
+export const AUTO_SYNC_DEBOUNCE_MS = 3000;
+export const AUTO_SYNC_IDLE_TIMEOUT_MS = 1000;
+export const AUTO_SYNC_RETRY_DELAYS_MS = [] as const;
+
+export type AutoSyncMode = 'auto' | 'manual';
+
+export type SeasonAutoSyncStatus =
+  | 'synced'
+  | 'dirty'
+  | 'scheduled'
+  | 'syncing'
+  | 'live'
+  | 'catching_up'
+  | 'needs_review'
+  | 'offline'
+  | 'conflict'
+  | 'failed';
+
+export interface SeasonAutoSyncState {
+  status: SeasonAutoSyncStatus;
+  pendingCount: number | null;
+  lastLocalChangeAt: number | null;
+  message: string | null;
+  progress: string | null;
+  mode: AutoSyncMode | null;
+  retryAttempt: number;
+  conflictCount?: number;
+}
+
+export interface SeasonAutoSyncSummary {
+  pendingCount?: number | null;
+  lastLocalChangeAt?: number | null;
+  source?: string;
+}
+
+type TimeoutHandle = ReturnType<typeof setTimeout>;
+type IdleHandle = number;
+
+type IdleDeadlineCallback = () => void;
+
+interface SeasonAutoSyncRuntime {
+  setTimeout: (callback: () => void, delay: number) => TimeoutHandle;
+  clearTimeout: (handle: TimeoutHandle) => void;
+  requestIdleCallback?: (callback: IdleDeadlineCallback, options?: { timeout?: number }) => IdleHandle;
+  cancelIdleCallback?: (handle: IdleHandle) => void;
+  isOnline?: () => boolean;
+  getPendingCount: (seasonId: string) => Promise<number>;
+  getBlockedReason?: (seasonId: string) => string | null | Promise<string | null>;
+  prepareSync?: (seasonId: string, mode: AutoSyncMode, source: string | null) => Promise<void> | void;
+  run: (seasonId: string, mode: AutoSyncMode, source: string | null) => Promise<SyncResult>;
+  onState?: (seasonId: string, state: SeasonAutoSyncState) => void;
+}
+
+interface SeasonAutoSyncRecord {
+  state: SeasonAutoSyncState;
+  timeoutHandle: TimeoutHandle | null;
+  idleHandle: IdleHandle | null;
+  running: boolean;
+  queued: boolean;
+  source: string | null;
+}
+
+export function createInitialSeasonAutoSyncState(): SeasonAutoSyncState {
+  return {
+    status: 'synced',
+    pendingCount: null,
+    lastLocalChangeAt: null,
+    message: null,
+    progress: null,
+    mode: null,
+    retryAttempt: 0,
+  };
+}
+
+export function getAutoSyncRetryDelayMs(retryAttempt: number): number | null {
+  void retryAttempt;
+  return null;
+}
+
+export function isTransientSyncFailure(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return [
+    'failed to fetch',
+    'network',
+    'timeout',
+    'timed out',
+    'offline',
+    'temporarily',
+    'connection',
+    'aborted',
+    'rate limit',
+  ].some((needle) => normalized.includes(needle));
+}
+
+export class SeasonAutoSyncScheduler {
+  private readonly records = new Map<string, SeasonAutoSyncRecord>();
+  private readonly runtime: SeasonAutoSyncRuntime;
+
+  constructor(runtime: SeasonAutoSyncRuntime) {
+    this.runtime = runtime;
+  }
+
+  notifyLocalChange(seasonId: string, summary: SeasonAutoSyncSummary = {}): void {
+    const record = this.getRecord(seasonId);
+    record.source = summary.source ?? record.source;
+    this.cancelScheduled(record);
+    const pendingCount = summary.pendingCount ?? record.state.pendingCount ?? 1;
+    const hasPending = (pendingCount ?? 0) > 0;
+    this.updateState(seasonId, {
+      status: hasPending ? (this.isOnline() ? 'dirty' : 'offline') : 'synced',
+      pendingCount,
+      lastLocalChangeAt: summary.lastLocalChangeAt ?? record.state.lastLocalChangeAt,
+      message: summary.pendingCount === 0 ? null : 'Unsynced local changes. Use Save to push them to the server.',
+      progress: null,
+      mode: null,
+    });
+
+    if (!hasPending) {
+      this.updateState(seasonId, { retryAttempt: 0 });
+      return;
+    }
+
+    if (!this.isOnline()) {
+      this.updateState(seasonId, {
+        status: 'offline',
+        message: 'Offline. Use Save when the connection returns.',
+      });
+    }
+  }
+
+  notifyGuardChanged(seasonId: string): void {
+    const record = this.getRecord(seasonId);
+    if (!record.state.pendingCount) return;
+    this.updateState(seasonId, {
+      status: this.isOnline() ? 'dirty' : 'offline',
+      message: this.isOnline()
+        ? 'Unsynced local changes. Use Save to push them to the server.'
+        : 'Offline. Use Save when the connection returns.',
+      mode: null,
+    });
+  }
+
+  notifyOnline(): void {
+    for (const [seasonId, record] of this.records) {
+      if (!record.state.pendingCount || record.state.status === 'conflict') continue;
+      this.updateState(seasonId, {
+        status: this.isOnline() ? 'dirty' : 'offline',
+        message: this.isOnline()
+          ? 'Unsynced local changes. Use Save to push them to the server.'
+          : 'Offline. Use Save when the connection returns.',
+        mode: null,
+      });
+    }
+  }
+
+  async syncNow(seasonId: string, source: string | null = null): Promise<SyncResult> {
+    const record = this.getRecord(seasonId);
+    record.source = source ?? record.source;
+    this.cancelScheduled(record);
+    return this.runSeason(seasonId, 'manual');
+  }
+
+  setProgress(seasonId: string, progress: string | null): void {
+    this.updateState(seasonId, { progress });
+  }
+
+  getState(seasonId: string): SeasonAutoSyncState {
+    return this.getRecord(seasonId).state;
+  }
+
+  private getRecord(seasonId: string): SeasonAutoSyncRecord {
+    const existing = this.records.get(seasonId);
+    if (existing) return existing;
+    const record: SeasonAutoSyncRecord = {
+      state: createInitialSeasonAutoSyncState(),
+      timeoutHandle: null,
+      idleHandle: null,
+      running: false,
+      queued: false,
+      source: null,
+    };
+    this.records.set(seasonId, record);
+    return record;
+  }
+
+  private updateState(seasonId: string, patch: Partial<SeasonAutoSyncState>): void {
+    const record = this.getRecord(seasonId);
+    record.state = { ...record.state, ...patch };
+    this.runtime.onState?.(seasonId, record.state);
+  }
+
+  private isOnline(): boolean {
+    return this.runtime.isOnline?.() ?? true;
+  }
+
+  private cancelScheduled(record: SeasonAutoSyncRecord): void {
+    if (record.timeoutHandle != null) {
+      this.runtime.clearTimeout(record.timeoutHandle);
+      record.timeoutHandle = null;
+    }
+    if (record.idleHandle != null) {
+      this.runtime.cancelIdleCallback?.(record.idleHandle);
+      record.idleHandle = null;
+    }
+  }
+
+  private async runSeason(seasonId: string, mode: AutoSyncMode): Promise<SyncResult> {
+    const record = this.getRecord(seasonId);
+    if (record.running) {
+      record.queued = true;
+      return { status: 'failed', message: 'Sync already running.' };
+    }
+    if (!this.isOnline()) {
+      this.updateState(seasonId, {
+        status: 'offline',
+        message: 'Offline. Use Save when the connection returns.',
+        mode,
+      });
+      return { status: 'failed', message: 'Offline. Use Save when the connection returns.' };
+    }
+
+    const blockedReason = await this.runtime.getBlockedReason?.(seasonId);
+    if (blockedReason) {
+      this.updateState(seasonId, {
+        status: 'dirty',
+        message: blockedReason,
+        mode: null,
+      });
+      return { status: 'failed', message: blockedReason };
+    }
+
+    try {
+      await this.runtime.prepareSync?.(seasonId, mode, record.source);
+    } catch (err) {
+      const message = (err as Error).message;
+      this.handleFailure(seasonId, message);
+      return { status: 'failed', message };
+    }
+
+    const pendingCount = await this.runtime.getPendingCount(seasonId);
+    if (pendingCount <= 0) {
+      this.updateState(seasonId, {
+        status: 'synced',
+        pendingCount: 0,
+        lastLocalChangeAt: null,
+        message: null,
+        progress: null,
+        mode: null,
+        retryAttempt: 0,
+      });
+      return { status: 'synced', message: 'No local changes to save.' };
+    }
+
+    record.running = true;
+    record.queued = false;
+    this.updateState(seasonId, {
+      status: 'syncing',
+      pendingCount,
+      message: 'Saving',
+      progress: 'Preparing save',
+      mode,
+    });
+
+    try {
+      const result = await this.runtime.run(seasonId, mode, record.source);
+      if (result.status === 'conflict') {
+        this.updateState(seasonId, {
+          status: 'conflict',
+          message: result.message,
+          progress: null,
+          mode: null,
+        });
+        return result;
+      }
+
+      if (result.status === 'failed') {
+        this.handleFailure(seasonId, result.message);
+        return result;
+      }
+
+      const nextPendingCount = await this.runtime.getPendingCount(seasonId);
+      if ((result.reviewCount ?? 0) > 0) {
+        this.updateState(seasonId, {
+          status: 'needs_review',
+          pendingCount: nextPendingCount,
+          message: result.message,
+          progress: null,
+          mode: null,
+          retryAttempt: 0,
+          conflictCount: result.reviewCount,
+        });
+        return result;
+      }
+      this.updateState(seasonId, {
+        status: nextPendingCount > 0 ? 'dirty' : 'synced',
+        pendingCount: nextPendingCount,
+        lastLocalChangeAt: nextPendingCount > 0 ? record.state.lastLocalChangeAt : null,
+        message: nextPendingCount > 0 ? 'New local changes are waiting for the next save.' : null,
+        progress: null,
+        mode: null,
+        retryAttempt: 0,
+      });
+      return result;
+    } catch (err) {
+      const message = (err as Error).message;
+      this.handleFailure(seasonId, message);
+      return { status: 'failed', message };
+    } finally {
+      record.running = false;
+      if (record.queued && record.state.status !== 'conflict') {
+        record.queued = false;
+        const pendingCount = await this.runtime.getPendingCount(seasonId).catch(() => record.state.pendingCount ?? 0);
+        if (pendingCount > 0) {
+          this.updateState(seasonId, {
+            status: 'dirty',
+            pendingCount,
+            message: 'Unsynced local changes. Use Save to push them to the server.',
+            mode: null,
+          });
+        }
+      }
+    }
+  }
+
+  private handleFailure(seasonId: string, message: string): void {
+    this.updateState(seasonId, {
+      status: 'failed',
+      message,
+      progress: null,
+      mode: null,
+    });
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "sourceRows",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "rowIndex", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

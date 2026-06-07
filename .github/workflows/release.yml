@@ -1,0 +1,103 @@
+name: Release desktop app
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'app-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    name: Build and publish Windows x64
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        working-directory: app
+
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            app/ai-agent/requirements.txt
+            app/ai-agent/requirements-build.txt
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run updater tests
+        run: npm run test:updater
+
+      - name: Run rule regression tests
+        run: npm run test:rules
+
+      - name: Run Python agent tests
+        run: npm run python:agent:test
+
+      - name: Build signed Tauri bundle
+        run: npm run native:build
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content -Raw -LiteralPath "src-tauri/tauri.conf.json" | ConvertFrom-Json).version
+          $tag = if ($env:GITHUB_REF_NAME -like "app-v*") { $env:GITHUB_REF_NAME } else { "app-v$version" }
+          $nsisDir = Join-Path "src-tauri" "target/release/bundle/nsis"
+          $installer = Get-ChildItem -LiteralPath $nsisDir -Filter "*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) { throw "No NSIS installer found in $nsisDir" }
+          $signaturePath = "$($installer.FullName).sig"
+          if (-not (Test-Path -LiteralPath $signaturePath)) { throw "No updater signature found: $signaturePath" }
+          $signature = (Get-Content -Raw -LiteralPath $signaturePath).Trim()
+          $assetName = $installer.Name
+          $assetUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$tag/$assetName"
+          $latest = [ordered]@{
+            version = $version
+            notes = "Seasonal Management $version"
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = $signature
+                url = $assetUrl
+              }
+            }
+          }
+          $latestPath = Join-Path $PWD "latest.json"
+          $latest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $latestPath -Encoding UTF8
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --title "Seasonal Management $version" --notes "Seasonal Management $version" --latest
+          }
+          gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber $installer.FullName $signaturePath $latestPath

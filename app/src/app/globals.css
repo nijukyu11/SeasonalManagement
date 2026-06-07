@@ -1,0 +1,171 @@
+@import "tailwindcss";
+@config "../../tailwind.config.ts";
+
+@layer base {
+  :root {
+    --inverse-surface: #2f3034;
+    --outline-variant: #c3c6d0;
+    --on-tertiary: #ffffff;
+    --on-secondary-fixed-variant: #3c475a;
+    --primary: #0e3b69;
+    --on-surface-variant: #43474f;
+    --surface: #f9f9fd;
+    --surface-container-highest: #e2e2e7;
+    --on-error: #ffffff;
+    --surface-container: #eeedf2;
+    --error-container: #ffdad6;
+    --on-secondary-fixed: #111c2c;
+    --primary-fixed: #d4e3ff;
+    --tertiary-fixed-dim: #f0be6e;
+    --on-background: #1a1c1f;
+    --inverse-on-surface: #f1f0f5;
+    --primary-container: #2c5282;
+    --on-primary-fixed: #001c3a;
+    --on-primary-container: #a2c6fd;
+    --on-tertiary-fixed-variant: #604100;
+    --inverse-primary: #a5c8ff;
+    --secondary-fixed-dim: #bcc7dd;
+    --surface-tint: #3b6090;
+    --primary-fixed-dim: #a5c8ff;
+    --on-primary: #ffffff;
+    --surface-container-low: #f4f3f8;
+    --tertiary-container: #6d4a00;
+    --surface-container-high: #e8e8ec;
+    --on-error-container: #93000a;
+    --secondary: #545f72;
+    --on-tertiary-container: #edbc6c;
+    --background: #f9f9fd;
+    --on-secondary-container: #586377;
+    --outline: #737780;
+    --error: #ba1a1a;
+    --secondary-container: #d5e0f7;
+    --surface-container-lowest: #ffffff;
+    --tertiary-fixed: #ffdead;
+    --surface-dim: #dad9de;
+    --on-surface: #1a1c1f;
+    --on-tertiary-fixed: #281900;
+    --secondary-fixed: #d8e3fa;
+    --surface-variant: #e2e2e7;
+    --surface-bright: #f9f9fd;
+    --on-secondary: #ffffff;
+    --tertiary: #4f3500;
+    --on-primary-fixed-variant: #204877;
+  }
+
+  .dark {
+    --inverse-surface: #f1f0f5;
+    --outline-variant: #43474f;
+    --on-tertiary: #000000;
+    --on-secondary-fixed-variant: #bcc7dd;
+    --primary: #3b82f6;
+    --on-surface-variant: #94a3b8;
+    --surface: #0f172a;
+    --surface-container-highest: #475569;
+    --on-error: #000000;
+    --surface-container: #1e293b;
+    --error-container: #ba1a1a;
+    --on-secondary-fixed: #d8e3fa;
+    --primary-fixed: #1d4ed8;
+    --tertiary-fixed-dim: #ffdead;
+    --on-background: #f8fafc;
+    --inverse-on-surface: #1a1c1f;
+    --primary-container: #1d4ed8;
+    --on-primary-fixed: #dbeafe;
+    --on-primary-container: #dbeafe;
+    --on-tertiary-fixed-variant: #ffdead;
+    --inverse-primary: #0e3b69;
+    --secondary-fixed-dim: #d8e3fa;
+    --surface-tint: #3b82f6;
+    --primary-fixed-dim: #1d4ed8;
+    --on-primary: #ffffff;
+    --surface-container-low: #1e293b;
+    --tertiary-container: #854d0e;
+    --surface-container-high: #334155;
+    --on-error-container: #ffdad6;
+    --secondary: #64748b;
+    --on-tertiary-container: #fef9c3;
+    --background: #0f172a;
+    --on-secondary-container: #f1f5f9;
+    --outline: #64748b;
+    --error: #ffb4ab;
+    --secondary-container: #334155;
+    --surface-container-lowest: #020617;
+    --tertiary-fixed: #854d0e;
+    --surface-dim: #0f172a;
+    --on-surface: #f8fafc;
+    --on-tertiary-fixed: #ffdead;
+    --secondary-fixed: #334155;
+    --surface-variant: #334155;
+    --surface-bright: #1e293b;
+    --on-secondary: #ffffff;
+    --tertiary: #eab308;
+    --on-primary-fixed-variant: #dbeafe;
+  }
+
+  body {
+    @apply bg-background text-on-background font-body-base antialiased;
+  }
+}
+
+/* Material Symbols config */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+}
+
+.app-route-cache-root {
+  position: relative;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.app-route-cache-panel {
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.app-route-cache-panel[data-route-cache-active="false"] {
+  position: absolute;
+  inset: 0;
+  display: none;
+  pointer-events: none;
+  user-select: none;
+  visibility: hidden;
+}
+
+.app-shell-content aside {
+  display: none !important;
+}
+
+.app-shell-content .ml-64 {
+  margin-left: 0 !important;
+}
+
+.operator-auth-screen {
+  box-sizing: border-box;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow: auto;
+}
+
+.operator-auth-card {
+  box-sizing: border-box;
+  width: min(384px, calc(100vw - 48px));
+  max-width: 384px;
+}
+
+.operator-auth-card-wide {
+  box-sizing: border-box;
+  width: min(448px, calc(100vw - 48px));
+  max-width: 448px;
+}
+
+.operator-auth-control {
+  box-sizing: border-box;
+  width: 100%;
+}

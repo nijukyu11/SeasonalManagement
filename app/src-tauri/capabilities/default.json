@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Allow the main app window to use the Tauri core APIs needed for native close cleanup.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-destroy",
+    "process:default",
+    "sql:default",
+    "sql:allow-execute",
+    "updater:default"
+  ]
+}

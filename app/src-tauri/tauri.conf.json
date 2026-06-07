@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SeasonalManagement",
+  "version": "0.1.0",
+  "identifier": "com.seasonalmanagement.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run python:agent:bundle && npm run build",
+    "devUrl": "http://localhost:3000",
+    "frontendDist": "../out"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Seasonal Management",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "resizable": true,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI2RUMyNkZENTMwNDg2QkIKUldTN2hnUlQvU2JzdHNXOC9oVmJ3WitGaGxOWkFYTy8xNDBLREN4UzFobEpwYWhlNVc5L0p4dVUK",
+      "endpoints": [
+        "https://github.com/nijukyu11/SeasonalManagement/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    },
+    "sql": {
+      "preload": [
+        "sqlite:seasonal-management-local.db"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "createUpdaterArtifacts": true,
+    "externalBin": [
+      "binaries/dashboard-ai-agent"
+    ],
+    "icon": []
+  }
+}
