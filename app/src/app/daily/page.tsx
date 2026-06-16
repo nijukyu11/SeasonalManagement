@@ -549,6 +549,7 @@ function DailyScheduleContent() {
           return;
         }
 
+        setSeason(targetSeason);
         setLoadProgress(buildLoadProgress('Checking local season baseline', 30, targetSeason.seasonCode));
         await ensureNativeSeasonBaseline(targetSeason);
         if (cancelled) return;
@@ -567,7 +568,6 @@ function DailyScheduleContent() {
           80,
           `${result.records.length} records`
         ));
-        setSeason(targetSeason);
         applyDailyNativeState(targetSeason.id, result.records, nextModifications, result.syncMeta, {
           replaceWindow: true,
           season: targetSeason,

@@ -624,6 +624,7 @@ function GateAllocationContent() {
           router.replace(`/gate?season=${targetSeason.id}`);
           return;
         }
+        setSeason(targetSeason);
         setLoadProgress(buildLoadProgress('Checking local season baseline', 30, targetSeason.seasonCode));
         await ensureNativeSeasonBaseline(targetSeason);
         if (cancelled) return;
@@ -643,7 +644,6 @@ function GateAllocationContent() {
           80,
           `${result.records.length} records`
         ));
-        setSeason(targetSeason);
         setFlightRecords(result.records);
         replaceGateModifications(nextModifications);
         patchCachedSeasonData(targetSeason.id, {

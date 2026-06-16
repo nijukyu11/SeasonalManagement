@@ -1218,6 +1218,7 @@ function CheckInAllocationContent() {
           return;
         }
 
+        setSeason(targetSeason);
         setLoadProgress(buildLoadProgress('Checking local season baseline', 30, targetSeason.seasonCode));
         await ensureNativeSeasonBaseline(targetSeason);
         if (cancelled) return;
@@ -1237,7 +1238,6 @@ function CheckInAllocationContent() {
           80,
           `${result.records.length} records`
         ));
-        setSeason(targetSeason);
         setFlightRecords(result.records);
         replaceCheckInModifications(nextModifications);
         setSyncSummary({

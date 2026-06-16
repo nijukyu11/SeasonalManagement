@@ -9579,6 +9579,17 @@ async function run() {
       [checkInPageSource, gatePageSource, detailedPageSource].every((source) => source.includes('if (!isRouteActive) return undefined;')),
     'Cached module pages must read their own cached search params and disable global listeners while inactive'
   );
+  const assertSeasonSelectedBeforeBaseline = (source, routeName) => {
+    const seasonIndex = source.indexOf('setSeason(targetSeason);');
+    const baselineIndex = source.indexOf('await ensureNativeSeasonBaseline(targetSeason);');
+    assert(
+      seasonIndex >= 0 && baselineIndex >= 0 && seasonIndex < baselineIndex,
+      `${routeName} must set the selected season before native baseline checks so Save controls stay visible while loading`
+    );
+  };
+  assertSeasonSelectedBeforeBaseline(dailyPageSource, 'Daily Schedule');
+  assertSeasonSelectedBeforeBaseline(checkInPageSource, 'Check-in Allocation');
+  assertSeasonSelectedBeforeBaseline(gatePageSource, 'Gate Allocation');
   assert(
     sessionStateHookSource.includes('sessionStorage.getItem(key)') &&
       sessionStateHookSource.includes('sessionStorage.setItem(key, JSON.stringify(value))') &&
