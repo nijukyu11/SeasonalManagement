@@ -8,7 +8,7 @@ use seasonal_management_lib::native_catchup::{
     import_season_snapshot_on_connection, merge_season_snapshot_on_connection,
     query_allocation_window_on_connection,
     query_schedule_window_on_connection, query_season_freshness_on_connection,
-    reconcile_flight_record_manifest_on_connection,
+    query_sync_summary_on_connection, reconcile_flight_record_manifest_on_connection,
     resolve_season_conflict_on_connection,
     should_request_page_fetch_retry, should_request_token_refresh,
     validate_pending_sync_result_coverage,
@@ -395,6 +395,48 @@ fn stale_merge_snapshot_input(data_version: i64, seq: i64, gate: i64, stand: i64
     }
 }
 
+fn stale_merge_modification_snapshot_input(field: &str, value: serde_json::Value, version: i64) -> MergeSeasonSnapshotInput {
+    MergeSeasonSnapshotInput {
+        season: json!({
+            "id": "season-1",
+            "seasonCode": "S26",
+            "effectiveStart": "2026-03-28",
+            "effectiveEnd": "2026-10-25",
+            "dataVersion": 5
+        }),
+        source_rows: vec![],
+        records: vec![json!({
+            "id": "leg-1",
+            "date": "2026-05-26",
+            "operationalDate": "2026-05-26",
+            "type": "departure",
+            "sourceSide": "dep",
+            "status": "scheduled",
+            "gate": 1,
+            "stand": 10,
+            "schedule": "10:00"
+        })],
+        modifications: vec![json!({
+            "legId": "leg-1",
+            "action": "modified",
+            field: value
+        })],
+        mod_history: vec![],
+        server_event_high_water: version,
+        entity_versions: json!({
+            "flightRecord:leg-1": {
+                "gate": 1,
+                "stand": 1,
+                "schedule": 1
+            },
+            "modification:leg-1": {
+                field: version
+            }
+        }),
+        client_id: Some("client-1".to_string()),
+    }
+}
+
 fn seed_imported_snapshot(conn: &Connection) {
     import_season_snapshot_on_connection(
         conn,
@@ -433,6 +475,51 @@ fn seed_imported_snapshot(conn: &Connection) {
     .expect("seed imported snapshot");
 }
 
+fn seed_imported_snapshot_with_modification(conn: &Connection, field: &str, value: serde_json::Value) {
+    import_season_snapshot_on_connection(
+        conn,
+        &ImportSeasonSnapshotInput {
+            season: json!({
+                "id": "season-1",
+                "seasonCode": "S26",
+                "effectiveStart": "2026-03-28",
+                "effectiveEnd": "2026-10-25",
+                "dataVersion": 1
+            }),
+            source_rows: vec![],
+            records: vec![json!({
+                "id": "leg-1",
+                "date": "2026-05-26",
+                "operationalDate": "2026-05-26",
+                "type": "departure",
+                "sourceSide": "dep",
+                "status": "scheduled",
+                "gate": 1,
+                "stand": 10,
+                "schedule": "10:00"
+            })],
+            modifications: vec![json!({
+                "legId": "leg-1",
+                "action": "modified",
+                field: value
+            })],
+            mod_history: vec![],
+            server_event_high_water: 1,
+            entity_versions: json!({
+                "flightRecord:leg-1": {
+                    "gate": 1,
+                    "stand": 1,
+                    "schedule": 1
+                },
+                "modification:leg-1": {
+                    field: 1
+                }
+            }),
+        },
+    )
+    .expect("seed imported snapshot with modification");
+}
+
 fn make_local_gate_edit(conn: &Connection, gate: i64) {
     apply_schedule_mutation_to_connection(
         conn,
@@ -458,6 +545,22 @@ fn make_local_gate_edit(conn: &Connection, gate: i64) {
     .expect("local gate edit");
 }
 
+fn make_local_modification_edit(conn: &Connection, field: &str, value: serde_json::Value) {
+    apply_local_modification_batch_delta_to_connection(
+        conn,
+        &ApplyLocalModificationBatchDeltaInput {
+            season_id: "season-1".to_string(),
+            mods: vec![json!({
+                "legId": "leg-1",
+                "action": "modified",
+                field: value
+            })],
+            history: None,
+        },
+    )
+    .expect("local modification edit");
+}
+
 fn current_record_payload(conn: &Connection) -> serde_json::Value {
     let payload: String = conn
         .query_row(
@@ -466,6 +569,17 @@ fn current_record_payload(conn: &Connection) -> serde_json::Value {
             |row| row.get(0),
         )
         .expect("current record payload");
+    serde_json::from_str(&payload).expect("json payload")
+}
+
+fn current_modification_payload(conn: &Connection) -> serde_json::Value {
+    let payload: String = conn
+        .query_row(
+            "SELECT payload_json FROM local_modifications WHERE season_id = ? AND leg_id = ? AND is_base = 0",
+            params!["season-1", "leg-1"],
+            |row| row.get(0),
+        )
+        .expect("current modification payload");
     serde_json::from_str(&payload).expect("json payload")
 }
 
@@ -584,6 +698,60 @@ fn dirty_stale_snapshot_merge_records_overlap_conflict_without_discarding_local_
 }
 
 #[test]
+fn dirty_stale_snapshot_merge_auto_accepts_remote_latest_allocation_modification_conflict() {
+    let conn = open_test_db();
+    configure_sqlite_connection(&conn).expect("configure sqlite");
+    ensure_native_schema(&conn).expect("native schema");
+    seed_imported_snapshot_with_modification(&conn, "gate", json!(2));
+    make_local_modification_edit(&conn, "gate", json!(4));
+
+    let result = merge_season_snapshot_on_connection(
+        &conn,
+        &stale_merge_modification_snapshot_input("gate", json!(8), 9),
+    )
+    .expect("merge dirty stale allocation modification conflict");
+    let current = current_modification_payload(&conn);
+    let pending_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM local_pending_ops WHERE season_id = ?",
+            params!["season-1"],
+            |row| row.get(0),
+        )
+        .expect("pending count");
+
+    assert_eq!(result.conflict_count, 0);
+    assert_eq!(result.auto_resolved_conflict_count, 1);
+    assert_eq!(result.auto_resolved_conflict_ids.len(), 1);
+    assert_eq!(pending_count, 0);
+    assert_eq!(result.sync_meta["pendingCount"], 0);
+    assert_eq!(result.sync_meta["syncStatus"], "synced");
+    assert_eq!(current["gate"], 8);
+}
+
+#[test]
+fn dirty_stale_snapshot_merge_keeps_structural_modification_conflict_for_review() {
+    let conn = open_test_db();
+    configure_sqlite_connection(&conn).expect("configure sqlite");
+    ensure_native_schema(&conn).expect("native schema");
+    seed_imported_snapshot_with_modification(&conn, "schedule", json!("10:00"));
+    make_local_modification_edit(&conn, "schedule", json!("10:20"));
+
+    let result = merge_season_snapshot_on_connection(
+        &conn,
+        &stale_merge_modification_snapshot_input("schedule", json!("10:30"), 9),
+    )
+    .expect("merge dirty stale structural modification conflict");
+    let current = current_modification_payload(&conn);
+
+    assert_eq!(result.auto_resolved_conflict_count, 0);
+    assert_eq!(result.conflict_count, 1);
+    assert_eq!(result.conflicts[0]["targetType"], "modification");
+    assert_eq!(result.conflicts[0]["targetId"], "leg-1");
+    assert_eq!(result.conflicts[0]["overlappingFields"][0], "schedule");
+    assert_eq!(current["schedule"], "10:20");
+}
+
+#[test]
 fn native_conflict_resolution_keep_mine_preserves_pending_local_change() {
     let conn = open_test_db();
     configure_sqlite_connection(&conn).expect("configure sqlite");
@@ -650,6 +818,191 @@ fn native_conflict_resolution_accept_remote_applies_remote_and_clears_target_pen
     assert_eq!(resolved.sync_meta["pendingCount"], 0);
     assert_eq!(current["gate"], 8);
     assert_eq!(current["stand"], 20);
+}
+
+fn seed_flight_record_conflict_for_record_history(
+    conn: &Connection,
+    history_id: &str,
+    record_changes: serde_json::Value,
+) -> String {
+    let conflict_id = "conflict-record-1".to_string();
+    let conflict_event = json!({
+        "eventId": "remote-record-1",
+        "seasonId": "season-1",
+        "clientId": "server",
+        "opId": "remote-record-op-1",
+        "serverSeq": 9,
+        "targetType": "flightRecord",
+        "targetId": "leg-1",
+        "changedFields": ["gate"],
+        "opPayload": {
+            "type": "flightRecord",
+            "record": {
+                "id": "leg-1",
+                "date": "2026-05-26",
+                "operationalDate": "2026-05-26",
+                "type": "departure",
+                "sourceSide": "DEP",
+                "status": "active",
+                "gate": 8,
+                "stand": 10,
+                "schedule": "10:00"
+            }
+        },
+        "createdAt": "2026-06-16T00:00:00Z"
+    });
+    let sync_meta = json!({
+        "seasonId": "season-1",
+        "baseServerVersion": 1,
+        "lastServerSeq": 8,
+        "localRevision": 1,
+        "pendingCount": 2,
+        "lastLocalChangeAt": 1_772_000_000_000_i64,
+        "syncStatus": "needs_review",
+        "conflicts": [{
+            "id": conflict_id,
+            "event": conflict_event,
+            "targetType": "flightRecord",
+            "targetId": "leg-1",
+            "overlappingFields": ["gate"]
+        }]
+    });
+    conn.execute(
+        "UPDATE local_sync_meta SET pending_count = ?, sync_status = ?, last_server_seq = ?, last_local_change_at = ?, payload_json = ? WHERE season_id = ?",
+        params![
+            2,
+            "needs_review",
+            8_i64,
+            1_772_000_000_000_i64,
+            sync_meta.to_string(),
+            "season-1"
+        ],
+    )
+    .expect("seed conflict sync meta");
+    conn.execute(
+        "INSERT INTO local_pending_ops (season_id, op_key, op_type, sort_order, payload_json) VALUES (?, ?, ?, ?, ?)",
+        params![
+            "season-1",
+            "flightRecord:leg-1",
+            "flightRecord",
+            0_i64,
+            json!({
+                "type": "flightRecord",
+                "record": {
+                    "id": "leg-1",
+                    "date": "2026-05-26",
+                    "operationalDate": "2026-05-26",
+                    "type": "departure",
+                    "sourceSide": "DEP",
+                    "status": "active",
+                    "gate": 4,
+                    "stand": 10,
+                    "schedule": "10:00"
+                }
+            }).to_string()
+        ],
+    )
+    .expect("seed flight record pending op");
+    conn.execute(
+        "INSERT INTO local_pending_ops (season_id, op_key, op_type, sort_order, payload_json) VALUES (?, ?, ?, ?, ?)",
+        params![
+            "season-1",
+            format!("modHistory:{history_id}"),
+            "modHistory",
+            1_i64,
+            json!({
+                "type": "modHistory",
+                "entry": {
+                    "id": history_id,
+                    "timestamp": 1_772_000_000_001_i64,
+                    "description": "Record history",
+                    "changes": [],
+                    "recordChanges": record_changes
+                }
+            }).to_string()
+        ],
+    )
+    .expect("seed mod history pending op");
+    conflict_id
+}
+
+#[test]
+fn accept_remote_record_conflict_drops_record_history_only_when_all_record_targets_match() {
+    let conn = open_test_db();
+    configure_sqlite_connection(&conn).expect("configure sqlite");
+    create_minimal_local_schema(&conn);
+    seed_flight(&conn);
+    let conflict_id = seed_flight_record_conflict_for_record_history(
+        &conn,
+        "history-record-only",
+        json!([{
+            "recordId": "leg-1",
+            "previousRecord": null,
+            "newRecord": { "id": "leg-1", "gate": 4 }
+        }]),
+    );
+
+    resolve_season_conflict_on_connection(
+        &conn,
+        &ResolveSeasonConflictInput {
+            season_id: "season-1".to_string(),
+            conflict_id,
+            resolution: "acceptRemote".to_string(),
+        },
+    )
+    .expect("accept remote record conflict");
+    let history_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM local_pending_ops WHERE season_id = ? AND op_type = 'modHistory'",
+            params!["season-1"],
+            |row| row.get(0),
+        )
+        .expect("history count");
+
+    assert_eq!(history_count, 0);
+}
+
+#[test]
+fn accept_remote_record_conflict_preserves_mixed_record_history_for_sibling_targets() {
+    let conn = open_test_db();
+    configure_sqlite_connection(&conn).expect("configure sqlite");
+    create_minimal_local_schema(&conn);
+    seed_flight(&conn);
+    let conflict_id = seed_flight_record_conflict_for_record_history(
+        &conn,
+        "history-mixed-records",
+        json!([
+            {
+                "recordId": "leg-1",
+                "previousRecord": null,
+                "newRecord": { "id": "leg-1", "gate": 4 }
+            },
+            {
+                "recordId": "leg-10",
+                "previousRecord": null,
+                "newRecord": { "id": "leg-10", "gate": 10 }
+            }
+        ]),
+    );
+
+    resolve_season_conflict_on_connection(
+        &conn,
+        &ResolveSeasonConflictInput {
+            season_id: "season-1".to_string(),
+            conflict_id,
+            resolution: "acceptRemote".to_string(),
+        },
+    )
+    .expect("accept remote record conflict");
+    let surviving_history: String = conn
+        .query_row(
+            "SELECT op_key FROM local_pending_ops WHERE season_id = ? AND op_type = 'modHistory'",
+            params!["season-1"],
+            |row| row.get(0),
+        )
+        .expect("mixed history should survive");
+
+    assert_eq!(surviving_history, "modHistory:history-mixed-records");
 }
 
 #[test]
@@ -1844,6 +2197,24 @@ fn native_local_modification_delta_writes_pending_rows_and_preserves_cursor() {
     assert_eq!(sync_meta["lastServerSeq"], 7);
     assert_eq!(stored_last_server_seq, 7);
     assert_eq!(snapshot_mod_count, 1);
+}
+
+#[test]
+fn native_sync_summary_reports_local_record_and_entity_version_counts() {
+    let conn = open_test_db();
+    configure_sqlite_connection(&conn).expect("configure sqlite");
+    create_minimal_local_schema(&conn);
+    seed_flight(&conn);
+    conn.execute(
+        "INSERT INTO local_entity_versions (season_id, target_type, target_id, server_version) VALUES (?, ?, ?, ?)",
+        params!["season-1", "flightRecord", "leg-1", 7_i64],
+    )
+    .expect("seed entity version");
+
+    let summary = query_sync_summary_on_connection(&conn, "season-1").expect("sync summary");
+
+    assert_eq!(summary.local_record_count, 1);
+    assert_eq!(summary.entity_version_count, 1);
 }
 
 #[test]

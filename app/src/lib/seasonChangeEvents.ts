@@ -53,9 +53,22 @@ export interface MergeRemoteSeasonEventResult {
   applied: boolean;
   conflict: boolean;
   skipped: boolean;
+  autoResolvedConflictCount?: number;
+  autoResolvedConflictIds?: string[];
 }
 
 const DELETE_FIELD = '__delete__';
+export const AUTO_REMOTE_WIN_MODIFICATION_FIELDS = [
+  'counter',
+  'checkInStart',
+  'checkInEnd',
+  'checkInAllocationMode',
+  'checkInCounterWindows',
+  'gate',
+  'stand',
+  'bhs',
+] as const;
+const AUTO_REMOTE_WIN_MODIFICATION_FIELD_SET = new Set<string>(AUTO_REMOTE_WIN_MODIFICATION_FIELDS);
 export const LOCAL_CLIENT_STORAGE_KEY = 'seasonal-management-sync-client-id';
 
 let memoryClientId: string | null = null;
@@ -229,6 +242,14 @@ function findOverlappingFields(localFields: string[], remoteFields: string[]): s
   }
   const remote = new Set(remoteFields);
   return localFields.filter((field) => remote.has(field));
+}
+
+export function isAutoResolvableRemoteLatestConflict(
+  event: Pick<SeasonChangeEvent, 'targetType' | 'changedFields'>
+): boolean {
+  return event.targetType === 'modification' &&
+    event.changedFields.length === 1 &&
+    AUTO_REMOTE_WIN_MODIFICATION_FIELD_SET.has(event.changedFields[0]);
 }
 
 function readPayloadEntity(event: SeasonChangeEvent): Record<string, unknown> | null {
@@ -498,6 +519,18 @@ export function mergeRemoteSeasonEvent(
   const overlappingFields = Array.from(new Set(overlap));
 
   if (!options.force && overlappingFields.length > 0) {
+    if (isAutoResolvableRemoteLatestConflict(event)) {
+      const conflictId = buildConflict(workspace, event, overlappingFields).id;
+      const next = applyEventToWorkspace(workspace, event, { force: true });
+      return {
+        workspace: next,
+        applied: true,
+        conflict: false,
+        skipped: false,
+        autoResolvedConflictCount: 1,
+        autoResolvedConflictIds: [conflictId],
+      };
+    }
     const conflict = buildConflict(workspace, event, overlappingFields);
     const existingConflicts = workspace.syncMeta.conflicts ?? [];
     const nextConflicts = existingConflicts.some((item) => item.id === conflict.id)
@@ -536,9 +569,14 @@ export function mergeRemoteSeasonEvents(
         applied: result.applied || merged.applied,
         conflict: result.conflict || merged.conflict,
         skipped: result.skipped && merged.skipped,
+        autoResolvedConflictCount: (result.autoResolvedConflictCount ?? 0) + (merged.autoResolvedConflictCount ?? 0),
+        autoResolvedConflictIds: [
+          ...(result.autoResolvedConflictIds ?? []),
+          ...(merged.autoResolvedConflictIds ?? []),
+        ],
       };
     },
-    { workspace, applied: false, conflict: false, skipped: true }
+    { workspace, applied: false, conflict: false, skipped: true, autoResolvedConflictCount: 0, autoResolvedConflictIds: [] }
   );
 }
 
@@ -621,6 +659,10 @@ export function mergeSeasonSnapshotIntoLocalWorkspace(
     });
     if (overlappingFields.length > 0) {
       const conflictEvent = eventWithSnapshotPayload(event, snapshotWorkspace, overlappingFields);
+      if (isAutoResolvableRemoteLatestConflict(conflictEvent)) {
+        mergedWorkspace = applyEventToWorkspace(mergedWorkspace, conflictEvent, { force: true });
+        continue;
+      }
       snapshotConflicts.push({
         id: `snapshot-conflict:${event.opId}:${overlappingFields.join(',')}`,
         event: conflictEvent,

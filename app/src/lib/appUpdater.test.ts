@@ -6,7 +6,9 @@ import {
   formatUpdateDate,
   getCurrentAppVersion,
   toDownloadProgress,
+  type AppUpdateDownloadState,
   type AppUpdaterCheckResult,
+  type TauriUpdateEvent,
 } from './appUpdater.ts';
 
 test('checkForAppUpdate reports unavailable outside native runtime', async () => {
@@ -51,7 +53,10 @@ test('checkForAppUpdate returns update metadata when a release is available', as
 });
 
 test('toDownloadProgress accumulates bytes and calculates percent after content length arrives', () => {
-  const first = toDownloadProgress({ downloadedBytes: 0, contentLength: null }, { event: 'Started', data: { contentLength: 100 } });
+  const first = toDownloadProgress(
+    { downloadedBytes: 0, contentLength: null, percent: null } satisfies AppUpdateDownloadState,
+    { event: 'Started', data: { contentLength: 100 } }
+  );
   const second = toDownloadProgress(first, { event: 'Progress', data: { chunkLength: 40 } });
   const third = toDownloadProgress(second, { event: 'Progress', data: { chunkLength: 15 } });
 
@@ -67,7 +72,7 @@ test('createAppUpdaterClient downloads, marks install complete, and relaunches',
   const update = {
     version: '0.2.0',
     currentVersion: '0.1.0',
-    downloadAndInstall: async (onEvent?: (event: unknown) => void) => {
+    downloadAndInstall: async (onEvent?: (event: TauriUpdateEvent) => void) => {
       events.push('download');
       onEvent?.({ event: 'Started', data: { contentLength: 5 } });
       onEvent?.({ event: 'Progress', data: { chunkLength: 5 } });

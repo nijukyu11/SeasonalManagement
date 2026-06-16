@@ -1,6 +1,6 @@
 # SeasonalManagement Architecture
 
-Last updated: 2026-05-28
+Last updated: 2026-06-16
 
 ## Purpose
 
@@ -94,6 +94,15 @@ Fetch/catch-up is separate from Save:
 
 Full workspace snapshot replacement is allowed for import, reset, repair, and guarded baseline seeding. Routine catch-up and normal edits must stay row-level/delta based.
 
+Current sync hardening boundaries:
+
+- `query_sync_summary` is the lightweight sync state contract. It includes pending/conflict counts, cursor fields, `localRevision`, `localRecordCount`, and `entityVersionCount`.
+- Fresh local workspace detection is based on native counts, not `lastServerSeq` alone. When local records, entity versions, pending ops, and conflicts are all zero, catch-up starts from cursor `0`.
+- Conflict cleanup in Rust structurally parses pending `modHistory` payloads and preserves mixed/cross-target history. Substring cleanup against `payload_json` is not safe for ids such as `leg-1` and `leg-10`.
+- JS allocation delta commits use one queued read-modify-write transaction through `replaceLocalSeasonSqlPendingStateFromDelta`; hot-path UI code must not split the delta read and pending write into separate queue slots.
+- Gate sync status is owned by `SeasonSyncProvider` and seeded from native summary. The Gate page must not maintain a parallel debounced summary state.
+- Gate optimistic allocation reset uses `SeasonAutoSyncState.localRevision` as the durability signal.
+
 ## Route Responsibilities
 
 | Route | Role | Native data access |
@@ -164,11 +173,12 @@ Until GitNexus is rebuilt cleanly, use it for broad historical topology and use 
 For architecture-sensitive changes, use:
 
 ```text
-rtk npm run test:rules
-rtk npm run test:notifications
-rtk npx tsc --noEmit --pretty false
-rtk npm run build
-rtk npm run native:build
+npm run test:rules
+npm run test:notifications
+npm run test:updater
+cargo test --manifest-path app/src-tauri/Cargo.toml --test native_catchup
+npx tsc --noEmit --pretty false
+npm run build
 ```
 
-For documentation-only changes, at minimum verify the edited files exist and contain the expected current sections.
+`npm run native:build` is a release/integration gate for packaging changes or final release validation. Do not run it during routine implementation unless explicitly requested. For documentation-only changes, at minimum verify the edited files exist and contain the expected current sections.

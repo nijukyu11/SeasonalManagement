@@ -16,9 +16,9 @@ import {
   getLocalSeasonSqlDatabase,
   listLocalSeasonSqlPendingSummaries,
   loadLocalSeasonSqlWorkspace,
-  readLocalSeasonSqlDeltaState,
   readLocalSeasonSqlSyncMeta,
   replaceLocalSeasonSqlPendingState,
+  replaceLocalSeasonSqlPendingStateFromDelta,
   saveLocalSeasonSqlWorkspace,
   setLocalSeasonSqlSyncMeta,
   type LocalSeasonSqlDatabase,
@@ -615,87 +615,93 @@ export async function applyLocalModificationBatchDelta(
   }
 
   const sqlDb = await getSqlDbForLocalStore();
-    const changedAt = Date.now();
-    const affectedLegIds = new Set(mods.map((mod) => mod.legId));
-    const state = await readLocalSeasonSqlDeltaState(sqlDb, seasonId, affectedLegIds);
-    if (!state) throw new Error(`Local season workspace ${seasonId} not found`);
+  const changedAt = Date.now();
+  const affectedLegIds = new Set(mods.map((mod) => mod.legId));
+  let nextSyncMeta: LocalSyncMeta | null = null;
+  await replaceLocalSeasonSqlPendingStateFromDelta(
+    sqlDb,
+    `modification-delta:${seasonId}`,
+    seasonId,
+    affectedLegIds,
+    async (state) => {
+      const pendingOps = state.pendingOps.map(hydratePendingOp);
+      const affectedModifications = deserializeModificationEntries(state.modificationEntries);
+      const affectedBaseMods = deserializeModificationEntries(state.baseModificationEntries);
+      const baseRecordsById = new Map(
+        state.baseRecords.map((record) => [record.id, hydrateFlightRecordFromPersistence(record)])
+      );
 
-    const pendingOps = state.pendingOps.map(hydratePendingOp);
-    const affectedModifications = deserializeModificationEntries(state.modificationEntries);
-    const affectedBaseMods = deserializeModificationEntries(state.baseModificationEntries);
-    const baseRecordsById = new Map(
-      state.baseRecords.map((record) => [record.id, hydrateFlightRecordFromPersistence(record)])
-    );
-
-    for (const op of pendingOps) {
-      if (op.type === 'modification' && affectedLegIds.has(op.mod.legId)) affectedModifications.set(op.mod.legId, op.mod);
-      if (op.type === 'modificationDelete' && affectedLegIds.has(op.legId)) affectedModifications.delete(op.legId);
-    }
-
-    const retainedBusinessOps: LocalPendingOp[] = [];
-    const retainedHistoryOps: LocalPendingOp[] = [];
-    for (const op of pendingOps) {
-      if (op.type === 'modHistory') {
-        retainedHistoryOps.push(op);
-      } else if (op.type === 'modification') {
-        if (!affectedLegIds.has(op.mod.legId)) retainedBusinessOps.push(op);
-      } else if (op.type === 'modificationDelete') {
-        if (!affectedLegIds.has(op.legId)) retainedBusinessOps.push(op);
-      } else {
-        retainedBusinessOps.push(op);
+      for (const op of pendingOps) {
+        if (op.type === 'modification' && affectedLegIds.has(op.mod.legId)) affectedModifications.set(op.mod.legId, op.mod);
+        if (op.type === 'modificationDelete' && affectedLegIds.has(op.legId)) affectedModifications.delete(op.legId);
       }
-    }
 
-    const nextModificationOps: LocalPendingOp[] = [];
-    const historyChanges: ModHistoryEntry['changes'] = [];
-    for (const mod of mods) {
-      const previousMod = affectedModifications.get(mod.legId) ?? null;
-      const nextMod: FlightModification = {
-        ...(previousMod ?? {}),
-        ...mod,
-        legId: mod.legId,
-        action: mod.action,
+      const retainedBusinessOps: LocalPendingOp[] = [];
+      const retainedHistoryOps: LocalPendingOp[] = [];
+      for (const op of pendingOps) {
+        if (op.type === 'modHistory') {
+          retainedHistoryOps.push(op);
+        } else if (op.type === 'modification') {
+          if (!affectedLegIds.has(op.mod.legId)) retainedBusinessOps.push(op);
+        } else if (op.type === 'modificationDelete') {
+          if (!affectedLegIds.has(op.legId)) retainedBusinessOps.push(op);
+        } else {
+          retainedBusinessOps.push(op);
+        }
+      }
+
+      const nextModificationOps: LocalPendingOp[] = [];
+      const historyChanges: ModHistoryEntry['changes'] = [];
+      for (const mod of mods) {
+        const previousMod = affectedModifications.get(mod.legId) ?? null;
+        const nextMod: FlightModification = {
+          ...(previousMod ?? {}),
+          ...mod,
+          legId: mod.legId,
+          action: mod.action,
+        };
+        historyChanges.push({
+          legId: mod.legId,
+          previousMod,
+          newMod: nextMod,
+        });
+
+        const baseMod = affectedBaseMods.get(mod.legId);
+        if (!baseMod && isNoOpModificationAgainstBaseRecord(nextMod, baseRecordsById.get(mod.legId))) {
+          affectedModifications.delete(mod.legId);
+          continue;
+        }
+        affectedModifications.set(mod.legId, nextMod);
+        if (!baseMod || !isSameValue(nextMod, baseMod)) {
+          nextModificationOps.push({ type: 'modification', mod: nextMod });
+        }
+      }
+
+      const nextHistoryOps: LocalPendingOp[] = history
+        ? [{
+            type: 'modHistory',
+            entry: {
+              id: history.id,
+              timestamp: history.timestamp,
+              description: history.description,
+              changes: historyChanges,
+            },
+          }, ...retainedHistoryOps]
+        : retainedHistoryOps;
+      const businessOps = mergePendingOps([...retainedBusinessOps, ...nextModificationOps]);
+      const nextPendingOps = businessOps.some((op) => op.type !== 'modHistory')
+        ? mergePendingOps([...businessOps, ...nextHistoryOps])
+        : businessOps;
+      nextSyncMeta = buildNextSyncMeta(state.syncMeta, state.season, nextPendingOps.length, changedAt);
+      return {
+        ...state,
+        pendingOps: nextPendingOps.map(serializePendingOp),
+        syncMeta: nextSyncMeta,
       };
-      historyChanges.push({
-        legId: mod.legId,
-        previousMod,
-        newMod: nextMod,
-      });
-
-      const baseMod = affectedBaseMods.get(mod.legId);
-      if (!baseMod && isNoOpModificationAgainstBaseRecord(nextMod, baseRecordsById.get(mod.legId))) {
-        affectedModifications.delete(mod.legId);
-        continue;
-      }
-      affectedModifications.set(mod.legId, nextMod);
-      if (!baseMod || !isSameValue(nextMod, baseMod)) {
-        nextModificationOps.push({ type: 'modification', mod: nextMod });
-      }
     }
-
-    const nextHistoryOps: LocalPendingOp[] = history
-      ? [{
-          type: 'modHistory',
-          entry: {
-            id: history.id,
-            timestamp: history.timestamp,
-            description: history.description,
-            changes: historyChanges,
-          },
-        }, ...retainedHistoryOps]
-      : retainedHistoryOps;
-    const businessOps = mergePendingOps([...retainedBusinessOps, ...nextModificationOps]);
-    const nextPendingOps = businessOps.some((op) => op.type !== 'modHistory')
-      ? mergePendingOps([...businessOps, ...nextHistoryOps])
-      : businessOps;
-    const nextSyncMeta = buildNextSyncMeta(state.syncMeta, state.season, nextPendingOps.length, changedAt);
-    await replaceLocalSeasonSqlPendingState(
-      sqlDb,
-      seasonId,
-      nextPendingOps.map(serializePendingOp),
-      nextSyncMeta
-    );
-    return nextSyncMeta;
+  );
+  if (!nextSyncMeta) throw new Error(`Local season workspace ${seasonId} not found`);
+  return nextSyncMeta;
 }
 
 export async function applyLocalFlightRecordMutation(

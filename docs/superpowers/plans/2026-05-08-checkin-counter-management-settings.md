@@ -140,7 +140,7 @@ assert(
 Run:
 
 ```powershell
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
 ```
 
 Expected: FAIL because `checkInCounters`, `checkInCounterGroups`, and `checkInCounterLocks` are not hydrated or validated yet.
@@ -351,7 +351,7 @@ return {
 Run:
 
 ```powershell
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
 ```
 
 Expected: PASS for the new settings validation checks.
@@ -425,7 +425,7 @@ assert(
 Run:
 
 ```powershell
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
 ```
 
 Expected: FAIL because `checkInCounterSettings.ts` does not exist and helpers are not exported.
@@ -670,7 +670,7 @@ export function findCheckInLockConflict(
 Run:
 
 ```powershell
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
 ```
 
 Expected: PASS for counter parsing, resource metadata, BHS mapping, and lock detection.
@@ -773,7 +773,7 @@ assert(
 Run:
 
 ```powershell
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
 ```
 
 Expected: FAIL because `resources`, lock metadata, BHS writes, and lock blocking are not wired into `checkinAllocation.ts`.
@@ -956,7 +956,7 @@ This preserves current behavior in tests and callers that do not pass resources.
 Run:
 
 ```powershell
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
 ```
 
 Expected: PASS for configured roster, BHS writes, lock blocking, and lock-conflict bar metadata.
@@ -994,7 +994,7 @@ assert(
 Run:
 
 ```powershell
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
 ```
 
 Expected: FAIL because the `Check-in Counters` tab is missing.
@@ -1346,8 +1346,8 @@ Use compact table/list rows, checkboxes for assignment, datetime-local inputs fo
 Run:
 
 ```powershell
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npx eslint src/app/settings/page.tsx src/lib/settingsRules.ts src/lib/checkInCounterSettings.ts scripts/rule-regression-tests.cjs"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npx eslint src/app/settings/page.tsx src/lib/settingsRules.ts src/lib/checkInCounterSettings.ts scripts/rule-regression-tests.cjs"
 ```
 
 Expected: both commands exit 0.
@@ -1382,7 +1382,7 @@ assert(
 Run:
 
 ```powershell
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
 ```
 
 Expected: FAIL because `/checkin` does not expose the group toggle or pass resource metadata.
@@ -1510,8 +1510,8 @@ Render an icon:
 Run:
 
 ```powershell
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npx eslint src/app/checkin/page.tsx src/lib/checkinAllocation.ts src/lib/checkInCounterSettings.ts scripts/rule-regression-tests.cjs"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npx eslint src/app/checkin/page.tsx src/lib/checkinAllocation.ts src/lib/checkInCounterSettings.ts scripts/rule-regression-tests.cjs"
 ```
 
 Expected: both commands exit 0.
@@ -1540,10 +1540,10 @@ Add to `context.md` under `### Check-in Allocation`:
 Run:
 
 ```powershell
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npx eslint src/app/settings/page.tsx src/app/checkin/page.tsx src/lib/settingsRules.ts src/lib/checkInCounterSettings.ts src/lib/checkinAllocation.ts scripts/rule-regression-tests.cjs"
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npx tsc --noEmit --pretty false"
-rtk proxy powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run build"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run test:rules"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npx eslint src/app/settings/page.tsx src/app/checkin/page.tsx src/lib/settingsRules.ts src/lib/checkInCounterSettings.ts src/lib/checkinAllocation.ts scripts/rule-regression-tests.cjs"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npx tsc --noEmit --pretty false"
+powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\Users\tuan\Documents\SeasonalManagement\app'; npm run build"
 ```
 
 Expected: all commands exit 0.
@@ -1553,7 +1553,7 @@ Expected: all commands exit 0.
 Run:
 
 ```powershell
-rtk proxy powershell -NoProfile -Command '$checkin = Invoke-WebRequest -UseBasicParsing -Uri ''http://localhost:3000/checkin'' -TimeoutSec 10; $settings = Invoke-WebRequest -UseBasicParsing -Uri ''http://localhost:3000/settings'' -TimeoutSec 10; Write-Output (''Checkin={0}; Settings={1}; CheckinText={2}; SettingsText={3}'' -f $checkin.StatusCode, $settings.StatusCode, ($checkin.Content -like ''*Check-in Allocation*''), ($settings.Content -like ''*Settings*''))'
+powershell -NoProfile -Command '$checkin = Invoke-WebRequest -UseBasicParsing -Uri ''http://localhost:3000/checkin'' -TimeoutSec 10; $settings = Invoke-WebRequest -UseBasicParsing -Uri ''http://localhost:3000/settings'' -TimeoutSec 10; Write-Output (''Checkin={0}; Settings={1}; CheckinText={2}; SettingsText={3}'' -f $checkin.StatusCode, $settings.StatusCode, ($checkin.Content -like ''*Check-in Allocation*''), ($settings.Content -like ''*Settings*''))'
 ```
 
 Expected:

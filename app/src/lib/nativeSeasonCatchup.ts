@@ -96,6 +96,8 @@ export interface NativeSeasonSnapshotMergeResult extends NativeSeasonSnapshotImp
   mergedPendingCount: number;
   conflictCount: number;
   conflicts: unknown[];
+  autoResolvedConflictCount?: number;
+  autoResolvedConflictIds?: string[];
 }
 
 export type NativeSeasonConflictResolution = 'keepMine' | 'acceptRemote';
@@ -145,6 +147,8 @@ export interface NativeSyncSummaryResult {
   lastLocalChangeAt?: number | null;
   lastServerSeq?: number | null;
   localRevision: number;
+  localRecordCount: number;
+  entityVersionCount: number;
 }
 
 export interface NativeConflictSummaryResult {
@@ -212,6 +216,8 @@ export interface NativeSyncPendingChangesResult {
   message: string;
   pendingCount: number;
   conflictCount: number;
+  autoResolvedConflictCount?: number;
+  autoResolvedConflictIds?: string[];
   notificationSent: number;
   notificationFailed: number;
   notificationSkipped: number;

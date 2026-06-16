@@ -60,6 +60,7 @@ import {
   getSeasonSyncPendingCount,
   getSeasonSyncTone,
   useSeasonSync,
+  useSeasonSyncActions,
   useSeasonSyncGuard,
 } from '../components/SeasonSyncProvider';
 import { useSessionScrollRestoration } from '../hooks/useSessionScrollRestoration';
@@ -81,7 +82,6 @@ const POOL_MIN_HEIGHT = 86;
 const POOL_MAX_HEIGHT = 260;
 const EMPTY_GATE_EXPORT_GROUP_IDS: string[] = [];
 const GATE_COMMIT_DEBOUNCE_MS = 400;
-const GATE_SYNC_SUMMARY_DEBOUNCE_MS = 300;
 
 function getAffectedIdsFromGateModifications(mods: FlightModification[]): string[] {
   return Array.from(new Set(mods.map((mod) => mod.legId)));
@@ -427,10 +427,7 @@ function GateAllocationContent() {
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
     buildLoadProgress('Loading gate allocation...', 10, 'Preparing workspace')
   );
-  const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; lastLocalChangeAt: number | null }>({
-    pendingCount: 0,
-    lastLocalChangeAt: null,
-  });
+  const [syncSummarySeeded, setSyncSummarySeeded] = useState(false);
   const [draggedRecordId, setDraggedRecordId] = useState<string | null>(null);
   const [activeDropRowIndex, setActiveDropRowIndex] = useState<number | null>(null);
   const [poolDropActive, setPoolDropActive] = useState(false);
@@ -448,13 +445,12 @@ function GateAllocationContent() {
   const ganttFullscreenRef = useRef<HTMLElement | null>(null);
   const latestGateModificationsRef = useRef<Map<string, FlightModification>>(new Map());
   const optimisticGateAllocationViewRef = useRef<GateAllocationView | null>(null);
+  const optimisticBaseLocalRevisionRef = useRef<number | null>(null);
   const gateCommitWorkerRef = useRef<Worker | null>(null);
   const gateCommitRequestsRef = useRef(new Map<number, PendingGateCommitRequest>());
   const gateCommitRequestSeqRef = useRef(0);
   const gateCommitAccumulatorRef = useRef<PendingAccumulatedGateCommit | null>(null);
   const gateCommitFlushTimerRef = useRef<number | null>(null);
-  const pendingGateSyncSummaryRef = useRef<Pick<LocalSyncMeta, 'pendingCount' | 'lastLocalChangeAt'> | null>(null);
-  const gateSyncSummaryTimerRef = useRef<number | null>(null);
   const commitQueueRef = useRef(Promise.resolve());
   const currentMutationRef = useRef<Promise<unknown> | null>(null);
   const historySeqRef = useRef(0);
@@ -462,13 +458,15 @@ function GateAllocationContent() {
   useSessionScrollRestoration('gate:gantt-scroll', ganttScrollRef);
   const syncSeasonId = season?.id ?? targetSeasonId;
   const { status: syncStatus, syncNow, fetchUpdatesNow } = useSeasonSync(syncSeasonId, 'gate');
+  const { seedSeasonSyncFromNative } = useSeasonSyncActions();
   const syncing = syncStatus.status === 'syncing' && syncStatus.mode === 'manual';
   const fetchingUpdates = syncStatus.status === 'catching_up' && syncStatus.mode === 'manual';
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' || syncStatus.status === 'conflict' ? syncStatus.message : null);
   const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
-  const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncSummary.pendingCount);
-  const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount);
-  const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
+  const syncFallbackPendingCount = syncSummarySeeded ? 0 : null;
+  const syncPendingCount = getSeasonSyncPendingCount(syncStatus, 0);
+  const syncLabel = getSeasonSyncLabel(syncStatus, syncFallbackPendingCount);
+  const syncTone = getSeasonSyncTone(syncStatus, syncFallbackPendingCount);
 
   const waitForGateLocalCommit = useCallback(async () => {
     await currentMutationRef.current;
@@ -486,8 +484,26 @@ function GateAllocationContent() {
     blockingUi: false,
   });
 
+  useEffect(() => {
+    if (!syncSeasonId) {
+      setSyncSummarySeeded(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setSyncSummarySeeded(false);
+    void seedSeasonSyncFromNative(syncSeasonId).then(() => {
+      if (!cancelled) setSyncSummarySeeded(true);
+    }).catch((error) => {
+      console.debug('[gate-sync] native summary seed failed', error);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [seedSeasonSyncFromNative, syncSeasonId]);
+
   const clearOptimisticGateAllocationView = useCallback(() => {
     optimisticGateAllocationViewRef.current = null;
+    optimisticBaseLocalRevisionRef.current = null;
     setOptimisticGateAllocationView(null);
   }, []);
 
@@ -497,11 +513,6 @@ function GateAllocationContent() {
       gateCommitFlushTimerRef.current = null;
     }
     gateCommitAccumulatorRef.current = null;
-    pendingGateSyncSummaryRef.current = null;
-    if (gateSyncSummaryTimerRef.current != null) {
-      window.clearTimeout(gateSyncSummaryTimerRef.current);
-      gateSyncSummaryTimerRef.current = null;
-    }
   }, []);
 
   const replaceGateModifications = useCallback((
@@ -546,10 +557,41 @@ function GateAllocationContent() {
     });
   }, []);
 
+  const refreshGateWindow = useCallback(async () => {
+    if (!season) return;
+    const result = await queryNativeAllocationWindow({
+      seasonId: season.id,
+      dateFrom: fromDateTime.slice(0, 10),
+      dateTo: toDateTime.slice(0, 10),
+      resourceType: 'gate',
+      limit: 10000,
+    });
+    if (!result) throw new Error('Native gate allocation query is unavailable.');
+    const nextModifications = new Map(result.modifications.map((mod) => [mod.legId, mod]));
+    clearOptimisticGateAllocationView();
+    setFlightRecords(result.records);
+    replaceGateModifications(nextModifications);
+    patchCachedSeasonData(season.id, {
+      records: result.records,
+      modifications: nextModifications,
+    });
+    useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+      seasonId: season.id,
+      season,
+      records: result.records,
+      modifications: nextModifications,
+      syncMeta: result.syncMeta,
+      windowKey: buildGateWindowKey(fromDateTime, toDateTime),
+    });
+  }, [clearOptimisticGateAllocationView, fromDateTime, replaceGateModifications, season, toDateTime]);
+
   useSeasonWorkspaceRefresh({
     seasonId: season?.id ?? targetSeasonId,
     policy: 'on-activation',
     source: 'gate',
+    onNativeRefresh: async () => {
+      await refreshGateWindow();
+    },
   });
 
   useEffect(() => {
@@ -577,7 +619,6 @@ function GateAllocationContent() {
           const emptyModifications = new Map<string, FlightModification>();
           latestGateModificationsRef.current = new Map(emptyModifications);
           setModifications(emptyModifications);
-          setSyncSummary({ pendingCount: 0, lastLocalChangeAt: null });
           return;
         }
         const targetSeason = nextSeasons.find((item) => item.id === targetSeasonId) ?? nextSeasons[0];
@@ -607,10 +648,6 @@ function GateAllocationContent() {
         setSeason(targetSeason);
         setFlightRecords(result.records);
         replaceGateModifications(nextModifications);
-        setSyncSummary({
-          pendingCount: result.syncMeta.pendingCount,
-          lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
-        });
         patchCachedSeasonData(targetSeason.id, {
           records: result.records,
           modifications: nextModifications,
@@ -661,8 +698,13 @@ function GateAllocationContent() {
   const displayGateAllocationView = optimisticGateAllocationView ?? allocationResult.view;
 
   useEffect(() => {
-    if (optimisticGateAllocationViewRef.current) clearOptimisticGateAllocationView();
-  }, [allocationResult.view, clearOptimisticGateAllocationView]);
+    if (!optimisticGateAllocationViewRef.current) return;
+    const baseRevision = optimisticBaseLocalRevisionRef.current;
+    const currentRevision = syncStatus.localRevision;
+    if (baseRevision == null || currentRevision == null || currentRevision > baseRevision) {
+      clearOptimisticGateAllocationView();
+    }
+  }, [allocationResult.view, clearOptimisticGateAllocationView, syncStatus.localRevision]);
 
   const timeline = useMemo(() => {
     try {
@@ -749,6 +791,9 @@ function GateAllocationContent() {
   const applyOptimisticGateModification = useCallback((mergedMod: FlightModification) => {
     const workingModifications = latestGateModificationsRef.current;
     workingModifications.set(mergedMod.legId, mergedMod);
+    if (!optimisticGateAllocationViewRef.current) {
+      optimisticBaseLocalRevisionRef.current = syncStatus.localRevision;
+    }
 
     const baseView = optimisticGateAllocationViewRef.current ?? allocationResult.view;
     const baseRecord = recordById.get(mergedMod.legId);
@@ -766,7 +811,7 @@ function GateAllocationContent() {
       optimisticGateAllocationViewRef.current = patchedView;
       setOptimisticGateAllocationView(patchedView);
     }
-  }, [allocationResult.view, fromDateTime, recordById, timelinePixelsPerMinute, toDateTime]);
+  }, [allocationResult.view, fromDateTime, recordById, syncStatus.localRevision, timelinePixelsPerMinute, toDateTime]);
 
   const enqueueLocalMutation = useCallback(function enqueueLocalMutation<T>(operation: () => Promise<T>): Promise<T> {
     const queuedMutation = commitQueueRef.current.then(operation);
@@ -897,32 +942,6 @@ function GateAllocationContent() {
     });
   }, [commitGateModificationsInWorker, commitGateModificationsNative, commitGateModificationsOnMainThread, enqueueLocalMutation, getGateCommitWorker]);
 
-  const scheduleGateSyncSummaryUpdate = useCallback((
-    syncMeta: Pick<LocalSyncMeta, 'pendingCount' | 'lastLocalChangeAt'>
-  ) => {
-    pendingGateSyncSummaryRef.current = {
-      pendingCount: syncMeta.pendingCount,
-      lastLocalChangeAt: syncMeta.lastLocalChangeAt,
-    };
-    if (gateSyncSummaryTimerRef.current != null) return;
-    gateSyncSummaryTimerRef.current = window.setTimeout(() => {
-      gateSyncSummaryTimerRef.current = null;
-      const pendingSummary = pendingGateSyncSummaryRef.current;
-      pendingGateSyncSummaryRef.current = null;
-      if (!pendingSummary) return;
-      setSyncSummary((current) => (
-        current.pendingCount === pendingSummary.pendingCount &&
-        current.lastLocalChangeAt === pendingSummary.lastLocalChangeAt
-          ? current
-          : {
-              ...current,
-              pendingCount: pendingSummary.pendingCount,
-              lastLocalChangeAt: pendingSummary.lastLocalChangeAt,
-            }
-      ));
-    }, GATE_SYNC_SUMMARY_DEBOUNCE_MS);
-  }, []);
-
   const scheduleGateAuditEntry = useCallback((
     entry: PendingAccumulatedGateCommit,
     result: GateCommitPersistenceResult
@@ -986,10 +1005,6 @@ function GateAllocationContent() {
         const nextModifications = new Map(result.modifications.map((mod) => [mod.legId, mod]));
         setFlightRecords(result.records);
         replaceGateModifications(nextModifications);
-        setSyncSummary({
-          pendingCount: result.syncMeta.pendingCount,
-          lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
-        });
         patchCachedSeasonData(season.id, {
           records: result.records,
           modifications: nextModifications,
@@ -1016,7 +1031,6 @@ function GateAllocationContent() {
     try {
       const result = await persistGateModifications(season.id, entry.mods, entry.description);
       if (!result.syncMeta) return;
-      scheduleGateSyncSummaryUpdate(result.syncMeta);
       useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
         seasonId: season.id,
         affectedIds: result.affectedIds ?? entry.legIds,
@@ -1034,7 +1048,7 @@ function GateAllocationContent() {
     } catch (error) {
       await rollbackAccumulatedGateCommit(error);
     }
-  }, [persistGateModifications, publishWorkspaceChange, rollbackAccumulatedGateCommit, scheduleGateAuditEntry, scheduleGateSyncSummaryUpdate, season]);
+  }, [persistGateModifications, publishWorkspaceChange, rollbackAccumulatedGateCommit, scheduleGateAuditEntry, season]);
 
   const scheduleAccumulatedGateCommit = useCallback(({
     legIds,

@@ -30,7 +30,19 @@ This section supersedes older IndexedDB/Firestore-first wording that may still a
 - `sync_season_workspace_v2` duplicate-op handling must be idempotent at the row-mutation layer: if `(client_id, op_id)` already exists, the RPC still reapplies `apply_workspace_op_json`, refreshes field versions with the original `server_seq`, and returns an applied event acknowledgement for that `opId`.
 - Production S26 server repair was applied with backup tables under `repair.repair_20260530_133455_*`. After repair, remote S26 matches the local SQLite truth used for staging: `25,855` raw records, `25,849` active records, `532` modifications, `144` active deletion mods, effective Total Flight `25,705`, and repair events `server_seq 4461..7768`.
 - Close/reopen preserves durable SQLite season data, but discards unsynced local edits, route/session cache, and UI undo history when the native close policy requests session cleanup.
-- Verification loop for these native changes: `rtk npm run test:rules`, `rtk npm run test:notifications`, `rtk npx tsc --noEmit --pretty false`, `rtk npm run build`, and `rtk npm run native:build`.
+- Verification loop for routine native sync hardening changes: `npm run test:rules`, `npm run test:notifications`, `npm run test:updater`, `cargo test --manifest-path app/src-tauri/Cargo.toml --test native_catchup`, `npx tsc --noEmit --pretty false`, and `npm run build`. `npm run native:build` is a release/integration gate, not part of normal implementation passes unless explicitly requested.
+
+## Native Sync Hardening - 2026-06-16
+
+These invariants supersede older review-before-sync and Gate sync-status wording:
+
+- Native conflict cleanup must structurally parse pending `modHistory` payloads. Do not use substring matching such as `payload_json LIKE "%leg-1%"` to decide whether to delete history. A pending history entry may be removed only when its resolved target set is non-empty and every parsed target belongs to the target being resolved; mixed/cross-target history must be preserved.
+- `query_sync_summary` exposes `localRecordCount` and `entityVersionCount` in addition to pending/conflict/cursor fields. `SeasonSyncProvider` uses these counts to detect a truly fresh local workspace. If local records, entity versions, pending ops, and conflicts are all zero, catch-up starts from cursor `0` even when `lastServerSeq` appears seeded.
+- JS delta mutation must keep read, compute, and pending-state write in one queued SQL transaction. `applyLocalModificationBatchDelta` uses `replaceLocalSeasonSqlPendingStateFromDelta`, which reads affected delta state and writes pending ops/sync meta in the same `sqlWriteQueueTail` slot and `BEGIN IMMEDIATE` transaction. Do not reintroduce a separate `readLocalSeasonSqlDeltaState` followed by `replaceLocalSeasonSqlPendingState` for hot-path Check-in/Gate commits.
+- `SeasonAutoSyncState` carries `localRevision`. Provider summary patches and workspace-change flushes must copy native `localRevision` so route UIs can tell when SQLite has advanced.
+- Gate sync status has one source: `useSeasonSync` seeded by `seedSeasonSyncFromNative`. Gate must not keep a parallel local `syncSummary`, local debounce timer, or `scheduleGateSyncSummaryUpdate` path for the badge.
+- Gate optimistic allocation view is cleared when the provider `localRevision` advances past the optimistic base revision, or when the user changes the season/range/reset base. It should not reset merely because `allocationResult.view` re-derived during a fast local commit.
+- The earlier derived-cache task is not implementation work for this pass. Native mutation paths already dirty/clear `local_derived_seasonal`; do not add a broad TS derived-cache rewrite unless a focused regression proves a live stale-cache bug.
 
 ---
 
@@ -144,6 +156,8 @@ Key functions:
 | `apply_schedule_mutation` / `apply_allocation_mutation` | Native row-level local mutations and pending-op generation |
 | `run_season_catchup` | Native server delta catch-up from Supabase event pages |
 | `sync_pending_changes` | Native pending upload to Supabase plus best-effort Telegram flush |
+| `query_sync_summary` | Lightweight pending/conflict/cursor/localRevision/freshness summary for sync UI and catch-up cursor selection |
+| `resolve_season_conflict` | Native conflict resolution using structural pending-op cleanup |
 | `check_season_integrity` | Native startup/fetch/sync guard for local SQLite health |
 | `query_dashboard_summary` / `query_native_dashboard_ai_sql` | Native dashboard summaries and read-only local AI SQL |
 
@@ -210,7 +224,7 @@ Import/re-import remains server-first because it establishes a new baseline. A s
 - Active counter locks block new allocation edits that overlap the lock window, but existing allocations remain visible and are marked as lock conflicts until users manually resolve them.
 - All allocation edits are local-first through native SQLite row-level modification commits and wait for manual Save before Supabase upload. The Check-in Gantt applies the already-validated modification to an immediate in-memory overlay, patches only the affected flight projection in the displayed Gantt view, then persists only affected rows/pending ops/sync meta through the native command path.
 - Check-in hot-path drag/resize work must avoid full workspace hydration or full allocation rebuilds. Drag-over previews and resize snap lines are `requestAnimationFrame`-throttled with no-op state guards. Allocated drag-over uses vertical-only edge scrolling so horizontal pointer movement cannot shift the timeline while a bar is being reassigned. The Check-in route registers a save guard during allocated drag or resize and waits for the current local mutation before manual Save can run.
-- Check-in local commits are accumulated briefly and written through native delta mutation commands so repeated rapid allocation actions do not hydrate and rewrite the full workspace. Pending-count refreshes should read native sync summary metadata, not full schedule snapshots.
+- Check-in local commits are accumulated briefly and written through native delta mutation commands so repeated rapid allocation actions do not hydrate and rewrite the full workspace. Pending-count refreshes should read native sync summary metadata, not full schedule snapshots. JS read-modify-write delta commits must stay inside `replaceLocalSeasonSqlPendingStateFromDelta` so the read and pending-state write share the same queued SQL transaction.
 - Check-in workspace refresh uses `useSeasonWorkspaceRefresh({ policy: 'on-activation', source: 'checkin' })`. While the route is active it ignores its own `checkin`, `checkin-worker`, and `checkin-sync` change events; other stale workspace events are debounced and applied inside React transition, and inactive route refreshes wait until route activation.
 
 ### Gate Allocation
@@ -219,8 +233,9 @@ Import/re-import remains server-first because it establishes a new baseline. A s
 - Gate assignments persist through the gate allocation modification fields. Dragging from the unallocated pool can assign a gate, dragging an allocated bar to another gate row can reassign it, and dragging an allocated bar back to the pool clears only the gate assignment.
 - Allocated Gate bar drag/drop is resource-only. The drag overlay locks its x-position for allocated bars while row hit testing still uses the live pointer position; the commit path calls `allocateGate(record, resource.gate)` or `unallocateGate(record)` and must not write gate start/end or minute-delta time changes.
 - Gate bars use deterministic carrier-based colors, timeline masonry packing for the unallocated pool, session-restored Gantt scroll, UI-only zoom, and local fullscreen behavior matching Check-in.
-- Gate edits are local-first through native SQLite row-level modification commits and wait for manual Save before Supabase upload. The Gate Gantt applies the modification to an immediate in-memory overlay, patches the affected flight projection in the displayed Gantt view, then persists only affected rows/pending ops/sync meta through the native command path.
+- Gate edits are local-first through native SQLite row-level modification commits and wait for manual Save before Supabase upload. The Gate Gantt applies the modification to an immediate in-memory overlay, patches the affected flight projection in the displayed Gantt view, then persists only affected rows/pending ops/sync meta through the native command path. The optimistic overlay is tied to `SeasonAutoSyncState.localRevision` and should clear only after native summary state advances beyond the optimistic base revision, or after an explicit season/range/reset base change.
 - Gate workspace refresh uses `useSeasonWorkspaceRefresh({ policy: 'on-activation', source: 'gate' })`, ignores its own `gate`, `gate-worker`, and `gate-sync` change events while active, debounces stale events, and applies external workspace refreshes inside React transition. The Gate route registers a save guard while a pointer drag is active and waits for the current local mutation before manual Save can run.
+- Gate sync badge/state must come from `useSeasonSync(syncSeasonId, 'gate')`, seeded through `seedSeasonSyncFromNative`. Do not restore route-local `syncSummary`, `pendingGateSyncSummaryRef`, `gateSyncSummaryTimerRef`, or `scheduleGateSyncSummaryUpdate`.
 
 ### Gantt Anti-Lag Mechanics
 
@@ -228,7 +243,7 @@ Import/re-import remains server-first because it establishes a new baseline. A s
 - Do not put full allocation rebuilds, full workspace hydration, Supabase writes, or Save execution inside drag-over, pointer-move, resize-move, snap-line, or drop-preview handlers.
 - Same-route workspace change sources are source-family filtered. Active Check-in ignores `checkin-*` changes, and active Gate ignores `gate-*` changes, so each Gantt does not immediately reload its own just-committed workspace and stutter after rapid actions.
 - Manual Save must respect the Gantt save guards: Check-in blocks while an allocated drag or resize is active; Gate blocks while a pointer drag is active. Both routes must await the current local mutation before Save starts.
-- The sync badge should use the lightweight `syncMeta` summary path after local edits. Reintroducing full workspace reads in the pending-count path can restore the post-action freeze.
+- The sync badge should use the lightweight native summary path after local edits. Reintroducing full workspace reads or route-local summary timers in the pending-count path can restore the post-action freeze or the old Gate `Synced` flash.
 
 ### Daily Schedule
 
@@ -398,7 +413,7 @@ flightRecords -> apply modifications -> groupFlightLegs -> downloadSeasonalExcel
 - Native desktop packaging uses Tauri. The package command is:
 
 ```text
-rtk npm run native:build
+npm run native:build
 ```
 
 - `native:build` runs `python:agent:bundle` first, then `next build`, compiles the Tauri Rust app, and emits a release executable plus NSIS installer.
@@ -502,15 +517,15 @@ Each AI backup includes a `BACKUP_MANIFEST.md`. The latest notebook backup inclu
 Use:
 
 ```text
-rtk npm run test:rules
-rtk npm run lint
-rtk npm run build
-rtk npm run native:build
+npm run test:rules
+npm run lint
+npm run build
+npm run native:build
 ```
 
 Current known lint status after the AI query-rich notebook change: lint exits 0 with pre-existing warnings in `postcss.config.js`, `src/app/layout.tsx`, and `src/lib/linking.ts`.
 
-Current local AI query-correctness verification: `rtk npm run test:rules`, `rtk npm run lint`, and `rtk npm run build` pass. `deno check` could not run because `deno` is not available in PATH on this machine.
+Current local AI query-correctness verification: `npm run test:rules`, `npm run lint`, and `npm run build` pass. `deno check` could not run because `deno` is not available in PATH on this machine.
 
 Current deployed AI backend status:
 

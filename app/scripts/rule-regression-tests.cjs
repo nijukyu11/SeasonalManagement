@@ -209,6 +209,7 @@ async function run() {
   } = require(path.join(tempDir, 'seasonWorkspaceBootstrap.js'));
   const {
     applySeasonEventRange,
+    AUTO_REMOTE_WIN_MODIFICATION_FIELDS,
     buildPendingChangeEvents,
     mergeSeasonSnapshotIntoLocalWorkspace,
     mergeRemoteSeasonEvent,
@@ -297,10 +298,13 @@ async function run() {
   } = require(path.join(tempDir, 'routeCountry.js'));
   const { planSync, applySuccessfulSync, finalizeSuccessfulSync, isSeasonWorkspaceStale, createWorkspaceFromRemoteSnapshot } = require(path.join(tempDir, 'seasonSync.js'));
   const {
+    AUTO_SYNC_DEBOUNCE_MS,
+    AUTO_SYNC_IDLE_TIMEOUT_MS,
     AUTO_SYNC_RETRY_DELAYS_MS,
     SeasonAutoSyncScheduler,
     getAutoSyncRetryDelayMs,
     isTransientSyncFailure,
+    shouldAutoSyncSource,
   } = require(path.join(tempDir, 'seasonAutoSync.js'));
   const {
     hydrateFlightModificationFromPersistence,
@@ -2269,6 +2273,81 @@ async function run() {
       modifications: Array.from(deleteVsEdit.workspace.modifications.entries()),
     })}`
   );
+  assert(
+    Array.isArray(AUTO_REMOTE_WIN_MODIFICATION_FIELDS) &&
+      AUTO_REMOTE_WIN_MODIFICATION_FIELDS.includes('gate') &&
+      AUTO_REMOTE_WIN_MODIFICATION_FIELDS.includes('counter') &&
+      !AUTO_REMOTE_WIN_MODIFICATION_FIELDS.includes('schedule') &&
+      !AUTO_REMOTE_WIN_MODIFICATION_FIELDS.includes('__delete__'),
+    `remote-latest auto resolve allowlist must stay limited to allocation modification fields, got ${JSON.stringify(AUTO_REMOTE_WIN_MODIFICATION_FIELDS)}`
+  );
+  const remoteModificationGateEvent = {
+    ...remoteDeleteEvent,
+    eventId: 'remote-modification-gate',
+    opId: 'remote-modification-gate-op',
+    serverSeq: 16,
+    changedFields: ['gate'],
+    opPayload: {
+      type: 'modification',
+      mod: { legId: 'LEG-1', action: 'modified', gate: 9 },
+      baseFieldVersions: { gate: 12 },
+    },
+  };
+  const autoRemoteGate = mergeRemoteSeasonEvent(modDirtyWorkspace, remoteModificationGateEvent, { clientId: 'client-local' });
+  assert(
+    autoRemoteGate.applied &&
+      !autoRemoteGate.conflict &&
+      autoRemoteGate.workspace.modifications.get('LEG-1').gate === 9 &&
+      autoRemoteGate.workspace.pendingOps.length === 0 &&
+      autoRemoteGate.workspace.syncMeta.conflicts.length === 0,
+    `single-field allocation modification conflicts should auto-accept remote latest and clear superseded local pending edits, got ${JSON.stringify({
+      modifications: Array.from(autoRemoteGate.workspace.modifications.entries()),
+      pendingOps: autoRemoteGate.workspace.pendingOps,
+      conflicts: autoRemoteGate.workspace.syncMeta.conflicts,
+    })}`
+  );
+  const remoteModificationScheduleEvent = {
+    ...remoteModificationGateEvent,
+    eventId: 'remote-modification-schedule',
+    opId: 'remote-modification-schedule-op',
+    serverSeq: 17,
+    changedFields: ['schedule'],
+    opPayload: {
+      type: 'modification',
+      mod: { legId: 'LEG-1', action: 'modified', gate: 2, schedule: '11:30' },
+      baseFieldVersions: { schedule: 12 },
+    },
+  };
+  const scheduleDirtyWorkspace = rebuildPendingOpsFromBaseline(createLocalWorkspace({
+    season: { id: 'entity-merge-season', seasonCode: 'S26', dataVersion: 8 },
+    rows: [],
+    records: [],
+    modifications: new Map([['LEG-1', { legId: 'LEG-1', action: 'modified', schedule: '10:20' }]]),
+    modHistory: [],
+    baseModificationEntries: [['LEG-1', { legId: 'LEG-1', action: 'modified', schedule: '10:00' }]],
+    entityVersions: { 'modification:LEG-1': { schedule: 12 } },
+    syncMeta: {
+      baseServerVersion: 8,
+      lastServerSeq: 12,
+      clientId: 'client-local',
+      localRevision: 1,
+      pendingCount: 1,
+      lastLocalChangeAt: 601,
+      syncStatus: 'dirty',
+    },
+  }), 601);
+  const structuralModificationConflict = mergeRemoteSeasonEvent(scheduleDirtyWorkspace, remoteModificationScheduleEvent, { clientId: 'client-local' });
+  assert(
+    !structuralModificationConflict.applied &&
+      structuralModificationConflict.conflict &&
+      structuralModificationConflict.workspace.modifications.get('LEG-1').schedule === '10:20' &&
+      structuralModificationConflict.workspace.pendingOps.length === 1,
+    `structural modification conflicts must still require review, got ${JSON.stringify({
+      modifications: Array.from(structuralModificationConflict.workspace.modifications.entries()),
+      pendingOps: structuralModificationConflict.workspace.pendingOps,
+      conflicts: structuralModificationConflict.workspace.syncMeta.conflicts,
+    })}`
+  );
   const ownRealtimeEvent = mergeRemoteSeasonEvent(dirtyEntityMergeWorkspace, { ...remoteStandEvent, clientId: 'client-local' }, { clientId: 'client-local' });
   assert(ownRealtimeEvent.skipped && !ownRealtimeEvent.applied, `own realtime event should be ignored, got ${JSON.stringify(ownRealtimeEvent)}`);
   assert(typeof applySeasonEventRange === 'function', 'seasonChangeEvents must expose applySeasonEventRange for deterministic cursor catch-up');
@@ -2345,6 +2424,28 @@ async function run() {
       records: conflictSnapshotMerged.records,
       pendingOps: conflictSnapshotMerged.pendingOps,
       syncMeta: conflictSnapshotMerged.syncMeta,
+    })}`
+  );
+  const modificationSnapshotWorkspace = createLocalWorkspace({
+    season: { id: 'entity-merge-season', seasonCode: 'S26', dataVersion: 10 },
+    rows: [],
+    records: [],
+    modifications: new Map([['LEG-1', { legId: 'LEG-1', action: 'modified', gate: 9 }]]),
+    modHistory: [],
+    baseModificationEntries: [['LEG-1', { legId: 'LEG-1', action: 'modified', gate: 9 }]],
+    entityVersions: { 'modification:LEG-1': { gate: 19 } },
+    serverEventHighWater: 19,
+  });
+  const autoSnapshotMerged = mergeSeasonSnapshotIntoLocalWorkspace(modDirtyWorkspace, modificationSnapshotWorkspace, { clientId: 'client-local' });
+  assert(
+    autoSnapshotMerged.modifications.get('LEG-1').gate === 9 &&
+      autoSnapshotMerged.pendingOps.length === 0 &&
+      (autoSnapshotMerged.syncMeta.conflicts?.length ?? 0) === 0 &&
+      autoSnapshotMerged.syncMeta.syncStatus === 'synced',
+    `dirty snapshot catch-up should auto-accept remote latest for single allocation modification conflicts, got ${JSON.stringify({
+      modifications: Array.from(autoSnapshotMerged.modifications.entries()),
+      pendingOps: autoSnapshotMerged.pendingOps,
+      syncMeta: autoSnapshotMerged.syncMeta,
     })}`
   );
   const snapshotSourceRow = baseRow({
@@ -2430,6 +2531,7 @@ async function run() {
   const schedulerIdleCallbacks = [];
   const schedulerStates = [];
   const schedulerRuns = [];
+  const schedulerPrepares = [];
   let schedulerTimerId = 1;
   let schedulerIdleId = 1;
   let schedulerBlockedReason = null;
@@ -2451,43 +2553,116 @@ async function run() {
     isOnline: () => schedulerOnline,
     getPendingCount: async () => schedulerPendingCount,
     getBlockedReason: () => schedulerBlockedReason,
+    prepareSync: async (seasonId, mode, source) => {
+      schedulerPrepares.push({ seasonId, mode, source });
+    },
     run: async (seasonId, mode) => {
       schedulerRuns.push({ seasonId, mode });
+      if (seasonId === 'daily-season') schedulerPendingCount = 0;
+      if (seasonId === 'review-season') return { status: 'synced', message: 'Needs review', reviewCount: 1 };
       return { status: 'synced', message: 'ok' };
     },
     onState: (seasonId, state) => schedulerStates.push({ seasonId, state }),
   });
-  scheduler.notifyLocalChange('manual-season');
-  scheduler.notifyLocalChange('manual-season');
   assert(
-    schedulerTimers.length === 0 &&
+    shouldAutoSyncSource('daily') &&
+      shouldAutoSyncSource('checkin-native') &&
+      shouldAutoSyncSource('gate-worker') &&
+      !shouldAutoSyncSource('detailed') &&
+      !shouldAutoSyncSource('seasonal') &&
+      !shouldAutoSyncSource(null),
+    'guarded auto sync must only enable Daily, Check-in, and Gate source families'
+  );
+  scheduler.notifyLocalChange('daily-season', { source: 'daily', pendingCount: 1, lastLocalChangeAt: 100 });
+  scheduler.notifyLocalChange('daily-season', { source: 'daily', pendingCount: 1, lastLocalChangeAt: 101 });
+  assert(
+    schedulerTimers.length === 2 &&
+      schedulerTimers[0].delay === AUTO_SYNC_DEBOUNCE_MS &&
+      schedulerClearedTimers.includes(schedulerTimers[0].id) &&
       schedulerIdleCallbacks.length === 0 &&
       schedulerRuns.length === 0 &&
-      schedulerStates.some((entry) => entry.seasonId === 'manual-season' && entry.state.status === 'dirty'),
-    `sync scheduler must not auto-run local workspace changes, got ${JSON.stringify({ schedulerTimers, schedulerIdleCallbacks, schedulerRuns, schedulerStates })}`
+      schedulerStates.some((entry) => entry.seasonId === 'daily-season' && entry.state.status === 'scheduled' && entry.state.mode === 'auto'),
+    `guarded auto sync should debounce Daily local changes, got ${JSON.stringify({ schedulerTimers, schedulerClearedTimers, schedulerIdleCallbacks, schedulerRuns, schedulerStates })}`
+  );
+  schedulerTimers.at(-1).callback();
+  assert(
+    schedulerIdleCallbacks.length === 1,
+    `guarded auto sync should wait for an idle callback before saving, got ${JSON.stringify({ schedulerIdleCallbacks, schedulerRuns })}`
+  );
+  await schedulerIdleCallbacks[0].callback();
+  for (let index = 0; index < 6; index++) await Promise.resolve();
+  assert(
+    schedulerRuns.length === 1 &&
+      schedulerRuns[0].seasonId === 'daily-season' &&
+      schedulerRuns[0].mode === 'auto' &&
+      schedulerPrepares.some((entry) => entry.seasonId === 'daily-season' && entry.mode === 'auto' && entry.source === 'daily'),
+    `guarded auto sync should run Daily changes in auto mode after debounce and idle, got ${JSON.stringify({ schedulerRuns, schedulerPrepares, schedulerStates })}`
+  );
+  const timerCountBeforeDetailed = schedulerTimers.length;
+  scheduler.notifyLocalChange('detailed-season', { source: 'detailed', pendingCount: 1 });
+  assert(
+    schedulerTimers.length === timerCountBeforeDetailed &&
+      schedulerRuns.every((entry) => entry.seasonId !== 'detailed-season') &&
+      schedulerStates.some((entry) => entry.seasonId === 'detailed-season' && entry.state.status === 'dirty'),
+    `sources outside Daily/Check-in/Gate should remain manual dirty state, got ${JSON.stringify({ schedulerTimers, schedulerRuns, schedulerStates })}`
+  );
+  schedulerOnline = false;
+  schedulerPendingCount = 1;
+  scheduler.notifyLocalChange('offline-season', { source: 'gate', pendingCount: 1 });
+  assert(
+    schedulerStates.some((entry) => entry.seasonId === 'offline-season' && entry.state.status === 'offline') &&
+      !schedulerRuns.some((entry) => entry.seasonId === 'offline-season'),
+    `guarded auto sync should mark offline seasons without scheduling sync, got ${JSON.stringify(schedulerStates)}`
+  );
+  schedulerOnline = true;
+  const timerCountBeforeOnline = schedulerTimers.length;
+  scheduler.notifyOnline();
+  assert(
+    schedulerTimers.length === timerCountBeforeOnline + 1 &&
+      schedulerStates.some((entry) => entry.seasonId === 'offline-season' && entry.state.status === 'scheduled'),
+    `guarded auto sync should schedule pending Gate changes when online returns, got ${JSON.stringify({ schedulerTimers, schedulerStates })}`
+  );
+  schedulerBlockedReason = 'Dragging allocation';
+  scheduler.notifyLocalChange('blocked-season', { source: 'checkin', pendingCount: 1 });
+  const blockedTimer = schedulerTimers.at(-1);
+  blockedTimer.callback();
+  await schedulerIdleCallbacks.at(-1).callback();
+  for (let index = 0; index < 6; index++) await Promise.resolve();
+  assert(
+    !schedulerRuns.some((entry) => entry.seasonId === 'blocked-season') &&
+      schedulerStates.some((entry) => entry.seasonId === 'blocked-season' && entry.state.status === 'dirty' && entry.state.message === 'Dragging allocation'),
+    `guarded auto sync should respect active drag/resize blockers before runs, got ${JSON.stringify({ schedulerRuns, schedulerStates })}`
+  );
+  schedulerBlockedReason = null;
+  const timerCountBeforeGuardClear = schedulerTimers.length;
+  scheduler.notifyGuardChanged('blocked-season');
+  assert(
+    schedulerTimers.length === timerCountBeforeGuardClear + 1 &&
+      schedulerStates.some((entry) => entry.seasonId === 'blocked-season' && entry.state.status === 'scheduled'),
+    `guarded auto sync should reschedule blocked Check-in changes after guard clears, got ${JSON.stringify({ schedulerTimers, schedulerStates })}`
+  );
+  schedulerPendingCount = 1;
+  scheduler.notifyLocalChange('review-season', { source: 'gate', pendingCount: 1 });
+  schedulerTimers.at(-1).callback();
+  await schedulerIdleCallbacks.at(-1).callback();
+  for (let index = 0; index < 6; index++) await Promise.resolve();
+  const reviewScheduledBeforeOnline = schedulerStates.filter((entry) =>
+    entry.seasonId === 'review-season' && entry.state.status === 'scheduled'
+  ).length;
+  scheduler.notifyOnline();
+  const reviewScheduledAfterOnline = schedulerStates.filter((entry) =>
+    entry.seasonId === 'review-season' && entry.state.status === 'scheduled'
+  ).length;
+  assert(
+    reviewScheduledAfterOnline === reviewScheduledBeforeOnline &&
+      schedulerStates.some((entry) => entry.seasonId === 'review-season' && entry.state.status === 'needs_review'),
+    `guarded auto sync must not reschedule seasons that need conflict review, got ${JSON.stringify({ schedulerTimers, schedulerRuns, schedulerStates })}`
   );
   await scheduler.syncNow('manual-season');
   assert(
-    schedulerRuns.length === 1 &&
-      schedulerRuns[0].seasonId === 'manual-season' &&
-      schedulerRuns[0].mode === 'manual',
+    schedulerRuns.some((entry) => entry.seasonId === 'manual-season' && entry.mode === 'manual'),
     `manual sync should still run on demand, got ${JSON.stringify(schedulerRuns)}`
   );
-  schedulerOnline = false;
-  scheduler.notifyLocalChange('offline-season');
-  assert(
-    schedulerStates.some((entry) => entry.seasonId === 'offline-season' && entry.state.status === 'offline'),
-    `manual sync scheduler should mark offline seasons without scheduling sync, got ${JSON.stringify(schedulerStates)}`
-  );
-  schedulerOnline = true;
-  schedulerBlockedReason = 'Dragging allocation';
-  await scheduler.syncNow('blocked-season');
-  assert(
-    schedulerRuns.length === 1 &&
-      schedulerStates.some((entry) => entry.seasonId === 'blocked-season' && entry.state.status === 'dirty' && entry.state.message === 'Dragging allocation'),
-    `manual sync scheduler should respect blockers before runs, got ${JSON.stringify({ schedulerRuns, schedulerStates })}`
-  );
-  schedulerBlockedReason = null;
   assert(getAutoSyncRetryDelayMs(0) === null && getAutoSyncRetryDelayMs(4) == null, `automatic retry delays should be disabled, got ${AUTO_SYNC_RETRY_DELAYS_MS.join(',')}`);
   assert(isTransientSyncFailure('Failed to fetch') && !isTransientSyncFailure('Server version changed from 1 to 2'), 'transient sync failure classification should stay available for status messaging');
   const mergeMutationWorkspace = createLocalWorkspace({
@@ -8036,8 +8211,8 @@ async function run() {
     workerUsesDelta: checkInWorkerSource.includes('applyLocalModificationBatchDelta'),
     workerAvoidsLoad: !checkInWorkerCommitBody.includes('loadLocalSeasonWorkspace'),
     workerAvoidsFullBatch: !checkInWorkerCommitBody.includes('applyLocalModificationBatch('),
-    readsSqlDelta: localDeltaCommitBody.includes('readLocalSeasonSqlDeltaState(sqlDb, seasonId, affectedLegIds)'),
-    replacesSqlPending: localDeltaCommitBody.includes('replaceLocalSeasonSqlPendingState('),
+    usesQueuedDeltaTransaction: localDeltaCommitBody.includes('replaceLocalSeasonSqlPendingStateFromDelta('),
+    avoidsSplitSqlDeltaRead: !localDeltaCommitBody.includes('readLocalSeasonSqlDeltaState(sqlDb, seasonId, affectedLegIds)'),
     keepsAffectedMods: localDeltaCommitBody.includes('affectedModifications'),
     avoidsFullSave: !localDeltaCommitBody.includes('saveLocalSeasonWorkspace('),
   };
@@ -8425,7 +8600,7 @@ async function run() {
   );
   const gateOptimisticBody = gatePageSource.slice(
     gatePageSource.indexOf('const applyOptimisticGateModification = useCallback'),
-    gatePageSource.indexOf('const refreshGateWorkspaceState')
+    gatePageSource.indexOf('const enqueueLocalMutation')
   );
   const gateWorkerCommitStart = gateWorkerSource.indexOf('async function commitGateModifications');
   const gateWorkerCommitEnd = gateWorkerSource.indexOf('workerScope.onmessage', gateWorkerCommitStart + 1);
@@ -8438,7 +8613,7 @@ async function run() {
   );
   const gatePersistBody = gatePageSource.slice(
     gatePageSource.indexOf('const persistGateModifications = useCallback'),
-    gatePageSource.indexOf('const scheduleGateSyncSummaryUpdate')
+    gatePageSource.indexOf('const scheduleGateAuditEntry')
   );
   const gateFlushBody = gatePageSource.slice(
     gatePageSource.indexOf('const flushAccumulatedGateCommit = useCallback'),
@@ -8527,13 +8702,16 @@ async function run() {
       gatePageSource.includes('const nativeResult = await runNativeLocalModificationBatchDelta') &&
       gatePageSource.includes("source: 'gate-native'") &&
       gatePageSource.includes('const GATE_COMMIT_DEBOUNCE_MS = 400') &&
-      gatePageSource.includes('const GATE_SYNC_SUMMARY_DEBOUNCE_MS = 300') &&
+      gatePageSource.includes('const { seedSeasonSyncFromNative } = useSeasonSyncActions()') &&
+      gatePageSource.includes('const [syncSummarySeeded, setSyncSummarySeeded] = useState(false)') &&
+      gatePageSource.includes('const syncFallbackPendingCount = syncSummarySeeded ? 0 : null') &&
+      gatePageSource.includes('optimisticBaseLocalRevisionRef') &&
       gatePageSource.includes('interface PendingAccumulatedGateCommit') &&
       gatePageSource.includes('gateCommitAccumulatorRef') &&
       gatePageSource.includes('gateCommitFlushTimerRef') &&
-      gatePageSource.includes('pendingGateSyncSummaryRef') &&
-      gatePageSource.includes('gateSyncSummaryTimerRef') &&
-      gatePageSource.includes('const scheduleGateSyncSummaryUpdate = useCallback') &&
+      !gatePageSource.includes('pendingGateSyncSummaryRef') &&
+      !gatePageSource.includes('gateSyncSummaryTimerRef') &&
+      !gatePageSource.includes('const scheduleGateSyncSummaryUpdate = useCallback') &&
       gatePageSource.includes('const scheduleGateAuditEntry = useCallback') &&
       gatePageSource.includes('const mergePendingGateCommit = useCallback') &&
       gatePageSource.includes('const flushAccumulatedGateCommit = useCallback') &&
@@ -8543,12 +8721,12 @@ async function run() {
       gateMainThreadCommitBody.includes('applyLocalModificationBatchDelta') &&
       gateMainThreadCommitBody.includes("source: 'gate'") &&
       gatePersistBody.includes("source: 'gate-worker'") &&
-      gateFlushBody.includes('scheduleGateSyncSummaryUpdate(result.syncMeta)') &&
+      !gateFlushBody.includes('scheduleGateSyncSummaryUpdate(result.syncMeta)') &&
       gateFlushBody.includes('publishWorkspaceChange(') &&
       gateFlushBody.includes('result.affectedIds') &&
       gateFlushBody.includes('result.syncMeta') &&
       gateFlushBody.includes('scheduleGateAuditEntry(entry, result)'),
-    'Gate Allocation commits must use delta-only persistence, one debounced accumulated flush, debounced sync summary updates, and idle audit scheduling'
+    'Gate Allocation commits must use delta-only persistence, one debounced accumulated flush, provider-seeded sync summary state, and idle audit scheduling'
   );
   assert(
     gatePointerMoveBody.includes("currentClientX: current.kind === 'allocated' ? current.currentClientX : event.clientX") &&
@@ -9399,8 +9577,11 @@ async function run() {
       seasonSyncProviderSource.includes('const source = pendingWorkspaceChangeSourcesRef.current.get(seasonId)') &&
       seasonSyncProviderSource.includes('pendingWorkspaceChangeSourcesRef.current.delete(seasonId)') &&
       seasonSyncProviderSource.includes('void queryNativeSyncSummary(seasonId).then((summary) =>') &&
+      seasonSyncProviderSource.includes('localRevision: summary.localRevision') &&
+      seasonSyncProviderSource.includes('seedSeasonSyncFromNative: (seasonId: string) => Promise<void>') &&
+      seasonSyncProviderSource.includes('const seedSeasonSyncFromNative = useCallback(async (seasonId: string)') &&
       seasonSyncProviderSource.includes('source,'),
-    'SeasonSyncProvider must debounce rapid workspace-change notifications into one native sync-summary read and scheduler notification per season'
+    'SeasonSyncProvider must debounce rapid workspace-change notifications into one native sync-summary read and scheduler notification per season while preserving localRevision'
   );
   const useSeasonSyncStart = seasonSyncProviderSource.indexOf('export function useSeasonSync(');
   const useSeasonSyncEnd = seasonSyncProviderSource.indexOf('export function useSeasonSyncActions', useSeasonSyncStart + 1);
@@ -9553,15 +9734,24 @@ async function run() {
   );
   assert(
     seasonAutoSyncSource.includes("status: 'dirty'") &&
-      seasonAutoSyncSource.includes("message: summary.pendingCount === 0 ? null : 'Unsynced local changes. Use Save to push them to the server.'") &&
+      seasonAutoSyncSource.includes('export function shouldAutoSyncSource') &&
+      seasonAutoSyncSource.includes("'daily'") &&
+      seasonAutoSyncSource.includes("'checkin'") &&
+      seasonAutoSyncSource.includes("'gate'") &&
+      seasonAutoSyncSource.includes('this.schedule(seasonId, record, AUTO_SYNC_DEBOUNCE_MS)') &&
+      seasonAutoSyncSource.includes("'scheduled'") &&
+      seasonAutoSyncSource.includes("'Auto save queued'") &&
+      seasonAutoSyncSource.includes("this.runSeason(seasonId, 'auto')") &&
       seasonAutoSyncSource.includes('getAutoSyncRetryDelayMs(retryAttempt: number): number | null') &&
       seasonAutoSyncSource.includes('return null;') &&
-      !seasonAutoSyncSource.includes('this.schedule(seasonId, AUTO_SYNC_DEBOUNCE_MS)') &&
       !seasonAutoSyncSource.includes('this.schedule(seasonId, retryDelay)') &&
-      !seasonAutoSyncSource.includes("status: 'scheduled'") &&
       !seasonAutoSyncSource.includes("'Auto syncing'") &&
-      !seasonAutoSyncSource.includes("'Auto sync scheduled'"),
-    'SeasonAutoSyncScheduler must be manual-only: local changes stay dirty, no debounce auto-run, and transient failures do not retry automatically'
+      !seasonSyncProviderSource.includes("if (mode !== 'manual') return") &&
+      seasonSyncProviderSource.includes("const syncGuardSource = mode === 'auto' ? 'auto-sync' : 'manual-sync'") &&
+      gatePageSource.includes('refreshGateWindow') &&
+      gatePageSource.includes('onNativeRefresh: async () =>') &&
+      gatePageSource.includes('await refreshGateWindow()'),
+    'SeasonAutoSyncScheduler must guarded-auto-save Daily/Check-in/Gate changes while provider/page guards keep auto sync safe'
   );
   assert(
     appShellSource.includes('useSeasonSyncSessionWarning') &&
@@ -9613,6 +9803,12 @@ async function run() {
       seasonSyncProviderSource.includes('const getBlockedGuard = useCallback') &&
       seasonSyncProviderSource.includes('if (!blockedGuard.quiet)') &&
       seasonSyncProviderSource.includes('MANUAL_FETCH_REPLAY_EVENT_WINDOW') &&
+      seasonSyncProviderSource.includes('const workspaceIsFresh = Boolean(') &&
+      seasonSyncProviderSource.includes('initialSummary.localRecordCount === 0') &&
+      seasonSyncProviderSource.includes('initialSummary.entityVersionCount === 0') &&
+      seasonSyncProviderSource.includes('initialSummary.pendingCount === 0') &&
+      seasonSyncProviderSource.includes('initialSummary.conflictCount === 0') &&
+      seasonSyncProviderSource.includes('workspaceIsFresh && serverHighWater > 0') &&
       seasonSyncProviderSource.includes('replayingRecentEvents') &&
       seasonSyncProviderSource.includes('localCursor: catchUpStartSeq') &&
       seasonSyncProviderSource.includes('reconcileManifest: manualFetch') &&
@@ -9622,8 +9818,11 @@ async function run() {
       !seasonSyncProviderSource.includes('let didApplyPagedEvents = false') &&
       !seasonSyncProviderSource.includes('didApplyPagedEvents = true') &&
       !seasonSyncProviderSource.includes('if (didApplyPagedEvents)') &&
-      seasonSyncProviderSource.includes("source: 'manual-sync'") &&
-      seasonSyncProviderSource.includes("reason: 'Manual save running'") &&
+      seasonSyncProviderSource.includes("source: syncGuardSource") &&
+      seasonSyncProviderSource.includes("'manual-sync'") &&
+      seasonSyncProviderSource.includes("'auto-sync'") &&
+      seasonSyncProviderSource.includes("'Manual save running'") &&
+      seasonSyncProviderSource.includes("'Auto save running'") &&
       [seasonalPageSource, detailedPageSource, dailyPageSource, checkInPageSource, gatePageSource].every((source) =>
         source.includes("reason: 'Loading server snapshot'") &&
           source.includes('quiet: true') &&
@@ -9790,6 +9989,11 @@ async function run() {
       seasonChangeEventsSource.includes('workspace.entityVersions') &&
       seasonChangeEventsSource.includes('mergeRemoteSeasonEvent') &&
       seasonChangeEventsSource.includes('resolveSeasonConflict') &&
+      seasonChangeEventsSource.includes('AUTO_REMOTE_WIN_MODIFICATION_FIELDS') &&
+      seasonChangeEventsSource.includes('isAutoResolvableRemoteLatestConflict') &&
+      seasonChangeEventsSource.includes('event.changedFields.length === 1') &&
+      seasonChangeEventsSource.includes("'checkInCounterWindows'") &&
+      seasonChangeEventsSource.includes("'bhs'") &&
       seasonChangeEventsSource.includes('__delete__') &&
       localSeasonStoreSource.includes('entityVersions') &&
       localSeasonStoreSource.includes('entityVersions: cloneJson(entityVersions)') &&
@@ -9918,6 +10122,9 @@ async function run() {
       nativeCatchupRustSource.includes('query_season_freshness_on_connection') &&
       nativeCatchupRustSource.includes('merge_season_snapshot_on_connection') &&
       nativeCatchupRustSource.includes('resolve_season_conflict_on_connection') &&
+      nativeCatchupRustSource.includes('AUTO_REMOTE_WIN_MODIFICATION_FIELDS') &&
+      nativeCatchupRustSource.includes('is_auto_remote_latest_conflict_event') &&
+      nativeCatchupRustSource.includes('event.changed_fields.len() == 1') &&
       nativeCatchupRustSource.includes('schedule-mutated') &&
       nativeCatchupRustSource.includes('integrity-failed') &&
       nativeCatchupRustSource.includes('lastServerSeq') &&
@@ -9952,6 +10159,20 @@ async function run() {
       !seasonSyncProviderSource.includes('saveLocalSeasonWorkspace(currentWorkspace') &&
       !seasonSyncProviderSource.includes("source: publishSource ?? 'paged-catchup'"),
     'Native catch-up must use Tauri Rust worker, WAL SQLite, token refresh handoff, passive checkpoints, fail closed on desktop, and avoid UI-side event-page replay'
+  );
+  const conflictCleanupStart = nativeCatchupRustSource.indexOf('fn remove_pending_ops_for_conflict_target');
+  const conflictCleanupEnd = nativeCatchupRustSource.indexOf('fn push_string_target', conflictCleanupStart + 1);
+  const conflictCleanupBody = conflictCleanupStart >= 0 && conflictCleanupEnd > conflictCleanupStart
+    ? nativeCatchupRustSource.slice(conflictCleanupStart, conflictCleanupEnd)
+    : '';
+  assert(
+    nativeCatchupRustSource.includes('fn mod_history_pending_op_targets') &&
+      nativeCatchupRustSource.includes('fn remove_related_mod_history_pending_ops') &&
+      nativeCatchupRustSource.includes('recordChanges') &&
+      nativeCatchupRustSource.includes('previousRecord') &&
+      nativeCatchupRustSource.includes('newRecord') &&
+      !conflictCleanupBody.includes('payload_json LIKE'),
+    'Native conflict resolution must structurally parse pending modHistory targets instead of substring matching payload_json'
   );
   assert(
     nativeCatchupRustSource.includes('normalize_modification_payload') &&

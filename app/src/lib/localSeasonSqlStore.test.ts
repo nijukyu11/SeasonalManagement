@@ -11,6 +11,7 @@ import {
   migrateLocalSeasonSqlDatabase,
   readLocalSeasonSqlDeltaState,
   replaceLocalSeasonSqlPendingState,
+  replaceLocalSeasonSqlPendingStateFromDelta,
   saveLocalSeasonSqlWorkspace,
   setLocalSeasonSqlDatabaseFactoryForTests,
   type LocalSeasonSqlDatabase,
@@ -481,6 +482,42 @@ test('replaces pending state without losing conflict review status', async () =>
   assert.equal(loaded?.pendingOps.length, 0);
   assert.equal(loaded?.syncMeta.syncStatus, 'needs_review');
   assert.equal(loaded?.syncMeta.conflicts?.length, 1);
+  db.close();
+});
+
+test('replaces pending state from delta inside a single queued transaction', async () => {
+  const db = new DefaultTransactionDatabase();
+  await migrateLocalSeasonSqlDatabase(db);
+  await saveLocalSeasonSqlWorkspace(db, workspace());
+  db.statements = [];
+
+  await replaceLocalSeasonSqlPendingStateFromDelta(
+    db,
+    'delta-test',
+    season.id,
+    new Set(['leg-1']),
+    async (state) => ({
+      ...state,
+      pendingOps: [
+        { type: 'modification', mod: { legId: 'leg-1', action: 'modified', gate: 22 } },
+        ...state.pendingOps.filter((op) => op.type !== 'modification'),
+      ],
+      syncMeta: {
+        ...state.syncMeta,
+        pendingCount: 1,
+        localRevision: state.syncMeta.localRevision + 1,
+        lastLocalChangeAt: 2000,
+        syncStatus: 'dirty',
+      },
+    })
+  );
+  const loaded = await loadLocalSeasonSqlWorkspace(db, season.id);
+
+  assert.equal(db.statements.filter((statement) => /^BEGIN IMMEDIATE$/i.test(statement)).length, 1);
+  assert.equal(db.statements.filter((statement) => /^COMMIT$/i.test(statement)).length, 1);
+  assert.equal(loaded?.pendingOps.length, 1);
+  assert.equal(loaded?.syncMeta.localRevision, 4);
+  assert.equal(loaded?.syncMeta.pendingCount, 1);
   db.close();
 });
 

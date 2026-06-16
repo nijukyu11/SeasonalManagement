@@ -10,6 +10,7 @@ export const LOCAL_SEASON_SQL_CONNECTION = 'sqlite:seasonal-management-local.db'
 export const LOCAL_SEASON_SQL_SCHEMA_VERSION = 1;
 const SQLITE_BUSY_RETRY_DELAYS_MS = [25, 75, 150];
 const SQL_WRITE_QUEUE_WARN_MS = 500;
+const SQL_READ_QUEUE_WARN_MS = 200;
 
 export interface LocalSeasonSqlDatabase {
   supportsExplicitTransactions?: boolean;
@@ -260,6 +261,20 @@ async function enqueueSqlWrite<T>(label: string, write: () => Promise<T>): Promi
       console.warn(`[local-season-sql] write queue waited ${waitedMs}ms for ${label}`);
     }
     return write();
+  });
+  sqlWriteQueueTail = current.catch(() => undefined);
+  return current;
+}
+
+export async function enqueueLocalSeasonSqlRead<T>(label: string, read: () => Promise<T>): Promise<T> {
+  const queuedAt = Date.now();
+  const previous = sqlWriteQueueTail.catch(() => undefined);
+  const current = previous.then(async () => {
+    const waitedMs = Date.now() - queuedAt;
+    if (waitedMs > SQL_READ_QUEUE_WARN_MS) {
+      console.warn(`[local-season-sql] read queue waited ${waitedMs}ms for ${label}`);
+    }
+    return read();
   });
   sqlWriteQueueTail = current.catch(() => undefined);
   return current;
@@ -806,6 +821,16 @@ export async function readLocalSeasonSqlDeltaState(
   seasonId: string,
   affectedLegIds: Set<string>
 ): Promise<LocalSeasonSqlDeltaState | null> {
+  return enqueueLocalSeasonSqlRead(`delta-state:${seasonId}`, () =>
+    readLocalSeasonSqlDeltaStateInternal(db, seasonId, affectedLegIds)
+  );
+}
+
+async function readLocalSeasonSqlDeltaStateInternal(
+  db: LocalSeasonSqlDatabase,
+  seasonId: string,
+  affectedLegIds: Set<string>
+): Promise<LocalSeasonSqlDeltaState | null> {
   const seasonRows = await db.select<JsonRow>(
     'SELECT payload_json AS payloadJson FROM local_seasons WHERE season_id = ?',
     [seasonId]
@@ -862,15 +887,67 @@ export async function replaceLocalSeasonSqlPendingState(
   pendingOps: LocalPendingOp[],
   syncMeta: LocalSyncMeta
 ): Promise<void> {
+  await transaction(db, 'pending-state', async () => {
+    await replaceLocalSeasonSqlPendingStateInternal(db, seasonId, pendingOps, syncMeta);
+  });
+}
+
+async function replaceLocalSeasonSqlPendingStateInternal(
+  db: LocalSeasonSqlDatabase,
+  seasonId: string,
+  pendingOps: LocalPendingOp[],
+  syncMeta: LocalSyncMeta
+): Promise<void> {
   const activeOps = activePendingOps(pendingOps);
   const activeSyncMeta = normalizeSyncMetaForPendingOps(syncMeta, activeOps);
-  await transaction(db, 'pending-state', async () => {
-    await executeSql(db, 'DELETE FROM local_pending_ops WHERE season_id = ?', [seasonId]);
-    await executeSql(db, 'DELETE FROM local_derived_seasonal WHERE season_id = ?', [seasonId]);
-    await executeSql(db, 'DELETE FROM local_sync_meta WHERE season_id = ?', [seasonId]);
-    await insertPendingOps(db, seasonId, activeOps);
-    await insertDerivedSeasonal(db, seasonId, null);
-    await insertSyncMeta(db, seasonId, activeSyncMeta);
+  await executeSql(db, 'DELETE FROM local_pending_ops WHERE season_id = ?', [seasonId]);
+  await executeSql(db, 'DELETE FROM local_derived_seasonal WHERE season_id = ?', [seasonId]);
+  await executeSql(db, 'DELETE FROM local_sync_meta WHERE season_id = ?', [seasonId]);
+  await insertPendingOps(db, seasonId, activeOps);
+  await insertDerivedSeasonal(db, seasonId, null);
+  await insertSyncMeta(db, seasonId, activeSyncMeta);
+}
+
+export async function replaceLocalSeasonSqlPendingStateFromDelta(
+  db: LocalSeasonSqlDatabase,
+  label: string,
+  seasonId: string,
+  affectedLegIds: Set<string>,
+  compute: (state: LocalSeasonSqlDeltaState) => LocalSeasonSqlDeltaState | Promise<LocalSeasonSqlDeltaState>
+): Promise<void> {
+  await enqueueSqlWrite(label, async () => {
+    const run = async () => {
+      const state = await readLocalSeasonSqlDeltaStateInternal(db, seasonId, affectedLegIds);
+      if (!state) throw new Error(`Local season workspace ${seasonId} not found`);
+      const nextState = await compute(state);
+      await replaceLocalSeasonSqlPendingStateInternal(
+        db,
+        seasonId,
+        nextState.pendingOps,
+        nextState.syncMeta
+      );
+    };
+    if (db.supportsExplicitTransactions === false) {
+      await run();
+      return;
+    }
+
+    let transactionStarted = false;
+    try {
+      await beginTransactionWithRecovery(db, label);
+      transactionStarted = true;
+      await run();
+      await executeSql(db, 'COMMIT');
+    } catch (error) {
+      if (transactionStarted) {
+        try {
+          await executeSql(db, 'ROLLBACK');
+        } catch {
+          // Preserve the original transaction failure.
+        }
+      }
+      throw error;
+    }
   });
 }
 
@@ -900,6 +977,15 @@ export async function clearLocalSeasonSqlWorkspaces(db: LocalSeasonSqlDatabase):
 }
 
 export async function readLocalSeasonSqlSyncMeta(
+  db: LocalSeasonSqlDatabase,
+  seasonId: string
+): Promise<LocalSyncMeta | null> {
+  return enqueueLocalSeasonSqlRead(`sync-meta:${seasonId}`, () =>
+    readLocalSeasonSqlSyncMetaInternal(db, seasonId)
+  );
+}
+
+async function readLocalSeasonSqlSyncMetaInternal(
   db: LocalSeasonSqlDatabase,
   seasonId: string
 ): Promise<LocalSyncMeta | null> {

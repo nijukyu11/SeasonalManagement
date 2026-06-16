@@ -69,6 +69,7 @@ type SeasonSyncContextValue = {
   ensureLiveSeason: (seasonId: string) => void;
   syncNow: (seasonId: string, source: string) => Promise<SyncResult>;
   fetchUpdatesNow: (seasonId: string, source: string) => Promise<SyncResult>;
+  seedSeasonSyncFromNative: (seasonId: string) => Promise<void>;
 };
 
 const DEFAULT_SYNC_STATE = createInitialSeasonAutoSyncState();
@@ -323,6 +324,7 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
       status: conflictCount > 0 ? 'needs_review' : (pendingCount > 0 ? 'dirty' : 'live'),
       pendingCount,
       lastLocalChangeAt: summary?.lastLocalChangeAt ?? null,
+      localRevision: summary?.localRevision ?? null,
       message: conflictCount > 0 ? `${conflictCount} remote conflict${conflictCount === 1 ? '' : 's'} need review.` : null,
       progress: null,
       mode: null,
@@ -421,17 +423,26 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
           entityVersions: remoteStore.getSeasonEntityVersions
             ? await remoteStore.getSeasonEntityVersions(seasonId).catch(() => ({}))
             : {},
-        };
+    };
     const serverHighWater = cursorState.serverHighWater;
     const backlog = serverHighWater - lastServerSeq;
-    const shouldReplayRecentEvents = manualFetch && serverHighWater > 0;
-    const catchUpStartSeq = backlog > 0
-      ? lastServerSeq
-      : shouldReplayRecentEvents
-        ? Math.max(0, Math.min(lastServerSeq, serverHighWater) - MANUAL_FETCH_REPLAY_EVENT_WINDOW)
-        : lastServerSeq;
+    const workspaceIsFresh = Boolean(
+      initialSummary &&
+      initialSummary.localRecordCount === 0 &&
+      initialSummary.entityVersionCount === 0 &&
+      initialSummary.pendingCount === 0 &&
+      initialSummary.conflictCount === 0
+    );
+    const shouldReplayRecentEvents = manualFetch && serverHighWater > 0 && !workspaceIsFresh;
+    const catchUpStartSeq = workspaceIsFresh && serverHighWater > 0
+      ? 0
+      : backlog > 0
+        ? lastServerSeq
+        : shouldReplayRecentEvents
+          ? Math.max(0, Math.min(lastServerSeq, serverHighWater) - MANUAL_FETCH_REPLAY_EVENT_WINDOW)
+          : lastServerSeq;
     const catchUpBacklog = serverHighWater - catchUpStartSeq;
-    const replayingRecentEvents = backlog <= 0 && catchUpBacklog > 0;
+    const replayingRecentEvents = !workspaceIsFresh && backlog <= 0 && catchUpBacklog > 0;
     if (catchUpBacklog <= 0) {
       patchStateFromNativeSummary(seasonId, initialSummary);
       if (manualFetch) {
@@ -601,22 +612,23 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
         return null;
       },
       prepareSync: async (seasonId, mode, source) => {
+        void mode;
         void source;
-        if (mode !== 'manual') return;
         const guards = Array.from(guardsRef.current.values()).filter((guard) => guard.seasonId === seasonId);
         for (const guard of guards) {
           await guard.beforeSync?.();
         }
       },
       run: async (seasonId, mode, source) => {
-        const syncGuardKey = `${seasonId}:manual-sync`;
+        const syncGuardSource = mode === 'auto' ? 'auto-sync' : 'manual-sync';
+        const syncGuardKey = `${seasonId}:${syncGuardSource}`;
         guardsRef.current.set(syncGuardKey, {
           seasonId,
-          source: 'manual-sync',
-          blocked: true,
-          reason: 'Manual save running',
+          source: syncGuardSource,
+          blocked: mode === 'manual',
+          reason: mode === 'auto' ? 'Auto save running' : 'Manual save running',
           quiet: true,
-          blockingUi: true,
+          blockingUi: mode === 'manual',
         });
         try {
           nextScheduler.setProgress(seasonId, mode === 'auto' ? 'Auto saving' : 'Preparing native save');
@@ -692,6 +704,11 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
     return runManualFetchSeason(seasonId, source);
   }, [ensureLiveSeason, runManualFetchSeason]);
 
+  const seedSeasonSyncFromNative = useCallback(async (seasonId: string) => {
+    const summary = await queryNativeSyncSummary(seasonId);
+    patchStateFromNativeSummary(seasonId, summary);
+  }, [patchStateFromNativeSummary]);
+
   useEffect(() => {
     if (!scheduler) return undefined;
     const pendingWorkspaceChangeSeasonIds = pendingWorkspaceChangeSeasonIdsRef.current;
@@ -708,6 +725,7 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
           scheduler.notifyLocalChange(seasonId, {
             pendingCount: summary.pendingCount,
             lastLocalChangeAt: summary.lastLocalChangeAt,
+            localRevision: summary.localRevision,
             source,
           });
           if (summary.conflictCount > 0) {
@@ -715,6 +733,7 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
               status: 'needs_review',
               pendingCount: summary.pendingCount,
               lastLocalChangeAt: summary.lastLocalChangeAt,
+              localRevision: summary.localRevision,
               message: `${summary.conflictCount} remote conflict${summary.conflictCount === 1 ? '' : 's'} need review.`,
               progress: null,
               conflictCount: summary.conflictCount,
@@ -763,6 +782,7 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
           scheduler.notifyLocalChange(seasonId, {
             pendingCount: state.pendingCount,
             lastLocalChangeAt: state.lastLocalChangeAt,
+            localRevision: state.localRevision,
           });
         }
       }
@@ -797,7 +817,8 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
     ensureLiveSeason,
     syncNow,
     fetchUpdatesNow,
-  }), [ensureLiveSeason, fetchUpdatesNow, registerGuard, syncNow]);
+    seedSeasonSyncFromNative,
+  }), [ensureLiveSeason, fetchUpdatesNow, registerGuard, seedSeasonSyncFromNative, syncNow]);
 
   return (
     <SeasonSyncContext.Provider value={contextValue}>
@@ -852,6 +873,9 @@ export function useSeasonSyncActions() {
       context?.fetchUpdatesNow(seasonId, source) ??
       { status: 'failed' as const, message: 'Sync coordinator is not ready.' }
     ),
+    seedSeasonSyncFromNative: async (seasonId: string) => {
+      await context?.seedSeasonSyncFromNative(seasonId);
+    },
   }), [context]);
 }
 
@@ -885,11 +909,13 @@ export function useSeasonSyncGlobalStatus() {
   }, [states]);
 }
 
-export function getSeasonSyncPendingCount(status: SeasonAutoSyncState, fallbackPendingCount: number): number {
+export function getSeasonSyncPendingCount(status: SeasonAutoSyncState, fallbackPendingCount: number): number;
+export function getSeasonSyncPendingCount(status: SeasonAutoSyncState, fallbackPendingCount: number | null): number | null;
+export function getSeasonSyncPendingCount(status: SeasonAutoSyncState, fallbackPendingCount: number | null): number | null {
   return status.pendingCount ?? fallbackPendingCount;
 }
 
-export function getSeasonSyncLabel(status: SeasonAutoSyncState, fallbackPendingCount: number): string {
+export function getSeasonSyncLabel(status: SeasonAutoSyncState, fallbackPendingCount: number | null): string {
   const pendingCount = getSeasonSyncPendingCount(status, fallbackPendingCount);
   if (status.status === 'syncing') return status.mode === 'auto' ? 'Auto saving' : 'Saving';
   if (status.status === 'catching_up') return 'Catching up';
@@ -897,15 +923,17 @@ export function getSeasonSyncLabel(status: SeasonAutoSyncState, fallbackPendingC
   if (status.status === 'offline') return 'Offline';
   if (status.status === 'conflict') return 'Conflict';
   if (status.status === 'failed') return 'Failed';
+  if (pendingCount == null) return 'Checking';
   if (pendingCount > 0) return `${pendingCount} unsynced`;
   return 'Synced';
 }
 
-export function getSeasonSyncTone(status: SeasonAutoSyncState, fallbackPendingCount: number): 'success' | 'warning' | 'error' | 'info' {
+export function getSeasonSyncTone(status: SeasonAutoSyncState, fallbackPendingCount: number | null): 'success' | 'warning' | 'error' | 'info' {
   const pendingCount = getSeasonSyncPendingCount(status, fallbackPendingCount);
   if (status.status === 'conflict' || status.status === 'failed') return 'error';
   if (status.status === 'needs_review') return 'warning';
   if (status.status === 'syncing' || status.status === 'offline' || status.status === 'scheduled' || status.status === 'catching_up' || status.status === 'live') return 'info';
+  if (pendingCount == null) return 'info';
   if (pendingCount > 0) return 'warning';
   return 'success';
 }

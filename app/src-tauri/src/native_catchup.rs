@@ -21,6 +21,16 @@ const PAGE_FETCH_RETRY_DELAYS_MS: [u64; 3] = [500, 1_000, 2_000];
 const SQLITE_SCHEMA_INIT_RETRY_DELAYS_MS: [u64; 4] = [100, 250, 500, 1_000];
 const NOTIFICATION_FLUSH_LIMIT: i64 = 50;
 const DELETE_FIELD: &str = "__delete__";
+const AUTO_REMOTE_WIN_MODIFICATION_FIELDS: [&str; 8] = [
+    "counter",
+    "checkInStart",
+    "checkInEnd",
+    "checkInAllocationMode",
+    "checkInCounterWindows",
+    "gate",
+    "stand",
+    "bhs",
+];
 const LOCAL_SEASON_SQL_SCHEMA_VERSION: i64 = 1;
 
 static SQLITE_SCHEMA_INIT_LOCK: Mutex<()> = Mutex::new(());
@@ -223,6 +233,8 @@ pub struct MergeSeasonSnapshotResult {
     pub merged_pending_count: usize,
     pub conflict_count: usize,
     pub conflicts: Vec<Value>,
+    pub auto_resolved_conflict_count: usize,
+    pub auto_resolved_conflict_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -306,6 +318,8 @@ pub struct QuerySyncSummaryResult {
     pub last_local_change_at: Option<i64>,
     pub last_server_seq: Option<i64>,
     pub local_revision: i64,
+    pub local_record_count: i64,
+    pub entity_version_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -410,6 +424,8 @@ pub struct NativeSyncPendingChangesResult {
     pub notification_failed: i64,
     pub notification_skipped: i64,
     pub notification_flush_error: Option<String>,
+    pub auto_resolved_conflict_count: usize,
+    pub auto_resolved_conflict_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1944,12 +1960,12 @@ fn event_payload_for_target(target_type: &str, entity: Value) -> Value {
     }
 }
 
-fn snapshot_conflict_for_pending_event(
+fn snapshot_remote_event_for_pending_event(
     event: &NativeCatchupEvent,
     remote_entity: Option<&Value>,
     fields: &[String],
-) -> Value {
-    let remote_event = NativeCatchupEvent {
+) -> NativeCatchupEvent {
+    NativeCatchupEvent {
         event_id: format!("snapshot-merge:{}", event.op_id),
         season_id: event.season_id.clone(),
         client_id: "server".to_string(),
@@ -1973,10 +1989,28 @@ fn snapshot_conflict_for_pending_event(
             remote_entity.cloned().unwrap_or(Value::Null),
         ),
         created_at: chrono_like_millis().to_string(),
-    };
+    }
+}
+
+fn snapshot_conflict_id(event: &NativeCatchupEvent, fields: &[String]) -> String {
+    format!(
+        "snapshot-merge:{}:{}:{}:{}",
+        event.op_id,
+        event.target_type,
+        event.target_id,
+        fields.join(",")
+    )
+}
+
+fn snapshot_conflict_for_pending_event(
+    event: &NativeCatchupEvent,
+    remote_entity: Option<&Value>,
+    fields: &[String],
+) -> Value {
+    let remote_event = snapshot_remote_event_for_pending_event(event, remote_entity, fields);
     let local_entity = event_payload_entity(event);
     json!({
-        "id": format!("{}:{}:{}:{}", remote_event.event_id, remote_event.target_type, remote_event.target_id, fields.join(",")),
+        "id": snapshot_conflict_id(event, fields),
         "event": remote_event,
         "targetType": remote_event.target_type,
         "targetId": remote_event.target_id,
@@ -2118,6 +2152,7 @@ pub fn merge_season_snapshot_on_connection(
             }
         }
 
+        let mut auto_resolved_conflict_ids = Vec::new();
         for event_value in &pending_events {
             let Some(mut event) = native_event_from_pending_value(event_value) else {
                 continue;
@@ -2147,6 +2182,26 @@ pub fn merge_season_snapshot_on_connection(
             if !overlapping_fields.is_empty() {
                 let remote_entity = read_current_entity(conn, &written_season_id, &event)
                     .map_err(|error| format!("Could not read snapshot conflict entity: {error}"))?;
+                let remote_event = snapshot_remote_event_for_pending_event(
+                    &event,
+                    remote_entity.as_ref(),
+                    &overlapping_fields,
+                );
+                if is_auto_remote_latest_conflict_event(&remote_event) {
+                    apply_event_data(conn, &written_season_id, &remote_event)
+                        .map_err(|error| format!("Could not apply auto-resolved snapshot conflict: {error}"))?;
+                    update_entity_versions(conn, &written_season_id, &remote_event)
+                        .map_err(|error| format!("Could not update auto-resolved snapshot versions: {error}"))?;
+                    remove_pending_ops_for_conflict_target(
+                        conn,
+                        &written_season_id,
+                        &event.target_type,
+                        &event.target_id,
+                    )
+                    .map_err(|error| format!("Could not clear auto-resolved pending operation: {error}"))?;
+                    auto_resolved_conflict_ids.push(snapshot_conflict_id(&event, &overlapping_fields));
+                    continue;
+                }
                 let conflict = snapshot_conflict_for_pending_event(
                     &event,
                     remote_entity.as_ref(),
@@ -2158,6 +2213,16 @@ pub fn merge_season_snapshot_on_connection(
                 .map_err(|error| format!("Could not replay pending operation on snapshot: {error}"))?;
         }
 
+        let pending_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM local_pending_ops WHERE season_id = ? AND op_type <> 'sourceRow'",
+                params![written_season_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("Could not count pending operations after snapshot merge: {error}"))?;
+        next_sync_meta["pendingCount"] = json!(pending_count);
+        next_sync_meta["autoResolvedConflictCount"] = json!(auto_resolved_conflict_ids.len());
+        next_sync_meta["autoResolvedConflictIds"] = json!(auto_resolved_conflict_ids.clone());
         let conflict_count = next_sync_meta
             .get("conflicts")
             .and_then(Value::as_array)
@@ -2165,7 +2230,7 @@ pub fn merge_season_snapshot_on_connection(
         next_sync_meta["syncStatus"] = Value::String(
             if conflict_count > 0 {
                 "needs_review"
-            } else if pending_ops.is_empty() {
+            } else if pending_count == 0 {
                 "synced"
             } else {
                 "dirty"
@@ -2187,9 +2252,11 @@ pub fn merge_season_snapshot_on_connection(
             mod_history: input.mod_history.len(),
             last_server_seq: input.server_event_high_water,
             sync_meta: next_sync_meta,
-            merged_pending_count: pending_ops.len(),
+            merged_pending_count: pending_count as usize,
             conflict_count,
             conflicts,
+            auto_resolved_conflict_count: auto_resolved_conflict_ids.len(),
+            auto_resolved_conflict_ids,
         })
     })();
 
@@ -2225,10 +2292,74 @@ fn remove_pending_ops_for_conflict_target(
             params![season_id, op_key],
         )?;
     }
-    conn.execute(
-        "DELETE FROM local_pending_ops WHERE season_id = ? AND op_type = 'modHistory' AND payload_json LIKE ?",
-        params![season_id, format!("%\"{target_id}\"%")],
+    remove_related_mod_history_pending_ops(conn, season_id, target_type, target_id)?;
+    Ok(())
+}
+
+fn push_string_target(targets: &mut HashSet<String>, value: Option<&Value>) {
+    if let Some(target) = value.and_then(Value::as_str) {
+        if !target.is_empty() {
+            targets.insert(target.to_string());
+        }
+    }
+}
+
+fn mod_history_pending_op_targets(payload_json: &str) -> rusqlite::Result<(Option<String>, HashSet<String>)> {
+    let payload = match serde_json::from_str::<Value>(payload_json) {
+        Ok(payload) => payload,
+        Err(_) => return Ok((None, HashSet::new())),
+    };
+    let entry = payload.get("entry").unwrap_or(&Value::Null);
+    let history_id = entry
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let mut targets = HashSet::new();
+    if let Some(changes) = entry.get("changes").and_then(Value::as_array) {
+        for change in changes {
+            push_string_target(&mut targets, change.get("legId"));
+            push_string_target(&mut targets, change.pointer("/previousMod/legId"));
+            push_string_target(&mut targets, change.pointer("/newMod/legId"));
+        }
+    }
+    if let Some(record_changes) = entry.get("recordChanges").and_then(Value::as_array) {
+        for change in record_changes {
+            push_string_target(&mut targets, change.get("recordId"));
+            push_string_target(&mut targets, change.pointer("/previousRecord/id"));
+            push_string_target(&mut targets, change.pointer("/newRecord/id"));
+        }
+    }
+    Ok((history_id, targets))
+}
+
+fn remove_related_mod_history_pending_ops(
+    conn: &Connection,
+    season_id: &str,
+    target_type: &str,
+    target_id: &str,
+) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT rowid, payload_json FROM local_pending_ops WHERE season_id = ? AND op_type = 'modHistory'",
     )?;
+    let rows = stmt.query_map(params![season_id], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut rowids_to_delete = Vec::new();
+    for row in rows {
+        let (rowid, payload_json) = row?;
+        let (history_id, targets) = mod_history_pending_op_targets(&payload_json)?;
+        let should_delete = if target_type == "modHistory" {
+            history_id.as_deref() == Some(target_id)
+        } else {
+            !targets.is_empty() && targets.iter().all(|target| target == target_id)
+        };
+        if should_delete {
+            rowids_to_delete.push(rowid);
+        }
+    }
+    for rowid in rowids_to_delete {
+        conn.execute("DELETE FROM local_pending_ops WHERE rowid = ?", params![rowid])?;
+    }
     Ok(())
 }
 
@@ -2585,6 +2716,16 @@ pub fn query_sync_summary_on_connection(
         params![season_id],
         |row| row.get::<_, i64>(0),
     )?;
+    let local_record_count = conn.query_row(
+        "SELECT COUNT(*) FROM local_flight_records WHERE season_id = ? AND is_base = 0",
+        params![season_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let entity_version_count = conn.query_row(
+        "SELECT COUNT(*) FROM local_entity_versions WHERE season_id = ?",
+        params![season_id],
+        |row| row.get::<_, i64>(0),
+    )?;
     let sync_status = if !conflicts.is_empty() {
         "needs_review".to_string()
     } else if pending_count > 0 {
@@ -2607,6 +2748,8 @@ pub fn query_sync_summary_on_connection(
             .get("localRevision")
             .and_then(Value::as_i64)
             .unwrap_or(0),
+        local_record_count,
+        entity_version_count,
     })
 }
 
@@ -3404,6 +3547,8 @@ pub fn sync_pending_changes_on_connection(
             notification_failed: 0,
             notification_skipped: 0,
             notification_flush_error: None,
+            auto_resolved_conflict_count: 0,
+            auto_resolved_conflict_ids: Vec::new(),
         });
     }
     Ok(NativeSyncPendingChangesResult {
@@ -3416,6 +3561,8 @@ pub fn sync_pending_changes_on_connection(
         notification_failed: 0,
         notification_skipped: 0,
         notification_flush_error: None,
+        auto_resolved_conflict_count: 0,
+        auto_resolved_conflict_ids: Vec::new(),
     })
 }
 
@@ -3606,7 +3753,13 @@ fn mark_pending_sync_conflict(
         next_sync_meta = json!({});
     }
     if let Some(object) = next_sync_meta.as_object_mut() {
+        let pending_count = conn.query_row(
+            "SELECT COUNT(*) FROM local_pending_ops WHERE season_id = ? AND op_type <> 'sourceRow'",
+            params![season_id],
+            |row| row.get::<_, i64>(0),
+        )?;
         object.insert("syncStatus".to_string(), json!("needs_review"));
+        object.insert("pendingCount".to_string(), json!(pending_count));
         object.insert(
             "conflicts".to_string(),
             Value::Array(
@@ -4500,6 +4653,41 @@ fn is_modification_delete_event(event: &NativeCatchupEvent) -> bool {
             .changed_fields
             .iter()
             .any(|field| field == DELETE_FIELD)
+}
+
+fn is_auto_remote_latest_conflict_event(event: &NativeCatchupEvent) -> bool {
+    event.target_type == "modification"
+        && event.changed_fields.len() == 1
+        && AUTO_REMOTE_WIN_MODIFICATION_FIELDS.contains(&event.changed_fields[0].as_str())
+}
+
+fn remote_latest_conflict_id(event: &NativeCatchupEvent) -> String {
+    format!("{}:{}:{}", event.op_id, event.target_type, event.target_id)
+}
+
+fn auto_resolve_remote_latest_conflict_events(
+    conn: &Connection,
+    season_id: &str,
+    conflict_events: &[NativeCatchupEvent],
+) -> rusqlite::Result<(Vec<NativeCatchupEvent>, Vec<String>)> {
+    let mut remaining = Vec::new();
+    let mut auto_resolved_ids = Vec::new();
+    for event in conflict_events {
+        if is_auto_remote_latest_conflict_event(event) {
+            apply_event_data(conn, season_id, event)?;
+            update_entity_versions(conn, season_id, event)?;
+            remove_pending_ops_for_conflict_target(
+                conn,
+                season_id,
+                &event.target_type,
+                &event.target_id,
+            )?;
+            auto_resolved_ids.push(remote_latest_conflict_id(event));
+        } else {
+            remaining.push(event.clone());
+        }
+    }
+    Ok((remaining, auto_resolved_ids))
 }
 
 fn same_client_event_already_applied(
@@ -5809,6 +5997,8 @@ pub async fn sync_native_pending_changes(
             notification_failed: 0,
             notification_skipped: 0,
             notification_flush_error: None,
+            auto_resolved_conflict_count: 0,
+            auto_resolved_conflict_ids: Vec::new(),
         });
     }
 
@@ -5844,6 +6034,8 @@ pub async fn sync_native_pending_changes(
             notification_failed: 0,
             notification_skipped: 0,
             notification_flush_error: None,
+            auto_resolved_conflict_count: 0,
+            auto_resolved_conflict_ids: Vec::new(),
         };
         app.emit(
             "sync-failed",
@@ -5858,7 +6050,20 @@ pub async fn sync_native_pending_changes(
         return Ok(result);
     }
 
-    let mut result = if rpc_result.conflict_events.is_empty() {
+    let (remaining_conflict_events, auto_resolved_conflict_ids) =
+        if rpc_result.conflict_events.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            auto_resolve_remote_latest_conflict_events(
+                &conn,
+                &input.season_id,
+                &rpc_result.conflict_events,
+            )
+            .map_err(|error| format!("Native pending auto-resolve failed: {error}"))?
+        };
+    let auto_resolved_conflict_count = auto_resolved_conflict_ids.len();
+
+    let mut result = if remaining_conflict_events.is_empty() {
         let next_sync_meta = finalize_successful_pending_sync(&conn, &input.season_id, &rpc_result)
             .map_err(|error| format!("Native pending sync finalize failed: {error}"))?;
         app.emit(
@@ -5880,23 +6085,33 @@ pub async fn sync_native_pending_changes(
         .ok();
         NativeSyncPendingChangesResult {
             status: "synced".to_string(),
-            message: "Local changes synced.".to_string(),
+            message: if auto_resolved_conflict_count > 0 {
+                format!(
+                    "Local changes synced. Auto-applied {} remote allocation change{}.",
+                    auto_resolved_conflict_count,
+                    if auto_resolved_conflict_count == 1 { "" } else { "s" }
+                )
+            } else {
+                "Local changes synced.".to_string()
+            },
             pending_count: 0,
             conflict_count: 0,
             notification_sent: 0,
             notification_failed: 0,
             notification_skipped: 0,
             notification_flush_error: None,
+            auto_resolved_conflict_count,
+            auto_resolved_conflict_ids,
         }
     } else {
         let next_sync_meta =
-            mark_pending_sync_conflict(&conn, &input.season_id, &rpc_result.conflict_events)
+            mark_pending_sync_conflict(&conn, &input.season_id, &remaining_conflict_events)
                 .map_err(|error| format!("Native pending conflict persist failed: {error}"))?;
         let conflict_count = next_sync_meta
             .get("conflicts")
             .and_then(Value::as_array)
             .map(Vec::len)
-            .unwrap_or(rpc_result.conflict_events.len());
+            .unwrap_or(remaining_conflict_events.len());
         app.emit(
             "conflict-updated",
             ConflictUpdatedEvent {
@@ -5918,6 +6133,8 @@ pub async fn sync_native_pending_changes(
             notification_failed: 0,
             notification_skipped: 0,
             notification_flush_error: None,
+            auto_resolved_conflict_count,
+            auto_resolved_conflict_ids,
         }
     };
 
