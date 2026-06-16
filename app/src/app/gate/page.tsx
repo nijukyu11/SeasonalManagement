@@ -427,7 +427,7 @@ function GateAllocationContent() {
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
     buildLoadProgress('Loading gate allocation...', 10, 'Preparing workspace')
   );
-  const [syncSummarySeeded, setSyncSummarySeeded] = useState(false);
+  const [seededSyncSeasonId, setSeededSyncSeasonId] = useState<string | null>(null);
   const [draggedRecordId, setDraggedRecordId] = useState<string | null>(null);
   const [activeDropRowIndex, setActiveDropRowIndex] = useState<number | null>(null);
   const [poolDropActive, setPoolDropActive] = useState(false);
@@ -459,10 +459,12 @@ function GateAllocationContent() {
   const syncSeasonId = season?.id ?? targetSeasonId;
   const { status: syncStatus, syncNow, fetchUpdatesNow } = useSeasonSync(syncSeasonId, 'gate');
   const { seedSeasonSyncFromNative } = useSeasonSyncActions();
-  const syncing = syncStatus.status === 'syncing' && syncStatus.mode === 'manual';
+  const syncInProgress = syncStatus.status === 'syncing';
+  const syncing = syncInProgress && syncStatus.mode === 'manual';
   const fetchingUpdates = syncStatus.status === 'catching_up' && syncStatus.mode === 'manual';
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' || syncStatus.status === 'conflict' ? syncStatus.message : null);
   const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
+  const syncSummarySeeded = syncSeasonId != null && seededSyncSeasonId === syncSeasonId;
   const syncFallbackPendingCount = syncSummarySeeded ? 0 : null;
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, 0);
   const syncLabel = getSeasonSyncLabel(syncStatus, syncFallbackPendingCount);
@@ -485,14 +487,10 @@ function GateAllocationContent() {
   });
 
   useEffect(() => {
-    if (!syncSeasonId) {
-      setSyncSummarySeeded(false);
-      return undefined;
-    }
+    if (!syncSeasonId) return undefined;
     let cancelled = false;
-    setSyncSummarySeeded(false);
     void seedSeasonSyncFromNative(syncSeasonId).then(() => {
-      if (!cancelled) setSyncSummarySeeded(true);
+      if (!cancelled) setSeededSyncSeasonId(syncSeasonId);
     }).catch((error) => {
       console.debug('[gate-sync] native summary seed failed', error);
     });
@@ -1302,7 +1300,7 @@ function GateAllocationContent() {
   const canZoomIn = timelinePixelsPerMinute < MAX_TIMELINE_PIXELS_PER_MINUTE;
 
   const handleSync = async () => {
-    if (!season || syncing) return;
+    if (!season || syncInProgress) return;
     try {
       const result = await syncNow();
       if (result.status !== 'synced') {
@@ -1314,7 +1312,7 @@ function GateAllocationContent() {
   };
 
   const handleFetchUpdates = async () => {
-    if (!syncSeasonId || fetchingUpdates || syncing) return;
+    if (!syncSeasonId || fetchingUpdates || syncInProgress) return;
     try {
       const result = await fetchUpdatesNow();
       if (result.status !== 'synced') {
@@ -1528,11 +1526,11 @@ function GateAllocationContent() {
                 <FetchServerUpdatesButton
                   fetching={fetchingUpdates}
                   progress={fetchProgress}
-                  disabled={syncing}
+                  disabled={syncInProgress}
                   onFetch={handleFetchUpdates}
                 />
                 <SyncActionButton
-                  syncing={syncing}
+                  syncing={syncInProgress}
                   pendingCount={syncPendingCount}
                   progress={syncProgress}
                   onSync={handleSync}

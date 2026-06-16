@@ -388,7 +388,8 @@ function DailyScheduleContent() {
   const dailyDeleteShortcutInFlightRef = useRef(false);
   const syncSeasonId = season?.id ?? targetSeasonId;
   const { status: syncStatus, syncNow, fetchUpdatesNow } = useSeasonSync(syncSeasonId, 'daily');
-  const syncing = syncStatus.status === 'syncing' && syncStatus.mode === 'manual';
+  const syncInProgress = syncStatus.status === 'syncing';
+  const syncing = syncInProgress && syncStatus.mode === 'manual';
   const fetchingUpdates = syncStatus.status === 'catching_up' && syncStatus.mode === 'manual';
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' || syncStatus.status === 'conflict' ? syncStatus.message : null);
   const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
@@ -642,7 +643,7 @@ function DailyScheduleContent() {
   }), [fromDateTime, toDateTime]);
   const hasSelectedRecords = selectedRecordIds.length > 0;
   const actionsDisabled = !season || syncing || dailyImporting;
-  const dailyImportDisabled = syncing || dailyImporting;
+  const dailyImportDisabled = syncInProgress || dailyImporting;
   const selectedArrCount = selectedRowRecords.filter((record) => record.type === 'A').length;
   const selectedDepCount = selectedRowRecords.filter((record) => record.type === 'D').length;
   const selectedHasLinkInfo = selectedRows.some(hasDailyLinkInfo) ||
@@ -803,7 +804,7 @@ function DailyScheduleContent() {
   }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, fromDateTime, modifications, publishDailyWorkspaceChange, season, settings, toDateTime]);
 
   const handleDailyImportFile = useCallback(async (file: File | null) => {
-    if (!file || syncing || dailyImporting) return;
+    if (!file || syncInProgress || dailyImporting) return;
     setDailyImporting(true);
     try {
       const buffer = await file.arrayBuffer();
@@ -944,7 +945,7 @@ function DailyScheduleContent() {
       setDailyImporting(false);
       if (dailyImportInputRef.current) dailyImportInputRef.current.value = '';
     }
-  }, [applyDailyNativeState, dailyImporting, enqueueLocalMutation, publishDailyWorkspaceChange, router, season?.id, seasons, showAlert, syncing]);
+  }, [applyDailyNativeState, dailyImporting, enqueueLocalMutation, publishDailyWorkspaceChange, router, season?.id, seasons, showAlert, syncInProgress]);
 
   const handleAddFlights = useCallback(async (mods: FlightModification[]) => {
     if (!season) return;
@@ -1208,7 +1209,7 @@ function DailyScheduleContent() {
   }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, selectedRecordIds, showAlert, showConfirm]);
 
   const handleSync = useCallback(async () => {
-    if (!season || syncing) return;
+    if (!season || syncInProgress) return;
     try {
       const result = await syncNow();
       if (result.status !== 'synced') {
@@ -1217,10 +1218,10 @@ function DailyScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Save Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [season, showAlert, syncing, syncNow]);
+  }, [season, showAlert, syncInProgress, syncNow]);
 
   const handleFetchUpdates = useCallback(async () => {
-    if (!syncSeasonId || fetchingUpdates || syncing) return;
+    if (!syncSeasonId || fetchingUpdates || syncInProgress) return;
     try {
       const result = await fetchUpdatesNow();
       if (result.status !== 'synced') {
@@ -1229,7 +1230,7 @@ function DailyScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Fetch Updates Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [fetchUpdatesNow, fetchingUpdates, showAlert, syncSeasonId, syncing]);
+  }, [fetchUpdatesNow, fetchingUpdates, showAlert, syncInProgress, syncSeasonId]);
 
   return (
     <div className="flex h-screen bg-surface text-on-surface overflow-hidden font-sans">
@@ -1269,11 +1270,11 @@ function DailyScheduleContent() {
                 <FetchServerUpdatesButton
                   fetching={fetchingUpdates}
                   progress={fetchProgress}
-                  disabled={syncing}
+                  disabled={syncInProgress}
                   onFetch={handleFetchUpdates}
                 />
                 <SyncActionButton
-                  syncing={syncing}
+                  syncing={syncInProgress}
                   pendingCount={syncPendingCount}
                   progress={syncProgress}
                   onSync={handleSync}

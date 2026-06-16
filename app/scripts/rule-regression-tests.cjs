@@ -2598,6 +2598,52 @@ async function run() {
       schedulerPrepares.some((entry) => entry.seasonId === 'daily-season' && entry.mode === 'auto' && entry.source === 'daily'),
     `guarded auto sync should run Daily changes in auto mode after debounce and idle, got ${JSON.stringify({ schedulerRuns, schedulerPrepares, schedulerStates })}`
   );
+  const runningStates = [];
+  let runningTimer = null;
+  let releaseRunningSync = null;
+  let runningPendingCount = 17934;
+  let runningRunStarted = false;
+  const runningScheduler = new SeasonAutoSyncScheduler({
+    setTimeout: (callback) => {
+      runningTimer = callback;
+      return 1;
+    },
+    clearTimeout: () => undefined,
+    isOnline: () => true,
+    getPendingCount: async () => runningPendingCount,
+    run: async () => {
+      runningRunStarted = true;
+      await new Promise((resolve) => {
+        releaseRunningSync = resolve;
+      });
+      runningPendingCount = 0;
+      return { status: 'synced', message: 'ok' };
+    },
+    onState: (seasonId, state) => runningStates.push({ seasonId, state }),
+  });
+  runningScheduler.notifyLocalChange('running-season', { source: 'daily', pendingCount: runningPendingCount, lastLocalChangeAt: 200 });
+  runningTimer();
+  for (let index = 0; index < 6; index++) await Promise.resolve();
+  assert(
+    runningRunStarted &&
+      runningStates.at(-1)?.state.status === 'syncing' &&
+      runningStates.at(-1)?.state.pendingCount === 17934,
+    `running auto sync should expose syncing state before guard churn, got ${JSON.stringify(runningStates)}`
+  );
+  runningScheduler.notifyGuardChanged('running-season');
+  runningScheduler.notifyLocalChange('running-season', { source: 'daily', pendingCount: 17934, lastLocalChangeAt: 201 });
+  assert(
+    runningStates.at(-1)?.state.status === 'syncing' &&
+      runningStates.at(-1)?.state.pendingCount === 17934,
+    `guard/local-change churn during auto sync must not show stale unsynced dirty state, got ${JSON.stringify(runningStates)}`
+  );
+  releaseRunningSync();
+  for (let index = 0; index < 8; index++) await Promise.resolve();
+  assert(
+    runningStates.at(-1)?.state.status === 'synced' &&
+      runningStates.at(-1)?.state.pendingCount === 0,
+    `completed auto sync should clear stale pending state, got ${JSON.stringify(runningStates)}`
+  );
   const timerCountBeforeDetailed = schedulerTimers.length;
   scheduler.notifyLocalChange('detailed-season', { source: 'detailed', pendingCount: 1 });
   assert(
@@ -8743,7 +8789,8 @@ async function run() {
       gatePageSource.includes("source: 'gate-native'") &&
       gatePageSource.includes('const GATE_COMMIT_DEBOUNCE_MS = 400') &&
       gatePageSource.includes('const { seedSeasonSyncFromNative } = useSeasonSyncActions()') &&
-      gatePageSource.includes('const [syncSummarySeeded, setSyncSummarySeeded] = useState(false)') &&
+      gatePageSource.includes('const [seededSyncSeasonId, setSeededSyncSeasonId] = useState<string | null>(null)') &&
+      gatePageSource.includes('const syncSummarySeeded = syncSeasonId != null && seededSyncSeasonId === syncSeasonId') &&
       gatePageSource.includes('const syncFallbackPendingCount = syncSummarySeeded ? 0 : null') &&
       gatePageSource.includes('optimisticBaseLocalRevisionRef') &&
       gatePageSource.includes('interface PendingAccumulatedGateCommit') &&

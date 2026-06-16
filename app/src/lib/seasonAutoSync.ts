@@ -117,9 +117,23 @@ export class SeasonAutoSyncScheduler {
   notifyLocalChange(seasonId: string, summary: SeasonAutoSyncSummary = {}): void {
     const record = this.getRecord(seasonId);
     record.source = summary.source ?? record.source;
-    this.cancelScheduled(record);
     const pendingCount = summary.pendingCount ?? record.state.pendingCount ?? 1;
     const hasPending = (pendingCount ?? 0) > 0;
+    if (record.running) {
+      record.queued = hasPending;
+      this.updateState(seasonId, {
+        status: 'syncing',
+        pendingCount,
+        lastLocalChangeAt: summary.lastLocalChangeAt ?? record.state.lastLocalChangeAt,
+        localRevision: summary.localRevision ?? record.state.localRevision,
+        message: record.state.message ?? 'Saving',
+        progress: record.state.progress ?? 'Saving',
+        mode: record.state.mode ?? 'auto',
+      });
+      return;
+    }
+
+    this.cancelScheduled(record);
     const canAutoSync = hasPending &&
       this.isOnline() &&
       record.state.status !== 'conflict' &&
@@ -161,6 +175,7 @@ export class SeasonAutoSyncScheduler {
     const record = this.getRecord(seasonId);
     if (!record.state.pendingCount) return;
     if (record.state.status === 'conflict' || record.state.status === 'needs_review') return;
+    if (record.running) return;
     const canAutoSync = this.isOnline() && shouldAutoSyncSource(record.source);
     this.cancelScheduled(record);
     this.updateState(seasonId, {
@@ -177,6 +192,7 @@ export class SeasonAutoSyncScheduler {
     for (const [seasonId, record] of this.records) {
       if (
         !record.state.pendingCount ||
+        record.running ||
         record.state.status === 'conflict' ||
         record.state.status === 'needs_review'
       ) continue;

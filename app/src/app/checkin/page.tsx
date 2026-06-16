@@ -850,7 +850,8 @@ function CheckInAllocationContent() {
   useSessionScrollRestoration('checkin:gantt-scroll', ganttScrollRef);
   const syncSeasonId = season?.id ?? targetSeasonId;
   const { status: syncStatus, syncNow, fetchUpdatesNow } = useSeasonSync(syncSeasonId, 'checkin');
-  const syncing = syncStatus.status === 'syncing' && syncStatus.mode === 'manual';
+  const syncInProgress = syncStatus.status === 'syncing';
+  const syncing = syncInProgress && syncStatus.mode === 'manual';
   const fetchingUpdates = syncStatus.status === 'catching_up' && syncStatus.mode === 'manual';
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' || syncStatus.status === 'conflict' ? syncStatus.message : null);
   const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
@@ -1891,7 +1892,7 @@ function CheckInAllocationContent() {
   };
 
   const handleSync = useCallback(async () => {
-    if (!season || syncing) return;
+    if (!season || syncInProgress) return;
     setResizeState(null);
     try {
       const result = await syncNow();
@@ -1901,10 +1902,10 @@ function CheckInAllocationContent() {
     } catch (err) {
       void showAlert({ title: 'Save Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [season, showAlert, syncing, syncNow]);
+  }, [season, showAlert, syncInProgress, syncNow]);
 
   const handleFetchUpdates = useCallback(async () => {
-    if (!syncSeasonId || fetchingUpdates || syncing) return;
+    if (!syncSeasonId || fetchingUpdates || syncInProgress) return;
     setResizeState(null);
     try {
       const result = await fetchUpdatesNow();
@@ -1914,7 +1915,7 @@ function CheckInAllocationContent() {
     } catch (err) {
       void showAlert({ title: 'Fetch Updates Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [fetchUpdatesNow, fetchingUpdates, showAlert, syncSeasonId, syncing]);
+  }, [fetchUpdatesNow, fetchingUpdates, showAlert, syncInProgress, syncSeasonId]);
 
   const handleOpenExportDialog = useCallback(() => {
     promoteLatestCheckInModificationsForView();
@@ -2606,11 +2607,11 @@ function CheckInAllocationContent() {
                 <FetchServerUpdatesButton
                   fetching={fetchingUpdates}
                   progress={fetchProgress}
-                  disabled={syncing}
+                  disabled={syncInProgress}
                   onFetch={handleFetchUpdates}
                 />
                 <SyncActionButton
-                  syncing={syncing}
+                  syncing={syncInProgress}
                   pendingCount={syncPendingCount}
                   progress={syncProgress}
                   onSync={handleSync}

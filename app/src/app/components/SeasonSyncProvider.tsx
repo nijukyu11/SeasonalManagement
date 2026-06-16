@@ -695,9 +695,22 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
 
   const syncNow = useCallback(async (seasonId: string, source: string) => {
     ensureLiveSeason(seasonId);
-    return scheduler?.syncNow(seasonId, source) ??
-      { status: 'failed' as const, message: 'Sync coordinator is not ready.' };
-  }, [ensureLiveSeason, scheduler]);
+    const result = await (scheduler?.syncNow(seasonId, source) ??
+      { status: 'failed' as const, message: 'Sync coordinator is not ready.' });
+    if (result.status === 'synced' || result.status === 'conflict') {
+      const summary = await queryNativeSyncSummary(seasonId).catch(() => null);
+      if (summary) {
+        patchStateFromNativeSummary(seasonId, summary);
+        publishSeasonWorkspaceChanged({
+          seasonId,
+          localRevision: summary.localRevision,
+          source: normalizeSyncSource(source, result),
+          syncMeta: null,
+        });
+      }
+    }
+    return result;
+  }, [ensureLiveSeason, patchStateFromNativeSummary, scheduler]);
 
   const fetchUpdatesNow = useCallback(async (seasonId: string, source: string) => {
     ensureLiveSeason(seasonId);
