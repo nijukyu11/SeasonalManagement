@@ -180,8 +180,8 @@ function canRepresentAsSingleImportRow(arrival: FlightLeg, departure: FlightLeg)
   const linkType = pairLinkType(arrival, departure);
   const inferred = inferredSameRowLinkType(arrival, departure);
   if (!linkType || !inferred || linkType !== inferred) return false;
-  if (linkType === 'sameday') return departure.date === arrival.date;
-  return departure.date === shiftIsoDate(arrival.date, 1);
+  if (linkType !== 'sameday') return false;
+  return departure.date === arrival.date;
 }
 
 function legSort(left: FlightLeg, right: FlightLeg): number {
@@ -245,6 +245,16 @@ function hasPairingMetadata(leg: FlightLeg): boolean {
   return !!leg.linkedRecordId || pairingKeys(leg).length > 0;
 }
 
+function candidateFromLeg(leg: FlightLeg): RowCandidate {
+  return {
+    date: leg.date,
+    airline: leg.airline,
+    aircraft: leg.aircraft,
+    arrival: leg.type === 'A' ? leg : null,
+    departure: leg.type === 'D' ? leg : null,
+  };
+}
+
 function buildCandidates(legs: FlightLeg[]): { candidates: RowCandidate[]; unpairedLinkedLegs: number } {
   const byId = new Map(legs.map((leg) => [leg.id, leg]));
   const byPairingKey = buildPairingIndex(legs);
@@ -260,6 +270,12 @@ function buildCandidates(legs: FlightLeg[]): { candidates: RowCandidate[]; unpai
       const arrival = leg.type === 'A' ? leg : counterpart;
       const departure = leg.type === 'D' ? leg : counterpart;
       if (arrival.type === 'A' && departure.type === 'D') {
+        if (pairLinkType(arrival, departure) === 'overnight') {
+          candidates.push(candidateFromLeg(arrival), candidateFromLeg(departure));
+          processed.add(arrival.id);
+          processed.add(departure.id);
+          continue;
+        }
         if (canRepresentAsSingleImportRow(arrival, departure)) {
           candidates.push({
             date: arrival.date,
@@ -278,13 +294,7 @@ function buildCandidates(legs: FlightLeg[]): { candidates: RowCandidate[]; unpai
       unpairedLinkedLegs += 1;
     }
 
-    candidates.push({
-      date: leg.date,
-      airline: leg.airline,
-      aircraft: leg.aircraft,
-      arrival: leg.type === 'A' ? leg : null,
-      departure: leg.type === 'D' ? leg : null,
-    });
+    candidates.push(candidateFromLeg(leg));
     processed.add(leg.id);
   }
 

@@ -194,6 +194,7 @@ Import/re-import remains server-first because it establishes a new baseline. A s
 - Seasonal Schedule has the same local Undo history model as Detailed Schedule. Delete actions undo modification overlays; link/unlink actions undo `FlightRecord` relationship fields.
 - Row checkboxes select atomic records for selective export.
 - If a selected record is linked, export automatically includes the paired record.
+- Seasonal Excel export keeps same-day linked ARR/DEP eligible for one combined row, but all overnight linked pairs are emitted as separate ARR-only and DEP-only rows so the DEP row keeps its actual +1 dates and weekday pattern.
 - The Seasonal row aggregator is display-only. It can be rebuilt or discarded at any time and must not be used as export or persistence truth.
 
 ### Check-in Allocation

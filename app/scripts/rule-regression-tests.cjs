@@ -5556,6 +5556,31 @@ async function run() {
     atomicGroups.some((group) => group.dep === '481' && group.effective === '2026-03-31' && group.discontinue === '2026-03-31'),
     `selected atomic export should include overnight DEP +1 row, got ${JSON.stringify(atomicGroups)}`
   );
+  const canonicalAtomicOvernight = buildCanonicalSeasonalRows({
+    records: atomicRecords,
+    modifications: new Map(),
+    selectedRecordIds: [linkedArr.id],
+  });
+  assert(canonicalAtomicOvernight.validation.valid, `canonical imported same-row overnight rows should round-trip, got ${JSON.stringify(canonicalAtomicOvernight.validation)}`);
+  assert(
+    canonicalAtomicOvernight.rows.length === 2 &&
+      canonicalAtomicOvernight.rows.some((row) =>
+        row.arrFlight === '480' &&
+        row.depFlight == null &&
+        row.effective === '30-Mar-26' &&
+        row.discontinue === '30-Mar-26' &&
+        JSON.stringify(row.daysOfWeek) === JSON.stringify([true, false, false, false, false, false, false])
+      ) &&
+      canonicalAtomicOvernight.rows.some((row) =>
+        row.depFlight === '481' &&
+        row.arrFlight == null &&
+        row.effective === '31-Mar-26' &&
+        row.discontinue === '31-Mar-26' &&
+        JSON.stringify(row.daysOfWeek) === JSON.stringify([false, true, false, false, false, false, false])
+      ) &&
+      !canonicalAtomicOvernight.rows.some((row) => row.arrFlight != null && row.depFlight != null),
+    `canonical imported same-row overnight export must split ARR/DEP rows with DEP +1 pattern, got ${JSON.stringify(canonicalAtomicOvernight.rows)}`
+  );
 
   const manualLinkedRecords = flattenRowsToFlightRecords([
     baseRow({
@@ -5662,8 +5687,23 @@ async function run() {
   const canonicalOvernight = buildCanonicalSeasonalRows({ records: manualLinkedRecords, modifications: new Map() });
   assert(canonicalOvernight.validation.valid, `canonical overnight rows should round-trip, got ${JSON.stringify(canonicalOvernight.validation)}`);
   assert(
-    canonicalOvernight.rows.some((row) => row.arrFlight === '580' && row.depFlight === '581' && row.effective === '30-Mar-26'),
-    `canonical representable overnight records should export as an inferred overnight row, got ${JSON.stringify(canonicalOvernight.rows)}`
+    canonicalOvernight.rows.length === 2 &&
+      canonicalOvernight.rows.some((row) =>
+        row.arrFlight === '580' &&
+        row.depFlight == null &&
+        row.effective === '30-Mar-26' &&
+        row.discontinue === '31-Mar-26' &&
+        JSON.stringify(row.daysOfWeek) === JSON.stringify([true, true, false, false, false, false, false])
+      ) &&
+      canonicalOvernight.rows.some((row) =>
+        row.depFlight === '581' &&
+        row.arrFlight == null &&
+        row.effective === '31-Mar-26' &&
+        row.discontinue === '1-Apr-26' &&
+        JSON.stringify(row.daysOfWeek) === JSON.stringify([false, true, true, false, false, false, false])
+      ) &&
+      !canonicalOvernight.rows.some((row) => row.arrFlight != null && row.depFlight != null),
+    `canonical overnight records must export as split ARR/DEP rows with DEP +1 pattern, got ${JSON.stringify(canonicalOvernight.rows)}`
   );
 
   const canonicalUnlinked = buildCanonicalSeasonalRows({ records: flattenRowsToFlightRecords(unlinkedOvernightLikeRows), modifications: new Map() });
