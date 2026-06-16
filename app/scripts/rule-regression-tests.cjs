@@ -9179,6 +9179,7 @@ async function run() {
   const layoutSource = fs.readFileSync(path.join(root, 'src', 'app', 'layout.tsx'), 'utf8');
   const globalCssSource = fs.readFileSync(path.join(root, 'src', 'app', 'globals.css'), 'utf8');
   const appShellSource = fs.readFileSync(path.join(root, 'src', 'app', 'components', 'AppShell.tsx'), 'utf8');
+  const releaseWorkflowSource = fs.readFileSync(path.join(root, '..', '.github', 'workflows', 'release.yml'), 'utf8');
   const appSidebarSource = fs.readFileSync(path.join(root, 'src', 'app', 'components', 'AppSidebar.tsx'), 'utf8');
   const workspacePageHeaderPath = path.join(root, 'src', 'app', 'components', 'WorkspacePageHeader.tsx');
   const workspacePageHeaderSource = fs.existsSync(workspacePageHeaderPath) ? fs.readFileSync(workspacePageHeaderPath, 'utf8') : '';
@@ -10403,6 +10404,17 @@ async function run() {
       globalCssSource.includes('width: min(384px, calc(100vw - 48px))') &&
       globalCssSource.includes('.operator-auth-control'),
     'Supabase mode must require an authenticated app operator before rendering a fixed-width login shell'
+  );
+  assert(
+    releaseWorkflowSource.includes('NEXT_PUBLIC_REMOTE_BACKEND: supabase') &&
+      releaseWorkflowSource.includes('NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}') &&
+      releaseWorkflowSource.includes('NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}') &&
+      releaseWorkflowSource.includes('Validate public runtime env') &&
+      releaseWorkflowSource.includes('"NEXT_PUBLIC_REMOTE_BACKEND"') &&
+      releaseWorkflowSource.includes('"NEXT_PUBLIC_SUPABASE_URL"') &&
+      releaseWorkflowSource.includes('"NEXT_PUBLIC_SUPABASE_ANON_KEY"') &&
+      releaseWorkflowSource.includes('Native release must be built with NEXT_PUBLIC_REMOTE_BACKEND=supabase'),
+    'Desktop release workflow must inject and validate Supabase public env so native builds cannot fall back to disabled Firestore sync'
   );
   assert(
     appRouteCacheSource.includes('memo(') &&

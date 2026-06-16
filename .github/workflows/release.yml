@@ -21,6 +21,9 @@ jobs:
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      NEXT_PUBLIC_REMOTE_BACKEND: supabase
+      NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
 
     steps:
       - name: Checkout
@@ -52,6 +55,24 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Validate public runtime env
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $required = @(
+            "NEXT_PUBLIC_REMOTE_BACKEND",
+            "NEXT_PUBLIC_SUPABASE_URL",
+            "NEXT_PUBLIC_SUPABASE_ANON_KEY"
+          )
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing required public runtime env: $name"
+            }
+          }
+          if ($env:NEXT_PUBLIC_REMOTE_BACKEND -ne "supabase") {
+            throw "Native release must be built with NEXT_PUBLIC_REMOTE_BACKEND=supabase"
+          }
 
       - name: Install Python agent dependencies
         run: python -m pip install -r ai-agent/requirements.txt -r ai-agent/requirements-build.txt
