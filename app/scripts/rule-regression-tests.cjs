@@ -10199,6 +10199,31 @@ async function run() {
       iataSeasonSource.includes('buildFlightSeriesId'),
     'Continuous storage must use global record keys, season-scoped entity clocks, plus scheduled, operational, IATA season, and series metadata'
   );
+  const removeModificationStart = supabaseStoreSource.indexOf('async removeModification(seasonId: string, legId: string)');
+  const removeModificationEnd = supabaseStoreSource.indexOf('async deleteModifications(seasonId: string, legIds: string[])', removeModificationStart);
+  const removeModificationSource = supabaseStoreSource.slice(removeModificationStart, removeModificationEnd);
+  const deleteModificationsStart = supabaseStoreSource.indexOf('async deleteModifications(seasonId: string, legIds: string[])');
+  const deleteModificationsEnd = supabaseStoreSource.indexOf('async saveModificationsWithHistory', deleteModificationsStart);
+  const deleteModificationsSource = supabaseStoreSource.slice(deleteModificationsStart, deleteModificationsEnd);
+  const modificationChildrenStart = supabaseStoreSource.indexOf('async function writeModificationChildren');
+  const modificationChildrenEnd = supabaseStoreSource.indexOf('async function readModificationChildren', modificationChildrenStart);
+  const modificationChildrenSource = supabaseStoreSource.slice(modificationChildrenStart, modificationChildrenEnd);
+  assert(
+    removeModificationSource.includes(".from('season_modifications').delete().eq('season_id', seasonId).eq('leg_id', legId)") &&
+      deleteModificationsSource.includes(".from('season_modifications').delete().eq('season_id', seasonId).in('leg_id', chunk)") &&
+      modificationChildrenSource.includes(".from('season_modification_added_legs').delete().eq('season_id', seasonId).eq('leg_id', mod.legId)"),
+    'Season-scoped modification deletes must filter by season_id before leg_id; no-schema pass only covers tables that already carry season_id'
+  );
+  const uniqueSeasonCodeMigrationPath = path.join(root, 'supabase', 'migrations', '20260616_unique_seasons_season_code.sql');
+  const uniqueSeasonCodeMigrationSource = fs.existsSync(uniqueSeasonCodeMigrationPath)
+    ? fs.readFileSync(uniqueSeasonCodeMigrationPath, 'utf8')
+    : '';
+  assert(
+    supabaseSchemaSource.includes('create unique index if not exists seasons_season_code_unique_idx on public.seasons (season_code)') &&
+      uniqueSeasonCodeMigrationSource.includes('create unique index if not exists seasons_season_code_unique_idx on public.seasons (season_code)') &&
+      supabaseStoreSource.includes('Duplicate season_code detected'),
+    'Season code must be unique and duplicate lookup errors must be surfaced clearly'
+  );
   const workspaceSnapshotStart = supabaseSchemaSource.indexOf('create or replace function public.get_season_workspace_snapshot');
   const workspaceSnapshotEnd = supabaseSchemaSource.indexOf('grant execute on function public.get_season_workspace_snapshot', workspaceSnapshotStart);
   const workspaceSnapshotSource = supabaseSchemaSource.slice(

@@ -615,7 +615,10 @@ async function writeModificationChildren(seasonId: string, mods: FlightModificat
   for (const mod of mods) {
     assertOk(await client().from('season_modification_counters').delete().eq('leg_id', mod.legId), 'clear modification counters');
     assertOk(await client().from('season_modification_checkin_windows').delete().eq('leg_id', mod.legId), 'clear modification windows');
-    assertOk(await client().from('season_modification_added_legs').delete().eq('leg_id', mod.legId), 'clear modification added leg');
+    assertOk(
+      await client().from('season_modification_added_legs').delete().eq('season_id', seasonId).eq('leg_id', mod.legId),
+      'clear modification added leg'
+    );
     const counterRows = toModificationCounterRows(mod);
     const windowRows = toModificationWindowRows(mod);
     const addedLegRow = toModificationAddedLegRow(seasonId, mod);
@@ -714,10 +717,15 @@ export const supabaseStore: RemoteStore = {
   },
 
   async findSeasonByCode(code: string): Promise<Season | null> {
-    const row = assertOk(
-      await client().from('seasons').select('*').eq('season_code', code).maybeSingle(),
-      'find season'
-    ) as SeasonRelationalRow | null;
+    const result = await client().from('seasons').select('*').eq('season_code', code).maybeSingle();
+    if (result.error) {
+      const message = result.error.message ?? '';
+      if (/multiple|Results contain/i.test(message)) {
+        throw new Error(`find season: Duplicate season_code detected for ${code}. Resolve duplicate seasons before importing.`);
+      }
+      throw new Error(`find season: ${message}`);
+    }
+    const row = result.data as SeasonRelationalRow | null;
     return row ? fromSeasonRow(row) : null;
   },
 
@@ -1054,13 +1062,19 @@ export const supabaseStore: RemoteStore = {
   },
 
   async removeModification(seasonId: string, legId: string): Promise<void> {
-    assertOk(await client().from('season_modifications').delete().eq('leg_id', legId), 'remove modification');
+    assertOk(
+      await client().from('season_modifications').delete().eq('season_id', seasonId).eq('leg_id', legId),
+      'remove modification'
+    );
   },
 
   async deleteModifications(seasonId: string, legIds: string[]): Promise<void> {
     if (legIds.length === 0) return;
     for (const chunk of chunkFirestoreWrites(legIds)) {
-      assertOk(await client().from('season_modifications').delete().in('leg_id', chunk), 'delete modifications');
+      assertOk(
+        await client().from('season_modifications').delete().eq('season_id', seasonId).in('leg_id', chunk),
+        'delete modifications'
+      );
       await pauseBetweenFirestoreWriteBatches();
     }
   },

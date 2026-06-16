@@ -161,6 +161,10 @@ Undo history can contain both modification changes and `FlightRecord` changes. T
 
 Import/re-import remains server-first because it establishes a new baseline. A successful import writes `sourceRows` and `flightRecords`, increments `dataVersion`, clears the local workspace for that season, and then saves a clean local baseline.
 
+- `seasons.season_code` is the unique business key for import lookup; `seasons.id` remains the generated primary key and the user-facing operational boundary.
+- No-schema season hardening scopes destructive remote modification deletes to `season_id` where the table already carries `season_id`. Counters/windows remain global-keyed until the composite-PK migration adds `season_id` to those child tables.
+- Remote composite keys `(season_id, record_id)` and `(season_id, leg_id)` are the target schema for flight records, modifications, and their child tables, but that migration must be shipped separately from the no-schema safety pass.
+
 ---
 
 ## UI Rules

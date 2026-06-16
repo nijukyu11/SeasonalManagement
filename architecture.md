@@ -40,6 +40,8 @@ Browser/static mode is not the operational source of truth. Legacy IndexedDB mod
 
 `season_id` is the canonical ownership attribute for operational rows. Do not group selected-season data by filename, upload batch, import session, or IATA season code.
 
+Season ownership hardening is staged. The current safe pass scopes destructive modification deletes and enforces unique `season_code`; the larger remote composite-key migration is deferred because it changes parent/child table keys, mappers, RPCs, and reporting surfaces together.
+
 Local SQLite and Supabase intentionally mirror the same concepts:
 
 | Concept | Local SQLite | Supabase |

@@ -732,6 +732,7 @@ alter table public.seasons enable row level security;
 
 create index if not exists seasons_uploaded_at_idx on public.seasons (uploaded_at desc);
 create index if not exists seasons_season_code_idx on public.seasons (season_code);
+create unique index if not exists seasons_season_code_unique_idx on public.seasons (season_code);
 create index if not exists season_source_rows_season_idx on public.season_source_rows (season_id, row_index);
 create index if not exists season_flight_records_season_operational_idx on public.season_flight_records (season_id, operational_date, type, status, flight_number);
 create index if not exists season_flight_records_date_idx on public.season_flight_records (operational_date, date, flight_number);
