@@ -428,13 +428,39 @@ export async function syncNativePendingChanges(
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!supabaseUrl || !anonKey) return null;
-  const accessToken = await currentAccessToken();
+  const accessToken = await refreshedAccessToken();
   if (!accessToken) return null;
-  return invokeNative<NativeSyncPendingChangesResult>('sync_pending_changes', {
-    seasonId,
-    supabaseUrl,
-    anonKey,
-    accessToken,
-    clientId: getOrCreateSeasonClientId(),
-  });
+  const [{ invoke }, { listen }] = await Promise.all([
+    import('@tauri-apps/api/core'),
+    import('@tauri-apps/api/event'),
+  ]);
+  const cancellationId = randomCancellationId(seasonId);
+  const unlistenTokenRequired = await listen<{ seasonId: string; cancellationId: string }>(
+    'season-catchup-token-required',
+    async (event) => {
+      if (event.payload.cancellationId !== cancellationId) return;
+      const refreshedToken = await refreshedAccessToken();
+      if (!refreshedToken) return;
+      await invoke('refresh_season_catchup_token', {
+        input: {
+          cancellationId,
+          accessToken: refreshedToken,
+        },
+      });
+    }
+  );
+  try {
+    return await invoke<NativeSyncPendingChangesResult>('sync_pending_changes', {
+      input: {
+        seasonId,
+        supabaseUrl,
+        anonKey,
+        accessToken,
+        clientId: getOrCreateSeasonClientId(),
+        cancellationId,
+      },
+    });
+  } finally {
+    unlistenTokenRequired();
+  }
 }

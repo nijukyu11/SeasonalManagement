@@ -1,6 +1,6 @@
 [package]
 name = "seasonal-management"
-version = "0.1.6"
+version = "0.1.7"
 description = "Seasonal Management native desktop shell"
 authors = ["Seasonal Management"]
 edition = "2021"

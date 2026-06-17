@@ -7,6 +7,8 @@ use rusqlite::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -20,6 +22,9 @@ const TOKEN_REFRESH_POLL_MS: u64 = 250;
 const PAGE_FETCH_RETRY_DELAYS_MS: [u64; 3] = [500, 1_000, 2_000];
 const SQLITE_SCHEMA_INIT_RETRY_DELAYS_MS: [u64; 4] = [100, 250, 500, 1_000];
 const NOTIFICATION_FLUSH_LIMIT: i64 = 50;
+pub const MAX_NATIVE_PENDING_SYNC_CHUNK_EVENTS: usize = 50;
+pub const MAX_NATIVE_PENDING_SYNC_CHUNK_BYTES: usize = 900_000;
+const MAX_NATIVE_MOD_HISTORY_SYNC_BYTES: usize = 800_000;
 const DELETE_FIELD: &str = "__delete__";
 const AUTO_REMOTE_WIN_MODIFICATION_FIELDS: [&str; 8] = [
     "counter",
@@ -404,6 +409,8 @@ pub struct NativeSyncPendingChangesInput {
     pub anon_key: String,
     pub access_token: String,
     pub client_id: String,
+    #[serde(default)]
+    pub cancellation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -441,17 +448,29 @@ struct NativeNotificationFlushResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct NativeSyncPendingRpcResult {
+pub struct NativeSyncPendingRpcResult {
     #[serde(default, alias = "applied_events")]
-    applied_events: Vec<NativeCatchupEvent>,
+    pub applied_events: Vec<NativeCatchupEvent>,
     #[serde(default, alias = "conflict_events")]
-    conflict_events: Vec<NativeCatchupEvent>,
+    pub conflict_events: Vec<NativeCatchupEvent>,
     #[serde(default, alias = "next_server_seq")]
-    next_server_seq: i64,
+    pub next_server_seq: i64,
     #[serde(default, alias = "server_high_water")]
-    server_high_water: i64,
+    pub server_high_water: i64,
     #[serde(default, alias = "next_server_version")]
-    next_server_version: i64,
+    pub next_server_version: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeHttpError {
+    pub status_code: Option<u16>,
+    pub message: String,
+}
+
+impl fmt::Display for NativeHttpError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -853,6 +872,162 @@ fn read_pending_ops(conn: &Connection, season_id: &str) -> rusqlite::Result<Vec<
     Ok(ops)
 }
 
+fn sqlite_json_error(message: impl Into<String>) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        message.into(),
+    )))
+}
+
+fn json_byte_len(value: &Value) -> usize {
+    serde_json::to_vec(value)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX)
+}
+
+fn mod_history_entry_with_parts(
+    source_entry: &Value,
+    id: String,
+    description: String,
+    changes: Vec<Value>,
+    record_changes: Vec<Value>,
+) -> Value {
+    let mut entry = source_entry.as_object().cloned().unwrap_or_default();
+    entry.insert("id".to_string(), Value::String(id));
+    entry.insert("description".to_string(), Value::String(description));
+    entry.insert("changes".to_string(), Value::Array(changes));
+    if record_changes.is_empty() {
+        entry.remove("recordChanges");
+    } else {
+        entry.insert("recordChanges".to_string(), Value::Array(record_changes));
+    }
+    Value::Object(entry)
+}
+
+fn split_mod_history_op_for_sync(op: &Value) -> rusqlite::Result<Vec<Value>> {
+    if op.get("type").and_then(Value::as_str) != Some("modHistory") {
+        return Ok(vec![op.clone()]);
+    }
+    if json_byte_len(op) <= MAX_NATIVE_MOD_HISTORY_SYNC_BYTES {
+        return Ok(vec![op.clone()]);
+    }
+
+    let Some(entry) = op.get("entry") else {
+        return Ok(vec![op.clone()]);
+    };
+    let base_id = value_to_string(entry.get("id")).unwrap_or_else(|| "mod-history".to_string());
+    let base_description =
+        value_to_string(entry.get("description")).unwrap_or_else(|| base_id.clone());
+    let items = entry
+        .get("changes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|value| ("change", value.clone()))
+        .chain(
+            entry
+                .get("recordChanges")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|value| ("recordChange", value.clone())),
+        )
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        return Ok(vec![op.clone()]);
+    }
+
+    let mut buckets: Vec<(Vec<Value>, Vec<Value>)> = Vec::new();
+    let mut current_changes: Vec<Value> = Vec::new();
+    let mut current_record_changes: Vec<Value> = Vec::new();
+
+    for (kind, item) in items {
+        let mut candidate_changes = current_changes.clone();
+        let mut candidate_record_changes = current_record_changes.clone();
+        if kind == "change" {
+            candidate_changes.push(item.clone());
+        } else {
+            candidate_record_changes.push(item.clone());
+        }
+        let candidate_entry = mod_history_entry_with_parts(
+            entry,
+            base_id.clone(),
+            base_description.clone(),
+            candidate_changes.clone(),
+            candidate_record_changes.clone(),
+        );
+        let candidate_op = json!({ "type": "modHistory", "entry": candidate_entry });
+        if json_byte_len(&candidate_op) <= MAX_NATIVE_MOD_HISTORY_SYNC_BYTES {
+            current_changes = candidate_changes;
+            current_record_changes = candidate_record_changes;
+            continue;
+        }
+
+        if !current_changes.is_empty() || !current_record_changes.is_empty() {
+            buckets.push((current_changes, current_record_changes));
+        }
+        current_changes = if kind == "change" {
+            vec![item.clone()]
+        } else {
+            Vec::new()
+        };
+        current_record_changes = if kind == "recordChange" {
+            vec![item]
+        } else {
+            Vec::new()
+        };
+        let single_entry = mod_history_entry_with_parts(
+            entry,
+            base_id.clone(),
+            base_description.clone(),
+            current_changes.clone(),
+            current_record_changes.clone(),
+        );
+        let single_op = json!({ "type": "modHistory", "entry": single_entry });
+        if json_byte_len(&single_op) > MAX_NATIVE_MOD_HISTORY_SYNC_BYTES {
+            return Err(sqlite_json_error(format!(
+                "A single modHistory change in {base_id} exceeds the native sync chunk size."
+            )));
+        }
+    }
+
+    if !current_changes.is_empty() || !current_record_changes.is_empty() {
+        buckets.push((current_changes, current_record_changes));
+    }
+    if buckets.len() <= 1 {
+        return Ok(vec![op.clone()]);
+    }
+
+    let total = buckets.len();
+    Ok(buckets
+        .into_iter()
+        .enumerate()
+        .map(|(index, (changes, record_changes))| {
+            let part = index + 1;
+            let part_id = format!("{base_id}_PART_{part:03}");
+            let part_description = format!("{base_description} ({part}/{total})");
+            json!({
+                "type": "modHistory",
+                "entry": mod_history_entry_with_parts(
+                    entry,
+                    part_id,
+                    part_description,
+                    changes,
+                    record_changes
+                )
+            })
+        })
+        .collect())
+}
+
+fn expand_pending_ops_for_native_sync(ops: Vec<Value>) -> rusqlite::Result<Vec<Value>> {
+    let mut expanded = Vec::new();
+    for op in ops {
+        expanded.extend(split_mod_history_op_for_sync(&op)?);
+    }
+    Ok(expanded)
+}
+
 fn load_modification_map(
     conn: &Connection,
     season_id: &str,
@@ -922,10 +1097,13 @@ fn normalize_modification_payload(leg_id: &str, action: Option<&str>, payload: &
 }
 
 fn is_inactive_record(record: &Value) -> bool {
-    value_to_string(record.get("status"))
-        .is_some_and(|status| matches!(status.to_ascii_lowercase().as_str(), "deleted" | "cancelled"))
-        || value_to_string(record.get("action"))
-            .is_some_and(|action| action.eq_ignore_ascii_case("deleted"))
+    value_to_string(record.get("status")).is_some_and(|status| {
+        matches!(
+            status.to_ascii_lowercase().as_str(),
+            "deleted" | "cancelled"
+        )
+    }) || value_to_string(record.get("action"))
+        .is_some_and(|action| action.eq_ignore_ascii_case("deleted"))
 }
 
 fn modification_action(modification: &Value) -> String {
@@ -1521,7 +1699,9 @@ pub fn ensure_local_season_on_connection(
         }
         Err(error) => {
             let _ = conn.execute_batch("ROLLBACK");
-            Err(format!("Could not ensure local season {season_id}: {error}"))
+            Err(format!(
+                "Could not ensure local season {season_id}: {error}"
+            ))
         }
     }
 }
@@ -1775,7 +1955,8 @@ fn replace_snapshot_tables_in_transaction(
         .map_err(|error| format!("Could not import current flight records: {error}"))?;
     insert_snapshot_flight_records(conn, &season_id, &input.records, true)
         .map_err(|error| format!("Could not import base flight records: {error}"))?;
-    let filtered_modifications = filter_snapshot_modifications(&input.records, &input.modifications);
+    let filtered_modifications =
+        filter_snapshot_modifications(&input.records, &input.modifications);
     insert_snapshot_modifications(conn, &season_id, &filtered_modifications, false)
         .map_err(|error| format!("Could not import current modifications: {error}"))?;
     insert_snapshot_modifications(conn, &season_id, &filtered_modifications, true)
@@ -1828,8 +2009,9 @@ pub fn import_season_snapshot_on_connection(
 
     match result {
         Ok(imported) => {
-            conn.execute_batch("COMMIT")
-                .map_err(|error| format!("Could not commit native season snapshot import: {error}"))?;
+            conn.execute_batch("COMMIT").map_err(|error| {
+                format!("Could not commit native season snapshot import: {error}")
+            })?;
             Ok(imported)
         }
         Err(error) => {
@@ -2032,12 +2214,11 @@ fn replay_pending_event_on_snapshot(
     season_id: &str,
     event: &NativeCatchupEvent,
 ) -> rusqlite::Result<()> {
-    if event
-        .op_payload
-        .get("type")
-        .and_then(Value::as_str)
-        == Some("modificationDelete")
-        || event.changed_fields.iter().any(|field| field == DELETE_FIELD)
+    if event.op_payload.get("type").and_then(Value::as_str) == Some("modificationDelete")
+        || event
+            .changed_fields
+            .iter()
+            .any(|field| field == DELETE_FIELD)
     {
         if event.target_type == "modification" {
             conn.execute(
@@ -2115,20 +2296,24 @@ pub fn merge_season_snapshot_on_connection(
         let client_id = input
             .client_id
             .clone()
-            .or_else(|| previous_client_id.as_ref().and_then(Value::as_str).map(str::to_string))
+            .or_else(|| {
+                previous_client_id
+                    .as_ref()
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
             .unwrap_or_else(|| "native-snapshot-merge".to_string());
-        let pending_events = build_native_pending_change_events(
-            conn,
-            &season_id,
-            &client_id,
-            chrono_like_millis(),
-        )
-        .map_err(|error| format!("Could not build pending events for snapshot merge: {error}"))?;
+        let pending_events =
+            build_native_pending_change_events(conn, &season_id, &client_id, chrono_like_millis())
+                .map_err(|error| {
+                    format!("Could not build pending events for snapshot merge: {error}")
+                })?;
 
         let (written_season_id, data_version, filtered_modifications) =
             replace_snapshot_tables_in_transaction(conn, &import_input)?;
-        insert_pending_ops(conn, &written_season_id, &pending_ops)
-            .map_err(|error| format!("Could not restore pending operations after snapshot merge: {error}"))?;
+        insert_pending_ops(conn, &written_season_id, &pending_ops).map_err(|error| {
+            format!("Could not restore pending operations after snapshot merge: {error}")
+        })?;
 
         let mut next_sync_meta = previous_sync_meta.clone();
         if !next_sync_meta.is_object() {
@@ -2137,12 +2322,17 @@ pub fn merge_season_snapshot_on_connection(
         if let Some(object) = next_sync_meta.as_object_mut() {
             object.insert("seasonId".to_string(), json!(written_season_id));
             object.insert("baseServerVersion".to_string(), json!(data_version));
-            object.insert("lastServerSeq".to_string(), json!(input.server_event_high_water));
+            object.insert(
+                "lastServerSeq".to_string(),
+                json!(input.server_event_high_water),
+            );
             object.insert("localRevision".to_string(), json!(previous_revision + 1));
             object.insert("pendingCount".to_string(), json!(pending_ops.len()));
             object.insert(
                 "lastLocalChangeAt".to_string(),
-                previous_last_local_change_at.map(Value::from).unwrap_or(Value::Null),
+                previous_last_local_change_at
+                    .map(Value::from)
+                    .unwrap_or(Value::Null),
             );
             object
                 .entry("conflicts".to_string())
@@ -2188,18 +2378,25 @@ pub fn merge_season_snapshot_on_connection(
                     &overlapping_fields,
                 );
                 if is_auto_remote_latest_conflict_event(&remote_event) {
-                    apply_event_data(conn, &written_season_id, &remote_event)
-                        .map_err(|error| format!("Could not apply auto-resolved snapshot conflict: {error}"))?;
-                    update_entity_versions(conn, &written_season_id, &remote_event)
-                        .map_err(|error| format!("Could not update auto-resolved snapshot versions: {error}"))?;
+                    apply_event_data(conn, &written_season_id, &remote_event).map_err(|error| {
+                        format!("Could not apply auto-resolved snapshot conflict: {error}")
+                    })?;
+                    update_entity_versions(conn, &written_season_id, &remote_event).map_err(
+                        |error| {
+                            format!("Could not update auto-resolved snapshot versions: {error}")
+                        },
+                    )?;
                     remove_pending_ops_for_conflict_target(
                         conn,
                         &written_season_id,
                         &event.target_type,
                         &event.target_id,
                     )
-                    .map_err(|error| format!("Could not clear auto-resolved pending operation: {error}"))?;
-                    auto_resolved_conflict_ids.push(snapshot_conflict_id(&event, &overlapping_fields));
+                    .map_err(|error| {
+                        format!("Could not clear auto-resolved pending operation: {error}")
+                    })?;
+                    auto_resolved_conflict_ids
+                        .push(snapshot_conflict_id(&event, &overlapping_fields));
                     continue;
                 }
                 let conflict = snapshot_conflict_for_pending_event(
@@ -2209,8 +2406,9 @@ pub fn merge_season_snapshot_on_connection(
                 );
                 append_conflict(&mut next_sync_meta, conflict);
             }
-            replay_pending_event_on_snapshot(conn, &written_season_id, &event)
-                .map_err(|error| format!("Could not replay pending operation on snapshot: {error}"))?;
+            replay_pending_event_on_snapshot(conn, &written_season_id, &event).map_err(
+                |error| format!("Could not replay pending operation on snapshot: {error}"),
+            )?;
         }
 
         let pending_count: i64 = conn
@@ -2262,8 +2460,9 @@ pub fn merge_season_snapshot_on_connection(
 
     match result {
         Ok(merged) => {
-            conn.execute_batch("COMMIT")
-                .map_err(|error| format!("Could not commit native season snapshot merge: {error}"))?;
+            conn.execute_batch("COMMIT").map_err(|error| {
+                format!("Could not commit native season snapshot merge: {error}")
+            })?;
             Ok(merged)
         }
         Err(error) => {
@@ -2304,16 +2503,15 @@ fn push_string_target(targets: &mut HashSet<String>, value: Option<&Value>) {
     }
 }
 
-fn mod_history_pending_op_targets(payload_json: &str) -> rusqlite::Result<(Option<String>, HashSet<String>)> {
+fn mod_history_pending_op_targets(
+    payload_json: &str,
+) -> rusqlite::Result<(Option<String>, HashSet<String>)> {
     let payload = match serde_json::from_str::<Value>(payload_json) {
         Ok(payload) => payload,
         Err(_) => return Ok((None, HashSet::new())),
     };
     let entry = payload.get("entry").unwrap_or(&Value::Null);
-    let history_id = entry
-        .get("id")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let history_id = entry.get("id").and_then(Value::as_str).map(str::to_string);
     let mut targets = HashSet::new();
     if let Some(changes) = entry.get("changes").and_then(Value::as_array) {
         for change in changes {
@@ -2358,7 +2556,10 @@ fn remove_related_mod_history_pending_ops(
         }
     }
     for rowid in rowids_to_delete {
-        conn.execute("DELETE FROM local_pending_ops WHERE rowid = ?", params![rowid])?;
+        conn.execute(
+            "DELETE FROM local_pending_ops WHERE rowid = ?",
+            params![rowid],
+        )?;
     }
     Ok(())
 }
@@ -2385,17 +2586,21 @@ pub fn resolve_season_conflict_on_connection(
             .unwrap_or_default();
         let Some(conflict) = conflicts
             .iter()
-            .find(|entry| entry.get("id").and_then(Value::as_str) == Some(input.conflict_id.as_str()))
+            .find(|entry| {
+                entry.get("id").and_then(Value::as_str) == Some(input.conflict_id.as_str())
+            })
             .cloned()
         else {
-            return Err(format!("Native conflict {} was not found.", input.conflict_id));
+            return Err(format!(
+                "Native conflict {} was not found.",
+                input.conflict_id
+            ));
         };
 
         if input.resolution == "acceptRemote" {
-            let event_value = conflict
-                .get("event")
-                .cloned()
-                .ok_or_else(|| format!("Native conflict {} has no remote event.", input.conflict_id))?;
+            let event_value = conflict.get("event").cloned().ok_or_else(|| {
+                format!("Native conflict {} has no remote event.", input.conflict_id)
+            })?;
             let event = serde_json::from_value::<NativeCatchupEvent>(event_value)
                 .map_err(|error| format!("Native conflict event is invalid: {error}"))?;
             apply_event_data(conn, &input.season_id, &event)
@@ -2408,12 +2613,16 @@ pub fn resolve_season_conflict_on_connection(
                 &event.target_type,
                 &event.target_id,
             )
-            .map_err(|error| format!("Could not rebuild pending state after conflict resolution: {error}"))?;
+            .map_err(|error| {
+                format!("Could not rebuild pending state after conflict resolution: {error}")
+            })?;
         }
 
         let remaining_conflicts = conflicts
             .into_iter()
-            .filter(|entry| entry.get("id").and_then(Value::as_str) != Some(input.conflict_id.as_str()))
+            .filter(|entry| {
+                entry.get("id").and_then(Value::as_str) != Some(input.conflict_id.as_str())
+            })
             .collect::<Vec<_>>();
         sync_meta["conflicts"] = Value::Array(remaining_conflicts);
         let last_server_seq = sync_meta
@@ -2433,12 +2642,16 @@ pub fn resolve_season_conflict_on_connection(
             "DELETE FROM local_derived_seasonal WHERE season_id = ?",
             params![&input.season_id],
         )
-        .map_err(|error| format!("Could not clear derived cache after conflict resolution: {error}"))?;
+        .map_err(|error| {
+            format!("Could not clear derived cache after conflict resolution: {error}")
+        })?;
         conn.execute(
             "INSERT INTO local_derived_seasonal (season_id, payload_json) VALUES (?, ?)",
             params![&input.season_id, "null"],
         )
-        .map_err(|error| format!("Could not reset derived cache after conflict resolution: {error}"))?;
+        .map_err(|error| {
+            format!("Could not reset derived cache after conflict resolution: {error}")
+        })?;
         Ok::<_, String>(ResolveSeasonConflictResult {
             season_id: input.season_id.clone(),
             conflict_count,
@@ -2819,7 +3032,10 @@ pub fn query_dashboard_summary_on_connection(
             continue;
         }
         let id = value_to_string(record.get("id")).unwrap_or_default();
-        if modifications.get(&id).is_some_and(|modification| is_deleted_modification(modification)) {
+        if modifications
+            .get(&id)
+            .is_some_and(|modification| is_deleted_modification(modification))
+        {
             continue;
         }
         let effective = modifications.get(&id).copied().unwrap_or(record);
@@ -3383,7 +3599,7 @@ pub fn build_native_pending_change_events(
     client_id: &str,
     now_millis: i64,
 ) -> rusqlite::Result<Vec<Value>> {
-    let pending_ops = read_pending_ops(conn, season_id)?;
+    let pending_ops = expand_pending_ops_for_native_sync(read_pending_ops(conn, season_id)?)?;
     pending_ops
         .into_iter()
         .enumerate()
@@ -3465,6 +3681,60 @@ pub fn build_native_pending_change_events(
         .collect()
 }
 
+fn chunk_native_pending_events(events: Vec<Value>) -> rusqlite::Result<Vec<Vec<Value>>> {
+    let mut chunks: Vec<Vec<Value>> = Vec::new();
+    let mut current: Vec<Value> = Vec::new();
+    let mut current_bytes = 2usize;
+
+    for event in events {
+        let event_bytes = json_byte_len(&event);
+        if event_bytes + 2 > MAX_NATIVE_PENDING_SYNC_CHUNK_BYTES {
+            let target = event
+                .get("targetId")
+                .and_then(Value::as_str)
+                .unwrap_or("<unknown>");
+            return Err(sqlite_json_error(format!(
+                "Native pending sync event {target} is too large for one upload chunk."
+            )));
+        }
+        let candidate_bytes = if current.is_empty() {
+            event_bytes + 2
+        } else {
+            current_bytes + event_bytes + 1
+        };
+        if !current.is_empty()
+            && (current.len() >= MAX_NATIVE_PENDING_SYNC_CHUNK_EVENTS
+                || candidate_bytes > MAX_NATIVE_PENDING_SYNC_CHUNK_BYTES)
+        {
+            chunks.push(current);
+            current = Vec::new();
+            current_bytes = 2;
+        }
+        current_bytes = if current.is_empty() {
+            event_bytes + 2
+        } else {
+            current_bytes + event_bytes + 1
+        };
+        current.push(event);
+    }
+
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    Ok(chunks)
+}
+
+pub fn build_native_pending_sync_chunks(
+    conn: &Connection,
+    season_id: &str,
+    client_id: &str,
+    now_millis: i64,
+) -> rusqlite::Result<Vec<Vec<Value>>> {
+    chunk_native_pending_events(build_native_pending_change_events(
+        conn, season_id, client_id, now_millis,
+    )?)
+}
+
 fn pending_event_op_id(event: &Value) -> Option<String> {
     value_to_string(event.get("opId")).or_else(|| value_to_string(event.get("op_id")))
 }
@@ -3484,7 +3754,12 @@ fn native_event_from_pending_value(event: &Value) -> Option<NativeCatchupEvent> 
             .get("changedFields")
             .or_else(|| event.get("changed_fields"))
             .and_then(Value::as_array)
-            .map(|items| items.iter().filter_map(|item| value_to_string(Some(item))).collect())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| value_to_string(Some(item)))
+                    .collect()
+            })
             .unwrap_or_default(),
         op_payload: event
             .get("opPayload")
@@ -4995,7 +5270,8 @@ fn should_skip_orphan_modification_event(
         return Ok(false);
     };
     let action = modification_action(remote);
-    let normalized = normalize_modification_payload(&event.target_id, Some(action.as_str()), remote);
+    let normalized =
+        normalize_modification_payload(&event.target_id, Some(action.as_str()), remote);
     if is_valid_added_modification_payload(&event.target_id, &normalized) {
         return Ok(false);
     }
@@ -5120,8 +5396,8 @@ pub fn reconcile_flight_record_manifest_on_connection(
         let mut removed_record_ids = Vec::new();
         {
             let mut stale_record_stmt = conn.prepare(&stale_record_sql)?;
-            let rows = stale_record_stmt
-                .query_map(params![season_id], |row| row.get::<_, String>(0))?;
+            let rows =
+                stale_record_stmt.query_map(params![season_id], |row| row.get::<_, String>(0))?;
             for row in rows {
                 removed_record_ids.push(row?);
             }
@@ -5182,8 +5458,7 @@ pub fn reconcile_flight_record_manifest_on_connection(
             params![season_id],
         )?;
 
-        if removed_flight_rows > 0 || removed_modification_rows > 0 || removed_entity_versions > 0
-        {
+        if removed_flight_rows > 0 || removed_modification_rows > 0 || removed_entity_versions > 0 {
             let sync_meta = read_sync_meta(conn, season_id)?;
             let last_server_seq = sync_meta
                 .get("lastServerSeq")
@@ -5319,38 +5594,38 @@ fn encode_query_component(value: &str) -> String {
     encoded
 }
 
-async fn wait_for_refreshed_token(
+async fn wait_for_refreshed_token_for(
     app: &AppHandle,
     state: &NativeCatchupState,
-    input: &RunSeasonCatchupInput,
+    season_id: &str,
+    cancellation_id: &str,
+    cancel_message: &str,
 ) -> Result<String, String> {
     app.emit(
         "season-catchup-token-required",
         TokenRequiredEvent {
-            season_id: input.season_id.clone(),
-            cancellation_id: input.cancellation_id.clone(),
+            season_id: season_id.to_string(),
+            cancellation_id: cancellation_id.to_string(),
         },
     )
     .map_err(|error| format!("Could not request refreshed token: {error}"))?;
 
     let mut waited = 0;
     while waited <= TOKEN_REFRESH_TIMEOUT_MS {
-        if is_cancelled(state, &input.cancellation_id) {
-            return Err(
-                "Native catch-up cancelled while waiting for a refreshed token.".to_string(),
-            );
+        if is_cancelled(state, cancellation_id) {
+            return Err(cancel_message.to_string());
         }
         if let Some(token) = state
             .refreshed_tokens
             .lock()
             .map_err(|_| "Native catch-up token state is unavailable.".to_string())?
-            .remove(&input.cancellation_id)
+            .remove(cancellation_id)
         {
             app.emit(
                 "season-catchup-token-refreshed",
                 TokenRequiredEvent {
-                    season_id: input.season_id.clone(),
-                    cancellation_id: input.cancellation_id.clone(),
+                    season_id: season_id.to_string(),
+                    cancellation_id: cancellation_id.to_string(),
                 },
             )
             .ok();
@@ -5360,6 +5635,21 @@ async fn wait_for_refreshed_token(
         waited += TOKEN_REFRESH_POLL_MS;
     }
     Err("Native catch-up could not refresh the Supabase session token.".to_string())
+}
+
+async fn wait_for_refreshed_token(
+    app: &AppHandle,
+    state: &NativeCatchupState,
+    input: &RunSeasonCatchupInput,
+) -> Result<String, String> {
+    wait_for_refreshed_token_for(
+        app,
+        state,
+        &input.season_id,
+        &input.cancellation_id,
+        "Native catch-up cancelled while waiting for a refreshed token.",
+    )
+    .await
 }
 
 async fn fetch_event_page(
@@ -5430,17 +5720,18 @@ async fn fetch_remote_flight_record_manifest(
 async fn post_pending_sync_events(
     client: &reqwest::Client,
     input: &NativeSyncPendingChangesInput,
+    access_token: &str,
     pending_events: &[Value],
     base_server_seq: i64,
-) -> Result<NativeSyncPendingRpcResult, reqwest::Error> {
+) -> Result<NativeSyncPendingRpcResult, NativeHttpError> {
     let url = format!(
         "{}/rest/v1/rpc/sync_season_workspace_v2",
         input.supabase_url.trim_end_matches('/')
     );
-    client
+    let response = client
         .post(url)
         .header("apikey", &input.anon_key)
-        .bearer_auth(&input.access_token)
+        .bearer_auth(access_token)
         .json(&json!({
             "p_season_id": input.season_id,
             "p_client_id": input.client_id,
@@ -5448,10 +5739,86 @@ async fn post_pending_sync_events(
             "p_pending_events": pending_events,
         }))
         .send()
-        .await?
-        .error_for_status()?
+        .await
+        .map_err(|error| NativeHttpError {
+            status_code: error.status().map(|status| status.as_u16()),
+            message: error.to_string(),
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|error| format!("<could not read response body: {error}>"));
+        return Err(NativeHttpError {
+            status_code: Some(status.as_u16()),
+            message: format!("HTTP status {}: {}", status.as_u16(), body),
+        });
+    }
+    response
         .json::<NativeSyncPendingRpcResult>()
         .await
+        .map_err(|error| NativeHttpError {
+            status_code: error.status().map(|status| status.as_u16()),
+            message: error.to_string(),
+        })
+}
+
+pub async fn upload_native_pending_chunks_with_retry<Upload, UploadFuture, Refresh, RefreshFuture>(
+    pending_chunks: &[Vec<Value>],
+    initial_base_server_seq: i64,
+    initial_next_server_version: i64,
+    initial_access_token: String,
+    mut upload: Upload,
+    mut refresh_access_token: Refresh,
+) -> Result<NativeSyncPendingRpcResult, NativeHttpError>
+where
+    Upload: FnMut(String, Vec<Value>, i64) -> UploadFuture,
+    UploadFuture: Future<Output = Result<NativeSyncPendingRpcResult, NativeHttpError>>,
+    Refresh: FnMut() -> RefreshFuture,
+    RefreshFuture: Future<Output = Result<String, NativeHttpError>>,
+{
+    let mut base_server_seq = initial_base_server_seq;
+    let mut access_token = initial_access_token;
+    let mut rpc_result = NativeSyncPendingRpcResult {
+        applied_events: Vec::new(),
+        conflict_events: Vec::new(),
+        next_server_seq: base_server_seq,
+        server_high_water: base_server_seq,
+        next_server_version: initial_next_server_version,
+    };
+
+    for chunk in pending_chunks {
+        let mut retried_after_refresh = false;
+        let chunk_result = loop {
+            match upload(access_token.clone(), chunk.clone(), base_server_seq).await {
+                Ok(result) => break result,
+                Err(error)
+                    if error.status_code.is_some_and(should_request_token_refresh)
+                        && !retried_after_refresh =>
+                {
+                    access_token = refresh_access_token().await?;
+                    retried_after_refresh = true;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        base_server_seq = chunk_result.next_server_seq;
+        rpc_result
+            .applied_events
+            .extend(chunk_result.applied_events.into_iter());
+        rpc_result
+            .conflict_events
+            .extend(chunk_result.conflict_events.into_iter());
+        rpc_result.next_server_seq = chunk_result.next_server_seq;
+        rpc_result.server_high_water = rpc_result
+            .server_high_water
+            .max(chunk_result.server_high_water);
+        rpc_result.next_server_version = chunk_result.next_server_version;
+    }
+
+    Ok(rpc_result)
 }
 
 async fn flush_schedule_notifications(
@@ -5584,7 +5951,8 @@ pub async fn run_native_season_catchup(
     }
 
     if input.reconcile_manifest {
-        let remote_record_ids = match fetch_remote_flight_record_manifest(&http, &input, &token).await
+        let remote_record_ids = match fetch_remote_flight_record_manifest(&http, &input, &token)
+            .await
         {
             Ok(record_ids) => record_ids,
             Err(error) => {
@@ -5619,15 +5987,12 @@ pub async fn run_native_season_catchup(
                     .to_string(),
             );
         }
-        let reconcile_result =
-            reconcile_flight_record_manifest_on_connection(
-                &conn,
-                &input.season_id,
-                &remote_record_ids,
-            )
-            .map_err(|error| {
-                format!("Native catch-up manifest reconciliation failed: {error}")
-            })?;
+        let reconcile_result = reconcile_flight_record_manifest_on_connection(
+            &conn,
+            &input.season_id,
+            &remote_record_ids,
+        )
+        .map_err(|error| format!("Native catch-up manifest reconciliation failed: {error}"))?;
         reconciled_flight_rows = reconcile_result.removed_flight_rows;
         reconciled_modification_rows = reconcile_result.removed_modification_rows;
         reconciled_entity_versions = reconcile_result.removed_entity_versions;
@@ -6002,13 +6367,14 @@ pub async fn sync_native_pending_changes(
         });
     }
 
-    let pending_events = build_native_pending_change_events(
+    let pending_chunks = build_native_pending_sync_chunks(
         &conn,
         &input.season_id,
         &input.client_id,
         chrono_like_millis(),
     )
     .map_err(|error| format!("Native pending event build failed: {error}"))?;
+    let pending_events = pending_chunks.iter().flatten().cloned().collect::<Vec<_>>();
     let sync_meta = read_sync_meta(&conn, &input.season_id)
         .map_err(|error| format!("Native sync metadata read failed: {error}"))?;
     let base_server_seq = sync_meta
@@ -6017,9 +6383,51 @@ pub async fn sync_native_pending_changes(
         .or_else(|| sync_meta.get("baseServerVersion").and_then(Value::as_i64))
         .unwrap_or(0);
     let http = reqwest::Client::new();
-    let rpc_result = post_pending_sync_events(&http, &input, &pending_events, base_server_seq)
-        .await
-        .map_err(|error| format!("Native pending upload failed: {error}"))?;
+    let initial_next_server_version = sync_meta
+        .get("baseServerVersion")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let rpc_result = upload_native_pending_chunks_with_retry(
+        &pending_chunks,
+        base_server_seq,
+        initial_next_server_version,
+        input.access_token.clone(),
+        |access_token, chunk, base_server_seq| {
+            let http = &http;
+            let input = &input;
+            async move {
+                post_pending_sync_events(http, input, &access_token, &chunk, base_server_seq).await
+            }
+        },
+        || {
+            let app = &app;
+            let state = &state;
+            let input = &input;
+            async move {
+                let Some(cancellation_id) = input.cancellation_id.as_deref() else {
+                    return Err(NativeHttpError {
+                        status_code: Some(401),
+                        message: "Native pending upload failed with HTTP 401 and no token refresh channel."
+                            .to_string(),
+                    });
+                };
+                wait_for_refreshed_token_for(
+                    app,
+                    state,
+                    &input.season_id,
+                    cancellation_id,
+                    "Native pending upload cancelled while waiting for a refreshed token.",
+                )
+                .await
+                .map_err(|error| NativeHttpError {
+                    status_code: Some(401),
+                    message: error,
+                })
+            }
+        },
+    )
+    .await
+    .map_err(|error| format!("Native pending upload failed: {error}"))?;
     if let Err(error) = validate_pending_sync_result_coverage(
         &pending_events,
         &rpc_result.applied_events,
@@ -6089,7 +6497,11 @@ pub async fn sync_native_pending_changes(
                 format!(
                     "Local changes synced. Auto-applied {} remote allocation change{}.",
                     auto_resolved_conflict_count,
-                    if auto_resolved_conflict_count == 1 { "" } else { "s" }
+                    if auto_resolved_conflict_count == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
                 )
             } else {
                 "Local changes synced.".to_string()

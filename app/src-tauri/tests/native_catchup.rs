@@ -2,25 +2,26 @@ use rusqlite::{params, Connection};
 use seasonal_management_lib::native_catchup::{
     apply_event_page, apply_local_modification_batch_delta_to_connection,
     apply_schedule_mutation_to_connection, build_native_pending_change_events,
-    check_season_integrity_on_connection, checkpoint_mode_for_committed_pages,
-    configure_sqlite_connection, query_dashboard_ai_sql_on_connection,
-    ensure_local_season_on_connection, ensure_native_schema,
-    import_season_snapshot_on_connection, merge_season_snapshot_on_connection,
-    query_allocation_window_on_connection,
-    query_schedule_window_on_connection, query_season_freshness_on_connection,
-    query_sync_summary_on_connection, reconcile_flight_record_manifest_on_connection,
-    resolve_season_conflict_on_connection,
+    build_native_pending_sync_chunks, check_season_integrity_on_connection,
+    checkpoint_mode_for_committed_pages, configure_sqlite_connection,
+    ensure_local_season_on_connection, ensure_native_schema, import_season_snapshot_on_connection,
+    merge_season_snapshot_on_connection, query_allocation_window_on_connection,
+    query_dashboard_ai_sql_on_connection, query_schedule_window_on_connection,
+    query_season_freshness_on_connection, query_sync_summary_on_connection,
+    reconcile_flight_record_manifest_on_connection, resolve_season_conflict_on_connection,
     should_request_page_fetch_retry, should_request_token_refresh,
-    validate_pending_sync_result_coverage,
-    ApplyLocalModificationBatchDeltaInput,
-    ApplyLocalModificationHistoryInput, ApplyScheduleMutationInput, CheckSeasonIntegrityInput,
-    EnsureLocalSeasonInput, ImportSeasonSnapshotInput, MergeSeasonSnapshotInput,
-    NativeCatchupEvent, NativeCatchupEventPage, QueryAllocationWindowInput,
-    QueryDashboardSummaryInput, QueryNativeDashboardAiSqlInput, QueryScheduleWindowInput,
-    QuerySeasonFreshnessInput, ResolveSeasonConflictInput, WalCheckpointMode,
+    upload_native_pending_chunks_with_retry, validate_pending_sync_result_coverage,
+    ApplyLocalModificationBatchDeltaInput, ApplyLocalModificationHistoryInput,
+    ApplyScheduleMutationInput, CheckSeasonIntegrityInput, EnsureLocalSeasonInput,
+    ImportSeasonSnapshotInput, MergeSeasonSnapshotInput, NativeCatchupEvent,
+    NativeCatchupEventPage, NativeHttpError, NativeSyncPendingRpcResult,
+    QueryAllocationWindowInput, QueryDashboardSummaryInput, QueryNativeDashboardAiSqlInput,
+    QueryScheduleWindowInput, QuerySeasonFreshnessInput, ResolveSeasonConflictInput,
+    WalCheckpointMode, MAX_NATIVE_PENDING_SYNC_CHUNK_BYTES, MAX_NATIVE_PENDING_SYNC_CHUNK_EVENTS,
 };
 use serde_json::json;
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 
 fn open_test_db() -> Connection {
@@ -29,6 +30,45 @@ fn open_test_db() -> Connection {
     let conn = Connection::open(db_path).expect("open sqlite db");
     std::mem::forget(dir);
     conn
+}
+
+fn daily_import_record(index: usize) -> serde_json::Value {
+    json!({
+        "id": format!("DAILY_IMPORT_A_2025_12_{:02}_ZZ{:04}_SGN_10_00_320", (index % 28) + 1, index),
+        "date": format!("2025-12-{:02}", (index % 28) + 1),
+        "operationalDate": format!("2025-12-{:02}", (index % 28) + 1),
+        "iataSeasonCode": "W25",
+        "type": "arrival",
+        "sourceSide": "ARR",
+        "status": "scheduled",
+        "sourceKind": "added",
+        "flightNumber": format!("ZZ{:04}", index),
+        "rawFlightNumber": format!("{:04}", index),
+        "airline": "ZZ",
+        "route": "SGN",
+        "schedule": "10:00",
+        "aircraft": "320",
+        "codeShares": "X".repeat(600),
+        "sourceRowIndex": index as i64,
+        "gate": (index % 20) as i64,
+        "stand": (index % 30) as i64,
+        "counter": format!("{},{}", index % 50, (index % 50) + 1)
+    })
+}
+
+fn pending_rpc_event(op_id: &str, server_seq: i64) -> NativeCatchupEvent {
+    NativeCatchupEvent {
+        event_id: format!("event-{op_id}"),
+        season_id: "season-1".to_string(),
+        client_id: "client-1".to_string(),
+        op_id: op_id.to_string(),
+        server_seq,
+        target_type: "flightRecord".to_string(),
+        target_id: op_id.to_string(),
+        changed_fields: vec!["record".to_string()],
+        op_payload: json!({ "type": "flightRecord" }),
+        created_at: "1234".to_string(),
+    }
 }
 
 #[test]
@@ -68,9 +108,8 @@ fn pending_sync_coverage_rejects_rpc_response_missing_pending_op_ids() {
         created_at: String::new(),
     }];
 
-    let error =
-        validate_pending_sync_result_coverage(&pending_events, &applied_events, &[])
-            .expect_err("missing applied/conflict event must fail closed");
+    let error = validate_pending_sync_result_coverage(&pending_events, &applied_events, &[])
+        .expect_err("missing applied/conflict event must fail closed");
 
     assert!(error.contains("client-1:modification:leg-2:action"));
 }
@@ -323,10 +362,7 @@ fn import_season_snapshot_drops_orphan_modifications_but_keeps_valid_added_legs(
     let orphan_count: i64 = conn
         .query_row(
             "SELECT COUNT(1) FROM local_modifications WHERE season_id = ? AND leg_id = ?",
-            params![
-                "season-s26",
-                "LEG_D_2026-08-08_910_AK_AK649_KUL_12_20_320"
-            ],
+            params!["season-s26", "LEG_D_2026-08-08_910_AK_AK649_KUL_12_20_320"],
             |row| row.get(0),
         )
         .expect("orphan modification count");
@@ -361,7 +397,12 @@ fn import_season_snapshot_drops_orphan_modifications_but_keeps_valid_added_legs(
     assert_eq!(window.modifications.len(), 2);
 }
 
-fn stale_merge_snapshot_input(data_version: i64, seq: i64, gate: i64, stand: i64) -> MergeSeasonSnapshotInput {
+fn stale_merge_snapshot_input(
+    data_version: i64,
+    seq: i64,
+    gate: i64,
+    stand: i64,
+) -> MergeSeasonSnapshotInput {
     MergeSeasonSnapshotInput {
         season: json!({
             "id": "season-1",
@@ -395,7 +436,11 @@ fn stale_merge_snapshot_input(data_version: i64, seq: i64, gate: i64, stand: i64
     }
 }
 
-fn stale_merge_modification_snapshot_input(field: &str, value: serde_json::Value, version: i64) -> MergeSeasonSnapshotInput {
+fn stale_merge_modification_snapshot_input(
+    field: &str,
+    value: serde_json::Value,
+    version: i64,
+) -> MergeSeasonSnapshotInput {
     MergeSeasonSnapshotInput {
         season: json!({
             "id": "season-1",
@@ -475,7 +520,11 @@ fn seed_imported_snapshot(conn: &Connection) {
     .expect("seed imported snapshot");
 }
 
-fn seed_imported_snapshot_with_modification(conn: &Connection, field: &str, value: serde_json::Value) {
+fn seed_imported_snapshot_with_modification(
+    conn: &Connection,
+    field: &str,
+    value: serde_json::Value,
+) {
     import_season_snapshot_on_connection(
         conn,
         &ImportSeasonSnapshotInput {
@@ -637,11 +686,9 @@ fn clean_stale_snapshot_merge_replaces_local_baseline() {
     ensure_native_schema(&conn).expect("native schema");
     seed_imported_snapshot(&conn);
 
-    let result = merge_season_snapshot_on_connection(
-        &conn,
-        &stale_merge_snapshot_input(5, 9, 7, 20),
-    )
-    .expect("merge clean stale snapshot");
+    let result =
+        merge_season_snapshot_on_connection(&conn, &stale_merge_snapshot_input(5, 9, 7, 20))
+            .expect("merge clean stale snapshot");
     let current = current_record_payload(&conn);
 
     assert_eq!(result.sync_meta["baseServerVersion"], 5);
@@ -659,11 +706,9 @@ fn dirty_stale_snapshot_merge_replays_non_overlapping_local_edits_on_latest_base
     seed_imported_snapshot(&conn);
     make_local_gate_edit(&conn, 4);
 
-    let result = merge_season_snapshot_on_connection(
-        &conn,
-        &stale_merge_snapshot_input(5, 9, 1, 20),
-    )
-    .expect("merge dirty stale snapshot");
+    let result =
+        merge_season_snapshot_on_connection(&conn, &stale_merge_snapshot_input(5, 9, 1, 20))
+            .expect("merge dirty stale snapshot");
     let current = current_record_payload(&conn);
 
     assert_eq!(result.sync_meta["pendingCount"], 1);
@@ -680,11 +725,9 @@ fn dirty_stale_snapshot_merge_records_overlap_conflict_without_discarding_local_
     seed_imported_snapshot(&conn);
     make_local_gate_edit(&conn, 4);
 
-    let result = merge_season_snapshot_on_connection(
-        &conn,
-        &stale_merge_snapshot_input(5, 9, 8, 20),
-    )
-    .expect("merge dirty stale conflict");
+    let result =
+        merge_season_snapshot_on_connection(&conn, &stale_merge_snapshot_input(5, 9, 8, 20))
+            .expect("merge dirty stale conflict");
     let current = current_record_payload(&conn);
 
     assert_eq!(result.sync_meta["pendingCount"], 1);
@@ -758,11 +801,9 @@ fn native_conflict_resolution_keep_mine_preserves_pending_local_change() {
     ensure_native_schema(&conn).expect("native schema");
     seed_imported_snapshot(&conn);
     make_local_gate_edit(&conn, 4);
-    let merged = merge_season_snapshot_on_connection(
-        &conn,
-        &stale_merge_snapshot_input(5, 9, 8, 20),
-    )
-    .expect("merge dirty stale conflict");
+    let merged =
+        merge_season_snapshot_on_connection(&conn, &stale_merge_snapshot_input(5, 9, 8, 20))
+            .expect("merge dirty stale conflict");
     let conflict_id = merged.conflicts[0]["id"].as_str().expect("conflict id");
 
     let resolved = resolve_season_conflict_on_connection(
@@ -788,11 +829,9 @@ fn native_conflict_resolution_accept_remote_applies_remote_and_clears_target_pen
     ensure_native_schema(&conn).expect("native schema");
     seed_imported_snapshot(&conn);
     make_local_gate_edit(&conn, 4);
-    let merged = merge_season_snapshot_on_connection(
-        &conn,
-        &stale_merge_snapshot_input(5, 9, 8, 20),
-    )
-    .expect("merge dirty stale conflict");
+    let merged =
+        merge_season_snapshot_on_connection(&conn, &stale_merge_snapshot_input(5, 9, 8, 20))
+            .expect("merge dirty stale conflict");
     let conflict_id = merged.conflicts[0]["id"].as_str().expect("conflict id");
 
     let resolved = resolve_season_conflict_on_connection(
@@ -1340,7 +1379,8 @@ fn ensure_local_season_is_idempotent_and_creates_sync_meta() {
     };
 
     let first = ensure_local_season_on_connection(&conn, &input).expect("ensure local season");
-    let second = ensure_local_season_on_connection(&conn, &input).expect("ensure local season again");
+    let second =
+        ensure_local_season_on_connection(&conn, &input).expect("ensure local season again");
 
     let season_count: i64 = conn
         .query_row(
@@ -1533,14 +1573,22 @@ fn schedule_window_normalizes_sparse_deleted_modification_and_reports_effective_
         "INSERT INTO local_modifications (
           season_id, leg_id, is_base, sort_order, action, payload_json
         ) VALUES (?, ?, 0, 0, 'deleted', ?)",
-        params!["season-1", "leg-1", json!({ "action": "deleted" }).to_string()],
+        params![
+            "season-1",
+            "leg-1",
+            json!({ "action": "deleted" }).to_string()
+        ],
     )
     .expect("seed sparse deleted modification");
     conn.execute(
         "INSERT INTO local_modifications (
           season_id, leg_id, is_base, sort_order, action, payload_json
         ) VALUES (?, ?, 0, 1, 'deleted', ?)",
-        params!["season-1", "leg-3", json!({ "action": "deleted" }).to_string()],
+        params![
+            "season-1",
+            "leg-3",
+            json!({ "action": "deleted" }).to_string()
+        ],
     )
     .expect("seed second sparse deleted modification");
 
@@ -1561,8 +1609,14 @@ fn schedule_window_normalizes_sparse_deleted_modification_and_reports_effective_
         .iter()
         .map(|modification| {
             (
-                modification["legId"].as_str().unwrap_or_default().to_string(),
-                modification["action"].as_str().unwrap_or_default().to_string(),
+                modification["legId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                modification["action"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
             )
         })
         .collect::<std::collections::HashMap<_, _>>();
@@ -1587,7 +1641,11 @@ fn schedule_window_counts_added_modifications_in_effective_totals() {
         "INSERT INTO local_modifications (
           season_id, leg_id, is_base, sort_order, action, payload_json
         ) VALUES (?, ?, 0, 0, 'deleted', ?)",
-        params!["season-1", "leg-1", json!({ "action": "deleted" }).to_string()],
+        params![
+            "season-1",
+            "leg-1",
+            json!({ "action": "deleted" }).to_string()
+        ],
     )
     .expect("seed sparse deleted modification");
     conn.execute(
@@ -1653,7 +1711,11 @@ fn dashboard_summary_uses_effective_modification_totals() {
         "INSERT INTO local_modifications (
           season_id, leg_id, is_base, sort_order, action, payload_json
         ) VALUES (?, ?, 0, 0, 'deleted', ?)",
-        params!["season-1", "leg-1", json!({ "action": "deleted" }).to_string()],
+        params![
+            "season-1",
+            "leg-1",
+            json!({ "action": "deleted" }).to_string()
+        ],
     )
     .expect("seed sparse deleted modification");
 
@@ -2299,6 +2361,382 @@ fn native_pending_sync_builds_v2_events_from_sql_pending_ops() {
 }
 
 #[test]
+fn native_pending_sync_chunks_and_splits_oversized_daily_import_history() {
+    let conn = open_test_db();
+    configure_sqlite_connection(&conn).expect("configure sqlite");
+    create_minimal_local_schema(&conn);
+    seed_flight(&conn);
+    let records = (0..900).map(daily_import_record).collect::<Vec<_>>();
+
+    apply_schedule_mutation_to_connection(
+        &conn,
+        &ApplyScheduleMutationInput {
+            season_id: "season-1".to_string(),
+            records,
+            source_rows: vec![],
+            mods: vec![],
+            deleted_ids: vec![],
+            history: Some(ApplyLocalModificationHistoryInput {
+                id: "LOCAL_DAILY_IMPORT_W25_BIG".to_string(),
+                timestamp: 1_781_619_961_521,
+                description: "Daily import: updated 0, inserted 900, deleted 0".to_string(),
+                schedule_notification: None,
+            }),
+        },
+    )
+    .expect("apply large daily import mutation");
+
+    let chunks = build_native_pending_sync_chunks(&conn, "season-1", "client-1", 1_234)
+        .expect("pending chunks");
+    assert!(
+        chunks.len() > 1,
+        "large native pending upload should be chunked"
+    );
+    assert!(chunks
+        .iter()
+        .all(|chunk| chunk.len() <= MAX_NATIVE_PENDING_SYNC_CHUNK_EVENTS));
+    assert!(chunks.iter().all(
+        |chunk| serde_json::to_vec(chunk).unwrap().len() <= MAX_NATIVE_PENDING_SYNC_CHUNK_BYTES
+    ));
+
+    let events = chunks.into_iter().flatten().collect::<Vec<_>>();
+    let history_events = events
+        .iter()
+        .filter(|event| {
+            event.get("targetType").and_then(|value| value.as_str()) == Some("modHistory")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        history_events.len() > 1,
+        "oversized daily import modHistory should split before RPC upload"
+    );
+    assert!(
+        history_events.iter().all(|event| event["targetId"]
+            .as_str()
+            .is_some_and(|id| id.contains("_PART_"))),
+        "split history events should use stable part ids"
+    );
+    let total_record_changes = history_events
+        .iter()
+        .map(|event| {
+            event["opPayload"]["entry"]["recordChanges"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or(0)
+        })
+        .sum::<usize>();
+    assert_eq!(total_record_changes, 900);
+    assert!(events
+        .iter()
+        .any(|event| { event["opPayload"]["record"]["iataSeasonCode"] == "W25" }));
+}
+
+#[test]
+fn native_pending_sync_splits_existing_oversized_mod_history_pending_op() {
+    let conn = open_test_db();
+    configure_sqlite_connection(&conn).expect("configure sqlite");
+    create_minimal_local_schema(&conn);
+    seed_flight(&conn);
+    let record_changes = (0..850)
+        .map(|index| {
+            json!({
+                "recordId": format!("DAILY_IMPORT_EXISTING_{index}"),
+                "previousRecord": null,
+                "newRecord": daily_import_record(index)
+            })
+        })
+        .collect::<Vec<_>>();
+    let history_op = json!({
+        "type": "modHistory",
+        "entry": {
+            "id": "LOCAL_DAILY_IMPORT_W25_EXISTING",
+            "timestamp": 1_781_619_961_521_i64,
+                "description": "Daily import: updated 0, inserted 850, deleted 0",
+            "changes": [],
+            "recordChanges": record_changes
+        }
+    });
+    conn.execute(
+        "INSERT INTO local_pending_ops (season_id, op_key, op_type, sort_order, payload_json) VALUES (?, ?, ?, ?, ?)",
+        params![
+            "season-1",
+            "modHistory:LOCAL_DAILY_IMPORT_W25_EXISTING",
+            "modHistory",
+            0_i64,
+            history_op.to_string()
+        ],
+    )
+    .expect("seed existing oversized history pending op");
+    conn.execute(
+        "UPDATE local_sync_meta SET pending_count = ?, sync_status = ?, payload_json = ? WHERE season_id = ?",
+        params![
+            1_i64,
+            "dirty",
+            json!({
+                "seasonId": "season-1",
+                "baseServerVersion": 1,
+                "lastServerSeq": 10,
+                "pendingCount": 1,
+                "syncStatus": "dirty",
+                "conflicts": []
+            })
+            .to_string(),
+            "season-1"
+        ],
+    )
+    .expect("mark dirty");
+
+    let chunks = build_native_pending_sync_chunks(&conn, "season-1", "client-1", 1_234)
+        .expect("pending chunks");
+    let history_events = chunks
+        .iter()
+        .flatten()
+        .filter(|event| {
+            event.get("targetType").and_then(|value| value.as_str()) == Some("modHistory")
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        history_events.len() > 1,
+        "existing oversized pending modHistory op must be split during upload"
+    );
+    assert_eq!(
+        history_events
+            .iter()
+            .map(|event| event["opPayload"]["entry"]["recordChanges"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or(0))
+            .sum::<usize>(),
+        850
+    );
+}
+
+#[test]
+fn native_pending_chunk_upload_retries_unauthorized_once_with_refreshed_token() {
+    let chunks = vec![vec![json!({ "opId": "client-1:flightRecord:leg-1:gate" })]];
+    let attempts = Arc::new(Mutex::new(Vec::<(String, i64, usize)>::new()));
+    let refresh_count = Arc::new(Mutex::new(0_usize));
+
+    let upload_attempts = Arc::clone(&attempts);
+    let refresh_attempts = Arc::clone(&refresh_count);
+    let result = tauri::async_runtime::block_on(upload_native_pending_chunks_with_retry(
+        &chunks,
+        10,
+        20,
+        "expired-token".to_string(),
+        move |access_token, chunk, base_server_seq| {
+            let upload_attempts = Arc::clone(&upload_attempts);
+            async move {
+                let attempt_number = {
+                    let mut guard = upload_attempts.lock().expect("attempt lock");
+                    guard.push((access_token.clone(), base_server_seq, chunk.len()));
+                    guard.len()
+                };
+                if attempt_number == 1 {
+                    return Err(NativeHttpError {
+                        status_code: Some(401),
+                        message: "expired token".to_string(),
+                    });
+                }
+                Ok(NativeSyncPendingRpcResult {
+                    applied_events: vec![pending_rpc_event("client-1:flightRecord:leg-1:gate", 11)],
+                    conflict_events: Vec::new(),
+                    next_server_seq: 11,
+                    server_high_water: 11,
+                    next_server_version: 21,
+                })
+            }
+        },
+        move || {
+            let refresh_attempts = Arc::clone(&refresh_attempts);
+            async move {
+                let mut guard = refresh_attempts.lock().expect("refresh lock");
+                *guard += 1;
+                Ok("fresh-token".to_string())
+            }
+        },
+    ))
+    .expect("401 should retry once with refreshed token");
+
+    assert_eq!(result.applied_events.len(), 1);
+    assert_eq!(result.next_server_seq, 11);
+    assert_eq!(
+        *refresh_count.lock().expect("refresh count"),
+        1,
+        "401 should request one refreshed token"
+    );
+    assert_eq!(
+        attempts.lock().expect("attempts").as_slice(),
+        &[
+            ("expired-token".to_string(), 10, 1),
+            ("fresh-token".to_string(), 10, 1)
+        ]
+    );
+}
+
+#[test]
+fn native_pending_chunk_upload_aggregates_chunk_acks_for_coverage() {
+    let chunks = vec![
+        vec![json!({ "opId": "client-1:flightRecord:leg-1:gate" })],
+        vec![json!({ "opId": "client-1:modification:leg-2:stand" })],
+    ];
+    let base_seq_attempts = Arc::new(Mutex::new(Vec::<i64>::new()));
+    let upload_attempts = Arc::clone(&base_seq_attempts);
+
+    let result = tauri::async_runtime::block_on(upload_native_pending_chunks_with_retry(
+        &chunks,
+        10,
+        20,
+        "token".to_string(),
+        move |_access_token, chunk, base_server_seq| {
+            let upload_attempts = Arc::clone(&upload_attempts);
+            async move {
+                upload_attempts
+                    .lock()
+                    .expect("base seq attempts")
+                    .push(base_server_seq);
+                let op_id = chunk[0]["opId"].as_str().expect("op id").to_string();
+                Ok(NativeSyncPendingRpcResult {
+                    applied_events: vec![pending_rpc_event(&op_id, base_server_seq + 1)],
+                    conflict_events: Vec::new(),
+                    next_server_seq: base_server_seq + 1,
+                    server_high_water: base_server_seq + 1,
+                    next_server_version: 21,
+                })
+            }
+        },
+        || async {
+            Err(NativeHttpError {
+                status_code: Some(401),
+                message: "unexpected refresh".to_string(),
+            })
+        },
+    ))
+    .expect("chunked upload should aggregate ACKs");
+
+    let pending_events = chunks.into_iter().flatten().collect::<Vec<_>>();
+    validate_pending_sync_result_coverage(
+        &pending_events,
+        &result.applied_events,
+        &result.conflict_events,
+    )
+    .expect("aggregated chunk ACKs should cover all pending opIds");
+    assert_eq!(result.applied_events.len(), 2);
+    assert_eq!(
+        base_seq_attempts
+            .lock()
+            .expect("base seq attempts")
+            .as_slice(),
+        &[10, 11],
+        "each chunk should use the previous chunk ACK as the next base sequence"
+    );
+}
+
+#[test]
+fn native_pending_chunk_upload_failure_keeps_sqlite_pending_ops() {
+    let conn = open_test_db();
+    configure_sqlite_connection(&conn).expect("configure sqlite");
+    create_minimal_local_schema(&conn);
+    seed_flight(&conn);
+    let records = (0..75).map(daily_import_record).collect::<Vec<_>>();
+
+    apply_schedule_mutation_to_connection(
+        &conn,
+        &ApplyScheduleMutationInput {
+            season_id: "season-1".to_string(),
+            records,
+            source_rows: vec![],
+            mods: vec![],
+            deleted_ids: vec![],
+            history: Some(ApplyLocalModificationHistoryInput {
+                id: "LOCAL_DAILY_IMPORT_W25_FAIL_MID_CHUNK".to_string(),
+                timestamp: 1_781_619_961_521,
+                description: "Daily import: updated 0, inserted 75, deleted 0".to_string(),
+                schedule_notification: None,
+            }),
+        },
+    )
+    .expect("apply daily import mutation");
+
+    let chunks = build_native_pending_sync_chunks(&conn, "season-1", "client-1", 1_234)
+        .expect("pending chunks");
+    assert!(
+        chunks.len() > 1,
+        "test requires more than one pending upload chunk"
+    );
+    let pending_before: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM local_pending_ops WHERE season_id = ?",
+            params!["season-1"],
+            |row| row.get(0),
+        )
+        .expect("pending count before");
+    let attempt_count = Arc::new(Mutex::new(0_usize));
+    let upload_attempts = Arc::clone(&attempt_count);
+
+    let error = tauri::async_runtime::block_on(upload_native_pending_chunks_with_retry(
+        &chunks,
+        10,
+        20,
+        "token".to_string(),
+        move |_access_token, chunk, base_server_seq| {
+            let upload_attempts = Arc::clone(&upload_attempts);
+            async move {
+                let attempt_number = {
+                    let mut guard = upload_attempts.lock().expect("attempt count");
+                    *guard += 1;
+                    *guard
+                };
+                if attempt_number == 2 {
+                    return Err(NativeHttpError {
+                        status_code: Some(500),
+                        message: "server failed mid-upload".to_string(),
+                    });
+                }
+                let applied_events = chunk
+                    .iter()
+                    .enumerate()
+                    .map(|(index, event)| {
+                        pending_rpc_event(
+                            event["opId"].as_str().expect("op id"),
+                            base_server_seq + i64::try_from(index).unwrap_or(0) + 1,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                Ok(NativeSyncPendingRpcResult {
+                    applied_events,
+                    conflict_events: Vec::new(),
+                    next_server_seq: base_server_seq + i64::try_from(chunk.len()).unwrap_or(0),
+                    server_high_water: base_server_seq + i64::try_from(chunk.len()).unwrap_or(0),
+                    next_server_version: 21,
+                })
+            }
+        },
+        || async {
+            Err(NativeHttpError {
+                status_code: Some(401),
+                message: "unexpected refresh".to_string(),
+            })
+        },
+    ))
+    .expect_err("second chunk failure should stop the upload");
+    let pending_after: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM local_pending_ops WHERE season_id = ?",
+            params!["season-1"],
+            |row| row.get(0),
+        )
+        .expect("pending count after");
+
+    assert_eq!(error.status_code, Some(500));
+    assert_eq!(
+        pending_after, pending_before,
+        "failed chunk upload must not clear local pending ops before finalize"
+    );
+}
+
+#[test]
 fn native_local_modification_delta_preserves_review_status_without_pending_work() {
     let conn = open_test_db();
     configure_sqlite_connection(&conn).expect("configure sqlite");
@@ -2555,12 +2993,7 @@ fn manifest_reconcile_prunes_local_only_records_without_pending_ops() {
     conn.execute(
         "INSERT INTO local_entity_versions (season_id, target_type, target_id, server_version)
          VALUES (?, ?, ?, ?)",
-        params![
-            "season-1",
-            "flightRecord",
-            "stale-local-only",
-            7_i64
-        ],
+        params!["season-1", "flightRecord", "stale-local-only", 7_i64],
     )
     .expect("seed stale entity version");
     conn.execute(
@@ -2764,8 +3197,7 @@ fn applies_new_flight_record_event_with_identity_even_when_id_is_not_changed() {
             |row| row.get(0),
         )
         .expect("current payload");
-    let current: serde_json::Value =
-        serde_json::from_str(&current_payload).expect("current json");
+    let current: serde_json::Value = serde_json::from_str(&current_payload).expect("current json");
 
     assert_eq!(current["id"], "remote-new-leg");
 }

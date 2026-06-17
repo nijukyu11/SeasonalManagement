@@ -2637,8 +2637,24 @@ async function run() {
       runningStates.at(-1)?.state.pendingCount === 17934,
     `guard/local-change churn during auto sync must not show stale unsynced dirty state, got ${JSON.stringify(runningStates)}`
   );
+  const manualWhileAuto = runningScheduler.syncNow('running-season', 'daily');
+  let manualWhileAutoSettled = false;
+  manualWhileAuto.finally(() => {
+    manualWhileAutoSettled = true;
+  });
+  for (let index = 0; index < 6; index++) await Promise.resolve();
+  assert(
+    !manualWhileAutoSettled,
+    'manual Save during an in-flight auto sync should wait for the active sync instead of returning Sync already running'
+  );
   releaseRunningSync();
   for (let index = 0; index < 8; index++) await Promise.resolve();
+  const manualWhileAutoResult = await manualWhileAuto;
+  assert(
+    manualWhileAutoResult.status !== 'failed' &&
+      manualWhileAutoResult.message !== 'Sync already running.',
+    `manual Save during auto sync must reuse or queue the active run, got ${JSON.stringify(manualWhileAutoResult)}`
+  );
   assert(
     runningStates.at(-1)?.state.status === 'synced' &&
       runningStates.at(-1)?.state.pendingCount === 0,
@@ -10032,6 +10048,17 @@ async function run() {
       nativeCatchupRustSource.includes('notification_flush_error') &&
       nativeSeasonCatchupSource.includes('notificationFlushError?: string'),
     'Native pending sync must best-effort flush schedule-telegram-notify after successful upload without failing the local sync result'
+  );
+  assert(
+    nativeCatchupRustSource.includes('MAX_NATIVE_PENDING_SYNC_CHUNK_EVENTS') &&
+      nativeCatchupRustSource.includes('MAX_NATIVE_PENDING_SYNC_CHUNK_BYTES') &&
+      nativeCatchupRustSource.includes('build_native_pending_sync_chunks') &&
+      nativeCatchupRustSource.includes('split_mod_history_op_for_sync') &&
+      nativeCatchupRustSource.includes('upload_native_pending_chunks_with_retry') &&
+      nativeCatchupRustSource.includes('for chunk in pending_chunks') &&
+      nativeCatchupRustSource.includes('refresh_access_token().await?') &&
+      !nativeCatchupRustSource.includes('post_pending_sync_events(&http, &input, &pending_events, base_server_seq)'),
+    'Native pending sync must split oversized modHistory and upload backend-agnostic chunks instead of one full pending payload'
   );
   assert(
     seasonSyncSource.includes('function flushScheduleNotifications') &&
