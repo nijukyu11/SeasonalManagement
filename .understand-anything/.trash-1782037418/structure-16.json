@@ -1,0 +1,605 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 3,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "docs/ai-report-export-guide.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 325,
+      "nonEmptyLines": 241,
+      "sections": [
+        {
+          "heading": "AI Workspace Query-Only Report Export Guide",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Purpose",
+          "level": 2,
+          "line": 3
+        },
+        {
+          "heading": "Backup Before AI Agent Changes",
+          "level": 2,
+          "line": 9
+        },
+        {
+          "heading": "Agent Runtime",
+          "level": 2,
+          "line": 13
+        },
+        {
+          "heading": "Vietnamese-First Output Policy",
+          "level": 2,
+          "line": 33
+        },
+        {
+          "heading": "Hermes-Inspired Skills",
+          "level": 2,
+          "line": 49
+        },
+        {
+          "heading": "Prompt Assembly",
+          "level": 2,
+          "line": 70
+        },
+        {
+          "heading": "Supported Templates",
+          "level": 2,
+          "line": 81
+        },
+        {
+          "heading": "Canonical Data Columns",
+          "level": 2,
+          "line": 88
+        },
+        {
+          "heading": "Workbook Shapes",
+          "level": 2,
+          "line": 114
+        },
+        {
+          "heading": "Query-Only Data Context",
+          "level": 2,
+          "line": 142
+        },
+        {
+          "heading": "Safe AI Export Action Contract",
+          "level": 2,
+          "line": 152
+        },
+        {
+          "heading": "Visual Report Action Contract",
+          "level": 2,
+          "line": 192
+        },
+        {
+          "heading": "Native Tool Calling",
+          "level": 2,
+          "line": 243
+        },
+        {
+          "heading": "Notebook Board Patch Contract",
+          "level": 2,
+          "line": 252
+        },
+        {
+          "heading": "Tool Trace Summary",
+          "level": 2,
+          "line": 287
+        },
+        {
+          "heading": "Local Provider Runtime",
+          "level": 2,
+          "line": 303
+        },
+        {
+          "heading": "Provider Retry",
+          "level": 2,
+          "line": 309
+        },
+        {
+          "heading": "Deploy Caveat",
+          "level": 2,
+          "line": 313
+        },
+        {
+          "heading": "Future Native Pivot Upgrade",
+          "level": 2,
+          "line": 317
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 20
+      }
+    },
+    {
+      "path": "docs/backend-supabase-schema-functions.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 809,
+      "nonEmptyLines": 601,
+      "sections": [
+        {
+          "heading": "SeasonalManagement Supabase backend schema and functions",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Current object counts",
+          "level": 2,
+          "line": 15
+        },
+        {
+          "heading": "Runtime environment contract",
+          "level": 2,
+          "line": 25
+        },
+        {
+          "heading": "Auth and operator access",
+          "level": 2,
+          "line": 63
+        },
+        {
+          "heading": "Public table schema",
+          "level": 2,
+          "line": 86
+        },
+        {
+          "heading": "Access and seasons",
+          "level": 3,
+          "line": 88
+        },
+        {
+          "heading": "`public.app_operators`",
+          "level": 4,
+          "line": 90
+        },
+        {
+          "heading": "`public.seasons`",
+          "level": 4,
+          "line": 101
+        },
+        {
+          "heading": "Imported source rows",
+          "level": 3,
+          "line": 118
+        },
+        {
+          "heading": "`public.season_source_rows`",
+          "level": 4,
+          "line": 120
+        },
+        {
+          "heading": "`public.season_source_row_days`",
+          "level": 4,
+          "line": 127
+        },
+        {
+          "heading": "Flight records and child tables",
+          "level": 3,
+          "line": 133
+        },
+        {
+          "heading": "`public.season_flight_records`",
+          "level": 4,
+          "line": 135
+        },
+        {
+          "heading": "`public.season_flight_record_counters`",
+          "level": 4,
+          "line": 153
+        },
+        {
+          "heading": "`public.season_flight_record_checkin_windows`",
+          "level": 4,
+          "line": 159
+        },
+        {
+          "heading": "Modifications and history",
+          "level": 3,
+          "line": 165
+        },
+        {
+          "heading": "`public.season_modifications`",
+          "level": 4,
+          "line": 167
+        },
+        {
+          "heading": "`public.season_modification_counters`",
+          "level": 4,
+          "line": 176
+        },
+        {
+          "heading": "`public.season_modification_checkin_windows`",
+          "level": 4,
+          "line": 182
+        },
+        {
+          "heading": "`public.season_modification_added_legs`",
+          "level": 4,
+          "line": 188
+        },
+        {
+          "heading": "`public.season_mod_history_entries`",
+          "level": 4,
+          "line": 195
+        },
+        {
+          "heading": "`public.season_mod_history_changes`",
+          "level": 4,
+          "line": 201
+        },
+        {
+          "heading": "`public.season_mod_history_record_changes`",
+          "level": 4,
+          "line": 207
+        },
+        {
+          "heading": "Sync, events, and notifications",
+          "level": 3,
+          "line": 213
+        },
+        {
+          "heading": "`public.season_change_events`",
+          "level": 4,
+          "line": 215
+        },
+        {
+          "heading": "`public.season_entity_versions`",
+          "level": 4,
+          "line": 225
+        },
+        {
+          "heading": "`public.schedule_notification_deliveries`",
+          "level": 4,
+          "line": 231
+        },
+        {
+          "heading": "Operational settings",
+          "level": 3,
+          "line": 244
+        },
+        {
+          "heading": "`public.operational_settings`",
+          "level": 4,
+          "line": 246
+        },
+        {
+          "heading": "`public.operational_route_countries`",
+          "level": 4,
+          "line": 251
+        },
+        {
+          "heading": "`public.operational_airline_colors`",
+          "level": 4,
+          "line": 256
+        },
+        {
+          "heading": "`public.operational_aircraft_groups`",
+          "level": 4,
+          "line": 261
+        },
+        {
+          "heading": "`public.operational_aircraft_group_types`",
+          "level": 4,
+          "line": 266
+        },
+        {
+          "heading": "`public.operational_counter_rules`",
+          "level": 4,
+          "line": 272
+        },
+        {
+          "heading": "`public.operational_checkin_counters`",
+          "level": 4,
+          "line": 277
+        },
+        {
+          "heading": "`public.operational_checkin_counter_groups`",
+          "level": 4,
+          "line": 282
+        },
+        {
+          "heading": "`public.operational_checkin_counter_group_members`",
+          "level": 4,
+          "line": 287
+        },
+        {
+          "heading": "`public.operational_checkin_counter_locks`",
+          "level": 4,
+          "line": 293
+        },
+        {
+          "heading": "`public.operational_checkin_counter_lock_members`",
+          "level": 4,
+          "line": 298
+        },
+        {
+          "heading": "`public.operational_gate_resources`",
+          "level": 4,
+          "line": 304
+        },
+        {
+          "heading": "`public.operational_gate_groups`",
+          "level": 4,
+          "line": 309
+        },
+        {
+          "heading": "`public.operational_gate_group_members`",
+          "level": 4,
+          "line": 314
+        },
+        {
+          "heading": "`public.operational_gate_locks`",
+          "level": 4,
+          "line": 320
+        },
+        {
+          "heading": "`public.operational_gate_lock_members`",
+          "level": 4,
+          "line": 325
+        },
+        {
+          "heading": "`public.operational_stand_gate_mappings`",
+          "level": 4,
+          "line": 331
+        },
+        {
+          "heading": "AI settings and synced provider keys",
+          "level": 3,
+          "line": 336
+        },
+        {
+          "heading": "`public.operational_ai_models`",
+          "level": 4,
+          "line": 338
+        },
+        {
+          "heading": "`public.operational_ai_context_documents`",
+          "level": 4,
+          "line": 344
+        },
+        {
+          "heading": "`public.operational_ai_provider_keys`",
+          "level": 4,
+          "line": 350
+        },
+        {
+          "heading": "Audit cache",
+          "level": 3,
+          "line": 359
+        },
+        {
+          "heading": "`public.audit_sessions`",
+          "level": 4,
+          "line": 361
+        },
+        {
+          "heading": "`public.audit_entries`",
+          "level": 4,
+          "line": 366
+        },
+        {
+          "heading": "`public.audit_delta_chunks`",
+          "level": 4,
+          "line": 372
+        },
+        {
+          "heading": "SQL functions and RPC contract",
+          "level": 2,
+          "line": 378
+        },
+        {
+          "heading": "Operator and AI-key authorization",
+          "level": 3,
+          "line": 382
+        },
+        {
+          "heading": "`public.is_app_operator() returns boolean`",
+          "level": 4,
+          "line": 384
+        },
+        {
+          "heading": "`public.app_operator_can_use_ai() returns boolean`",
+          "level": 4,
+          "line": 391
+        },
+        {
+          "heading": "`public.app_operator_can_manage_ai() returns boolean`",
+          "level": 4,
+          "line": 398
+        },
+        {
+          "heading": "`public.sync_ai_provider_key(p_provider text, p_secret_value text, p_key_fingerprint text, p_updated_at bigint) returns jsonb`",
+          "level": 4,
+          "line": 405
+        },
+        {
+          "heading": "`public.fetch_ai_provider_key(p_provider text) returns jsonb`",
+          "level": 4,
+          "line": 414
+        },
+        {
+          "heading": "`public.list_ai_provider_key_status() returns jsonb`",
+          "level": 4,
+          "line": 423
+        },
+        {
+          "heading": "JSON conversion and upsert helpers",
+          "level": 3,
+          "line": 431
+        },
+        {
+          "heading": "`public.jsonb_text_array(p_value jsonb) returns text[]`",
+          "level": 4,
+          "line": 433
+        },
+        {
+          "heading": "`public.upsert_season_source_row_from_json(p_season_id text, row_payload jsonb) returns void`",
+          "level": 4,
+          "line": 439
+        },
+        {
+          "heading": "`public.upsert_season_flight_record_from_json(p_season_id text, record_payload jsonb) returns void`",
+          "level": 4,
+          "line": 444
+        },
+        {
+          "heading": "`public.upsert_season_modification_from_json(p_season_id text, mod_payload jsonb) returns void`",
+          "level": 4,
+          "line": 449
+        },
+        {
+          "heading": "`public.upsert_season_mod_history_from_json(p_season_id text, history_payload jsonb) returns void`",
+          "level": 4,
+          "line": 454
+        },
+        {
+          "heading": "`public.apply_workspace_op_json(p_season_id text, op jsonb) returns void`",
+          "level": 4,
+          "line": 459
+        },
+        {
+          "heading": "Season sync RPCs",
+          "level": 3,
+          "line": 465
+        },
+        {
+          "heading": "`public.sync_season_workspace(p_season_id text, p_base_version integer, p_pending_ops jsonb) returns jsonb`",
+          "level": 4,
+          "line": 467
+        },
+        {
+          "heading": "`public.get_season_event_high_water(p_season_id text) returns bigint`",
+          "level": 4,
+          "line": 480
+        },
+        {
+          "heading": "`public.get_season_workspace_snapshot(p_season_id text, p_mod_history_limit integer default 50) returns jsonb`",
+          "level": 4,
+          "line": 487
+        },
+        {
+          "heading": "`public.get_season_change_event_page(p_season_id text, p_after_seq bigint, p_through_seq bigint, p_limit integer default 200) returns jsonb`",
+          "level": 4,
+          "line": 494
+        },
+        {
+          "heading": "`public.sync_season_workspace_v2(p_season_id text, p_client_id text, p_base_server_seq bigint, p_pending_events jsonb) returns jsonb`",
+          "level": 4,
+          "line": 501
+        },
+        {
+          "heading": "Notification trigger",
+          "level": 3,
+          "line": 510
+        },
+        {
+          "heading": "`public.enqueue_schedule_notification_delivery() returns trigger`",
+          "level": 4,
+          "line": 512
+        },
+        {
+          "heading": "RLS, grants, and exposed Data API",
+          "level": 2,
+          "line": 519
+        },
+        {
+          "heading": "Reporting schema",
+          "level": 2,
+          "line": 596
+        },
+        {
+          "heading": "Realtime contract",
+          "level": 2,
+          "line": 629
+        },
+        {
+          "heading": "Edge Functions",
+          "level": 2,
+          "line": 648
+        },
+        {
+          "heading": "`dashboard-ai-analysis`",
+          "level": 3,
+          "line": 652
+        },
+        {
+          "heading": "`rotate-dashboard-ai-key`",
+          "level": 3,
+          "line": 666
+        },
+        {
+          "heading": "`schedule-telegram-notify`",
+          "level": 3,
+          "line": 680
+        },
+        {
+          "heading": "Client-side Supabase table usage",
+          "level": 2,
+          "line": 694
+        },
+        {
+          "heading": "Migration and cutover comparison checklist",
+          "level": 2,
+          "line": 738
+        },
+        {
+          "heading": "Smoke SQL for backend comparison",
+          "level": 2,
+          "line": 760
+        },
+        {
+          "heading": "Notes for self-hosted Supabase cutover",
+          "level": 2,
+          "line": 803
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 87
+      }
+    },
+    {
+      "path": "docs/tauri-updater-release.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 40,
+      "nonEmptyLines": 27,
+      "sections": [
+        {
+          "heading": "Tauri Updater Release Notes",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "One-time setup",
+          "level": 2,
+          "line": 5
+        },
+        {
+          "heading": "Release flow",
+          "level": 2,
+          "line": 23
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 3
+      }
+    }
+  ]
+}

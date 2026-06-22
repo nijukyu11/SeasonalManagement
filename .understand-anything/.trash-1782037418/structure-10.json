@@ -1,0 +1,1614 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 3,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "app/scripts/dashboard-ai-local-sql-source.mjs",
+      "language": "javascript",
+      "fileCategory": "code",
+      "totalLines": 152,
+      "nonEmptyLines": 144,
+      "functions": [
+        {
+          "name": "hasForbiddenDashboardAiSql",
+          "startLine": 32,
+          "endLine": 37,
+          "params": [
+            "sql"
+          ]
+        },
+        {
+          "name": "normalizeDashboardAiSql",
+          "startLine": 39,
+          "endLine": 44,
+          "params": [
+            "sql"
+          ]
+        },
+        {
+          "name": "dashboardAiCteNames",
+          "startLine": 46,
+          "endLine": 59,
+          "params": [
+            "upperSql"
+          ]
+        },
+        {
+          "name": "validateDashboardAiSql",
+          "startLine": 61,
+          "endLine": 87,
+          "params": [
+            "sql"
+          ]
+        },
+        {
+          "name": "ensureDashboardAiFlightOperationsView",
+          "startLine": 89,
+          "endLine": 122,
+          "params": [
+            "db"
+          ]
+        },
+        {
+          "name": "queryDashboardAiLocalSql",
+          "startLine": 124,
+          "endLine": 152,
+          "params": [
+            "input"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "DEFAULT_DASHBOARD_AI_LOCAL_DB_PATH",
+          "line": 4,
+          "isDefault": false
+        },
+        {
+          "name": "hasForbiddenDashboardAiSql",
+          "line": 32,
+          "isDefault": false
+        },
+        {
+          "name": "normalizeDashboardAiSql",
+          "line": 39,
+          "isDefault": false
+        },
+        {
+          "name": "validateDashboardAiSql",
+          "line": 61,
+          "isDefault": false
+        },
+        {
+          "name": "queryDashboardAiLocalSql",
+          "line": 124,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "hasForbiddenDashboardAiSql",
+          "callee": "String(sql || '').toUpperCase",
+          "lineNumber": 33
+        },
+        {
+          "caller": "hasForbiddenDashboardAiSql",
+          "callee": "String",
+          "lineNumber": 33
+        },
+        {
+          "caller": "hasForbiddenDashboardAiSql",
+          "callee": "FORBIDDEN_SQL_KEYWORDS.some",
+          "lineNumber": 34
+        },
+        {
+          "caller": "hasForbiddenDashboardAiSql",
+          "callee": "upper.includes",
+          "lineNumber": 35
+        },
+        {
+          "caller": "hasForbiddenDashboardAiSql",
+          "callee": "upper.includes",
+          "lineNumber": 35
+        },
+        {
+          "caller": "normalizeDashboardAiSql",
+          "callee": "Math.max",
+          "lineNumber": 40
+        },
+        {
+          "caller": "normalizeDashboardAiSql",
+          "callee": "Math.min",
+          "lineNumber": 40
+        },
+        {
+          "caller": "normalizeDashboardAiSql",
+          "callee": "Number.isFinite",
+          "lineNumber": 40
+        },
+        {
+          "caller": "normalizeDashboardAiSql",
+          "callee": "Number",
+          "lineNumber": 40
+        },
+        {
+          "caller": "normalizeDashboardAiSql",
+          "callee": "Math.floor",
+          "lineNumber": 40
+        },
+        {
+          "caller": "normalizeDashboardAiSql",
+          "callee": "Number",
+          "lineNumber": 40
+        },
+        {
+          "caller": "normalizeDashboardAiSql",
+          "callee": "String(sql || '').trim().replace(/;+$/g, '').trim",
+          "lineNumber": 41
+        },
+        {
+          "caller": "normalizeDashboardAiSql",
+          "callee": "String(sql || '').trim().replace",
+          "lineNumber": 41
+        },
+        {
+          "caller": "normalizeDashboardAiSql",
+          "callee": "String(sql || '').trim",
+          "lineNumber": 41
+        },
+        {
+          "caller": "normalizeDashboardAiSql",
+          "callee": "String",
+          "lineNumber": 41
+        },
+        {
+          "caller": "normalizeDashboardAiSql",
+          "callee": "/\\blimit\\s+\\d+\\b/i.test",
+          "lineNumber": 42
+        },
+        {
+          "caller": "dashboardAiCteNames",
+          "callee": "upperSql.trimStart().startsWith",
+          "lineNumber": 47
+        },
+        {
+          "caller": "dashboardAiCteNames",
+          "callee": "upperSql.trimStart",
+          "lineNumber": 47
+        },
+        {
+          "caller": "dashboardAiCteNames",
+          "callee": "upperSql.split",
+          "lineNumber": 48
+        },
+        {
+          "caller": "dashboardAiCteNames",
+          "callee": "beforeSelect.split",
+          "lineNumber": 50
+        },
+        {
+          "caller": "dashboardAiCteNames",
+          "callee": "part\n      .replace(/\\bWITH\\b/g, ' ')\n      .trim()\n      .split(/\\s+/)[0]\n      ?.replace",
+          "lineNumber": 51
+        },
+        {
+          "caller": "dashboardAiCteNames",
+          "callee": "part\n      .replace(/\\bWITH\\b/g, ' ')\n      .trim()\n      .split",
+          "lineNumber": 51
+        },
+        {
+          "caller": "dashboardAiCteNames",
+          "callee": "part\n      .replace(/\\bWITH\\b/g, ' ')\n      .trim",
+          "lineNumber": 51
+        },
+        {
+          "caller": "dashboardAiCteNames",
+          "callee": "part\n      .replace",
+          "lineNumber": 51
+        },
+        {
+          "caller": "dashboardAiCteNames",
+          "callee": "names.add",
+          "lineNumber": 56
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "String(sql || '').trim",
+          "lineNumber": 62
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "String",
+          "lineNumber": 62
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "normalized.toUpperCase",
+          "lineNumber": 63
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "upper.startsWith",
+          "lineNumber": 64
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "upper.startsWith",
+          "lineNumber": 64
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "normalized.includes",
+          "lineNumber": 67
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "hasForbiddenDashboardAiSql",
+          "lineNumber": 70
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "dashboardAiCteNames",
+          "lineNumber": 73
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "upper\n    .replace(/[(),]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .split(' ')\n    .filter",
+          "lineNumber": 74
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "upper\n    .replace(/[(),]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .split",
+          "lineNumber": 74
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "upper\n    .replace(/[(),]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim",
+          "lineNumber": 74
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "upper\n    .replace(/[(),]/g, ' ')\n    .replace",
+          "lineNumber": 74
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "upper\n    .replace",
+          "lineNumber": 74
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "words[index + 1].replace",
+          "lineNumber": 82
+        },
+        {
+          "caller": "validateDashboardAiSql",
+          "callee": "cteNames.has",
+          "lineNumber": 83
+        },
+        {
+          "caller": "ensureDashboardAiFlightOperationsView",
+          "callee": "db.exec",
+          "lineNumber": 90
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "import",
+          "lineNumber": 125
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "Math.max",
+          "lineNumber": 127
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "Math.min",
+          "lineNumber": 127
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "Number.isFinite",
+          "lineNumber": 127
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "Number",
+          "lineNumber": 127
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "Math.floor",
+          "lineNumber": 127
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "Number",
+          "lineNumber": 127
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "normalizeDashboardAiSql",
+          "lineNumber": 128
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "validateDashboardAiSql",
+          "lineNumber": 129
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "ensureDashboardAiFlightOperationsView",
+          "lineNumber": 132
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "db.pragma",
+          "lineNumber": 133
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "db.prepare",
+          "lineNumber": 134
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "statement.all",
+          "lineNumber": 135
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "Array.isArray",
+          "lineNumber": 135
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "rows.slice",
+          "lineNumber": 136
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "Object.keys",
+          "lineNumber": 139
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "executedSql.slice",
+          "lineNumber": 143
+        },
+        {
+          "caller": "queryDashboardAiLocalSql",
+          "callee": "db.close",
+          "lineNumber": 150
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 5,
+        "functionCount": 6,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "app/scripts/skawld-dashboard-agent-harness.mjs",
+      "language": "javascript",
+      "fileCategory": "code",
+      "totalLines": 454,
+      "nonEmptyLines": 422,
+      "functions": [
+        {
+          "name": "parseArgs",
+          "startLine": 7,
+          "endLine": 32,
+          "params": [
+            "argv"
+          ]
+        },
+        {
+          "name": "hasForbiddenSql",
+          "startLine": 34,
+          "endLine": 36,
+          "params": [
+            "sql"
+          ]
+        },
+        {
+          "name": "ensureReadOnlySelectSql",
+          "startLine": 38,
+          "endLine": 54,
+          "params": [
+            "sql"
+          ]
+        },
+        {
+          "name": "inferScenarioFromPrompt",
+          "startLine": 56,
+          "endLine": 63,
+          "params": [
+            "prompt"
+          ]
+        },
+        {
+          "name": "sqlStringLiteral",
+          "startLine": 65,
+          "endLine": 67,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "extractPromptDate",
+          "startLine": 69,
+          "endLine": 75,
+          "params": [
+            "prompt"
+          ]
+        },
+        {
+          "name": "extractPromptFlight",
+          "startLine": 77,
+          "endLine": 80,
+          "params": [
+            "prompt"
+          ]
+        },
+        {
+          "name": "buildSqlForScenario",
+          "startLine": 82,
+          "endLine": 141,
+          "params": [
+            "scenario"
+          ]
+        },
+        {
+          "name": "inferScenarioFromSql",
+          "startLine": 143,
+          "endLine": 149,
+          "params": [
+            "sql"
+          ]
+        },
+        {
+          "name": "buildMockQueryResult",
+          "startLine": 151,
+          "endLine": 194,
+          "params": [
+            "sql"
+          ]
+        },
+        {
+          "name": "latestPromptFromRequest",
+          "startLine": 196,
+          "endLine": 206,
+          "params": [
+            "req"
+          ]
+        },
+        {
+          "name": "latestToolResultFromRequest",
+          "startLine": 208,
+          "endLine": 222,
+          "params": [
+            "req"
+          ]
+        },
+        {
+          "name": "formatInteger",
+          "startLine": 224,
+          "endLine": 227,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "formatDateVi",
+          "startLine": 229,
+          "endLine": 233,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "finalTextForQueryResult",
+          "startLine": 235,
+          "endLine": 264,
+          "params": [
+            "queryResult"
+          ]
+        },
+        {
+          "name": "createQueryLocalSqlTool",
+          "startLine": 309,
+          "endLine": 370,
+          "params": []
+        },
+        {
+          "name": "runSkawldDashboardAgentHarness",
+          "startLine": 372,
+          "endLine": 435,
+          "params": []
+        },
+        {
+          "name": "main",
+          "startLine": 437,
+          "endLine": 450,
+          "params": []
+        }
+      ],
+      "classes": [
+        {
+          "name": "MockDashboardProvider",
+          "startLine": 266,
+          "endLine": 307,
+          "methods": [
+            "contextWindow",
+            "stream"
+          ],
+          "properties": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "runSkawldDashboardAgentHarness",
+          "line": 372,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "hasForbiddenSql",
+          "callee": "/\\b(insert|update|delete|drop|alter|create|attach|detach|pragma|vacuum|replace|transaction|begin|commit|rollback|load_extension)\\b/i.test",
+          "lineNumber": 35
+        },
+        {
+          "caller": "ensureReadOnlySelectSql",
+          "callee": "String(sql || '').trim",
+          "lineNumber": 39
+        },
+        {
+          "caller": "ensureReadOnlySelectSql",
+          "callee": "String",
+          "lineNumber": 39
+        },
+        {
+          "caller": "ensureReadOnlySelectSql",
+          "callee": "normalized.split(';').filter",
+          "lineNumber": 41
+        },
+        {
+          "caller": "ensureReadOnlySelectSql",
+          "callee": "normalized.split",
+          "lineNumber": 41
+        },
+        {
+          "caller": "ensureReadOnlySelectSql",
+          "callee": "part.trim",
+          "lineNumber": 41
+        },
+        {
+          "caller": "ensureReadOnlySelectSql",
+          "callee": "/^(select|with)\\b/i.test",
+          "lineNumber": 44
+        },
+        {
+          "caller": "ensureReadOnlySelectSql",
+          "callee": "hasForbiddenSql",
+          "lineNumber": 47
+        },
+        {
+          "caller": "ensureReadOnlySelectSql",
+          "callee": "/\\bdashboard_ai_flight_operations\\b/i.test",
+          "lineNumber": 50
+        },
+        {
+          "caller": "ensureReadOnlySelectSql",
+          "callee": "/\\blimit\\s+\\d+\\b/i.test",
+          "lineNumber": 53
+        },
+        {
+          "caller": "ensureReadOnlySelectSql",
+          "callee": "normalized.replace",
+          "lineNumber": 53
+        },
+        {
+          "caller": "inferScenarioFromPrompt",
+          "callee": "String(prompt || '').toLowerCase",
+          "lineNumber": 57
+        },
+        {
+          "caller": "inferScenarioFromPrompt",
+          "callee": "String",
+          "lineNumber": 57
+        },
+        {
+          "caller": "inferScenarioFromPrompt",
+          "callee": "/\\b(?=[a-z0-9]*[a-z])(?=[a-z0-9]*\\d)[a-z0-9]{2,3}\\s?\\d{2,4}[a-z]?\\b/i.test",
+          "lineNumber": 58
+        },
+        {
+          "caller": "inferScenarioFromPrompt",
+          "callee": "/1 chuyến|một chuyến|chuyến bay cụ thể/i.test",
+          "lineNumber": 58
+        },
+        {
+          "caller": "inferScenarioFromPrompt",
+          "callee": "/thông tin ngày bay|ngày bay 18\\/06\\/2026|ngày 18\\/06\\/2026/i.test",
+          "lineNumber": 59
+        },
+        {
+          "caller": "inferScenarioFromPrompt",
+          "callee": "/cao điểm|bất thường/i.test",
+          "lineNumber": 59
+        },
+        {
+          "caller": "inferScenarioFromPrompt",
+          "callee": "/so sánh.*tháng\\s*6.*tháng\\s*5|tháng\\s*6.*với.*tháng\\s*5/i.test",
+          "lineNumber": 60
+        },
+        {
+          "caller": "inferScenarioFromPrompt",
+          "callee": "/tổng|thống kê|bao nhiêu/i.test",
+          "lineNumber": 61
+        },
+        {
+          "caller": "inferScenarioFromPrompt",
+          "callee": "/tháng\\s*6|06\\/2026|2026-06/i.test",
+          "lineNumber": 61
+        },
+        {
+          "caller": "sqlStringLiteral",
+          "callee": "String(value || '').replace",
+          "lineNumber": 66
+        },
+        {
+          "caller": "sqlStringLiteral",
+          "callee": "String",
+          "lineNumber": 66
+        },
+        {
+          "caller": "extractPromptDate",
+          "callee": "String",
+          "lineNumber": 70
+        },
+        {
+          "caller": "extractPromptDate",
+          "callee": "text.match",
+          "lineNumber": 71
+        },
+        {
+          "caller": "extractPromptDate",
+          "callee": "slash[2].padStart",
+          "lineNumber": 72
+        },
+        {
+          "caller": "extractPromptDate",
+          "callee": "slash[1].padStart",
+          "lineNumber": 72
+        },
+        {
+          "caller": "extractPromptDate",
+          "callee": "text.match",
+          "lineNumber": 73
+        },
+        {
+          "caller": "extractPromptFlight",
+          "callee": "String(prompt || '').toUpperCase().match",
+          "lineNumber": 78
+        },
+        {
+          "caller": "extractPromptFlight",
+          "callee": "String(prompt || '').toUpperCase",
+          "lineNumber": 78
+        },
+        {
+          "caller": "extractPromptFlight",
+          "callee": "String",
+          "lineNumber": 78
+        },
+        {
+          "caller": "extractPromptFlight",
+          "callee": "match[1].replace",
+          "lineNumber": 79
+        },
+        {
+          "caller": "buildSqlForScenario",
+          "callee": "extractPromptFlight",
+          "lineNumber": 84
+        },
+        {
+          "caller": "buildSqlForScenario",
+          "callee": "extractPromptDate",
+          "lineNumber": 85
+        },
+        {
+          "caller": "buildSqlForScenario",
+          "callee": "[\n      'SELECT ops_date, flight, airline, route, aircraft, type, local_hour, gate, stand, pax',\n      'FROM dashboard_ai_flight_operations',\n      `WHERE flight = ${sqlStringLiteral(flight)}`,\n      `AND ops_date = ${sqlStringLiteral(opsDate)}`,\n      'ORDER BY local_hour ASC',\n      'LIMIT 20',\n    ].join",
+          "lineNumber": 86
+        },
+        {
+          "caller": "buildSqlForScenario",
+          "callee": "sqlStringLiteral",
+          "lineNumber": 89
+        },
+        {
+          "caller": "buildSqlForScenario",
+          "callee": "sqlStringLiteral",
+          "lineNumber": 90
+        },
+        {
+          "caller": "buildSqlForScenario",
+          "callee": "[\n      'SELECT airline, route, COUNT(*) AS flights,',\n      'SUM(COUNT(*)) OVER () AS total_day_flights,',\n      \"SUM(CASE WHEN type = 'A' THEN 1 ELSE 0 END) AS arrivals,\",\n      \"SUM(CASE WHEN type = 'D' THEN 1 ELSE 0 END) AS departures\",\n      'FROM dashboard_ai_flight_operations',\n      \"WHERE ops_date = '2026-06-18'\",\n      'GROUP BY airline, route',\n      'ORDER BY flights DESC',\n      'LIMIT 20',\n    ].join",
+          "lineNumber": 96
+        },
+        {
+          "caller": "buildSqlForScenario",
+          "callee": "[\n      'SELECT month, COUNT(*) AS flights,',\n      \"SUM(CASE WHEN type = 'A' THEN 1 ELSE 0 END) AS arrivals,\",\n      \"SUM(CASE WHEN type = 'D' THEN 1 ELSE 0 END) AS departures\",\n      'FROM dashboard_ai_flight_operations',\n      \"WHERE month IN ('2026-05', '2026-06')\",\n      'GROUP BY month',\n      'ORDER BY month ASC',\n      'LIMIT 10',\n    ].join",
+          "lineNumber": 109
+        },
+        {
+          "caller": "buildSqlForScenario",
+          "callee": "[\n      'SELECT month, COUNT(*) AS flights,',\n      \"SUM(CASE WHEN type = 'A' THEN 1 ELSE 0 END) AS arrivals,\",\n      \"SUM(CASE WHEN type = 'D' THEN 1 ELSE 0 END) AS departures\",\n      'FROM dashboard_ai_flight_operations',\n      \"WHERE month = '2026-06'\",\n      'GROUP BY month',\n      'LIMIT 10',\n    ].join",
+          "lineNumber": 121
+        },
+        {
+          "caller": "buildSqlForScenario",
+          "callee": "[\n    'SELECT ops_date, COUNT(*) AS flights,',\n    \"SUM(CASE WHEN type = 'A' THEN 1 ELSE 0 END) AS arrivals,\",\n    \"SUM(CASE WHEN type = 'D' THEN 1 ELSE 0 END) AS departures\",\n    'FROM dashboard_ai_flight_operations',\n    \"WHERE month = '2026-06'\",\n    'GROUP BY ops_date',\n    'ORDER BY flights DESC',\n    'LIMIT 30',\n  ].join",
+          "lineNumber": 131
+        },
+        {
+          "caller": "inferScenarioFromSql",
+          "callee": "/\\bflight\\s*=\\s*'[^']+'/i.test",
+          "lineNumber": 144
+        },
+        {
+          "caller": "inferScenarioFromSql",
+          "callee": "/\\bops_date\\s*=\\s*'2026-06-18'/i.test",
+          "lineNumber": 145
+        },
+        {
+          "caller": "inferScenarioFromSql",
+          "callee": "/\\bGROUP BY airline, route\\b/i.test",
+          "lineNumber": 145
+        },
+        {
+          "caller": "inferScenarioFromSql",
+          "callee": "/\\bmonth\\s+IN\\s+\\('2026-05',\\s*'2026-06'\\)/i.test",
+          "lineNumber": 146
+        },
+        {
+          "caller": "inferScenarioFromSql",
+          "callee": "/\\bmonth\\s*=\\s*'2026-06'/i.test",
+          "lineNumber": 147
+        },
+        {
+          "caller": "inferScenarioFromSql",
+          "callee": "/\\bGROUP BY month\\b/i.test",
+          "lineNumber": 147
+        },
+        {
+          "caller": "buildMockQueryResult",
+          "callee": "inferScenarioFromSql",
+          "lineNumber": 152
+        },
+        {
+          "caller": "buildMockQueryResult",
+          "callee": "/\\bops_date\\b/i.test",
+          "lineNumber": 180
+        },
+        {
+          "caller": "buildMockQueryResult",
+          "callee": "/\\bgroup\\s+by\\s+ops_date\\b/i.test",
+          "lineNumber": 180
+        },
+        {
+          "caller": "latestPromptFromRequest",
+          "callee": "[...(req.messages || [])].reverse",
+          "lineNumber": 197
+        },
+        {
+          "caller": "latestPromptFromRequest",
+          "callee": "Array.isArray",
+          "lineNumber": 199
+        },
+        {
+          "caller": "latestPromptFromRequest",
+          "callee": "message.content\n      .filter((block) => block?.type === 'text' && typeof block.text === 'string' && !block.text.startsWith('<env>'))\n      .map",
+          "lineNumber": 200
+        },
+        {
+          "caller": "latestPromptFromRequest",
+          "callee": "message.content\n      .filter",
+          "lineNumber": 200
+        },
+        {
+          "caller": "latestPromptFromRequest",
+          "callee": "block.text.startsWith",
+          "lineNumber": 201
+        },
+        {
+          "caller": "latestPromptFromRequest",
+          "callee": "textBlocks.at",
+          "lineNumber": 203
+        },
+        {
+          "caller": "latestToolResultFromRequest",
+          "callee": "[...(req.messages || [])].reverse",
+          "lineNumber": 209
+        },
+        {
+          "caller": "latestToolResultFromRequest",
+          "callee": "Array.isArray",
+          "lineNumber": 211
+        },
+        {
+          "caller": "latestToolResultFromRequest",
+          "callee": "[...message.content].reverse",
+          "lineNumber": 212
+        },
+        {
+          "caller": "latestToolResultFromRequest",
+          "callee": "JSON.parse",
+          "lineNumber": 215
+        },
+        {
+          "caller": "formatInteger",
+          "callee": "Number",
+          "lineNumber": 225
+        },
+        {
+          "caller": "formatInteger",
+          "callee": "Number.isFinite",
+          "lineNumber": 226
+        },
+        {
+          "caller": "formatInteger",
+          "callee": "number.toLocaleString",
+          "lineNumber": 226
+        },
+        {
+          "caller": "formatInteger",
+          "callee": "String",
+          "lineNumber": 226
+        },
+        {
+          "caller": "formatDateVi",
+          "callee": "String",
+          "lineNumber": 230
+        },
+        {
+          "caller": "formatDateVi",
+          "callee": "text.match",
+          "lineNumber": 231
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Array.isArray",
+          "lineNumber": 237
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatDateVi",
+          "lineNumber": 241
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "String(row.local_hour ?? '').padStart",
+          "lineNumber": 241
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "String",
+          "lineNumber": 241
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 241
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Number",
+          "lineNumber": 244
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "rows.reduce",
+          "lineNumber": 244
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Number",
+          "lineNumber": 244
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 247
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 247
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 247
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "rows.find",
+          "lineNumber": 250
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "rows.find",
+          "lineNumber": 251
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Number",
+          "lineNumber": 252
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Number",
+          "lineNumber": 252
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Number",
+          "lineNumber": 253
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Number",
+          "lineNumber": 253
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 255
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 255
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 255
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Math.abs",
+          "lineNumber": 255
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "deltaPct.toLocaleString",
+          "lineNumber": 255
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 255
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Math.abs",
+          "lineNumber": 255
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Number",
+          "lineNumber": 255
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Number",
+          "lineNumber": 255
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 255
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Math.abs",
+          "lineNumber": 255
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Number",
+          "lineNumber": 255
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Number",
+          "lineNumber": 255
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 259
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 259
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 259
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "rows.reduce",
+          "lineNumber": 262
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Number",
+          "lineNumber": 262
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "Number",
+          "lineNumber": 262
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatDateVi",
+          "lineNumber": 263
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 263
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatDateVi",
+          "lineNumber": 263
+        },
+        {
+          "caller": "finalTextForQueryResult",
+          "callee": "formatInteger",
+          "lineNumber": 263
+        },
+        {
+          "caller": "stream",
+          "callee": "req.messages.some",
+          "lineNumber": 274
+        },
+        {
+          "caller": "stream",
+          "callee": "message.content?.some",
+          "lineNumber": 275
+        },
+        {
+          "caller": "stream",
+          "callee": "latestPromptFromRequest",
+          "lineNumber": 281
+        },
+        {
+          "caller": "stream",
+          "callee": "inferScenarioFromPrompt",
+          "lineNumber": 282
+        },
+        {
+          "caller": "stream",
+          "callee": "buildSqlForScenario",
+          "lineNumber": 283
+        },
+        {
+          "caller": "stream",
+          "callee": "JSON.stringify",
+          "lineNumber": 286
+        },
+        {
+          "caller": "stream",
+          "callee": "latestToolResultFromRequest",
+          "lineNumber": 296
+        },
+        {
+          "caller": "stream",
+          "callee": "finalTextForQueryResult",
+          "lineNumber": 299
+        },
+        {
+          "caller": "validate",
+          "callee": "ensureReadOnlySelectSql",
+          "lineNumber": 323
+        },
+        {
+          "caller": "summarize",
+          "callee": "input.sql.slice",
+          "lineNumber": 327
+        },
+        {
+          "caller": "execute",
+          "callee": "inferScenarioFromSql",
+          "lineNumber": 330
+        },
+        {
+          "caller": "execute",
+          "callee": "queryDashboardAiLocalSql",
+          "lineNumber": 335
+        },
+        {
+          "caller": "execute",
+          "callee": "buildMockQueryResult",
+          "lineNumber": 345
+        },
+        {
+          "caller": "execute",
+          "callee": "buildMockQueryResult",
+          "lineNumber": 349
+        },
+        {
+          "caller": "execute",
+          "callee": "JSON.stringify",
+          "lineNumber": 355
+        },
+        {
+          "caller": "execute",
+          "callee": "Object.keys",
+          "lineNumber": 359
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "String",
+          "lineNumber": 373
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "['mock', 'local-sqlite', 'auto'].includes",
+          "lineNumber": 374
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "Promise.all",
+          "lineNumber": 375
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "import",
+          "lineNumber": 376
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "import",
+          "lineNumber": 377
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "import",
+          "lineNumber": 378
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "import",
+          "lineNumber": 379
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "tools.register",
+          "lineNumber": 386
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "createQueryLocalSqlTool",
+          "lineNumber": 386
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "process.cwd",
+          "lineNumber": 393
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "[\n      'Bạn là Dashboard AI dev harness.',\n      'Luôn trả lời tiếng Việt.',\n      'Chỉ dùng query_local_sql read-only.',\n      PRODUCTION_WARNING,\n    ].join",
+          "lineNumber": 395
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "agent.session",
+          "lineNumber": 405
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "session.run",
+          "lineNumber": 412
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "events.push",
+          "lineNumber": 413
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "toolResults.push",
+          "lineNumber": 414
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "errors.push",
+          "lineNumber": 416
+        },
+        {
+          "caller": "runSkawldDashboardAgentHarness",
+          "callee": "agent.close",
+          "lineNumber": 419
+        },
+        {
+          "caller": "main",
+          "callee": "parseArgs",
+          "lineNumber": 438
+        },
+        {
+          "caller": "main",
+          "callee": "runSkawldDashboardAgentHarness",
+          "lineNumber": 439
+        },
+        {
+          "caller": "main",
+          "callee": "process.stdout.write",
+          "lineNumber": 442
+        },
+        {
+          "caller": "main",
+          "callee": "process.stdout.write",
+          "lineNumber": 443
+        },
+        {
+          "caller": "main",
+          "callee": "process.stdout.write",
+          "lineNumber": 444
+        },
+        {
+          "caller": "main",
+          "callee": "process.stdout.write",
+          "lineNumber": 445
+        },
+        {
+          "caller": "main",
+          "callee": "result.events.map((event) => event.type).join",
+          "lineNumber": 445
+        },
+        {
+          "caller": "main",
+          "callee": "result.events.map",
+          "lineNumber": 445
+        },
+        {
+          "caller": "main",
+          "callee": "process.stdout.write",
+          "lineNumber": 446
+        },
+        {
+          "caller": "main",
+          "callee": "process.stdout.write",
+          "lineNumber": 448
+        },
+        {
+          "caller": "main",
+          "callee": "JSON.stringify",
+          "lineNumber": 448
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 1,
+        "functionCount": 18,
+        "classCount": 1
+      }
+    },
+    {
+      "path": "app/scripts/test-skawld-dashboard-agent-harness.mjs",
+      "language": "javascript",
+      "fileCategory": "code",
+      "totalLines": 163,
+      "nonEmptyLines": 150,
+      "functions": [
+        {
+          "name": "parseArgs",
+          "startLine": 5,
+          "endLine": 18,
+          "params": [
+            "argv"
+          ]
+        },
+        {
+          "name": "assert",
+          "startLine": 58,
+          "endLine": 60,
+          "params": [
+            "condition",
+            "message"
+          ]
+        },
+        {
+          "name": "extractToolSql",
+          "startLine": 62,
+          "endLine": 65,
+          "params": [
+            "result"
+          ]
+        },
+        {
+          "name": "formatDateForPrompt",
+          "startLine": 67,
+          "endLine": 70,
+          "params": [
+            "opsDate"
+          ]
+        },
+        {
+          "name": "buildTestTree",
+          "startLine": 72,
+          "endLine": 104,
+          "params": [
+            "options"
+          ]
+        },
+        {
+          "name": "runHarnessTestCase",
+          "startLine": 106,
+          "endLine": 144,
+          "params": [
+            "testCase",
+            "options"
+          ]
+        },
+        {
+          "name": "runSkawldDashboardHarnessTestTree",
+          "startLine": 146,
+          "endLine": 154,
+          "params": []
+        },
+        {
+          "name": "main",
+          "startLine": 156,
+          "endLine": 159,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "runSkawldDashboardHarnessTestTree",
+          "line": 146,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "extractToolSql",
+          "callee": "result.events.find",
+          "lineNumber": 63
+        },
+        {
+          "caller": "extractToolSql",
+          "callee": "String",
+          "lineNumber": 64
+        },
+        {
+          "caller": "formatDateForPrompt",
+          "callee": "String(opsDate || '').match",
+          "lineNumber": 68
+        },
+        {
+          "caller": "formatDateForPrompt",
+          "callee": "String",
+          "lineNumber": 68
+        },
+        {
+          "caller": "buildTestTree",
+          "callee": "queryDashboardAiLocalSql",
+          "lineNumber": 76
+        },
+        {
+          "caller": "buildTestTree",
+          "callee": "[\n        'SELECT flight, ops_date',\n        'FROM dashboard_ai_flight_operations',\n        \"WHERE month = '2026-06'\",\n        'AND flight IS NOT NULL',\n        \"AND flight <> ''\",\n        'ORDER BY ops_date ASC, flight ASC',\n        'LIMIT 1',\n      ].join",
+          "lineNumber": 78
+        },
+        {
+          "caller": "buildTestTree",
+          "callee": "formatDateForPrompt",
+          "lineNumber": 94
+        },
+        {
+          "caller": "buildTestTree",
+          "callee": "BASE_TEST_TREE.map",
+          "lineNumber": 95
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "runSkawldDashboardAgentHarness",
+          "lineNumber": 107
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "extractToolSql",
+          "lineNumber": 108
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "result.events.map",
+          "lineNumber": 109
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "assert",
+          "lineNumber": 111
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "assert",
+          "lineNumber": 112
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "eventTypes.includes",
+          "lineNumber": 112
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "eventTypes.join",
+          "lineNumber": 112
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "assert",
+          "lineNumber": 113
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "eventTypes.includes",
+          "lineNumber": 113
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "eventTypes.join",
+          "lineNumber": 113
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "assert",
+          "lineNumber": 114
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "eventTypes.includes",
+          "lineNumber": 114
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "eventTypes.join",
+          "lineNumber": 114
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "assert",
+          "lineNumber": 115
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "assert",
+          "lineNumber": 119
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "result.finalText.toLowerCase().includes",
+          "lineNumber": 120
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "result.finalText.toLowerCase",
+          "lineNumber": 120
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "String(expected).toLowerCase",
+          "lineNumber": 120
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "String",
+          "lineNumber": 120
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "JSON.stringify",
+          "lineNumber": 121
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "JSON.stringify",
+          "lineNumber": 121
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "assert",
+          "lineNumber": 125
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "assert",
+          "lineNumber": 126
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "result.toolResults.some",
+          "lineNumber": 126
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "assert",
+          "lineNumber": 129
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "sql.includes",
+          "lineNumber": 130
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "JSON.stringify",
+          "lineNumber": 131
+        },
+        {
+          "caller": "runHarnessTestCase",
+          "callee": "JSON.stringify",
+          "lineNumber": 131
+        },
+        {
+          "caller": "runSkawldDashboardHarnessTestTree",
+          "callee": "parseArgs",
+          "lineNumber": 147
+        },
+        {
+          "caller": "runSkawldDashboardHarnessTestTree",
+          "callee": "buildTestTree",
+          "lineNumber": 148
+        },
+        {
+          "caller": "runSkawldDashboardHarnessTestTree",
+          "callee": "results.push",
+          "lineNumber": 151
+        },
+        {
+          "caller": "runSkawldDashboardHarnessTestTree",
+          "callee": "runHarnessTestCase",
+          "lineNumber": 151
+        },
+        {
+          "caller": "main",
+          "callee": "runSkawldDashboardHarnessTestTree",
+          "lineNumber": 157
+        },
+        {
+          "caller": "main",
+          "callee": "process.stdout.write",
+          "lineNumber": 158
+        },
+        {
+          "caller": "main",
+          "callee": "JSON.stringify",
+          "lineNumber": 158
+        }
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 1,
+        "functionCount": 8,
+        "classCount": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "app/ai-agent/agent/contracts.py",
+      "language": "python",
+      "sizeLines": 69,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/agent/main.py",
+      "language": "python",
+      "sizeLines": 317,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/agent/provider_clients.py",
+      "language": "python",
+      "sizeLines": 90,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/agent/sql_validator.py",
+      "language": "python",
+      "sizeLines": 106,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/agent/sqlite_source.py",
+      "language": "python",
+      "sizeLines": 72,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/agent_sidecar.py",
+      "language": "python",
+      "sizeLines": 16,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/tests/test_local_agent_workflows.py",
+      "language": "python",
+      "sizeLines": 94,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/tests/test_provider_clients.py",
+      "language": "python",
+      "sizeLines": 45,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/tests/test_sql_validator.py",
+      "language": "python",
+      "sizeLines": 35,
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "app/ai-agent/agent/contracts.py": [],
+    "app/ai-agent/agent/main.py": [
+      "app/ai-agent/agent/contracts.py",
+      "app/ai-agent/agent/provider_clients.py",
+      "app/ai-agent/agent/sqlite_source.py"
+    ],
+    "app/ai-agent/agent/provider_clients.py": [],
+    "app/ai-agent/agent/sql_validator.py": [],
+    "app/ai-agent/agent/sqlite_source.py": [
+      "app/ai-agent/agent/contracts.py",
+      "app/ai-agent/agent/sql_validator.py"
+    ],
+    "app/ai-agent/agent_sidecar.py": [
+      "app/ai-agent/agent/main.py"
+    ],
+    "app/ai-agent/tests/test_local_agent_workflows.py": [
+      "app/ai-agent/agent/contracts.py",
+      "app/ai-agent/agent/main.py"
+    ],
+    "app/ai-agent/tests/test_provider_clients.py": [
+      "app/ai-agent/agent/provider_clients.py"
+    ],
+    "app/ai-agent/tests/test_sql_validator.py": [
+      "app/ai-agent/agent/sql_validator.py"
+    ]
+  }
+}

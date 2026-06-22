@@ -1,0 +1,106 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "app/src/app/components/AppShell.tsx",
+      "language": "typescript",
+      "sizeLines": 130,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/AppSidebar.tsx",
+      "language": "typescript",
+      "sizeLines": 265,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/AppUpdateProvider.tsx",
+      "language": "typescript",
+      "sizeLines": 235,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/NativeRuntimeGate.tsx",
+      "language": "typescript",
+      "sizeLines": 31,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/OperatorAuthGate.tsx",
+      "language": "typescript",
+      "sizeLines": 315,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/PbbIcon.tsx",
+      "language": "typescript",
+      "sizeLines": 30,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/layout.tsx",
+      "language": "typescript",
+      "sizeLines": 24,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/settings/components/UpdatesTab.tsx",
+      "language": "typescript",
+      "sizeLines": 160,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/appUpdater.test.ts",
+      "language": "typescript",
+      "sizeLines": 124,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/appUpdater.ts",
+      "language": "typescript",
+      "sizeLines": 200,
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "app/src/app/components/AppShell.tsx": [
+      "app/src/app/components/AppRouteCache.tsx",
+      "app/src/app/components/AppSidebar.tsx",
+      "app/src/app/components/AppUpdateProvider.tsx",
+      "app/src/app/components/ExportNotificationProvider.tsx",
+      "app/src/app/components/NativeCloseCleanupGuard.tsx",
+      "app/src/app/components/NativeRuntimeGate.tsx",
+      "app/src/app/components/NativeStartupSessionReset.tsx",
+      "app/src/app/components/OperatorAuthGate.tsx",
+      "app/src/app/components/SeasonSyncProvider.tsx"
+    ],
+    "app/src/app/components/AppSidebar.tsx": [
+      "app/src/app/components/OperatorAuthGate.tsx",
+      "app/src/app/components/PbbIcon.tsx"
+    ],
+    "app/src/app/components/AppUpdateProvider.tsx": [
+      "app/src/lib/appUpdater.ts"
+    ],
+    "app/src/app/components/NativeRuntimeGate.tsx": [
+      "app/src/lib/nativeRuntime.ts"
+    ],
+    "app/src/app/components/OperatorAuthGate.tsx": [
+      "app/src/lib/supabase.ts"
+    ],
+    "app/src/app/components/PbbIcon.tsx": [],
+    "app/src/app/layout.tsx": [
+      "app/src/app/components/AppShell.tsx",
+      "app/src/app/globals.css"
+    ],
+    "app/src/app/settings/components/UpdatesTab.tsx": [
+      "app/src/app/components/AppUpdateProvider.tsx",
+      "app/src/lib/appUpdater.ts"
+    ],
+    "app/src/lib/appUpdater.test.ts": [
+      "app/src/lib/appUpdater.ts"
+    ],
+    "app/src/lib/appUpdater.ts": [
+      "app/src/lib/nativeRuntime.ts"
+    ]
+  }
+}

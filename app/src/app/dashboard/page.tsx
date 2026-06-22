@@ -639,6 +639,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     buildLoadProgress('Loading dashboard...', 10, 'Preparing analysis')
   );
   const [error, setError] = useState<string | null>(null);
+  const [fetchUpdateNotice, setFetchUpdateNotice] = useState<{ title: string; message: string; tone: 'warning' | 'error' } | null>(null);
   const [dataSource, setDataSource] = useState<'local' | 'cache' | 'server' | null>(null);
   const [syncMeta, setSyncMeta] = useState<LocalSyncMeta | null>(null);
 
@@ -682,7 +683,8 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   const routeCountries = operationalSettings?.routeCountries;
   const syncSeasonId = season?.id ?? targetSeasonId;
   const { status: syncStatus, fetchUpdatesNow } = useSeasonSync(syncSeasonId, 'dashboard');
-  const fetchingUpdates = syncStatus.status === 'catching_up' && syncStatus.mode === 'manual';
+  const syncInProgress = syncStatus.status === 'syncing';
+  const fetchingUpdates = syncStatus.status === 'catching_up';
   const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
 
   const refreshDashboardWindow = useCallback(async () => {
@@ -725,16 +727,32 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   });
 
   const handleFetchUpdates = useCallback(async () => {
-    if (!syncSeasonId || fetchingUpdates) return;
+    if (!syncSeasonId || fetchingUpdates || syncInProgress) return;
+    setFetchUpdateNotice(null);
     try {
       const result = await fetchUpdatesNow();
-      if (result.status !== 'synced') {
-        setError(result.message);
+      if (result.status === 'busy') return;
+      if (result.status === 'conflict') {
+        setFetchUpdateNotice({
+          title: 'Fetch Updates Need Review',
+          message: result.message,
+          tone: 'warning',
+        });
+      } else if (result.status !== 'synced') {
+        setFetchUpdateNotice({
+          title: 'Fetch Updates Failed',
+          message: result.message,
+          tone: 'error',
+        });
       }
     } catch (err) {
-      setError((err as Error).message);
+      setFetchUpdateNotice({
+        title: 'Fetch Updates Failed',
+        message: (err as Error).message,
+        tone: 'error',
+      });
     }
-  }, [fetchUpdatesNow, fetchingUpdates, syncSeasonId]);
+  }, [fetchUpdatesNow, fetchingUpdates, syncInProgress, syncSeasonId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -819,6 +837,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           syncMeta: result.syncMeta,
           windowKey: buildDashboardWindowKey('overview'),
         });
+        setFetchUpdateNotice(null);
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
       } finally {
@@ -2354,8 +2373,8 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-surface text-on-surface font-sans">
-      <div className="flex h-screen min-w-0 flex-1 flex-col bg-surface">
+    <div className="flex h-dvh overflow-hidden bg-surface text-on-surface font-sans">
+      <div className="flex h-dvh min-w-0 flex-1 flex-col bg-surface">
         <header className="z-30 flex flex-none items-center justify-between border-b border-slate-200 bg-white/80 px-6 py-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
           <div>
             <h1 className="font-h3 text-h3 text-on-surface">Seasonal Dashboard</h1>
@@ -2381,7 +2400,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
               <FetchServerUpdatesButton
                 fetching={fetchingUpdates}
                 progress={fetchProgress}
-                disabled={loading}
+                disabled={syncInProgress || loading}
                 onFetch={handleFetchUpdates}
               />
             )}
@@ -2389,6 +2408,18 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         </header>
 
         <main ref={dashboardScrollRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-4">
+          {fetchUpdateNotice && (
+            <section
+              className={`rounded-lg border px-4 py-3 text-sm font-medium ${
+                fetchUpdateNotice.tone === 'warning'
+                  ? 'border-amber-200 bg-amber-50 text-amber-800'
+                  : 'border-red-200 bg-red-50 text-red-700'
+              }`}
+            >
+              <div className="font-semibold">{fetchUpdateNotice.title}</div>
+              <div className="mt-1">{fetchUpdateNotice.message}</div>
+            </section>
+          )}
           {error && (
             <section className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
               {error}
@@ -3190,7 +3221,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
 
 export default function DashboardPage({ routeBase = '/dashboard' }: { routeBase?: '/' | '/dashboard' } = {}) {
   return (
-    <Suspense fallback={<div className="flex h-screen items-center justify-center bg-surface text-on-surface">Đang tải bảng điều khiển...</div>}>
+    <Suspense fallback={<div className="flex h-dvh items-center justify-center bg-surface text-on-surface">Đang tải bảng điều khiển...</div>}>
       <DashboardContent routeBase={routeBase} />
     </Suspense>
   );

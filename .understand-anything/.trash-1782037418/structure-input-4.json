@@ -1,0 +1,209 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "app/src/app/SeasonalSchedulePage.tsx",
+      "language": "typescript",
+      "sizeLines": 2142,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/audit/page.tsx",
+      "language": "typescript",
+      "sizeLines": 383,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/LoadingStatusPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 72,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/NativeCloseCleanupGuard.tsx",
+      "language": "typescript",
+      "sizeLines": 122,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/NativeStartupSessionReset.tsx",
+      "language": "typescript",
+      "sizeLines": 78,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/appSessionCleanup.ts",
+      "language": "typescript",
+      "sizeLines": 58,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/auditLog.ts",
+      "language": "typescript",
+      "sizeLines": 607,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/importProgress.ts",
+      "language": "typescript",
+      "sizeLines": 55,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeClosePolicy.test.ts",
+      "language": "typescript",
+      "sizeLines": 14,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeClosePolicy.ts",
+      "language": "typescript",
+      "sizeLines": 10,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/pairDeletion.ts",
+      "language": "typescript",
+      "sizeLines": 67,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/scheduleNotifications.test.ts",
+      "language": "typescript",
+      "sizeLines": 824,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/scheduleNotifications.ts",
+      "language": "typescript",
+      "sizeLines": 1060,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonalDisplayAggregator.ts",
+      "language": "typescript",
+      "sizeLines": 133,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonalFlightFilter.test.ts",
+      "language": "typescript",
+      "sizeLines": 33,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonalFlightFilter.ts",
+      "language": "typescript",
+      "sizeLines": 26,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonalLinkActions.ts",
+      "language": "typescript",
+      "sizeLines": 187,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/uiUndoMemory.ts",
+      "language": "typescript",
+      "sizeLines": 28,
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "app/src/app/SeasonalSchedulePage.tsx": [
+      "app/src/app/components/AppDialog.tsx",
+      "app/src/app/components/ExportNotificationProvider.tsx",
+      "app/src/app/components/FetchServerUpdatesButton.tsx",
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/app/components/NewFlightModal.tsx",
+      "app/src/app/components/SeasonConflictReviewControl.tsx",
+      "app/src/app/components/SeasonSyncProvider.tsx",
+      "app/src/app/components/SyncActionButton.tsx",
+      "app/src/app/components/WorkspacePageHeader.tsx",
+      "app/src/app/hooks/useSeasonWorkspaceRefresh.ts",
+      "app/src/lib/atomicSchedule.ts",
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/canonicalSeasonalRows.ts",
+      "app/src/lib/detailedScheduleState.ts",
+      "app/src/lib/exporter.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/importSeasonRules.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeSeasonBootstrap.ts",
+      "app/src/lib/nativeSeasonRepository.ts",
+      "app/src/lib/pairDeletion.ts",
+      "app/src/lib/parser.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/scheduleNotifications.ts",
+      "app/src/lib/seasonalDisplayAggregator.ts",
+      "app/src/lib/seasonalFlightFilter.ts",
+      "app/src/lib/seasonalImportPatch.ts",
+      "app/src/lib/seasonalLinkActions.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/seasonWorkspaceStore.ts",
+      "app/src/lib/types.ts",
+      "app/src/lib/uiUndoMemory.ts"
+    ],
+    "app/src/app/audit/page.tsx": [
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/remoteStore.ts"
+    ],
+    "app/src/app/components/LoadingStatusPanel.tsx": [
+      "app/src/lib/importProgress.ts"
+    ],
+    "app/src/app/components/NativeCloseCleanupGuard.tsx": [
+      "app/src/app/components/AppDialog.tsx",
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/lib/appSessionCleanup.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/nativeClosePolicy.ts"
+    ],
+    "app/src/app/components/NativeStartupSessionReset.tsx": [
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/lib/appSessionCleanup.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/uiUndoMemory.ts"
+    ],
+    "app/src/lib/appSessionCleanup.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/uiUndoMemory.ts"
+    ],
+    "app/src/lib/auditLog.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/importProgress.ts": [],
+    "app/src/lib/nativeClosePolicy.test.ts": [
+      "app/src/lib/nativeClosePolicy.ts"
+    ],
+    "app/src/lib/nativeClosePolicy.ts": [],
+    "app/src/lib/pairDeletion.ts": [
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/scheduleNotifications.test.ts": [
+      "app/src/lib/pairDeletion.ts",
+      "app/src/lib/scheduleNotifications.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/scheduleNotifications.ts": [
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonalDisplayAggregator.ts": [
+      "app/src/lib/atomicSchedule.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonalFlightFilter.test.ts": [
+      "app/src/lib/seasonalFlightFilter.ts"
+    ],
+    "app/src/lib/seasonalFlightFilter.ts": [],
+    "app/src/lib/seasonalLinkActions.ts": [
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/uiUndoMemory.ts": []
+  }
+}

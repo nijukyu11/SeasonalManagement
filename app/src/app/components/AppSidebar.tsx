@@ -169,7 +169,7 @@ export default function AppSidebar() {
 
   return (
     <aside
-      className={`app-sidebar relative z-40 flex h-screen flex-none flex-col border-r border-slate-200 bg-slate-50 text-slate-700 shadow-sm transition-[width] duration-200 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 ${collapsed ? 'w-16' : 'w-64'}`}
+      className={`app-sidebar relative z-40 flex h-dvh flex-none flex-col border-r border-slate-200 bg-slate-50 text-slate-700 shadow-sm transition-[width] duration-200 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 ${collapsed ? 'w-16' : 'w-64'}`}
       aria-label="Main navigation"
       data-collapsed={collapsed ? 'true' : 'false'}
     >

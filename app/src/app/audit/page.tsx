@@ -155,7 +155,7 @@ export default function AuditLogPage() {
   const selectedSession = sessions.find((session) => session.id === selectedSessionId);
 
   return (
-    <main className="flex h-screen min-w-0 overflow-hidden bg-slate-100 p-3 text-slate-900 dark:bg-slate-950 dark:text-slate-100 sm:p-4 lg:p-6">
+    <main className="flex h-dvh min-w-0 overflow-hidden bg-slate-100 p-3 text-slate-900 dark:bg-slate-950 dark:text-slate-100 sm:p-4 lg:p-6">
       <div className="mx-auto flex h-full w-full max-w-[1800px] min-w-0 flex-col gap-4 lg:gap-5">
         <header className="flex flex-none flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">

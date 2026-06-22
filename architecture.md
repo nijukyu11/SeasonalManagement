@@ -1,6 +1,6 @@
 # SeasonalManagement Architecture
 
-Last updated: 2026-06-16
+Last updated: 2026-06-22
 
 ## Purpose
 
@@ -23,6 +23,21 @@ User action
 ```
 
 Browser/static mode is not the operational source of truth. Legacy IndexedDB modules remain for compatibility, migration, and backup paths, but normal desktop routes should use native SQLite commands or bounded native read APIs.
+
+## Current Codebase Map
+
+This 2026-06-21 refresh used GitNexus plus direct source inspection. GitNexus is installed for the repo, but the active index is stale and incomplete for the current native rewrite: it was indexed on 2026-05-21, keyword search reports missing FTS indexes, and the graph only recognizes `app/src-tauri/src/lib.rs` / `main.rs` instead of the large Rust core in `native_catchup.rs`. Treat GitNexus as a broad historical map until it is rebuilt cleanly; live source under `app/src`, `app/src-tauri`, and `app/supabase` is authoritative.
+
+The active architecture is now organized around six seams:
+
+| Seam | Current owner | Notes |
+|---|---|---|
+| Route workflows | `SeasonalSchedulePage`, `daily`, `detailed`, `checkin`, `gate`, `dashboard`, `settings`, `audit` | Pages own UI state, drafts, dialogs, and viewport-specific actions. |
+| Domain transforms | `atomicSchedule`, `dailySchedule`, `checkinAllocation`, `gateAllocation`, `exporter`, `settingsRules` | Keep these pure where possible; they are the safest place for deterministic regression tests. |
+| Native facade | `nativeSeasonRepository`, `nativeSeasonCatchup`, `nativeLocalSeasonStore` | TypeScript should call native through these modules instead of importing Tauri commands ad hoc. |
+| Native core | `src-tauri/src/lib.rs`, `src-tauri/src/native_catchup.rs` | Owns SQLite, row-level mutations, sync, catch-up, conflict resolution, local dashboard SQL, and AI sidecar access. |
+| Remote/backend | `remoteStore`, `supabaseStore`, `supabaseRelationalMappers`, `supabase/schema.sql`, migrations | Native runtime requires Supabase; non-native Firestore fallback still exists but is not the operational desktop path. |
+| AI/reporting | `dashboardAiAnalysis`, `dashboardAiShared`, `ai-agent`, Supabase AI functions | Read-only analysis only; local SQLite is authoritative when desktop data is loaded or dirty. |
 
 ## Primary Boundaries
 
@@ -99,11 +114,53 @@ Current sync hardening boundaries:
 - `query_sync_summary` is the lightweight sync state contract. It includes pending/conflict counts, cursor fields, `localRevision`, `localRecordCount`, and `entityVersionCount`.
 - Fresh local workspace detection is based on native counts, not `lastServerSeq` alone. When local records, entity versions, pending ops, and conflicts are all zero, catch-up starts from cursor `0`.
 - Conflict cleanup in Rust structurally parses pending `modHistory` payloads and preserves mixed/cross-target history. Substring cleanup against `payload_json` is not safe for ids such as `leg-1` and `leg-10`.
+- Manifest reconcile protects stale-row pruning through parsed pending targets. It must not use substring checks over `op_key` or `payload_json`, because `modification:leg-10` can otherwise protect an unrelated stale `leg-1` row.
+- Native pending sync and TypeScript fallback sync report `conflict` when pending ops are empty but review items remain. Manual Save still calls native sync with zero pending ops so conflict-only states are not flattened to `synced`.
+- Close/session cleanup may discard pending local edits, but unresolved conflict review items must stay in `local_sync_meta` and keep `syncStatus = needs_review`. Browser fallback discard-all, SQL discard, and native discard must follow the same conflict-preserving contract.
+- `SeasonAutoSyncScheduler` preserves `conflictCount` on runtime `conflict` results, including review-only manual Save, so provider session warnings do not drop unresolved review items.
+- Clean scheduler success paths must clear stale `conflictCount` because state patches are merged.
+- Scheduler queue cleanup must not overwrite `needs_review` or `conflict` with a fresh auto-save schedule when local edits arrive during an in-flight sync.
+- Scheduler runs must preserve conflict summaries observed during the active run even when the final sync result is clean. This uses current-run conflict tracking, not stale state, so an explicit clean sync can still clear resolved conflicts.
+- Scheduler summary updates must consume native `conflictCount`; conflict-only summaries should publish `needs_review` directly, not `synced` followed by a corrective provider patch.
+- Scheduler pre-run pending-count summary failures must publish `failed` sync state and return a failed result. A rejected `getPendingCount()` must not escape manual Save or auto-save while the UI remains in an old state.
+- Workspace-change summary refresh must catch `queryNativeSyncSummary()` failures and publish a failed sync state. A native summary read failure must not leave only a stale session warning with no visible route/global error.
+- Workspace-change events that carry `syncMeta` must patch provider route/global state and notify the scheduler immediately before the debounced native summary read. The later native summary remains the reconcile step, but badges must not show stale `Synced` state while pending or conflict metadata is already available.
+- Workspace-change summary refresh must patch provider state from native summary on every successful read, including `conflictCount = 0`. Otherwise resolving the last conflict can update session/scheduler state while leaving route/global UI stuck at `needs_review`.
+- Provider native summary seeding must also catch `queryNativeSyncSummary()` failures, publish a failed sync state, and rethrow. Gate relies on this seed path for its sync badge and should not remain in `Checking` after a native summary read failure.
+- Live season subscription setup must catch remote store or realtime subscription failures and publish a failed sync state. If subscription setup fails, automatic catch-up is unavailable and stale data must be visible as a sync failure.
+- Live season setup must still run background catch-up when the active `RemoteStore` has no realtime subscription API. Realtime is the push channel, not the prerequisite for initial server update fetch. The fallback must register a no-op live marker so repeated `ensureLiveSeason()` calls do not start duplicate catch-up runs for the same season.
+- Manual Save and Fetch Updates must start their manual operation before calling `ensureLiveSeason()`. The live setup path may start background catch-up, so calling it first can race with manual sync/fetch before the manual guard is active.
+- Seasonal import/re-import replaces or patches a local baseline, so its handler and visible button must be disabled while native catch-up/Fetch Updates is applying server changes.
+- Daily OperationalTurns import writes batches of local schedule changes, so its handler and visible button must also be disabled while native catch-up/Fetch Updates is applying server changes.
+- Daily local mutation controls and handlers must use same-season `syncWriteInProgress = syncInProgress || fetchingUpdates`, not manual-only `syncing`, for Add/Link/Unlink/Delete. Auto Save and catch-up are both write paths and should not leave local mutation controls visually or behaviorally active.
+- Check-in and Gate allocation write interactions must also use same-season `syncWriteInProgress` for drag/drop, resize, context actions, unallocate-all, and override apply. Manual-only `syncing` is insufficient because auto Save and catch-up both write native sync state.
+- The global sync banner must surface server freshness failures from catch-up replay, realtime subscription setup, native sync summary reads, local integrity checks, server update fetch availability, and missing server seasons. Its copy should use generic server sync wording, not catch-up-only wording, failed server freshness states must take priority over another season's background catch-up progress, and context fallbacks must be preserved when raw thrown errors would otherwise produce generic messages such as `Failed to fetch`.
+- Server update fetch runtime checks must publish provider `failed` state before returning failed results. Runtime-unavailable paths should not leave badges/global sync UI in the previous state.
+- `useSeasonWorkspaceRefresh()` must preserve a failed native refresh event without advancing its handled cursor. The hook may avoid immediate retry loops, but a failed event must remain available for a controlled retry on route activation or a newer workspace event.
+- `useSeasonWorkspaceRefresh()` must re-check `event.seasonId` when a debounced or activation-delayed refresh actually runs. A queued event from a previous season must be discarded before the route native refresh callback is called.
+- Save handlers on operational routes, including Seasonal and Detailed, must warn when `reviewCount > 0`, even if the sync result status is `synced` after non-conflicting changes were saved. Controlled sync failures must use the explicit `Save Failed` title instead of a generic status label.
+- Seasonal and Detailed mutation controls must block on any same-season `syncing` state, not only manual Save mode. The shared provider state is season-scoped, so auto/manual sync from another surface must disable edits, undo, link/unlink/delete, import, fetch, and save controls for that season.
+- Native sync publish events must preserve `reviewCount` for `synced` results when native `conflictCount` remains positive.
+- Settings repair import confirmations must include native `conflictCount` as conflict review items, not only pending local changes.
+- Settings repair import must pass the imported native `syncMeta` through `publishSeasonWorkspaceChanged` after replacing the local baseline, because provider route/global state consumes event metadata immediately before the debounced native summary reconcile.
+- Seasonal re-import of an existing season must also pass native `conflictCount` into the dirty-import guard. A clean `pendingCount` does not make baseline replacement safe while conflict review items remain.
+- Route-local sync badge fallbacks must derive conflict count from `LocalSyncMeta.conflicts` and pass it to shared label/tone helpers. `pendingCount = 0` is not enough to render success while conflicts are unresolved, and fallback `pendingCount > 0` must keep warning tone even if provider state is still `live`.
+- Dashboard Fetch Updates must present native catch-up `conflict` results as a warning/status notice and disable while same-season `syncing` is active. It must not silently ignore review items or allow manual catch-up to overlap a save just because Dashboard is read-only.
+- Fetch Updates controls on operational routes and Dashboard must use any `catching_up` state as their busy/disabled state, including background server update replay. Manual fetch should not remain clickable only because the current catch-up was not started by the button.
+- A duplicate manual Fetch Updates call while catch-up is already in flight is `busy`, not `failed`. Routes must not show `Fetch Updates Failed` for this already-running state.
+- A manual Fetch Updates call blocked by a local operation guard should queue catch-up and return `busy`, not `failed`, because the request is deferred rather than broken.
+- Icon-only toolbar buttons must expose an explicit `aria-label` even when they also have `title` tooltips.
+- Daily, Check-in, and Gate `Fetch Updates` buttons should use `syncInProgress`, not manual-only `syncing`, for disabled state so auto sync and manual fetch cannot overlap visually or behaviorally.
+- Manual Fetch Server Updates reports `conflict` when native catch-up leaves review items. Route handlers should present that as a warning/review state, not as successful sync and not as a fetch failure.
+- Session sync warnings track both pending local changes and conflict-only review items. Do not clear the session warning merely because `pendingCount` is zero when `conflictCount` remains positive.
+- Shared sync UI tone treats conflict review as warning; only failed sync states should use error tone.
 - JS allocation delta commits use one queued read-modify-write transaction through `replaceLocalSeasonSqlPendingStateFromDelta`; hot-path UI code must not split the delta read and pending write into separate queue slots.
 - Gate sync status is owned by `SeasonSyncProvider` and seeded from native summary. The Gate page must not maintain a parallel debounced summary state.
 - Gate optimistic allocation reset uses `SeasonAutoSyncState.localRevision` as the durability signal.
 
 ## Route Responsibilities
+
+Route shells should use dynamic viewport height (`h-dvh`) rather than fixed `h-screen` so the desktop WebView and responsive layouts do not clip or leave stale viewport gaps. Rule tests guard `src/app/**/*.tsx` for this exact class.
 
 | Route | Role | Native data access |
 |---|---|---|
@@ -163,10 +220,20 @@ GitNexus is useful for the older graph and cross-file symbol relationships, but 
 - Indexed files: 815
 - Indexed symbols: 52,367
 - Indexed processes: 300
-- Many indexed files are under `_backups`; native files such as `nativeSeasonRepository.ts` were not in the graph during this refresh.
-- Reindex attempt on 2026-05-28 failed with `Cannot destructure property 'package' of 'node.target' as it is null.`
+- Many indexed symbols are under `_backups`, which causes ambiguous matches for current app symbols.
+- Keyword `query()` returned no processes on 2026-06-21 because FTS indexes are missing.
+- `route_map` and `tool_map` currently return empty results for this project.
+- Cypher/file queries still work for broad topology, but the Rust native core is under-indexed.
+- A prior reindex attempt on 2026-05-28 failed with `Cannot destructure property 'package' of 'node.target' as it is null.`
 
 Until GitNexus is rebuilt cleanly, use it for broad historical topology and use direct live-file inspection for `app/src/lib/native*`, `app/src-tauri`, and newer Supabase migrations.
+
+## Review Watchlist
+
+- Dashboard AI production Vietnamese strings in `dashboardAiAnalysis.ts` and `dashboard-ai-analysis/index.ts` are normalized to UTF-8 and guarded by rule tests. Keep those guards when editing prompts, fallback text, or Edge Function responses; malformed Vietnamese in tests should be limited to explicit repair/fallback fixtures.
+- `native_catchup.rs` is a large multi-responsibility module. Changes to sync, catch-up, manifest reconcile, conflict cleanup, and local AI SQL should be reviewed with direct Rust tests because GitNexus does not currently expose that internal symbol graph.
+- Keep the manifest reconcile prefix-collision regression in `native_catchup.rs` tests whenever changing pending target parsing.
+- Keep the conflict-only native sync regression in `native_catchup.rs` tests whenever changing pending upload or manual Save behavior.
 
 ## Verification
 

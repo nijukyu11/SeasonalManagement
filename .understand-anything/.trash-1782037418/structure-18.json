@@ -1,0 +1,290 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 3,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "docs/superpowers/specs/2026-05-07-daily-schedule-design.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 165,
+      "nonEmptyLines": 112,
+      "sections": [
+        {
+          "heading": "Daily Schedule Design",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Goal",
+          "level": 2,
+          "line": 3
+        },
+        {
+          "heading": "Approved UI Direction",
+          "level": 2,
+          "line": 7
+        },
+        {
+          "heading": "Date Range Behavior",
+          "level": 2,
+          "line": 15
+        },
+        {
+          "heading": "Toolbar Summary",
+          "level": 2,
+          "line": 28
+        },
+        {
+          "heading": "Grid Columns",
+          "level": 2,
+          "line": 38
+        },
+        {
+          "heading": "Row Consolidation",
+          "level": 2,
+          "line": 61
+        },
+        {
+          "heading": "Direct Inline Editing",
+          "level": 2,
+          "line": 71
+        },
+        {
+          "heading": "Validation",
+          "level": 2,
+          "line": 97
+        },
+        {
+          "heading": "Operations",
+          "level": 2,
+          "line": 111
+        },
+        {
+          "heading": "Architecture",
+          "level": 2,
+          "line": 125
+        },
+        {
+          "heading": "Testing Strategy",
+          "level": 2,
+          "line": 147
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 12
+      }
+    },
+    {
+      "path": "docs/superpowers/specs/2026-05-08-checkin-allocation-discrete-grouping-design.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 321,
+      "nonEmptyLines": 208,
+      "sections": [
+        {
+          "heading": "Check-in Allocation - Discrete Grouping Design",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Status",
+          "level": 2,
+          "line": 3
+        },
+        {
+          "heading": "Scope",
+          "level": 2,
+          "line": 13
+        },
+        {
+          "heading": "Route And Navigation",
+          "level": 2,
+          "line": 34
+        },
+        {
+          "heading": "Data Source",
+          "level": 2,
+          "line": 48
+        },
+        {
+          "heading": "Data Model",
+          "level": 2,
+          "line": 63
+        },
+        {
+          "heading": "Counter Rule Initialization",
+          "level": 2,
+          "line": 89
+        },
+        {
+          "heading": "Counter Roster",
+          "level": 2,
+          "line": 106
+        },
+        {
+          "heading": "Layout",
+          "level": 2,
+          "line": 115
+        },
+        {
+          "heading": "Timeline",
+          "level": 2,
+          "line": 127
+        },
+        {
+          "heading": "Unallocated Pool",
+          "level": 2,
+          "line": 139
+        },
+        {
+          "heading": "Resource Grid",
+          "level": 2,
+          "line": 149
+        },
+        {
+          "heading": "Discrete Group Rendering",
+          "level": 2,
+          "line": 159
+        },
+        {
+          "heading": "Broken Shape Rendering",
+          "level": 2,
+          "line": 187
+        },
+        {
+          "heading": "Bar Labels And Time Markers",
+          "level": 2,
+          "line": 205
+        },
+        {
+          "heading": "Context Menu",
+          "level": 2,
+          "line": 223
+        },
+        {
+          "heading": "Validation",
+          "level": 2,
+          "line": 241
+        },
+        {
+          "heading": "Local-First Persistence",
+          "level": 2,
+          "line": 257
+        },
+        {
+          "heading": "Rendering Architecture",
+          "level": 2,
+          "line": 272
+        },
+        {
+          "heading": "Testing Strategy",
+          "level": 2,
+          "line": 294
+        },
+        {
+          "heading": "Implementation Notes",
+          "level": 2,
+          "line": 319
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 21
+      }
+    },
+    {
+      "path": "docs/superpowers/specs/2026-05-08-checkin-counter-management-settings-design.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 240,
+      "nonEmptyLines": 172,
+      "sections": [
+        {
+          "heading": "Check-in Counter Management Settings Design",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Status",
+          "level": 2,
+          "line": 3
+        },
+        {
+          "heading": "Scope",
+          "level": 2,
+          "line": 13
+        },
+        {
+          "heading": "Data Model",
+          "level": 2,
+          "line": 34
+        },
+        {
+          "heading": "Validation Rules",
+          "level": 2,
+          "line": 84
+        },
+        {
+          "heading": "Settings UI",
+          "level": 2,
+          "line": 100
+        },
+        {
+          "heading": "Gantt Resource Roster",
+          "level": 2,
+          "line": 130
+        },
+        {
+          "heading": "Grouped Resource View",
+          "level": 2,
+          "line": 140
+        },
+        {
+          "heading": "BHS Mapping",
+          "level": 2,
+          "line": 158
+        },
+        {
+          "heading": "Lock Enforcement",
+          "level": 2,
+          "line": 179
+        },
+        {
+          "heading": "Interaction With Overlap Stacking",
+          "level": 2,
+          "line": 203
+        },
+        {
+          "heading": "Error Handling",
+          "level": 2,
+          "line": 209
+        },
+        {
+          "heading": "Testing",
+          "level": 2,
+          "line": 217
+        },
+        {
+          "heading": "Documentation Updates",
+          "level": 2,
+          "line": 233
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 14
+      }
+    }
+  ]
+}

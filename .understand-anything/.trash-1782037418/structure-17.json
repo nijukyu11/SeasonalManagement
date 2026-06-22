@@ -1,0 +1,634 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 7,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "docs/superpowers/plans/2026-05-07-daily-schedule.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 1541,
+      "nonEmptyLines": 1335,
+      "sections": [
+        {
+          "heading": "Daily Schedule Implementation Plan",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "File Structure",
+          "level": 2,
+          "line": 13
+        },
+        {
+          "heading": "Task 1: Daily Schedule Pure Helpers",
+          "level": 3,
+          "line": 30
+        },
+        {
+          "heading": "Task 2: Daily Schedule Route Shell and Navigation",
+          "level": 3,
+          "line": 559
+        },
+        {
+          "heading": "Task 3: Direct Inline Editing and Local-First Save",
+          "level": 3,
+          "line": 1000
+        },
+        {
+          "heading": "Task 4: Add, Delete, Link, and Unlink Operations",
+          "level": 3,
+          "line": 1215
+        },
+        {
+          "heading": "Task 5: Documentation, Polish, and Final Verification",
+          "level": 3,
+          "line": 1460
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 7
+      }
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-08-checkin-allocation-discrete-grouping.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 1887,
+      "nonEmptyLines": 1617,
+      "sections": [
+        {
+          "heading": "Check-in Allocation - Discrete Grouping Implementation Plan",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "File Structure",
+          "level": 2,
+          "line": 13
+        },
+        {
+          "heading": "Task 1: Check-in Fields And Persistence",
+          "level": 3,
+          "line": 40
+        },
+        {
+          "heading": "Task 2: Pure Check-in Allocation Helper",
+          "level": 3,
+          "line": 219
+        },
+        {
+          "heading": "Task 3: Check-in Route Local-First Shell",
+          "level": 3,
+          "line": 953
+        },
+        {
+          "heading": "Task 4: Gantt Rendering And Operations",
+          "level": 3,
+          "line": 1386
+        },
+        {
+          "heading": "Task 5: Documentation And Verification",
+          "level": 3,
+          "line": 1794
+        },
+        {
+          "heading": "Execution Notes",
+          "level": 2,
+          "line": 1880
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 8
+      }
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-08-checkin-counter-management-settings.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 1572,
+      "nonEmptyLines": 1339,
+      "sections": [
+        {
+          "heading": "Check-in Counter Management Settings Implementation Plan",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "File Structure",
+          "level": 2,
+          "line": 13
+        },
+        {
+          "heading": "Task 1: Settings Types, Hydration, And Validation",
+          "level": 3,
+          "line": 36
+        },
+        {
+          "heading": "Task 2: Counter Settings Helper Module",
+          "level": 3,
+          "line": 361
+        },
+        {
+          "heading": "Task 3: Check-in Allocation Domain Integration",
+          "level": 3,
+          "line": 680
+        },
+        {
+          "heading": "Task 4: Settings Page UI",
+          "level": 3,
+          "line": 966
+        },
+        {
+          "heading": "Task 5: Check-in Gantt UI Wiring",
+          "level": 3,
+          "line": 1357
+        },
+        {
+          "heading": "Task 6: Documentation And Full Verification",
+          "level": 3,
+          "line": 1521
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 8
+      }
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-08-checkin-gantt-ux-enhancements.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 45,
+      "nonEmptyLines": 31,
+      "sections": [
+        {
+          "heading": "Check-in Gantt UX Enhancements Implementation Plan",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Task 1: Pure Helper Coverage",
+          "level": 3,
+          "line": 13
+        },
+        {
+          "heading": "Task 2: Route Interaction Wiring",
+          "level": 3,
+          "line": 24
+        },
+        {
+          "heading": "Task 3: Verification",
+          "level": 3,
+          "line": 36
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 4
+      }
+    },
+    {
+      "path": "docs/superpowers/plans/2026-06-16-native-sync-conflict-hardening.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 312,
+      "nonEmptyLines": 221,
+      "sections": [
+        {
+          "heading": "Native Sync Conflict & Race-Condition Hardening Plan",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Implementation Status - 2026-06-16",
+          "level": 2,
+          "line": 11
+        },
+        {
+          "heading": "File Structure",
+          "level": 2,
+          "line": 39
+        },
+        {
+          "heading": "Issue Index",
+          "level": 2,
+          "line": 66
+        },
+        {
+          "heading": "Task 1: Structural cleanup rule for snapshot/resolve paths (ISS-1)",
+          "level": 2,
+          "line": 79
+        },
+        {
+          "heading": "Sub-task 1.1: Add a failing regression test for the substring trap",
+          "level": 3,
+          "line": 87
+        },
+        {
+          "heading": "Sub-task 1.2: Replace substring `LIKE` with structural target matching",
+          "level": 3,
+          "line": 102
+        },
+        {
+          "heading": "Sub-task 1.3: Verify",
+          "level": 3,
+          "line": 125
+        },
+        {
+          "heading": "Task 2: Read queue serialization for delta state (ISS-2)",
+          "level": 2,
+          "line": 132
+        },
+        {
+          "heading": "Sub-task 2.1: Add a queued read-modify-write helper for the full mutation flow",
+          "level": 3,
+          "line": 140
+        },
+        {
+          "heading": "Sub-task 2.2: Collapse the read-modify-write into a single queued transaction",
+          "level": 3,
+          "line": 146
+        },
+        {
+          "heading": "Sub-task 2.3: Regression coverage for the queue contract",
+          "level": 3,
+          "line": 164
+        },
+        {
+          "heading": "Sub-task 2.4: Verify",
+          "level": 3,
+          "line": 176
+        },
+        {
+          "heading": "Task 3: Dropped derived-cache rewrite (ISS-3)",
+          "level": 2,
+          "line": 183
+        },
+        {
+          "heading": "Task 4: Manual fetch pre-flights the cursor (ISS-4)",
+          "level": 2,
+          "line": 193
+        },
+        {
+          "heading": "Sub-task 4.1: Use the workspace freshness signal, not just `lastServerSeq`",
+          "level": 3,
+          "line": 200
+        },
+        {
+          "heading": "Sub-task 4.2: Verify",
+          "level": 3,
+          "line": 217
+        },
+        {
+          "heading": "Task 5: Single source of sync summary on the gate page (ISS-5)",
+          "level": 2,
+          "line": 224
+        },
+        {
+          "heading": "Sub-task 5.1: Seed the provider from the native query before removing local state",
+          "level": 3,
+          "line": 232
+        },
+        {
+          "heading": "Sub-task 5.2: Regression coverage",
+          "level": 3,
+          "line": 243
+        },
+        {
+          "heading": "Sub-task 5.3: Verify",
+          "level": 3,
+          "line": 248
+        },
+        {
+          "heading": "Task 6: Synchronize optimistic view reset with allocationResult.view (ISS-6)",
+          "level": 2,
+          "line": 256
+        },
+        {
+          "heading": "Sub-task 6.1: Plumb `localRevision` into the provider state and use it as the staleness signal",
+          "level": 3,
+          "line": 263
+        },
+        {
+          "heading": "Sub-task 6.2: Add a regression test",
+          "level": 3,
+          "line": 275
+        },
+        {
+          "heading": "Sub-task 6.3: Verify",
+          "level": 3,
+          "line": 280
+        },
+        {
+          "heading": "Cross-Cutting Verification",
+          "level": 2,
+          "line": 287
+        },
+        {
+          "heading": "Release gate (separate, not part of this plan)",
+          "level": 3,
+          "line": 300
+        },
+        {
+          "heading": "Risk and Rollback Notes",
+          "level": 2,
+          "line": 306
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 28
+      }
+    },
+    {
+      "path": "docs/superpowers/plans/2026-06-16-season-assignment-and-atomic-import-review.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 335,
+      "nonEmptyLines": 224,
+      "sections": [
+        {
+          "heading": "Season Assignment & Atomic Import/Flight Management Review",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "1. Current Behavior Recap",
+          "level": 2,
+          "line": 11
+        },
+        {
+          "heading": "1.1 Season ID generation",
+          "level": 3,
+          "line": 13
+        },
+        {
+          "heading": "1.2 Flight record ID generation",
+          "level": 3,
+          "line": 18
+        },
+        {
+          "heading": "1.3 Local vs remote key shape",
+          "level": 3,
+          "line": 39
+        },
+        {
+          "heading": "1.4 Import flow (seasonal)",
+          "level": 3,
+          "line": 47
+        },
+        {
+          "heading": "1.5 Daily import flow",
+          "level": 3,
+          "line": 62
+        },
+        {
+          "heading": "1.6 Flight mutation flows",
+          "level": 3,
+          "line": 70
+        },
+        {
+          "heading": "2. Findings",
+          "level": 2,
+          "line": 79
+        },
+        {
+          "heading": "F-1 (High): `seasons.season_code` is not uniquely constrained",
+          "level": 3,
+          "line": 81
+        },
+        {
+          "heading": "F-2 (High): `record_id` and `leg_id` are globally unique PKs, not season-scoped",
+          "level": 3,
+          "line": 89
+        },
+        {
+          "heading": "F-3 (High): `deleteModifications(seasonId, legIds)` does not filter by `seasonId`",
+          "level": 3,
+          "line": 123
+        },
+        {
+          "heading": "F-4 (Medium): Multi-step seasonal import is not atomic across the remote write boundary",
+          "level": 3,
+          "line": 129
+        },
+        {
+          "heading": "F-5 (Medium): Native import overwrites remote asynchronously",
+          "level": 3,
+          "line": 135
+        },
+        {
+          "heading": "F-6 (Medium): Patch path is \"delete and rewrite\" instead of UPSERT-then-cleanup",
+          "level": 3,
+          "line": 141
+        },
+        {
+          "heading": "F-7 (Low — legacy adapter only, not active import risk): `parser.expandToFlightLegs` infers season year from first row",
+          "level": 3,
+          "line": 147
+        },
+        {
+          "heading": "F-8 (Low): `applyLocalSourceRows` native branch returns a workspace with stale `derivedSeasonal`",
+          "level": 3,
+          "line": 155
+        },
+        {
+          "heading": "3. Why the Current Model Still Works in Practice",
+          "level": 2,
+          "line": 163
+        },
+        {
+          "heading": "4. Existing Tests That Cover (or Don't Cover) These Findings",
+          "level": 2,
+          "line": 179
+        },
+        {
+          "heading": "5. Proposed Adjustments",
+          "level": 2,
+          "line": 194
+        },
+        {
+          "heading": "5.1 (Revised) Document the failure mode for F-1 honestly",
+          "level": 3,
+          "line": 198
+        },
+        {
+          "heading": "5.2 Add a `UNIQUE` constraint on `seasons.season_code` (F-1)",
+          "level": 3,
+          "line": 204
+        },
+        {
+          "heading": "5.3 (Revised) F-2 migration scope: child tables and RPCs",
+          "level": 3,
+          "line": 215
+        },
+        {
+          "heading": "5.4 (Revised) Atomicity for the seasonal import is not a single transaction",
+          "level": 3,
+          "line": 242
+        },
+        {
+          "heading": "5.5 (Renumbered — was 5.3) Make `applyLocalSourceRows` consistent with `applyLocalFlightRecordMutation` (F-8)",
+          "level": 3,
+          "line": 269
+        },
+        {
+          "heading": "5.6 (Renumbered — was 5.4) Document the season ownership contract in `context.md`",
+          "level": 3,
+          "line": 275
+        },
+        {
+          "heading": "6. Verification Plan (when the adjustments are implemented)",
+          "level": 2,
+          "line": 290
+        },
+        {
+          "heading": "7. Risk and Rollback",
+          "level": 2,
+          "line": 302
+        },
+        {
+          "heading": "8. Open Questions",
+          "level": 2,
+          "line": 311
+        },
+        {
+          "heading": "9. Suggested Phasing (if the user wants to proceed)",
+          "level": 2,
+          "line": 321
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 30
+      }
+    },
+    {
+      "path": "docs/superpowers/plans/2026-06-16-season-ownership-hardening-implementation.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 490,
+      "nonEmptyLines": 345,
+      "sections": [
+        {
+          "heading": "Season Ownership Hardening Implementation Plan",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Evaluation",
+          "level": 2,
+          "line": 13
+        },
+        {
+          "heading": "File Structure",
+          "level": 2,
+          "line": 33
+        },
+        {
+          "heading": "Package A - No-Schema Safety Hardening",
+          "level": 3,
+          "line": 35
+        },
+        {
+          "heading": "Package B - Unique Season Code",
+          "level": 3,
+          "line": 44
+        },
+        {
+          "heading": "Package C - Documentation",
+          "level": 3,
+          "line": 56
+        },
+        {
+          "heading": "Future Package D - Composite Remote PK Migration",
+          "level": 3,
+          "line": 63
+        },
+        {
+          "heading": "Future Package E - Local Mirror Recovery UX",
+          "level": 3,
+          "line": 73
+        },
+        {
+          "heading": "Future Package F - Remote Import Transaction",
+          "level": 3,
+          "line": 79
+        },
+        {
+          "heading": "Task 0: Execution Preflight",
+          "level": 2,
+          "line": 86
+        },
+        {
+          "heading": "Task 1: No-Schema Season-Scoped Deletes",
+          "level": 2,
+          "line": 129
+        },
+        {
+          "heading": "Task 2: Duplicate `season_code` Guard",
+          "level": 2,
+          "line": 237
+        },
+        {
+          "heading": "Task 3: Contract Documentation",
+          "level": 2,
+          "line": 333
+        },
+        {
+          "heading": "Future Package D: Composite Remote PK Migration",
+          "level": 2,
+          "line": 383
+        },
+        {
+          "heading": "Future Package E: Local Mirror Recovery UX",
+          "level": 2,
+          "line": 421
+        },
+        {
+          "heading": "Future Package F: Remote Import Transaction",
+          "level": 2,
+          "line": 443
+        },
+        {
+          "heading": "Final Verification for Package A/B/C",
+          "level": 2,
+          "line": 465
+        },
+        {
+          "heading": "Self-Review",
+          "level": 2,
+          "line": 486
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 18
+      }
+    }
+  ]
+}

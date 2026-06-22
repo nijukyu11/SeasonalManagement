@@ -24,7 +24,7 @@ export default function LoadingStatusPanel({
 }: LoadingStatusPanelProps) {
   const percent = Math.max(0, Math.min(100, progress.percent));
   const shellClassName = mode === 'fullscreen'
-    ? 'flex h-screen items-center justify-center bg-surface px-6 text-on-surface'
+    ? 'flex h-dvh items-center justify-center bg-surface px-6 text-on-surface'
     : mode === 'inline'
       ? 'flex w-full items-center justify-center px-4 py-3 text-on-surface'
       : 'flex w-full min-h-[220px] items-center justify-center px-6 py-10 text-on-surface';

@@ -12,6 +12,8 @@ interface UseSeasonWorkspaceRefreshOptions {
   policy: 'background' | 'on-activation';
   source: string;
   onNativeRefresh?: (event: SeasonWorkspaceChangeEvent) => Promise<void> | void;
+  shouldDeferRefresh?: () => boolean;
+  shouldHandleWorkspaceChange?: (event: SeasonWorkspaceChangeEvent) => boolean;
 }
 
 const REFRESH_DEBOUNCE_MS = 120;
@@ -31,15 +33,20 @@ export function useSeasonWorkspaceRefresh({
   policy,
   source,
   onNativeRefresh,
+  shouldDeferRefresh,
+  shouldHandleWorkspaceChange,
 }: UseSeasonWorkspaceRefreshOptions): void {
   const isRouteActive = useCachedRouteActivity();
   const onNativeRefreshRef = useRef(onNativeRefresh);
+  const shouldDeferRefreshRef = useRef(shouldDeferRefresh);
+  const shouldHandleWorkspaceChangeRef = useRef(shouldHandleWorkspaceChange);
   const seasonIdRef = useRef(seasonId);
   const policyRef = useRef(policy);
   const sourceRef = useRef(source);
   const isRouteActiveRef = useRef(isRouteActive);
   const staleEventRef = useRef<SeasonWorkspaceChangeEvent | null>(null);
   const lastHandledEventSeqRef = useRef(0);
+  const failedRefreshEventSeqRef = useRef<number | null>(null);
   const refreshTimerRef = useRef<number | null>(null);
   const activationRefreshHandleRef = useRef<number | null>(null);
   const activationRefreshHandleTypeRef = useRef<'idle' | 'timeout' | null>(null);
@@ -49,11 +56,13 @@ export function useSeasonWorkspaceRefresh({
 
   useEffect(() => {
     onNativeRefreshRef.current = onNativeRefresh;
+    shouldDeferRefreshRef.current = shouldDeferRefresh;
+    shouldHandleWorkspaceChangeRef.current = shouldHandleWorkspaceChange;
     seasonIdRef.current = seasonId;
     policyRef.current = policy;
     sourceRef.current = source;
     isRouteActiveRef.current = isRouteActive;
-  }, [isRouteActive, onNativeRefresh, policy, seasonId, source]);
+  }, [isRouteActive, onNativeRefresh, policy, seasonId, shouldDeferRefresh, shouldHandleWorkspaceChange, source]);
 
   useEffect(() => {
     let disposed = false;
@@ -73,7 +82,11 @@ export function useSeasonWorkspaceRefresh({
 
     async function refreshFromNativeEvent(event: SeasonWorkspaceChangeEvent) {
       const currentSeasonId = seasonIdRef.current;
-      if (!currentSeasonId || event.eventSeq <= lastHandledEventSeqRef.current) return;
+      if (!currentSeasonId || event.seasonId !== currentSeasonId || event.eventSeq <= lastHandledEventSeqRef.current) {
+        if (staleEventRef.current?.eventSeq === event.eventSeq) staleEventRef.current = null;
+        if (failedRefreshEventSeqRef.current === event.eventSeq) failedRefreshEventSeqRef.current = null;
+        return;
+      }
       if (refreshingRef.current) {
         staleEventRef.current = event;
         return;
@@ -81,24 +94,34 @@ export function useSeasonWorkspaceRefresh({
       refreshingRef.current = true;
       try {
         if (!disposed) await onNativeRefreshRef.current?.(event);
+        failedRefreshEventSeqRef.current = null;
         lastHandledEventSeqRef.current = Math.max(lastHandledEventSeqRef.current, event.eventSeq);
         if (staleEventRef.current?.eventSeq === event.eventSeq) staleEventRef.current = null;
       } catch (error) {
         console.error('Season workspace refresh failed', error);
-        lastHandledEventSeqRef.current = Math.max(lastHandledEventSeqRef.current, event.eventSeq);
-        if (staleEventRef.current?.eventSeq === event.eventSeq) staleEventRef.current = null;
+        failedRefreshEventSeqRef.current = event.eventSeq;
+        staleEventRef.current = event;
       } finally {
         refreshingRef.current = false;
         const pendingEvent = staleEventRef.current;
-        if (!disposed && pendingEvent && pendingEvent.eventSeq > lastHandledEventSeqRef.current) {
+        if (
+          !disposed &&
+          pendingEvent &&
+          pendingEvent.eventSeq > lastHandledEventSeqRef.current &&
+          pendingEvent.eventSeq !== failedRefreshEventSeqRef.current
+        ) {
           void scheduleRefreshRef.current(pendingEvent);
         }
       }
     }
 
     scheduleRefreshRef.current = (event: SeasonWorkspaceChangeEvent) => {
+      if (event.eventSeq !== failedRefreshEventSeqRef.current) failedRefreshEventSeqRef.current = null;
       staleEventRef.current = event;
       if (refreshTimerRef.current != null) window.clearTimeout(refreshTimerRef.current);
+      if (shouldDeferRefreshRef.current?.()) {
+        return;
+      }
       refreshTimerRef.current = window.setTimeout(() => {
         refreshTimerRef.current = null;
         const pendingEvent = staleEventRef.current;
@@ -107,6 +130,7 @@ export function useSeasonWorkspaceRefresh({
     };
 
     scheduleActivationRefreshRef.current = (event: SeasonWorkspaceChangeEvent) => {
+      failedRefreshEventSeqRef.current = null;
       staleEventRef.current = event;
       cancelActivationRefresh();
 
@@ -135,6 +159,7 @@ export function useSeasonWorkspaceRefresh({
       if (!currentSeasonId || event.seasonId !== currentSeasonId) return;
       if (event.eventSeq <= lastHandledEventSeqRef.current) return;
       if (currentRouteActive && isSameWorkspaceChangeSource(event.source, sourceRef.current)) return;
+      if (currentRouteActive && shouldHandleWorkspaceChangeRef.current && !shouldHandleWorkspaceChangeRef.current(event)) return;
       if (policyRef.current === 'background' || currentRouteActive) {
         scheduleRefreshRef.current(event);
         return;
@@ -157,6 +182,6 @@ export function useSeasonWorkspaceRefresh({
   useEffect(() => {
     if (!isRouteActive || policy !== 'on-activation') return;
     const pendingEvent = staleEventRef.current;
-    if (pendingEvent) scheduleActivationRefreshRef.current(pendingEvent);
-  }, [isRouteActive, policy]);
+    if (pendingEvent && !shouldDeferRefreshRef.current?.()) scheduleRefreshRef.current(pendingEvent);
+  }, [isRouteActive, policy, shouldDeferRefresh]);
 }

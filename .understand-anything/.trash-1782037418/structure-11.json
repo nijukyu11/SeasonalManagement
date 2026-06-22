@@ -1,0 +1,3812 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 3,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "localSeasonSqlStore.test.ts",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 392,
+      "nonEmptyLines": 343,
+      "functions": [
+        {
+          "name": "record",
+          "startLine": 108,
+          "endLine": 143,
+          "params": [
+            "overrides"
+          ]
+        },
+        {
+          "name": "workspace",
+          "startLine": 178,
+          "endLine": 201,
+          "params": []
+        },
+        {
+          "name": "createMigratedDb",
+          "startLine": 203,
+          "endLine": 207,
+          "params": []
+        }
+      ],
+      "classes": [
+        {
+          "name": "NodeSqliteTestDatabase",
+          "startLine": 21,
+          "endLine": 37,
+          "methods": [
+            "execute",
+            "select",
+            "close"
+          ],
+          "properties": [
+            "supportsExplicitTransactions",
+            "db"
+          ]
+        },
+        {
+          "name": "NoExplicitTransactionDatabase",
+          "startLine": 39,
+          "endLine": 48,
+          "methods": [
+            "execute"
+          ],
+          "properties": [
+            "supportsExplicitTransactions"
+          ]
+        },
+        {
+          "name": "BusyOnceDatabase",
+          "startLine": 50,
+          "endLine": 60,
+          "methods": [
+            "execute"
+          ],
+          "properties": [
+            "busyFailuresRemaining"
+          ]
+        },
+        {
+          "name": "DefaultTransactionDatabase",
+          "startLine": 62,
+          "endLine": 70,
+          "methods": [
+            "execute"
+          ],
+          "properties": [
+            "supportsExplicitTransactions",
+            "statements"
+          ]
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "execute",
+          "callee": "this.db.prepare(sql).run",
+          "lineNumber": 27
+        },
+        {
+          "caller": "execute",
+          "callee": "this.db.prepare",
+          "lineNumber": 27
+        },
+        {
+          "caller": "select",
+          "callee": "this.db.prepare(sql).all",
+          "lineNumber": 31
+        },
+        {
+          "caller": "select",
+          "callee": "this.db.prepare",
+          "lineNumber": 31
+        },
+        {
+          "caller": "close",
+          "callee": "this.db.close",
+          "lineNumber": 35
+        },
+        {
+          "caller": "execute",
+          "callee": "/^(BEGIN|COMMIT|ROLLBACK)\\b/i.test",
+          "lineNumber": 43
+        },
+        {
+          "caller": "execute",
+          "callee": "sql.trim",
+          "lineNumber": 43
+        },
+        {
+          "caller": "execute",
+          "callee": "Promise.reject",
+          "lineNumber": 44
+        },
+        {
+          "caller": "execute",
+          "callee": "super.execute",
+          "lineNumber": 46
+        },
+        {
+          "caller": "execute",
+          "callee": "/^INSERT INTO local_seasons\\b/i.test",
+          "lineNumber": 54
+        },
+        {
+          "caller": "execute",
+          "callee": "sql.trim",
+          "lineNumber": 54
+        },
+        {
+          "caller": "execute",
+          "callee": "Promise.reject",
+          "lineNumber": 56
+        },
+        {
+          "caller": "execute",
+          "callee": "super.execute",
+          "lineNumber": 58
+        },
+        {
+          "caller": "execute",
+          "callee": "this.statements.push",
+          "lineNumber": 67
+        },
+        {
+          "caller": "execute",
+          "callee": "sql.trim",
+          "lineNumber": 67
+        },
+        {
+          "caller": "execute",
+          "callee": "super.execute",
+          "lineNumber": 68
+        },
+        {
+          "caller": "workspace",
+          "callee": "record",
+          "lineNumber": 184
+        },
+        {
+          "caller": "workspace",
+          "callee": "record",
+          "lineNumber": 184
+        },
+        {
+          "caller": "workspace",
+          "callee": "record",
+          "lineNumber": 193
+        },
+        {
+          "caller": "workspace",
+          "callee": "record",
+          "lineNumber": 193
+        },
+        {
+          "caller": "createMigratedDb",
+          "callee": "migrateLocalSeasonSqlDatabase",
+          "lineNumber": 205
+        }
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 0,
+        "functionCount": 3,
+        "classCount": 4
+      }
+    },
+    {
+      "path": "localSeasonSqlStore.ts",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 922,
+      "nonEmptyLines": 860,
+      "functions": [
+        {
+          "name": "encodeJson",
+          "startLine": 185,
+          "endLine": 187,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "decodeJson",
+          "startLine": 189,
+          "endLine": 196,
+          "params": [
+            "value",
+            "fallback"
+          ]
+        },
+        {
+          "name": "payload",
+          "startLine": 198,
+          "endLine": 200,
+          "params": [
+            "row",
+            "fallback"
+          ]
+        },
+        {
+          "name": "boolToSql",
+          "startLine": 202,
+          "endLine": 204,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "opKey",
+          "startLine": 206,
+          "endLine": 212,
+          "params": [
+            "op"
+          ]
+        },
+        {
+          "name": "isSqliteBusyError",
+          "startLine": 214,
+          "endLine": 222,
+          "params": [
+            "error"
+          ]
+        },
+        {
+          "name": "wait",
+          "startLine": 224,
+          "endLine": 226,
+          "params": [
+            "ms"
+          ]
+        },
+        {
+          "name": "executeSql",
+          "startLine": 228,
+          "endLine": 244,
+          "params": [
+            "db",
+            "sql",
+            "bindValues"
+          ]
+        },
+        {
+          "name": "transaction",
+          "startLine": 246,
+          "endLine": 264,
+          "params": [
+            "db",
+            "write"
+          ]
+        },
+        {
+          "name": "placeholders",
+          "startLine": 266,
+          "endLine": 268,
+          "params": [
+            "values"
+          ]
+        },
+        {
+          "name": "getTauriGlobal",
+          "startLine": 270,
+          "endLine": 272,
+          "params": []
+        },
+        {
+          "name": "isTauriRuntime",
+          "startLine": 274,
+          "endLine": 280,
+          "params": []
+        },
+        {
+          "name": "setLocalSeasonSqlDatabaseFactoryForTests",
+          "startLine": 282,
+          "endLine": 287,
+          "params": [
+            "factory"
+          ]
+        },
+        {
+          "name": "getLocalSeasonSqlDatabase",
+          "startLine": 289,
+          "endLine": 294,
+          "params": []
+        },
+        {
+          "name": "loadTauriSqlDatabase",
+          "startLine": 296,
+          "endLine": 308,
+          "params": []
+        },
+        {
+          "name": "migrateLocalSeasonSqlDatabase",
+          "startLine": 310,
+          "endLine": 321,
+          "params": [
+            "db"
+          ]
+        },
+        {
+          "name": "saveLocalSeasonSqlWorkspace",
+          "startLine": 323,
+          "endLine": 377,
+          "params": [
+            "db",
+            "workspace",
+            "options"
+          ]
+        },
+        {
+          "name": "insertSourceRows",
+          "startLine": 379,
+          "endLine": 393,
+          "params": [
+            "db",
+            "seasonId",
+            "rows",
+            "isBase"
+          ]
+        },
+        {
+          "name": "insertFlightRecords",
+          "startLine": 395,
+          "endLine": 429,
+          "params": [
+            "db",
+            "seasonId",
+            "records",
+            "isBase"
+          ]
+        },
+        {
+          "name": "insertModifications",
+          "startLine": 431,
+          "endLine": 459,
+          "params": [
+            "db",
+            "seasonId",
+            "entries",
+            "isBase"
+          ]
+        },
+        {
+          "name": "insertModHistory",
+          "startLine": 461,
+          "endLine": 475,
+          "params": [
+            "db",
+            "seasonId",
+            "entries",
+            "isBase"
+          ]
+        },
+        {
+          "name": "insertPendingOps",
+          "startLine": 477,
+          "endLine": 490,
+          "params": [
+            "db",
+            "seasonId",
+            "pendingOps"
+          ]
+        },
+        {
+          "name": "insertDerivedSeasonal",
+          "startLine": 492,
+          "endLine": 501,
+          "params": [
+            "db",
+            "seasonId",
+            "derivedSeasonal"
+          ]
+        },
+        {
+          "name": "insertSyncMeta",
+          "startLine": 503,
+          "endLine": 521,
+          "params": [
+            "db",
+            "seasonId",
+            "syncMeta"
+          ]
+        },
+        {
+          "name": "insertEntityVersions",
+          "startLine": 523,
+          "endLine": 538,
+          "params": [
+            "db",
+            "seasonId",
+            "entityVersions"
+          ]
+        },
+        {
+          "name": "loadLocalSeasonSqlWorkspace",
+          "startLine": 540,
+          "endLine": 600,
+          "params": [
+            "db",
+            "seasonId"
+          ]
+        },
+        {
+          "name": "loadJsonRows",
+          "startLine": 602,
+          "endLine": 615,
+          "params": [
+            "db",
+            "table",
+            "seasonId",
+            "isBase"
+          ]
+        },
+        {
+          "name": "loadModificationEntries",
+          "startLine": 617,
+          "endLine": 636,
+          "params": [
+            "db",
+            "seasonId",
+            "isBase",
+            "legIds"
+          ]
+        },
+        {
+          "name": "loadPendingOps",
+          "startLine": 638,
+          "endLine": 650,
+          "params": [
+            "db",
+            "seasonId"
+          ]
+        },
+        {
+          "name": "buildEntityVersionMap",
+          "startLine": 652,
+          "endLine": 665,
+          "params": [
+            "rows"
+          ]
+        },
+        {
+          "name": "assertLocalSeasonSqlWorkspaceIntegrity",
+          "startLine": 667,
+          "endLine": 685,
+          "params": [
+            "workspace",
+            "options"
+          ]
+        },
+        {
+          "name": "countGeneratedFlightRecords",
+          "startLine": 687,
+          "endLine": 705,
+          "params": [
+            "rows"
+          ]
+        },
+        {
+          "name": "parseSourceRowDate",
+          "startLine": 707,
+          "endLine": 719,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "readLocalSeasonSqlDeltaState",
+          "startLine": 736,
+          "endLine": 772,
+          "params": [
+            "db",
+            "seasonId",
+            "affectedLegIds"
+          ]
+        },
+        {
+          "name": "loadFlightRecordsByIds",
+          "startLine": 774,
+          "endLine": 789,
+          "params": [
+            "db",
+            "seasonId",
+            "recordIds",
+            "isBase"
+          ]
+        },
+        {
+          "name": "replaceLocalSeasonSqlPendingState",
+          "startLine": 791,
+          "endLine": 805,
+          "params": [
+            "db",
+            "seasonId",
+            "pendingOps",
+            "syncMeta"
+          ]
+        },
+        {
+          "name": "listLocalSeasonSqlWorkspaceIds",
+          "startLine": 807,
+          "endLine": 812,
+          "params": [
+            "db"
+          ]
+        },
+        {
+          "name": "clearLocalSeasonSqlWorkspaces",
+          "startLine": 814,
+          "endLine": 830,
+          "params": [
+            "db"
+          ]
+        },
+        {
+          "name": "readLocalSeasonSqlSyncMeta",
+          "startLine": 832,
+          "endLine": 841,
+          "params": [
+            "db",
+            "seasonId"
+          ]
+        },
+        {
+          "name": "setLocalSeasonSqlSyncMeta",
+          "startLine": 843,
+          "endLine": 852,
+          "params": [
+            "db",
+            "seasonId",
+            "syncMeta"
+          ]
+        },
+        {
+          "name": "saveLocalSeasonIndexedDbBackup",
+          "startLine": 854,
+          "endLine": 864,
+          "params": [
+            "db",
+            "seasonId",
+            "snapshot"
+          ]
+        },
+        {
+          "name": "restoreLatestLocalSeasonSqlBackup",
+          "startLine": 866,
+          "endLine": 896,
+          "params": [
+            "db",
+            "seasonId"
+          ]
+        },
+        {
+          "name": "getLocalSeasonSqlKv",
+          "startLine": 898,
+          "endLine": 908,
+          "params": [
+            "db",
+            "key",
+            "fallback"
+          ]
+        },
+        {
+          "name": "setLocalSeasonSqlKv",
+          "startLine": 910,
+          "endLine": 921,
+          "params": [
+            "db",
+            "key",
+            "value"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "LOCAL_SEASON_SQL_CONNECTION",
+          "line": 9,
+          "isDefault": false
+        },
+        {
+          "name": "LOCAL_SEASON_SQL_SCHEMA_VERSION",
+          "line": 10,
+          "isDefault": false
+        },
+        {
+          "name": "setLocalSeasonSqlDatabaseFactoryForTests",
+          "line": 282,
+          "isDefault": false
+        },
+        {
+          "name": "getLocalSeasonSqlDatabase",
+          "line": 289,
+          "isDefault": false
+        },
+        {
+          "name": "migrateLocalSeasonSqlDatabase",
+          "line": 310,
+          "isDefault": false
+        },
+        {
+          "name": "saveLocalSeasonSqlWorkspace",
+          "line": 323,
+          "isDefault": false
+        },
+        {
+          "name": "loadLocalSeasonSqlWorkspace",
+          "line": 540,
+          "isDefault": false
+        },
+        {
+          "name": "assertLocalSeasonSqlWorkspaceIntegrity",
+          "line": 667,
+          "isDefault": false
+        },
+        {
+          "name": "readLocalSeasonSqlDeltaState",
+          "line": 736,
+          "isDefault": false
+        },
+        {
+          "name": "replaceLocalSeasonSqlPendingState",
+          "line": 791,
+          "isDefault": false
+        },
+        {
+          "name": "listLocalSeasonSqlWorkspaceIds",
+          "line": 807,
+          "isDefault": false
+        },
+        {
+          "name": "clearLocalSeasonSqlWorkspaces",
+          "line": 814,
+          "isDefault": false
+        },
+        {
+          "name": "readLocalSeasonSqlSyncMeta",
+          "line": 832,
+          "isDefault": false
+        },
+        {
+          "name": "setLocalSeasonSqlSyncMeta",
+          "line": 843,
+          "isDefault": false
+        },
+        {
+          "name": "saveLocalSeasonIndexedDbBackup",
+          "line": 854,
+          "isDefault": false
+        },
+        {
+          "name": "restoreLatestLocalSeasonSqlBackup",
+          "line": 866,
+          "isDefault": false
+        },
+        {
+          "name": "getLocalSeasonSqlKv",
+          "line": 898,
+          "isDefault": false
+        },
+        {
+          "name": "setLocalSeasonSqlKv",
+          "line": 910,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "encodeJson",
+          "callee": "JSON.stringify",
+          "lineNumber": 186
+        },
+        {
+          "caller": "decodeJson",
+          "callee": "JSON.parse",
+          "lineNumber": 192
+        },
+        {
+          "caller": "payload",
+          "callee": "decodeJson",
+          "lineNumber": 199
+        },
+        {
+          "caller": "isSqliteBusyError",
+          "callee": "/database is locked|database table is locked|SQLITE_BUSY/i.test",
+          "lineNumber": 215
+        },
+        {
+          "caller": "isSqliteBusyError",
+          "callee": "isSqliteBusyError",
+          "lineNumber": 216
+        },
+        {
+          "caller": "isSqliteBusyError",
+          "callee": "isSqliteBusyError",
+          "lineNumber": 219
+        },
+        {
+          "caller": "isSqliteBusyError",
+          "callee": "[record.code, record.message].filter(Boolean).join",
+          "lineNumber": 219
+        },
+        {
+          "caller": "isSqliteBusyError",
+          "callee": "[record.code, record.message].filter",
+          "lineNumber": 219
+        },
+        {
+          "caller": "wait",
+          "callee": "setTimeout",
+          "lineNumber": 225
+        },
+        {
+          "caller": "executeSql",
+          "callee": "db.execute",
+          "lineNumber": 236
+        },
+        {
+          "caller": "executeSql",
+          "callee": "isSqliteBusyError",
+          "lineNumber": 239
+        },
+        {
+          "caller": "executeSql",
+          "callee": "wait",
+          "lineNumber": 241
+        },
+        {
+          "caller": "transaction",
+          "callee": "write",
+          "lineNumber": 248
+        },
+        {
+          "caller": "transaction",
+          "callee": "executeSql",
+          "lineNumber": 252
+        },
+        {
+          "caller": "transaction",
+          "callee": "write",
+          "lineNumber": 254
+        },
+        {
+          "caller": "transaction",
+          "callee": "executeSql",
+          "lineNumber": 255
+        },
+        {
+          "caller": "transaction",
+          "callee": "executeSql",
+          "lineNumber": 258
+        },
+        {
+          "caller": "placeholders",
+          "callee": "values.map(() => '?').join",
+          "lineNumber": 267
+        },
+        {
+          "caller": "placeholders",
+          "callee": "values.map",
+          "lineNumber": 267
+        },
+        {
+          "caller": "isTauriRuntime",
+          "callee": "getTauriGlobal",
+          "lineNumber": 275
+        },
+        {
+          "caller": "isTauriRuntime",
+          "callee": "Object.prototype.hasOwnProperty.call",
+          "lineNumber": 277
+        },
+        {
+          "caller": "isTauriRuntime",
+          "callee": "Object.prototype.hasOwnProperty.call",
+          "lineNumber": 278
+        },
+        {
+          "caller": "getLocalSeasonSqlDatabase",
+          "callee": "(databaseFactory ?? loadTauriSqlDatabase)",
+          "lineNumber": 291
+        },
+        {
+          "caller": "loadTauriSqlDatabase",
+          "callee": "isTauriRuntime",
+          "lineNumber": 297
+        },
+        {
+          "caller": "loadTauriSqlDatabase",
+          "callee": "import",
+          "lineNumber": 299
+        },
+        {
+          "caller": "loadTauriSqlDatabase",
+          "callee": "Database.load",
+          "lineNumber": 301
+        },
+        {
+          "caller": "loadTauriSqlDatabase",
+          "callee": "migrateLocalSeasonSqlDatabase",
+          "lineNumber": 302
+        },
+        {
+          "caller": "loadTauriSqlDatabase",
+          "callee": "console.warn",
+          "lineNumber": 305
+        },
+        {
+          "caller": "migrateLocalSeasonSqlDatabase",
+          "callee": "executeSql",
+          "lineNumber": 311
+        },
+        {
+          "caller": "migrateLocalSeasonSqlDatabase",
+          "callee": "executeSql",
+          "lineNumber": 313
+        },
+        {
+          "caller": "migrateLocalSeasonSqlDatabase",
+          "callee": "executeSql",
+          "lineNumber": 315
+        },
+        {
+          "caller": "migrateLocalSeasonSqlDatabase",
+          "callee": "Date.now",
+          "lineNumber": 319
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "assertLocalSeasonSqlWorkspaceIntegrity",
+          "lineNumber": 328
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "transaction",
+          "lineNumber": 330
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "executeSql",
+          "lineNumber": 331
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "encodeJson",
+          "lineNumber": 347
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "executeSql",
+          "lineNumber": 361
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "insertSourceRows",
+          "lineNumber": 364
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "insertSourceRows",
+          "lineNumber": 365
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "insertFlightRecords",
+          "lineNumber": 366
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "insertFlightRecords",
+          "lineNumber": 367
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "insertModifications",
+          "lineNumber": 368
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "insertModifications",
+          "lineNumber": 369
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "insertModHistory",
+          "lineNumber": 370
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "insertModHistory",
+          "lineNumber": 371
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "insertPendingOps",
+          "lineNumber": 372
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "insertDerivedSeasonal",
+          "lineNumber": 373
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "insertSyncMeta",
+          "lineNumber": 374
+        },
+        {
+          "caller": "saveLocalSeasonSqlWorkspace",
+          "callee": "insertEntityVersions",
+          "lineNumber": 375
+        },
+        {
+          "caller": "insertSourceRows",
+          "callee": "rows.entries",
+          "lineNumber": 385
+        },
+        {
+          "caller": "insertSourceRows",
+          "callee": "executeSql",
+          "lineNumber": 386
+        },
+        {
+          "caller": "insertSourceRows",
+          "callee": "boolToSql",
+          "lineNumber": 390
+        },
+        {
+          "caller": "insertSourceRows",
+          "callee": "encodeJson",
+          "lineNumber": 390
+        },
+        {
+          "caller": "insertFlightRecords",
+          "callee": "records.entries",
+          "lineNumber": 401
+        },
+        {
+          "caller": "insertFlightRecords",
+          "callee": "executeSql",
+          "lineNumber": 402
+        },
+        {
+          "caller": "insertFlightRecords",
+          "callee": "boolToSql",
+          "lineNumber": 411
+        },
+        {
+          "caller": "insertFlightRecords",
+          "callee": "encodeJson",
+          "lineNumber": 421
+        },
+        {
+          "caller": "insertFlightRecords",
+          "callee": "encodeJson",
+          "lineNumber": 425
+        },
+        {
+          "caller": "insertModifications",
+          "callee": "entries.entries",
+          "lineNumber": 437
+        },
+        {
+          "caller": "insertModifications",
+          "callee": "executeSql",
+          "lineNumber": 438
+        },
+        {
+          "caller": "insertModifications",
+          "callee": "boolToSql",
+          "lineNumber": 446
+        },
+        {
+          "caller": "insertModifications",
+          "callee": "encodeJson",
+          "lineNumber": 451
+        },
+        {
+          "caller": "insertModifications",
+          "callee": "encodeJson",
+          "lineNumber": 455
+        },
+        {
+          "caller": "insertModHistory",
+          "callee": "entries.entries",
+          "lineNumber": 467
+        },
+        {
+          "caller": "insertModHistory",
+          "callee": "executeSql",
+          "lineNumber": 468
+        },
+        {
+          "caller": "insertModHistory",
+          "callee": "boolToSql",
+          "lineNumber": 472
+        },
+        {
+          "caller": "insertModHistory",
+          "callee": "encodeJson",
+          "lineNumber": 472
+        },
+        {
+          "caller": "insertPendingOps",
+          "callee": "pendingOps.entries",
+          "lineNumber": 482
+        },
+        {
+          "caller": "insertPendingOps",
+          "callee": "executeSql",
+          "lineNumber": 483
+        },
+        {
+          "caller": "insertPendingOps",
+          "callee": "opKey",
+          "lineNumber": 487
+        },
+        {
+          "caller": "insertPendingOps",
+          "callee": "encodeJson",
+          "lineNumber": 487
+        },
+        {
+          "caller": "insertDerivedSeasonal",
+          "callee": "executeSql",
+          "lineNumber": 497
+        },
+        {
+          "caller": "insertDerivedSeasonal",
+          "callee": "encodeJson",
+          "lineNumber": 499
+        },
+        {
+          "caller": "insertSyncMeta",
+          "callee": "executeSql",
+          "lineNumber": 508
+        },
+        {
+          "caller": "insertSyncMeta",
+          "callee": "encodeJson",
+          "lineNumber": 518
+        },
+        {
+          "caller": "insertEntityVersions",
+          "callee": "Object.entries",
+          "lineNumber": 528
+        },
+        {
+          "caller": "insertEntityVersions",
+          "callee": "Object.entries",
+          "lineNumber": 529
+        },
+        {
+          "caller": "insertEntityVersions",
+          "callee": "executeSql",
+          "lineNumber": 530
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "await db.select",
+          "lineNumber": 544
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "Promise.all",
+          "lineNumber": 563
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "loadJsonRows",
+          "lineNumber": 564
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "loadJsonRows",
+          "lineNumber": 565
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "loadJsonRows",
+          "lineNumber": 566
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "loadJsonRows",
+          "lineNumber": 567
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "loadModificationEntries",
+          "lineNumber": 568
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "loadModificationEntries",
+          "lineNumber": 569
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "loadJsonRows",
+          "lineNumber": 570
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "loadJsonRows",
+          "lineNumber": 571
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "loadPendingOps",
+          "lineNumber": 572
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "db.select",
+          "lineNumber": 573
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "db.select",
+          "lineNumber": 574
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "db.select",
+          "lineNumber": 575
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "payload",
+          "lineNumber": 584
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "payload",
+          "lineNumber": 594
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "buildEntityVersionMap",
+          "lineNumber": 595
+        },
+        {
+          "caller": "loadLocalSeasonSqlWorkspace",
+          "callee": "payload",
+          "lineNumber": 597
+        },
+        {
+          "caller": "loadJsonRows",
+          "callee": "await db.select",
+          "lineNumber": 608
+        },
+        {
+          "caller": "loadJsonRows",
+          "callee": "boolToSql",
+          "lineNumber": 612
+        },
+        {
+          "caller": "loadJsonRows",
+          "callee": "rows.map",
+          "lineNumber": 614
+        },
+        {
+          "caller": "loadJsonRows",
+          "callee": "payload",
+          "lineNumber": 614
+        },
+        {
+          "caller": "loadModificationEntries",
+          "callee": "boolToSql",
+          "lineNumber": 623
+        },
+        {
+          "caller": "loadModificationEntries",
+          "callee": "placeholders",
+          "lineNumber": 625
+        },
+        {
+          "caller": "loadModificationEntries",
+          "callee": "params.push",
+          "lineNumber": 627
+        },
+        {
+          "caller": "loadModificationEntries",
+          "callee": "await db.select",
+          "lineNumber": 628
+        },
+        {
+          "caller": "loadModificationEntries",
+          "callee": "rows.map",
+          "lineNumber": 635
+        },
+        {
+          "caller": "loadModificationEntries",
+          "callee": "String",
+          "lineNumber": 635
+        },
+        {
+          "caller": "loadModificationEntries",
+          "callee": "payload",
+          "lineNumber": 635
+        },
+        {
+          "caller": "loadModificationEntries",
+          "callee": "String",
+          "lineNumber": 635
+        },
+        {
+          "caller": "loadPendingOps",
+          "callee": "await db.select",
+          "lineNumber": 642
+        },
+        {
+          "caller": "loadPendingOps",
+          "callee": "rows.map",
+          "lineNumber": 649
+        },
+        {
+          "caller": "loadPendingOps",
+          "callee": "payload",
+          "lineNumber": 649
+        },
+        {
+          "caller": "buildEntityVersionMap",
+          "callee": "String",
+          "lineNumber": 657
+        },
+        {
+          "caller": "buildEntityVersionMap",
+          "callee": "String",
+          "lineNumber": 658
+        },
+        {
+          "caller": "buildEntityVersionMap",
+          "callee": "Number",
+          "lineNumber": 659
+        },
+        {
+          "caller": "assertLocalSeasonSqlWorkspaceIntegrity",
+          "callee": "Math.max",
+          "lineNumber": 672
+        },
+        {
+          "caller": "assertLocalSeasonSqlWorkspaceIntegrity",
+          "callee": "Number",
+          "lineNumber": 673
+        },
+        {
+          "caller": "assertLocalSeasonSqlWorkspaceIntegrity",
+          "callee": "countGeneratedFlightRecords",
+          "lineNumber": 674
+        },
+        {
+          "caller": "assertLocalSeasonSqlWorkspaceIntegrity",
+          "callee": "countGeneratedFlightRecords",
+          "lineNumber": 675
+        },
+        {
+          "caller": "countGeneratedFlightRecords",
+          "callee": "parseSourceRowDate",
+          "lineNumber": 690
+        },
+        {
+          "caller": "countGeneratedFlightRecords",
+          "callee": "parseSourceRowDate",
+          "lineNumber": 691
+        },
+        {
+          "caller": "countGeneratedFlightRecords",
+          "callee": "cursor.getDay",
+          "lineNumber": 698
+        },
+        {
+          "caller": "countGeneratedFlightRecords",
+          "callee": "cursor.setDate",
+          "lineNumber": 701
+        },
+        {
+          "caller": "countGeneratedFlightRecords",
+          "callee": "cursor.getDate",
+          "lineNumber": 701
+        },
+        {
+          "caller": "parseSourceRowDate",
+          "callee": "value.trim",
+          "lineNumber": 708
+        },
+        {
+          "caller": "parseSourceRowDate",
+          "callee": "value.trim",
+          "lineNumber": 709
+        },
+        {
+          "caller": "parseSourceRowDate",
+          "callee": "/^(\\d{4})-(\\d{2})-(\\d{2})$/.exec",
+          "lineNumber": 710
+        },
+        {
+          "caller": "parseSourceRowDate",
+          "callee": "Number",
+          "lineNumber": 711
+        },
+        {
+          "caller": "parseSourceRowDate",
+          "callee": "Number",
+          "lineNumber": 711
+        },
+        {
+          "caller": "parseSourceRowDate",
+          "callee": "Number",
+          "lineNumber": 711
+        },
+        {
+          "caller": "parseSourceRowDate",
+          "callee": "/^(\\d{1,2})[-\\s/]([A-Za-z]{3})[-\\s/](\\d{2}|\\d{4})$/.exec",
+          "lineNumber": 712
+        },
+        {
+          "caller": "parseSourceRowDate",
+          "callee": "dmy[2].toLowerCase",
+          "lineNumber": 714
+        },
+        {
+          "caller": "parseSourceRowDate",
+          "callee": "Number",
+          "lineNumber": 716
+        },
+        {
+          "caller": "parseSourceRowDate",
+          "callee": "Number",
+          "lineNumber": 718
+        },
+        {
+          "caller": "readLocalSeasonSqlDeltaState",
+          "callee": "await db.select",
+          "lineNumber": 741
+        },
+        {
+          "caller": "readLocalSeasonSqlDeltaState",
+          "callee": "Array.from",
+          "lineNumber": 747
+        },
+        {
+          "caller": "readLocalSeasonSqlDeltaState",
+          "callee": "Promise.all",
+          "lineNumber": 754
+        },
+        {
+          "caller": "readLocalSeasonSqlDeltaState",
+          "callee": "loadPendingOps",
+          "lineNumber": 755
+        },
+        {
+          "caller": "readLocalSeasonSqlDeltaState",
+          "callee": "db.select",
+          "lineNumber": 756
+        },
+        {
+          "caller": "readLocalSeasonSqlDeltaState",
+          "callee": "loadModificationEntries",
+          "lineNumber": 757
+        },
+        {
+          "caller": "readLocalSeasonSqlDeltaState",
+          "callee": "loadModificationEntries",
+          "lineNumber": 758
+        },
+        {
+          "caller": "readLocalSeasonSqlDeltaState",
+          "callee": "loadFlightRecordsByIds",
+          "lineNumber": 759
+        },
+        {
+          "caller": "readLocalSeasonSqlDeltaState",
+          "callee": "payload",
+          "lineNumber": 763
+        },
+        {
+          "caller": "readLocalSeasonSqlDeltaState",
+          "callee": "payload",
+          "lineNumber": 766
+        },
+        {
+          "caller": "loadFlightRecordsByIds",
+          "callee": "await db.select",
+          "lineNumber": 781
+        },
+        {
+          "caller": "loadFlightRecordsByIds",
+          "callee": "placeholders",
+          "lineNumber": 784
+        },
+        {
+          "caller": "loadFlightRecordsByIds",
+          "callee": "boolToSql",
+          "lineNumber": 786
+        },
+        {
+          "caller": "loadFlightRecordsByIds",
+          "callee": "rows.map",
+          "lineNumber": 788
+        },
+        {
+          "caller": "loadFlightRecordsByIds",
+          "callee": "payload",
+          "lineNumber": 788
+        },
+        {
+          "caller": "replaceLocalSeasonSqlPendingState",
+          "callee": "transaction",
+          "lineNumber": 797
+        },
+        {
+          "caller": "replaceLocalSeasonSqlPendingState",
+          "callee": "executeSql",
+          "lineNumber": 798
+        },
+        {
+          "caller": "replaceLocalSeasonSqlPendingState",
+          "callee": "executeSql",
+          "lineNumber": 799
+        },
+        {
+          "caller": "replaceLocalSeasonSqlPendingState",
+          "callee": "executeSql",
+          "lineNumber": 800
+        },
+        {
+          "caller": "replaceLocalSeasonSqlPendingState",
+          "callee": "insertPendingOps",
+          "lineNumber": 801
+        },
+        {
+          "caller": "replaceLocalSeasonSqlPendingState",
+          "callee": "insertDerivedSeasonal",
+          "lineNumber": 802
+        },
+        {
+          "caller": "replaceLocalSeasonSqlPendingState",
+          "callee": "insertSyncMeta",
+          "lineNumber": 803
+        },
+        {
+          "caller": "listLocalSeasonSqlWorkspaceIds",
+          "callee": "await db.select",
+          "lineNumber": 808
+        },
+        {
+          "caller": "listLocalSeasonSqlWorkspaceIds",
+          "callee": "rows.map",
+          "lineNumber": 811
+        },
+        {
+          "caller": "listLocalSeasonSqlWorkspaceIds",
+          "callee": "String",
+          "lineNumber": 811
+        },
+        {
+          "caller": "clearLocalSeasonSqlWorkspaces",
+          "callee": "transaction",
+          "lineNumber": 815
+        },
+        {
+          "caller": "clearLocalSeasonSqlWorkspaces",
+          "callee": "executeSql",
+          "lineNumber": 827
+        },
+        {
+          "caller": "readLocalSeasonSqlSyncMeta",
+          "callee": "await db.select",
+          "lineNumber": 836
+        },
+        {
+          "caller": "readLocalSeasonSqlSyncMeta",
+          "callee": "payload",
+          "lineNumber": 840
+        },
+        {
+          "caller": "setLocalSeasonSqlSyncMeta",
+          "callee": "transaction",
+          "lineNumber": 848
+        },
+        {
+          "caller": "setLocalSeasonSqlSyncMeta",
+          "callee": "executeSql",
+          "lineNumber": 849
+        },
+        {
+          "caller": "setLocalSeasonSqlSyncMeta",
+          "callee": "insertSyncMeta",
+          "lineNumber": 850
+        },
+        {
+          "caller": "saveLocalSeasonIndexedDbBackup",
+          "callee": "executeSql",
+          "lineNumber": 859
+        },
+        {
+          "caller": "saveLocalSeasonIndexedDbBackup",
+          "callee": "Date.now",
+          "lineNumber": 862
+        },
+        {
+          "caller": "saveLocalSeasonIndexedDbBackup",
+          "callee": "encodeJson",
+          "lineNumber": 862
+        },
+        {
+          "caller": "restoreLatestLocalSeasonSqlBackup",
+          "callee": "await db.select",
+          "lineNumber": 870
+        },
+        {
+          "caller": "restoreLatestLocalSeasonSqlBackup",
+          "callee": "payload",
+          "lineNumber": 879
+        },
+        {
+          "caller": "restoreLatestLocalSeasonSqlBackup",
+          "callee": "saveLocalSeasonSqlWorkspace",
+          "lineNumber": 886
+        },
+        {
+          "caller": "restoreLatestLocalSeasonSqlBackup",
+          "callee": "Number",
+          "lineNumber": 889
+        },
+        {
+          "caller": "getLocalSeasonSqlKv",
+          "callee": "await db.select",
+          "lineNumber": 903
+        },
+        {
+          "caller": "getLocalSeasonSqlKv",
+          "callee": "decodeJson",
+          "lineNumber": 907
+        },
+        {
+          "caller": "setLocalSeasonSqlKv",
+          "callee": "executeSql",
+          "lineNumber": 915
+        },
+        {
+          "caller": "setLocalSeasonSqlKv",
+          "callee": "encodeJson",
+          "lineNumber": 919
+        },
+        {
+          "caller": "setLocalSeasonSqlKv",
+          "callee": "Date.now",
+          "lineNumber": 919
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 18,
+        "functionCount": 44,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "localSeasonStore.ts",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 1160,
+      "nonEmptyLines": 1070,
+      "functions": [
+        {
+          "name": "isNativeLocalRuntime",
+          "startLine": 134,
+          "endLine": 136,
+          "params": []
+        },
+        {
+          "name": "isNativeFullWorkspaceSaveAllowed",
+          "startLine": 138,
+          "endLine": 140,
+          "params": [
+            "options"
+          ]
+        },
+        {
+          "name": "canUseIndexedDb",
+          "startLine": 142,
+          "endLine": 144,
+          "params": []
+        },
+        {
+          "name": "getDb",
+          "startLine": 146,
+          "endLine": 162,
+          "params": []
+        },
+        {
+          "name": "closeLocalSeasonDb",
+          "startLine": 164,
+          "endLine": 176,
+          "params": []
+        },
+        {
+          "name": "serializeModificationMap",
+          "startLine": 178,
+          "endLine": 185,
+          "params": [
+            "modifications"
+          ]
+        },
+        {
+          "name": "deserializeModificationEntries",
+          "startLine": 187,
+          "endLine": 191,
+          "params": [
+            "entries"
+          ]
+        },
+        {
+          "name": "pickHydratedModificationsById",
+          "startLine": 193,
+          "endLine": 203,
+          "params": [
+            "entries",
+            "legIds"
+          ]
+        },
+        {
+          "name": "buildInitialSyncMeta",
+          "startLine": 205,
+          "endLine": 219,
+          "params": [
+            "season",
+            "options"
+          ]
+        },
+        {
+          "name": "cloneJson",
+          "startLine": 221,
+          "endLine": 223,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "stableStringify",
+          "startLine": 225,
+          "endLine": 232,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "isSameValue",
+          "startLine": 234,
+          "endLine": 236,
+          "params": [
+            "left",
+            "right"
+          ]
+        },
+        {
+          "name": "isNoOpModificationAgainstBaseRecord",
+          "startLine": 238,
+          "endLine": 266,
+          "params": [
+            "mod",
+            "baseRecord"
+          ]
+        },
+        {
+          "name": "serializePendingOp",
+          "startLine": 268,
+          "endLine": 282,
+          "params": [
+            "op"
+          ]
+        },
+        {
+          "name": "hydratePendingOp",
+          "startLine": 284,
+          "endLine": 298,
+          "params": [
+            "op"
+          ]
+        },
+        {
+          "name": "applyPendingOpsToStoredSeasonData",
+          "startLine": 300,
+          "endLine": 349,
+          "params": [
+            "data",
+            "pendingOps"
+          ]
+        },
+        {
+          "name": "pickHydratedRecordsById",
+          "startLine": 351,
+          "endLine": 361,
+          "params": [
+            "records",
+            "recordIds"
+          ]
+        },
+        {
+          "name": "buildNextSyncMeta",
+          "startLine": 363,
+          "endLine": 378,
+          "params": [
+            "current",
+            "season",
+            "pendingCount",
+            "changedAt"
+          ]
+        },
+        {
+          "name": "createLocalWorkspace",
+          "startLine": 380,
+          "endLine": 432,
+          "params": [
+            "{\n  season,\n  rows,\n  records,\n  modifications,\n  modHistory,\n  baseRows,\n  baseRecords,\n  baseModificationEntries,\n  baseModHistory,\n  pendingOps = [],\n  derivedSeasonal = null,\n  entityVersions = {},\n  serverEventHighWater,\n  syncMeta,\n}"
+          ]
+        },
+        {
+          "name": "pendingKey",
+          "startLine": 434,
+          "endLine": 440,
+          "params": [
+            "op"
+          ]
+        },
+        {
+          "name": "mergePendingOps",
+          "startLine": 442,
+          "endLine": 446,
+          "params": [
+            "ops"
+          ]
+        },
+        {
+          "name": "rebuildPendingOpsFromBaseline",
+          "startLine": 448,
+          "endLine": 502,
+          "params": [
+            "workspace",
+            "changedAt"
+          ]
+        },
+        {
+          "name": "markDerivedSeasonalDirty",
+          "startLine": 504,
+          "endLine": 513,
+          "params": [
+            "workspace"
+          ]
+        },
+        {
+          "name": "withPendingOps",
+          "startLine": 515,
+          "endLine": 517,
+          "params": [
+            "workspace"
+          ]
+        },
+        {
+          "name": "serializeWorkspaceForSql",
+          "startLine": 519,
+          "endLine": 535,
+          "params": [
+            "workspace"
+          ]
+        },
+        {
+          "name": "hydrateWorkspaceFromSql",
+          "startLine": 537,
+          "endLine": 570,
+          "params": [
+            "stored"
+          ]
+        },
+        {
+          "name": "ensureSqlSeededFromIndexedDb",
+          "startLine": 572,
+          "endLine": 601,
+          "params": [
+            "sqlDb"
+          ]
+        },
+        {
+          "name": "getSqlDbForLocalStore",
+          "startLine": 603,
+          "endLine": 608,
+          "params": []
+        },
+        {
+          "name": "saveLocalSeasonWorkspace",
+          "startLine": 610,
+          "endLine": 626,
+          "params": [
+            "workspace",
+            "options"
+          ]
+        },
+        {
+          "name": "saveIndexedDbLocalSeasonWorkspace",
+          "startLine": 628,
+          "endLine": 656,
+          "params": [
+            "workspace"
+          ]
+        },
+        {
+          "name": "clearAllLocalSeasonWorkspaces",
+          "startLine": 658,
+          "endLine": 674,
+          "params": []
+        },
+        {
+          "name": "listLocalSeasonWorkspaceIds",
+          "startLine": 676,
+          "endLine": 680,
+          "params": []
+        },
+        {
+          "name": "listIndexedDbLocalSeasonWorkspaceIds",
+          "startLine": 682,
+          "endLine": 687,
+          "params": []
+        },
+        {
+          "name": "discardLocalPendingChanges",
+          "startLine": 689,
+          "endLine": 712,
+          "params": [
+            "seasonId"
+          ]
+        },
+        {
+          "name": "discardAllLocalPendingChanges",
+          "startLine": 714,
+          "endLine": 732,
+          "params": []
+        },
+        {
+          "name": "loadLocalSeasonWorkspace",
+          "startLine": 734,
+          "endLine": 741,
+          "params": [
+            "seasonId"
+          ]
+        },
+        {
+          "name": "loadIndexedDbLocalSeasonWorkspace",
+          "startLine": 743,
+          "endLine": 778,
+          "params": [
+            "seasonId"
+          ]
+        },
+        {
+          "name": "applyLocalModificationBatchDelta",
+          "startLine": 780,
+          "endLine": 988,
+          "params": [
+            "seasonId",
+            "mods",
+            "history"
+          ]
+        },
+        {
+          "name": "applyLocalFlightRecordMutation",
+          "startLine": 990,
+          "endLine": 1026,
+          "params": [
+            "seasonId",
+            "result",
+            "historyEntry"
+          ]
+        },
+        {
+          "name": "applyLocalModificationBatch",
+          "startLine": 1028,
+          "endLine": 1057,
+          "params": [
+            "seasonId",
+            "mods",
+            "historyEntry"
+          ]
+        },
+        {
+          "name": "applyLocalSourceRows",
+          "startLine": 1059,
+          "endLine": 1092,
+          "params": [
+            "seasonId",
+            "rows",
+            "records",
+            "historyEntry"
+          ]
+        },
+        {
+          "name": "getPendingSyncSummary",
+          "startLine": 1094,
+          "endLine": 1136,
+          "params": [
+            "seasonId"
+          ]
+        },
+        {
+          "name": "updateLocalSyncMeta",
+          "startLine": 1138,
+          "endLine": 1160,
+          "params": [
+            "seasonId",
+            "syncMeta"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "serializeModificationMap",
+          "line": 178,
+          "isDefault": false
+        },
+        {
+          "name": "deserializeModificationEntries",
+          "line": 187,
+          "isDefault": false
+        },
+        {
+          "name": "buildInitialSyncMeta",
+          "line": 205,
+          "isDefault": false
+        },
+        {
+          "name": "createLocalWorkspace",
+          "line": 380,
+          "isDefault": false
+        },
+        {
+          "name": "mergePendingOps",
+          "line": 442,
+          "isDefault": false
+        },
+        {
+          "name": "rebuildPendingOpsFromBaseline",
+          "line": 448,
+          "isDefault": false
+        },
+        {
+          "name": "markDerivedSeasonalDirty",
+          "line": 504,
+          "isDefault": false
+        },
+        {
+          "name": "saveLocalSeasonWorkspace",
+          "line": 610,
+          "isDefault": false
+        },
+        {
+          "name": "clearAllLocalSeasonWorkspaces",
+          "line": 658,
+          "isDefault": false
+        },
+        {
+          "name": "discardLocalPendingChanges",
+          "line": 689,
+          "isDefault": false
+        },
+        {
+          "name": "discardAllLocalPendingChanges",
+          "line": 714,
+          "isDefault": false
+        },
+        {
+          "name": "loadLocalSeasonWorkspace",
+          "line": 734,
+          "isDefault": false
+        },
+        {
+          "name": "applyLocalModificationBatchDelta",
+          "line": 780,
+          "isDefault": false
+        },
+        {
+          "name": "applyLocalFlightRecordMutation",
+          "line": 990,
+          "isDefault": false
+        },
+        {
+          "name": "applyLocalModificationBatch",
+          "line": 1028,
+          "isDefault": false
+        },
+        {
+          "name": "applyLocalSourceRows",
+          "line": 1059,
+          "isDefault": false
+        },
+        {
+          "name": "getPendingSyncSummary",
+          "line": 1094,
+          "isDefault": false
+        },
+        {
+          "name": "updateLocalSyncMeta",
+          "line": 1138,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "isNativeLocalRuntime",
+          "callee": "isTauriRuntime",
+          "lineNumber": 135
+        },
+        {
+          "caller": "isNativeFullWorkspaceSaveAllowed",
+          "callee": "Boolean",
+          "lineNumber": 139
+        },
+        {
+          "caller": "getDb",
+          "callee": "Promise.reject",
+          "lineNumber": 148
+        },
+        {
+          "caller": "getDb",
+          "callee": "openDB",
+          "lineNumber": 151
+        },
+        {
+          "caller": "upgrade",
+          "callee": "db.objectStoreNames.contains",
+          "lineNumber": 153
+        },
+        {
+          "caller": "upgrade",
+          "callee": "db.createObjectStore",
+          "lineNumber": 153
+        },
+        {
+          "caller": "upgrade",
+          "callee": "db.objectStoreNames.contains",
+          "lineNumber": 154
+        },
+        {
+          "caller": "upgrade",
+          "callee": "db.createObjectStore",
+          "lineNumber": 154
+        },
+        {
+          "caller": "upgrade",
+          "callee": "db.objectStoreNames.contains",
+          "lineNumber": 155
+        },
+        {
+          "caller": "upgrade",
+          "callee": "db.createObjectStore",
+          "lineNumber": 155
+        },
+        {
+          "caller": "upgrade",
+          "callee": "db.objectStoreNames.contains",
+          "lineNumber": 156
+        },
+        {
+          "caller": "upgrade",
+          "callee": "db.createObjectStore",
+          "lineNumber": 156
+        },
+        {
+          "caller": "upgrade",
+          "callee": "db.objectStoreNames.contains",
+          "lineNumber": 157
+        },
+        {
+          "caller": "upgrade",
+          "callee": "db.createObjectStore",
+          "lineNumber": 157
+        },
+        {
+          "caller": "closeLocalSeasonDb",
+          "callee": "db.close",
+          "lineNumber": 171
+        },
+        {
+          "caller": "serializeModificationMap",
+          "callee": "Array.from(modifications.entries()).map",
+          "lineNumber": 181
+        },
+        {
+          "caller": "serializeModificationMap",
+          "callee": "Array.from",
+          "lineNumber": 181
+        },
+        {
+          "caller": "serializeModificationMap",
+          "callee": "modifications.entries",
+          "lineNumber": 181
+        },
+        {
+          "caller": "serializeModificationMap",
+          "callee": "serializeFlightModificationForPersistence",
+          "lineNumber": 183
+        },
+        {
+          "caller": "deserializeModificationEntries",
+          "callee": "entries.map",
+          "lineNumber": 190
+        },
+        {
+          "caller": "deserializeModificationEntries",
+          "callee": "hydrateFlightModificationFromPersistence",
+          "lineNumber": 190
+        },
+        {
+          "caller": "pickHydratedModificationsById",
+          "callee": "legIds.has",
+          "lineNumber": 199
+        },
+        {
+          "caller": "pickHydratedModificationsById",
+          "callee": "picked.set",
+          "lineNumber": 200
+        },
+        {
+          "caller": "pickHydratedModificationsById",
+          "callee": "hydrateFlightModificationFromPersistence",
+          "lineNumber": 200
+        },
+        {
+          "caller": "cloneJson",
+          "callee": "JSON.parse",
+          "lineNumber": 222
+        },
+        {
+          "caller": "cloneJson",
+          "callee": "JSON.stringify",
+          "lineNumber": 222
+        },
+        {
+          "caller": "stableStringify",
+          "callee": "JSON.stringify",
+          "lineNumber": 226
+        },
+        {
+          "caller": "stableStringify",
+          "callee": "Array.isArray",
+          "lineNumber": 227
+        },
+        {
+          "caller": "stableStringify",
+          "callee": "value.map((item) => stableStringify(item)).join",
+          "lineNumber": 227
+        },
+        {
+          "caller": "stableStringify",
+          "callee": "value.map",
+          "lineNumber": 227
+        },
+        {
+          "caller": "stableStringify",
+          "callee": "stableStringify",
+          "lineNumber": 227
+        },
+        {
+          "caller": "stableStringify",
+          "callee": "Object.entries(value as Record<string, unknown>)\n    .filter(([, entryValue]) => entryValue !== undefined)\n    .sort",
+          "lineNumber": 228
+        },
+        {
+          "caller": "stableStringify",
+          "callee": "Object.entries(value as Record<string, unknown>)\n    .filter",
+          "lineNumber": 228
+        },
+        {
+          "caller": "stableStringify",
+          "callee": "Object.entries",
+          "lineNumber": 228
+        },
+        {
+          "caller": "stableStringify",
+          "callee": "a.localeCompare",
+          "lineNumber": 230
+        },
+        {
+          "caller": "stableStringify",
+          "callee": "entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`).join",
+          "lineNumber": 231
+        },
+        {
+          "caller": "stableStringify",
+          "callee": "entries.map",
+          "lineNumber": 231
+        },
+        {
+          "caller": "stableStringify",
+          "callee": "JSON.stringify",
+          "lineNumber": 231
+        },
+        {
+          "caller": "stableStringify",
+          "callee": "stableStringify",
+          "lineNumber": 231
+        },
+        {
+          "caller": "isSameValue",
+          "callee": "stableStringify",
+          "lineNumber": 235
+        },
+        {
+          "caller": "isSameValue",
+          "callee": "stableStringify",
+          "lineNumber": 235
+        },
+        {
+          "caller": "isNoOpModificationAgainstBaseRecord",
+          "callee": "fieldPairs.every",
+          "lineNumber": 262
+        },
+        {
+          "caller": "isNoOpModificationAgainstBaseRecord",
+          "callee": "isSameValue",
+          "lineNumber": 264
+        },
+        {
+          "caller": "serializePendingOp",
+          "callee": "serializeSourceRowForPersistence",
+          "lineNumber": 270
+        },
+        {
+          "caller": "serializePendingOp",
+          "callee": "serializeFlightRecordForPersistence",
+          "lineNumber": 273
+        },
+        {
+          "caller": "serializePendingOp",
+          "callee": "serializeFlightModificationForPersistence",
+          "lineNumber": 276
+        },
+        {
+          "caller": "serializePendingOp",
+          "callee": "serializeModHistoryEntryForPersistence",
+          "lineNumber": 279
+        },
+        {
+          "caller": "hydratePendingOp",
+          "callee": "hydrateSourceRowFromPersistence",
+          "lineNumber": 286
+        },
+        {
+          "caller": "hydratePendingOp",
+          "callee": "hydrateFlightRecordFromPersistence",
+          "lineNumber": 289
+        },
+        {
+          "caller": "hydratePendingOp",
+          "callee": "hydrateFlightModificationFromPersistence",
+          "lineNumber": 292
+        },
+        {
+          "caller": "hydratePendingOp",
+          "callee": "hydrateModHistoryEntryFromPersistence",
+          "lineNumber": 295
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "hydrateSourceRowFromPersistence",
+          "lineNumber": 311
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "rowsByIndex.set",
+          "lineNumber": 312
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "hydrateFlightRecordFromPersistence",
+          "lineNumber": 317
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "recordsById.set",
+          "lineNumber": 318
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "deserializeModificationEntries",
+          "lineNumber": 321
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "data.modHistory.map",
+          "lineNumber": 322
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "hydrateModHistoryEntryFromPersistence",
+          "lineNumber": 322
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "modHistory.map",
+          "lineNumber": 323
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "rowsByIndex.set",
+          "lineNumber": 329
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "recordsById.set",
+          "lineNumber": 332
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "modifications.set",
+          "lineNumber": 334
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "modifications.delete",
+          "lineNumber": 336
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "modHistoryIds.has",
+          "lineNumber": 337
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "pendingHistory.push",
+          "lineNumber": 338
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "modHistoryIds.add",
+          "lineNumber": 339
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "Array.from",
+          "lineNumber": 344
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "rowsByIndex.values",
+          "lineNumber": 344
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "Array.from",
+          "lineNumber": 345
+        },
+        {
+          "caller": "applyPendingOpsToStoredSeasonData",
+          "callee": "recordsById.values",
+          "lineNumber": 345
+        },
+        {
+          "caller": "pickHydratedRecordsById",
+          "callee": "recordIds.has",
+          "lineNumber": 357
+        },
+        {
+          "caller": "pickHydratedRecordsById",
+          "callee": "picked.set",
+          "lineNumber": 358
+        },
+        {
+          "caller": "pickHydratedRecordsById",
+          "callee": "hydrateFlightRecordFromPersistence",
+          "lineNumber": 358
+        },
+        {
+          "caller": "buildNextSyncMeta",
+          "callee": "buildInitialSyncMeta",
+          "lineNumber": 369
+        },
+        {
+          "caller": "createLocalWorkspace",
+          "callee": "mergePendingOps",
+          "lineNumber": 411
+        },
+        {
+          "caller": "createLocalWorkspace",
+          "callee": "buildInitialSyncMeta",
+          "lineNumber": 412
+        },
+        {
+          "caller": "createLocalWorkspace",
+          "callee": "cloneJson",
+          "lineNumber": 419
+        },
+        {
+          "caller": "createLocalWorkspace",
+          "callee": "cloneJson",
+          "lineNumber": 420
+        },
+        {
+          "caller": "createLocalWorkspace",
+          "callee": "serializeModificationMap",
+          "lineNumber": 421
+        },
+        {
+          "caller": "createLocalWorkspace",
+          "callee": "cloneJson",
+          "lineNumber": 422
+        },
+        {
+          "caller": "createLocalWorkspace",
+          "callee": "cloneJson",
+          "lineNumber": 425
+        },
+        {
+          "caller": "mergePendingOps",
+          "callee": "byKey.set",
+          "lineNumber": 444
+        },
+        {
+          "caller": "mergePendingOps",
+          "callee": "pendingKey",
+          "lineNumber": 444
+        },
+        {
+          "caller": "mergePendingOps",
+          "callee": "Array.from",
+          "lineNumber": 445
+        },
+        {
+          "caller": "mergePendingOps",
+          "callee": "byKey.values",
+          "lineNumber": 445
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "workspace.baseRows.map",
+          "lineNumber": 453
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "baseRowsByIndex.get",
+          "lineNumber": 455
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "isSameValue",
+          "lineNumber": 456
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "pendingOps.push",
+          "lineNumber": 456
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "workspace.baseRecords.map",
+          "lineNumber": 459
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "baseRecordsById.get",
+          "lineNumber": 461
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "isSameValue",
+          "lineNumber": 462
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "pendingOps.push",
+          "lineNumber": 462
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "deserializeModificationEntries",
+          "lineNumber": 465
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "baseMods.has",
+          "lineNumber": 468
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "isNoOpModificationAgainstBaseRecord",
+          "lineNumber": 468
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "baseRecordsById.get",
+          "lineNumber": 468
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "normalizedMods.delete",
+          "lineNumber": 469
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "baseMods.get",
+          "lineNumber": 474
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "isSameValue",
+          "lineNumber": 475
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "pendingOps.push",
+          "lineNumber": 475
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "baseMods.keys",
+          "lineNumber": 477
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "normalizedMods.has",
+          "lineNumber": 478
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "pendingOps.push",
+          "lineNumber": 478
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "pendingOps.some",
+          "lineNumber": 481
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "workspace.baseModHistory.map",
+          "lineNumber": 483
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "baseHistoryIds.has",
+          "lineNumber": 485
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "pendingOps.push",
+          "lineNumber": 485
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "mergePendingOps",
+          "lineNumber": 489
+        },
+        {
+          "caller": "rebuildPendingOpsFromBaseline",
+          "callee": "Date.now",
+          "lineNumber": 498
+        },
+        {
+          "caller": "withPendingOps",
+          "callee": "markDerivedSeasonalDirty",
+          "lineNumber": 516
+        },
+        {
+          "caller": "withPendingOps",
+          "callee": "rebuildPendingOpsFromBaseline",
+          "lineNumber": 516
+        },
+        {
+          "caller": "withPendingOps",
+          "callee": "Date.now",
+          "lineNumber": 516
+        },
+        {
+          "caller": "serializeWorkspaceForSql",
+          "callee": "workspace.rows.map",
+          "lineNumber": 522
+        },
+        {
+          "caller": "serializeWorkspaceForSql",
+          "callee": "workspace.records.map",
+          "lineNumber": 523
+        },
+        {
+          "caller": "serializeWorkspaceForSql",
+          "callee": "serializeModificationMap",
+          "lineNumber": 524
+        },
+        {
+          "caller": "serializeWorkspaceForSql",
+          "callee": "workspace.modHistory.map",
+          "lineNumber": 525
+        },
+        {
+          "caller": "serializeWorkspaceForSql",
+          "callee": "workspace.baseRows.map",
+          "lineNumber": 526
+        },
+        {
+          "caller": "serializeWorkspaceForSql",
+          "callee": "workspace.baseRecords.map",
+          "lineNumber": 527
+        },
+        {
+          "caller": "serializeWorkspaceForSql",
+          "callee": "serializeModificationMap",
+          "lineNumber": 528
+        },
+        {
+          "caller": "serializeWorkspaceForSql",
+          "callee": "deserializeModificationEntries",
+          "lineNumber": 528
+        },
+        {
+          "caller": "serializeWorkspaceForSql",
+          "callee": "workspace.baseModHistory.map",
+          "lineNumber": 529
+        },
+        {
+          "caller": "serializeWorkspaceForSql",
+          "callee": "workspace.pendingOps.map",
+          "lineNumber": 530
+        },
+        {
+          "caller": "hydrateWorkspaceFromSql",
+          "callee": "stored.pendingOps.map",
+          "lineNumber": 538
+        },
+        {
+          "caller": "hydrateWorkspaceFromSql",
+          "callee": "applyPendingOpsToStoredSeasonData",
+          "lineNumber": 539
+        },
+        {
+          "caller": "hydrateWorkspaceFromSql",
+          "callee": "(stored.baseRows ?? stored.rows).map",
+          "lineNumber": 550
+        },
+        {
+          "caller": "hydrateWorkspaceFromSql",
+          "callee": "hydrateSourceRowFromPersistence",
+          "lineNumber": 550
+        },
+        {
+          "caller": "hydrateWorkspaceFromSql",
+          "callee": "(stored.baseRecords ?? stored.records).map",
+          "lineNumber": 551
+        },
+        {
+          "caller": "hydrateWorkspaceFromSql",
+          "callee": "hydrateFlightRecordFromPersistence",
+          "lineNumber": 551
+        },
+        {
+          "caller": "hydrateWorkspaceFromSql",
+          "callee": "(stored.baseModificationEntries ?? stored.modificationEntries).map",
+          "lineNumber": 552
+        },
+        {
+          "caller": "hydrateWorkspaceFromSql",
+          "callee": "hydrateFlightModificationFromPersistence",
+          "lineNumber": 552
+        },
+        {
+          "caller": "hydrateWorkspaceFromSql",
+          "callee": "(stored.baseModHistory ?? stored.modHistory).map",
+          "lineNumber": 553
+        },
+        {
+          "caller": "hydrateWorkspaceFromSql",
+          "callee": "hydrateModHistoryEntryFromPersistence",
+          "lineNumber": 553
+        },
+        {
+          "caller": "hydrateWorkspaceFromSql",
+          "callee": "createLocalWorkspace",
+          "lineNumber": 555
+        },
+        {
+          "caller": "ensureSqlSeededFromIndexedDb",
+          "callee": "canUseIndexedDb",
+          "lineNumber": 573
+        },
+        {
+          "caller": "ensureSqlSeededFromIndexedDb",
+          "callee": "setLocalSeasonSqlKv",
+          "lineNumber": 574
+        },
+        {
+          "caller": "ensureSqlSeededFromIndexedDb",
+          "callee": "getLocalSeasonSqlKv",
+          "lineNumber": 577
+        },
+        {
+          "caller": "ensureSqlSeededFromIndexedDb",
+          "callee": "(async () => {\n      const seasonIds = await listIndexedDbLocalSeasonWorkspaceIds();\n      for (const seasonId of seasonIds) {\n        const workspace = await loadIndexedDbLocalSeasonWorkspace(seasonId);\n        if (!workspace) continue;\n        const serialized = serializeWorkspaceForSql(workspace);\n        await saveLocalSeasonIndexedDbBackup(sqlDb, seasonId, serialized);\n        await saveLocalSeasonSqlWorkspace(sqlDb, serialized);\n      }\n      await setLocalSeasonSqlKv(sqlDb, INDEXEDDB_SQL_RESET_KEY, true);\n      databaseResetInProgress = true;\n      try {\n        await closeLocalSeasonDb();\n        await deleteDB(DB_NAME);\n      } finally {\n        databaseResetInProgress = false;\n      }\n    })().finally",
+          "lineNumber": 579
+        },
+        {
+          "caller": "ensureSqlSeededFromIndexedDb",
+          "callee": "(async () => {\n      const seasonIds = await listIndexedDbLocalSeasonWorkspaceIds();\n      for (const seasonId of seasonIds) {\n        const workspace = await loadIndexedDbLocalSeasonWorkspace(seasonId);\n        if (!workspace) continue;\n        const serialized = serializeWorkspaceForSql(workspace);\n        await saveLocalSeasonIndexedDbBackup(sqlDb, seasonId, serialized);\n        await saveLocalSeasonSqlWorkspace(sqlDb, serialized);\n      }\n      await setLocalSeasonSqlKv(sqlDb, INDEXEDDB_SQL_RESET_KEY, true);\n      databaseResetInProgress = true;\n      try {\n        await closeLocalSeasonDb();\n        await deleteDB(DB_NAME);\n      } finally {\n        databaseResetInProgress = false;\n      }\n    })",
+          "lineNumber": 579
+        },
+        {
+          "caller": "ensureSqlSeededFromIndexedDb",
+          "callee": "listIndexedDbLocalSeasonWorkspaceIds",
+          "lineNumber": 580
+        },
+        {
+          "caller": "ensureSqlSeededFromIndexedDb",
+          "callee": "loadIndexedDbLocalSeasonWorkspace",
+          "lineNumber": 582
+        },
+        {
+          "caller": "ensureSqlSeededFromIndexedDb",
+          "callee": "serializeWorkspaceForSql",
+          "lineNumber": 584
+        },
+        {
+          "caller": "ensureSqlSeededFromIndexedDb",
+          "callee": "saveLocalSeasonIndexedDbBackup",
+          "lineNumber": 585
+        },
+        {
+          "caller": "ensureSqlSeededFromIndexedDb",
+          "callee": "saveLocalSeasonSqlWorkspace",
+          "lineNumber": 586
+        },
+        {
+          "caller": "ensureSqlSeededFromIndexedDb",
+          "callee": "setLocalSeasonSqlKv",
+          "lineNumber": 588
+        },
+        {
+          "caller": "ensureSqlSeededFromIndexedDb",
+          "callee": "closeLocalSeasonDb",
+          "lineNumber": 591
+        },
+        {
+          "caller": "ensureSqlSeededFromIndexedDb",
+          "callee": "deleteDB",
+          "lineNumber": 592
+        },
+        {
+          "caller": "getSqlDbForLocalStore",
+          "callee": "getLocalSeasonSqlDatabase",
+          "lineNumber": 604
+        },
+        {
+          "caller": "getSqlDbForLocalStore",
+          "callee": "ensureSqlSeededFromIndexedDb",
+          "lineNumber": 606
+        },
+        {
+          "caller": "saveLocalSeasonWorkspace",
+          "callee": "getSqlDbForLocalStore",
+          "lineNumber": 614
+        },
+        {
+          "caller": "saveLocalSeasonWorkspace",
+          "callee": "isNativeLocalRuntime",
+          "lineNumber": 616
+        },
+        {
+          "caller": "saveLocalSeasonWorkspace",
+          "callee": "isNativeFullWorkspaceSaveAllowed",
+          "lineNumber": 616
+        },
+        {
+          "caller": "saveLocalSeasonWorkspace",
+          "callee": "saveLocalSeasonSqlWorkspace",
+          "lineNumber": 621
+        },
+        {
+          "caller": "saveLocalSeasonWorkspace",
+          "callee": "serializeWorkspaceForSql",
+          "lineNumber": 621
+        },
+        {
+          "caller": "saveLocalSeasonWorkspace",
+          "callee": "memoryWorkspaces.set",
+          "lineNumber": 622
+        },
+        {
+          "caller": "saveLocalSeasonWorkspace",
+          "callee": "saveIndexedDbLocalSeasonWorkspace",
+          "lineNumber": 625
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "canUseIndexedDb",
+          "lineNumber": 629
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "memoryWorkspaces.set",
+          "lineNumber": 630
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "getDb",
+          "lineNumber": 634
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "db.transaction",
+          "lineNumber": 636
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "Promise.all",
+          "lineNumber": 637
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "tx.objectStore('seasonData').put",
+          "lineNumber": 638
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "tx.objectStore",
+          "lineNumber": 638
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "workspace.rows.map",
+          "lineNumber": 641
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "workspace.records.map",
+          "lineNumber": 642
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "serializeModificationMap",
+          "lineNumber": 643
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "workspace.modHistory.map",
+          "lineNumber": 644
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "workspace.baseRows.map",
+          "lineNumber": 645
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "workspace.baseRecords.map",
+          "lineNumber": 646
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "serializeModificationMap",
+          "lineNumber": 647
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "deserializeModificationEntries",
+          "lineNumber": 647
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "workspace.baseModHistory.map",
+          "lineNumber": 648
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "tx.objectStore('pendingOps').put",
+          "lineNumber": 650
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "tx.objectStore",
+          "lineNumber": 650
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "workspace.pendingOps.map",
+          "lineNumber": 650
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "tx.objectStore('derivedSeasonal').put",
+          "lineNumber": 651
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "tx.objectStore",
+          "lineNumber": 651
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "tx.objectStore('syncMeta').put",
+          "lineNumber": 652
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "tx.objectStore",
+          "lineNumber": 652
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "tx.objectStore('entityVersions').put",
+          "lineNumber": 653
+        },
+        {
+          "caller": "saveIndexedDbLocalSeasonWorkspace",
+          "callee": "tx.objectStore",
+          "lineNumber": 653
+        },
+        {
+          "caller": "clearAllLocalSeasonWorkspaces",
+          "callee": "memoryWorkspaces.clear",
+          "lineNumber": 659
+        },
+        {
+          "caller": "clearAllLocalSeasonWorkspaces",
+          "callee": "getLocalSeasonSqlDatabase",
+          "lineNumber": 660
+        },
+        {
+          "caller": "clearAllLocalSeasonWorkspaces",
+          "callee": "clearLocalSeasonSqlWorkspaces",
+          "lineNumber": 662
+        },
+        {
+          "caller": "clearAllLocalSeasonWorkspaces",
+          "callee": "setLocalSeasonSqlKv",
+          "lineNumber": 663
+        },
+        {
+          "caller": "clearAllLocalSeasonWorkspaces",
+          "callee": "canUseIndexedDb",
+          "lineNumber": 665
+        },
+        {
+          "caller": "clearAllLocalSeasonWorkspaces",
+          "callee": "closeLocalSeasonDb",
+          "lineNumber": 669
+        },
+        {
+          "caller": "clearAllLocalSeasonWorkspaces",
+          "callee": "deleteDB",
+          "lineNumber": 670
+        },
+        {
+          "caller": "listLocalSeasonWorkspaceIds",
+          "callee": "getSqlDbForLocalStore",
+          "lineNumber": 677
+        },
+        {
+          "caller": "listLocalSeasonWorkspaceIds",
+          "callee": "listLocalSeasonSqlWorkspaceIds",
+          "lineNumber": 678
+        },
+        {
+          "caller": "listLocalSeasonWorkspaceIds",
+          "callee": "listIndexedDbLocalSeasonWorkspaceIds",
+          "lineNumber": 679
+        },
+        {
+          "caller": "listIndexedDbLocalSeasonWorkspaceIds",
+          "callee": "canUseIndexedDb",
+          "lineNumber": 683
+        },
+        {
+          "caller": "listIndexedDbLocalSeasonWorkspaceIds",
+          "callee": "Array.from",
+          "lineNumber": 683
+        },
+        {
+          "caller": "listIndexedDbLocalSeasonWorkspaceIds",
+          "callee": "memoryWorkspaces.keys",
+          "lineNumber": 683
+        },
+        {
+          "caller": "listIndexedDbLocalSeasonWorkspaceIds",
+          "callee": "getDb",
+          "lineNumber": 684
+        },
+        {
+          "caller": "listIndexedDbLocalSeasonWorkspaceIds",
+          "callee": "db.getAllKeys",
+          "lineNumber": 685
+        },
+        {
+          "caller": "listIndexedDbLocalSeasonWorkspaceIds",
+          "callee": "keys.map",
+          "lineNumber": 686
+        },
+        {
+          "caller": "listIndexedDbLocalSeasonWorkspaceIds",
+          "callee": "String",
+          "lineNumber": 686
+        },
+        {
+          "caller": "discardLocalPendingChanges",
+          "callee": "loadLocalSeasonWorkspace",
+          "lineNumber": 690
+        },
+        {
+          "caller": "discardLocalPendingChanges",
+          "callee": "cloneJson",
+          "lineNumber": 696
+        },
+        {
+          "caller": "discardLocalPendingChanges",
+          "callee": "cloneJson",
+          "lineNumber": 697
+        },
+        {
+          "caller": "discardLocalPendingChanges",
+          "callee": "deserializeModificationEntries",
+          "lineNumber": 698
+        },
+        {
+          "caller": "discardLocalPendingChanges",
+          "callee": "cloneJson",
+          "lineNumber": 699
+        },
+        {
+          "caller": "discardLocalPendingChanges",
+          "callee": "saveLocalSeasonWorkspace",
+          "lineNumber": 710
+        },
+        {
+          "caller": "discardAllLocalPendingChanges",
+          "callee": "listLocalSeasonWorkspaceIds",
+          "lineNumber": 715
+        },
+        {
+          "caller": "discardAllLocalPendingChanges",
+          "callee": "loadLocalSeasonWorkspace",
+          "lineNumber": 720
+        },
+        {
+          "caller": "discardAllLocalPendingChanges",
+          "callee": "discardLocalPendingChanges",
+          "lineNumber": 725
+        },
+        {
+          "caller": "discardAllLocalPendingChanges",
+          "callee": "discardedSeasonIds.push",
+          "lineNumber": 727
+        },
+        {
+          "caller": "loadLocalSeasonWorkspace",
+          "callee": "getSqlDbForLocalStore",
+          "lineNumber": 735
+        },
+        {
+          "caller": "loadLocalSeasonWorkspace",
+          "callee": "loadLocalSeasonSqlWorkspace",
+          "lineNumber": 737
+        },
+        {
+          "caller": "loadLocalSeasonWorkspace",
+          "callee": "hydrateWorkspaceFromSql",
+          "lineNumber": 738
+        },
+        {
+          "caller": "loadLocalSeasonWorkspace",
+          "callee": "loadIndexedDbLocalSeasonWorkspace",
+          "lineNumber": 740
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "canUseIndexedDb",
+          "lineNumber": 744
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "memoryWorkspaces.get",
+          "lineNumber": 744
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "getDb",
+          "lineNumber": 746
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "Promise.all",
+          "lineNumber": 747
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "db.get",
+          "lineNumber": 748
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "db.get",
+          "lineNumber": 749
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "db.get",
+          "lineNumber": 750
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "db.get",
+          "lineNumber": 751
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "db.get",
+          "lineNumber": 752
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "(pending?.ops ?? []).map",
+          "lineNumber": 756
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "applyPendingOpsToStoredSeasonData",
+          "lineNumber": 757
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "(data.baseRows ?? data.rows).map",
+          "lineNumber": 758
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "hydrateSourceRowFromPersistence",
+          "lineNumber": 758
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "(data.baseRecords ?? data.records).map",
+          "lineNumber": 759
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "hydrateFlightRecordFromPersistence",
+          "lineNumber": 759
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "(data.baseModificationEntries ?? data.modificationEntries).map",
+          "lineNumber": 760
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "hydrateFlightModificationFromPersistence",
+          "lineNumber": 760
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "(data.baseModHistory ?? data.modHistory).map",
+          "lineNumber": 761
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "hydrateModHistoryEntryFromPersistence",
+          "lineNumber": 761
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "createLocalWorkspace",
+          "lineNumber": 763
+        },
+        {
+          "caller": "loadIndexedDbLocalSeasonWorkspace",
+          "callee": "buildInitialSyncMeta",
+          "lineNumber": 776
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "loadLocalSeasonWorkspace",
+          "lineNumber": 786
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "getSqlDbForLocalStore",
+          "lineNumber": 791
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "Date.now",
+          "lineNumber": 793
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "mods.map",
+          "lineNumber": 794
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "readLocalSeasonSqlDeltaState",
+          "lineNumber": 795
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "state.pendingOps.map",
+          "lineNumber": 798
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "deserializeModificationEntries",
+          "lineNumber": 799
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "deserializeModificationEntries",
+          "lineNumber": 800
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "state.baseRecords.map",
+          "lineNumber": 802
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "hydrateFlightRecordFromPersistence",
+          "lineNumber": 802
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedLegIds.has",
+          "lineNumber": 806
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedModifications.set",
+          "lineNumber": 806
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedLegIds.has",
+          "lineNumber": 807
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedModifications.delete",
+          "lineNumber": 807
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "retainedHistoryOps.push",
+          "lineNumber": 814
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedLegIds.has",
+          "lineNumber": 816
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "retainedBusinessOps.push",
+          "lineNumber": 816
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedLegIds.has",
+          "lineNumber": 818
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "retainedBusinessOps.push",
+          "lineNumber": 818
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "retainedBusinessOps.push",
+          "lineNumber": 820
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedModifications.get",
+          "lineNumber": 827
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "historyChanges.push",
+          "lineNumber": 834
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedBaseMods.get",
+          "lineNumber": 840
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "isNoOpModificationAgainstBaseRecord",
+          "lineNumber": 841
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "baseRecordsById.get",
+          "lineNumber": 841
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedModifications.delete",
+          "lineNumber": 842
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedModifications.set",
+          "lineNumber": 845
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "isSameValue",
+          "lineNumber": 846
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "nextModificationOps.push",
+          "lineNumber": 847
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "mergePendingOps",
+          "lineNumber": 862
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "businessOps.some",
+          "lineNumber": 863
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "mergePendingOps",
+          "lineNumber": 864
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "buildNextSyncMeta",
+          "lineNumber": 866
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "replaceLocalSeasonSqlPendingState",
+          "lineNumber": 867
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "nextPendingOps.map",
+          "lineNumber": 870
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "canUseIndexedDb",
+          "lineNumber": 876
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "loadLocalSeasonWorkspace",
+          "lineNumber": 877
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "mods.map",
+          "lineNumber": 884
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "workspace.modifications.get",
+          "lineNumber": 885
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "applyLocalModificationBatch",
+          "lineNumber": 899
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "getDb",
+          "lineNumber": 903
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "Promise.all",
+          "lineNumber": 904
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "db.get",
+          "lineNumber": 905
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "db.get",
+          "lineNumber": 906
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "db.get",
+          "lineNumber": 907
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "Date.now",
+          "lineNumber": 911
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "(pending?.ops ?? []).map",
+          "lineNumber": 912
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "mods.map",
+          "lineNumber": 913
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "pickHydratedModificationsById",
+          "lineNumber": 914
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "pickHydratedModificationsById",
+          "lineNumber": 915
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "pickHydratedRecordsById",
+          "lineNumber": 916
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedLegIds.has",
+          "lineNumber": 919
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedModifications.set",
+          "lineNumber": 919
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedLegIds.has",
+          "lineNumber": 920
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedModifications.delete",
+          "lineNumber": 920
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "retainedHistoryOps.push",
+          "lineNumber": 927
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedLegIds.has",
+          "lineNumber": 929
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "retainedBusinessOps.push",
+          "lineNumber": 929
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedLegIds.has",
+          "lineNumber": 931
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "retainedBusinessOps.push",
+          "lineNumber": 931
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "retainedBusinessOps.push",
+          "lineNumber": 933
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedModifications.get",
+          "lineNumber": 940
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "historyChanges.push",
+          "lineNumber": 947
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedBaseMods.get",
+          "lineNumber": 953
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "isNoOpModificationAgainstBaseRecord",
+          "lineNumber": 954
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "baseRecordsById.get",
+          "lineNumber": 954
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedModifications.delete",
+          "lineNumber": 955
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "affectedModifications.set",
+          "lineNumber": 958
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "isSameValue",
+          "lineNumber": 959
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "nextModificationOps.push",
+          "lineNumber": 960
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "mergePendingOps",
+          "lineNumber": 975
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "businessOps.some",
+          "lineNumber": 976
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "mergePendingOps",
+          "lineNumber": 977
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "buildNextSyncMeta",
+          "lineNumber": 979
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "db.transaction",
+          "lineNumber": 980
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "Promise.all",
+          "lineNumber": 981
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "tx.objectStore('pendingOps').put",
+          "lineNumber": 982
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "tx.objectStore",
+          "lineNumber": 982
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "nextPendingOps.map",
+          "lineNumber": 982
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "tx.objectStore('derivedSeasonal').put",
+          "lineNumber": 983
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "tx.objectStore",
+          "lineNumber": 983
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "tx.objectStore('syncMeta').put",
+          "lineNumber": 984
+        },
+        {
+          "caller": "applyLocalModificationBatchDelta",
+          "callee": "tx.objectStore",
+          "lineNumber": 984
+        },
+        {
+          "caller": "applyLocalFlightRecordMutation",
+          "callee": "runNativeScheduleMutation",
+          "lineNumber": 996
+        },
+        {
+          "caller": "applyLocalFlightRecordMutation",
+          "callee": "loadLocalSeasonWorkspace",
+          "lineNumber": 1010
+        },
+        {
+          "caller": "applyLocalFlightRecordMutation",
+          "callee": "loadLocalSeasonWorkspace",
+          "lineNumber": 1014
+        },
+        {
+          "caller": "applyLocalFlightRecordMutation",
+          "callee": "changedRecords.map",
+          "lineNumber": 1017
+        },
+        {
+          "caller": "applyLocalFlightRecordMutation",
+          "callee": "workspace.records.map",
+          "lineNumber": 1018
+        },
+        {
+          "caller": "applyLocalFlightRecordMutation",
+          "callee": "changedRecordsById.get",
+          "lineNumber": 1018
+        },
+        {
+          "caller": "applyLocalFlightRecordMutation",
+          "callee": "workspace.records.map",
+          "lineNumber": 1019
+        },
+        {
+          "caller": "applyLocalFlightRecordMutation",
+          "callee": "existingRecordIds.has",
+          "lineNumber": 1021
+        },
+        {
+          "caller": "applyLocalFlightRecordMutation",
+          "callee": "nextRecords.push",
+          "lineNumber": 1021
+        },
+        {
+          "caller": "applyLocalFlightRecordMutation",
+          "callee": "withPendingOps",
+          "lineNumber": 1023
+        },
+        {
+          "caller": "applyLocalFlightRecordMutation",
+          "callee": "saveLocalSeasonWorkspace",
+          "lineNumber": 1024
+        },
+        {
+          "caller": "applyLocalModificationBatch",
+          "callee": "runNativeLocalModificationBatchDelta",
+          "lineNumber": 1033
+        },
+        {
+          "caller": "applyLocalModificationBatch",
+          "callee": "loadLocalSeasonWorkspace",
+          "lineNumber": 1045
+        },
+        {
+          "caller": "applyLocalModificationBatch",
+          "callee": "loadLocalSeasonWorkspace",
+          "lineNumber": 1049
+        },
+        {
+          "caller": "applyLocalModificationBatch",
+          "callee": "modifications.set",
+          "lineNumber": 1052
+        },
+        {
+          "caller": "applyLocalModificationBatch",
+          "callee": "withPendingOps",
+          "lineNumber": 1054
+        },
+        {
+          "caller": "applyLocalModificationBatch",
+          "callee": "saveLocalSeasonWorkspace",
+          "lineNumber": 1055
+        },
+        {
+          "caller": "applyLocalSourceRows",
+          "callee": "runNativeScheduleMutation",
+          "lineNumber": 1065
+        },
+        {
+          "caller": "applyLocalSourceRows",
+          "callee": "loadLocalSeasonWorkspace",
+          "lineNumber": 1080
+        },
+        {
+          "caller": "applyLocalSourceRows",
+          "callee": "loadLocalSeasonWorkspace",
+          "lineNumber": 1084
+        },
+        {
+          "caller": "applyLocalSourceRows",
+          "callee": "withPendingOps",
+          "lineNumber": 1089
+        },
+        {
+          "caller": "applyLocalSourceRows",
+          "callee": "saveLocalSeasonWorkspace",
+          "lineNumber": 1090
+        },
+        {
+          "caller": "getPendingSyncSummary",
+          "callee": "getSqlDbForLocalStore",
+          "lineNumber": 1102
+        },
+        {
+          "caller": "getPendingSyncSummary",
+          "callee": "readLocalSeasonSqlSyncMeta",
+          "lineNumber": 1104
+        },
+        {
+          "caller": "getPendingSyncSummary",
+          "callee": "canUseIndexedDb",
+          "lineNumber": 1115
+        },
+        {
+          "caller": "getPendingSyncSummary",
+          "callee": "getDb",
+          "lineNumber": 1116
+        },
+        {
+          "caller": "getPendingSyncSummary",
+          "callee": "db.get",
+          "lineNumber": 1117
+        },
+        {
+          "caller": "getPendingSyncSummary",
+          "callee": "loadLocalSeasonWorkspace",
+          "lineNumber": 1128
+        },
+        {
+          "caller": "updateLocalSyncMeta",
+          "callee": "getSqlDbForLocalStore",
+          "lineNumber": 1139
+        },
+        {
+          "caller": "updateLocalSyncMeta",
+          "callee": "setLocalSeasonSqlSyncMeta",
+          "lineNumber": 1141
+        },
+        {
+          "caller": "updateLocalSyncMeta",
+          "callee": "memoryWorkspaces.get",
+          "lineNumber": 1142
+        },
+        {
+          "caller": "updateLocalSyncMeta",
+          "callee": "memoryWorkspaces.set",
+          "lineNumber": 1145
+        },
+        {
+          "caller": "updateLocalSyncMeta",
+          "callee": "canUseIndexedDb",
+          "lineNumber": 1149
+        },
+        {
+          "caller": "updateLocalSyncMeta",
+          "callee": "getDb",
+          "lineNumber": 1150
+        },
+        {
+          "caller": "updateLocalSyncMeta",
+          "callee": "db.put",
+          "lineNumber": 1151
+        },
+        {
+          "caller": "updateLocalSyncMeta",
+          "callee": "memoryWorkspaces.get",
+          "lineNumber": 1155
+        },
+        {
+          "caller": "updateLocalSyncMeta",
+          "callee": "memoryWorkspaces.set",
+          "lineNumber": 1158
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 18,
+        "functionCount": 43,
+        "classCount": 0
+      }
+    }
+  ]
+}

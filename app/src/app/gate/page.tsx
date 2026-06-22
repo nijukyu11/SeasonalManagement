@@ -461,7 +461,8 @@ function GateAllocationContent() {
   const { seedSeasonSyncFromNative } = useSeasonSyncActions();
   const syncInProgress = syncStatus.status === 'syncing';
   const syncing = syncInProgress && syncStatus.mode === 'manual';
-  const fetchingUpdates = syncStatus.status === 'catching_up' && syncStatus.mode === 'manual';
+  const fetchingUpdates = syncStatus.status === 'catching_up';
+  const syncWriteInProgress = syncInProgress || fetchingUpdates;
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' || syncStatus.status === 'conflict' ? syncStatus.message : null);
   const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
   const syncSummarySeeded = syncSeasonId != null && seededSyncSeasonId === syncSeasonId;
@@ -1143,7 +1144,7 @@ function GateAllocationContent() {
     event: ReactPointerEvent<HTMLElement>,
     source: { kind: 'unallocated'; record: FlightRecord } | { kind: 'allocated'; bar: GateResourceBar }
   ) => {
-    if (!isRouteActive || syncing || event.button !== 0) return;
+    if (!isRouteActive || syncWriteInProgress || event.button !== 0) return;
     if ((event.target as HTMLElement).closest('[data-gate-bar-action="true"]')) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1187,7 +1188,7 @@ function GateAllocationContent() {
     setPointerDragState(drag);
     setDraggedRecordId(drag.recordId);
     updateGatePointerPreview(event.clientX, event.clientY, drag);
-  }, [isRouteActive, recordById, settings, syncing, updateGatePointerPreview]);
+  }, [isRouteActive, recordById, settings, syncWriteInProgress, updateGatePointerPreview]);
 
   const handleGatePointerMove = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     if (!isRouteActive) return;
@@ -1210,7 +1211,7 @@ function GateAllocationContent() {
     const target = resolveGatePointerDrop(event.clientX, event.clientY);
     clearGateDragState();
     const record = recordById.get(drag.recordId);
-    if (!record || syncing) return;
+    if (!record || syncWriteInProgress) return;
     if (target.kind === 'row') {
       const resource = view?.resourceRows[target.rowIndex];
       if (!resource) return;
@@ -1231,7 +1232,7 @@ function GateAllocationContent() {
         void showAlert({ title: 'Unallocate Failed', message: (err as Error).message, tone: 'error' });
       });
     }
-  }, [clearGateDragState, commitGateModification, isRouteActive, pointerDragState, recordById, resolveGatePointerDrop, showAlert, syncing, view]);
+  }, [clearGateDragState, commitGateModification, isRouteActive, pointerDragState, recordById, resolveGatePointerDrop, showAlert, syncWriteInProgress, view]);
 
   const dragOverlay = pointerDragState ? (
     <div
@@ -1303,7 +1304,9 @@ function GateAllocationContent() {
     if (!season || syncInProgress) return;
     try {
       const result = await syncNow();
-      if (result.status !== 'synced') {
+      if (result.status === 'conflict' || (result.reviewCount ?? 0) > 0) {
+        void showAlert({ title: 'Save Needs Review', message: result.message ?? 'Saved non-conflicting changes. Review remaining conflicts.', tone: 'warning' });
+      } else if (result.status !== 'synced') {
         void showAlert({ title: 'Save Failed', message: result.message, tone: 'error' });
       }
     } catch (err) {
@@ -1315,7 +1318,10 @@ function GateAllocationContent() {
     if (!syncSeasonId || fetchingUpdates || syncInProgress) return;
     try {
       const result = await fetchUpdatesNow();
-      if (result.status !== 'synced') {
+      if (result.status === 'busy') return;
+      if (result.status === 'conflict') {
+        void showAlert({ title: 'Fetch Updates Need Review', message: result.message, tone: 'warning' });
+      } else if (result.status !== 'synced') {
         void showAlert({ title: 'Fetch Updates Failed', message: result.message, tone: 'error' });
       }
     } catch (err) {
@@ -1459,7 +1465,7 @@ function GateAllocationContent() {
         onPointerMove={handleGatePointerMove}
         onPointerUp={handleGatePointerUp}
         onPointerCancel={clearGateDragState}
-        className={`absolute z-10 flex items-center overflow-hidden rounded-[4px] border border-white px-2 text-[11px] font-bold ${syncing ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'} ${draggedRecordId === bar.recordId ? 'ring-2 ring-primary/60 ring-offset-1 ring-offset-surface-container-lowest' : ''}`}
+        className={`absolute z-10 flex items-center overflow-hidden rounded-[4px] border border-white px-2 text-[11px] font-bold ${syncWriteInProgress ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'} ${draggedRecordId === bar.recordId ? 'ring-2 ring-primary/60 ring-offset-1 ring-offset-surface-container-lowest' : ''}`}
         style={{
           left,
           top: 6 + bar.stackIndex * (BAR_HEIGHT + 4),
@@ -1485,7 +1491,7 @@ function GateAllocationContent() {
               event.stopPropagation();
               void commitGateModification(unallocateGate(record), `Unallocated gate for ${bar.flightNumber}`);
             }}
-            disabled={syncing}
+            disabled={syncWriteInProgress}
             className="ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded bg-white/25 text-[10px] disabled:opacity-50"
             aria-label={`Unallocate ${bar.flightNumber}`}
             title="Unallocate"
@@ -1498,8 +1504,8 @@ function GateAllocationContent() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-surface text-on-surface font-sans">
-      <div className="flex h-screen min-w-0 flex-1 flex-col bg-surface">
+    <div className="flex h-dvh overflow-hidden bg-surface text-on-surface font-sans">
+      <div className="flex h-dvh min-w-0 flex-1 flex-col bg-surface">
         <header className="z-30 flex flex-none items-center justify-between border-b border-slate-200 bg-white/80 px-6 py-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
           <div>
             <h1 className="font-h3 text-h3 text-on-surface">Gate Allocation</h1>
@@ -1593,7 +1599,7 @@ function GateAllocationContent() {
 
           <section
             ref={ganttFullscreenRef}
-            className={`relative min-h-0 flex-1 overflow-hidden rounded-lg border border-surface-variant bg-surface-container-lowest shadow-sm ${isGanttFullscreen ? 'fixed inset-0 z-[100] h-screen w-screen rounded-none border-0 bg-surface shadow-none' : ''}`}
+            className={`relative min-h-0 flex-1 overflow-hidden rounded-lg border border-surface-variant bg-surface-container-lowest shadow-sm ${isGanttFullscreen ? 'fixed inset-0 z-[100] h-dvh w-screen rounded-none border-0 bg-surface shadow-none' : ''}`}
           >
             <div className="flex h-full min-h-0 flex-col">
               <div className="flex h-10 flex-none items-center justify-between border-b border-surface-variant bg-surface-container-low px-3">
@@ -1608,7 +1614,7 @@ function GateAllocationContent() {
                       event.stopPropagation();
                       void handleUnallocateAllGatesInPeriod();
                     }}
-                    disabled={syncing || summary.gateBlocks === 0}
+                    disabled={syncWriteInProgress || summary.gateBlocks === 0}
                     className="flex h-7 items-center gap-1.5 rounded border border-outline-variant bg-surface-container-lowest px-2 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
                     aria-label="Unallocate all gates in selected period"
                     title="Unallocate all gates in selected period"
@@ -1681,7 +1687,7 @@ function GateAllocationContent() {
                       <FetchServerUpdatesButton
                         fetching={fetchingUpdates}
                         progress={fetchProgress}
-                        disabled={syncing}
+                        disabled={syncInProgress}
                         onFetch={handleFetchUpdates}
                       />
                     )}
@@ -1693,7 +1699,7 @@ function GateAllocationContent() {
                       <FetchServerUpdatesButton
                         fetching={fetchingUpdates}
                         progress={fetchProgress}
-                        disabled={syncing}
+                        disabled={syncInProgress}
                         onFetch={handleFetchUpdates}
                       />
                     )}

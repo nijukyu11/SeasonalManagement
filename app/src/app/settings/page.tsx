@@ -1069,8 +1069,14 @@ export default function SettingsPage() {
       const dates = legs.map((leg) => leg.date).sort();
       const existing = await findSeasonByCode(seasonCode);
       const syncSummary = existing ? await queryNativeSyncSummary(existing.id) : null;
-      const pendingNote = (syncSummary?.pendingCount ?? 0) > 0
-        ? `\n\nThis season has ${syncSummary?.pendingCount} pending local change${syncSummary?.pendingCount === 1 ? '' : 's'} that will be discarded by the repair import.`
+      const pendingCount = syncSummary?.pendingCount ?? 0;
+      const conflictCount = syncSummary?.conflictCount ?? 0;
+      const syncRiskParts = [
+        pendingCount > 0 ? `${pendingCount} pending local change${pendingCount === 1 ? '' : 's'}` : null,
+        conflictCount > 0 ? `${conflictCount} conflict review item${conflictCount === 1 ? '' : 's'}` : null,
+      ].filter(Boolean);
+      const pendingNote = syncRiskParts.length > 0
+        ? `\n\nThis season has ${syncRiskParts.join(' and ')} that will be discarded by the repair import.`
         : '';
       const confirmed = await showConfirm({
         title: 'Replace Full Season',
@@ -1179,6 +1185,7 @@ export default function SettingsPage() {
         seasonId,
         localRevision: imported.syncMeta.localRevision,
         source: 'settings',
+        syncMeta: imported.syncMeta,
       });
       void appendAuditLogEntry({
         seasonId,
@@ -1390,8 +1397,8 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-surface text-on-surface">
-      <div className="flex h-screen min-w-0 flex-1 flex-col">
+    <div className="flex h-dvh overflow-hidden bg-surface text-on-surface">
+      <div className="flex h-dvh min-w-0 flex-1 flex-col">
         <header className="z-30 flex flex-none items-center justify-between border-b border-slate-200 bg-white/80 px-6 py-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
           <div>
             <h1 className="font-h3 text-h3 text-on-surface">Settings</h1>

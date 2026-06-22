@@ -59,7 +59,7 @@ import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
 import { ensureNativeLocalSeason, queryNativeScheduleWindow, runNativeScheduleMutation } from '@/lib/nativeSeasonRepository';
 import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
-import type { LocalSyncMeta } from '@/lib/localSeasonStore';
+import { getLocalSyncConflictCount, type LocalSyncMeta } from '@/lib/localSeasonStore';
 import type { FlightCounter, FlightModification, FlightRecord, ModHistoryEntry, OperationalSettings, Season } from '@/lib/types';
 import NewFlightModal from '../components/NewFlightModal';
 import { useAppDialog } from '../components/AppDialog';
@@ -367,8 +367,9 @@ function DailyScheduleContent() {
   );
   const [dailyImporting, setDailyImporting] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
-  const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; lastLocalChangeAt: number | null }>({
+  const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; conflictCount: number; lastLocalChangeAt: number | null }>({
     pendingCount: 0,
+    conflictCount: 0,
     lastLocalChangeAt: null,
   });
   const [fromDateTime, setFromDateTime] = useSessionState('daily:fromDateTime', defaultRange.from);
@@ -390,12 +391,13 @@ function DailyScheduleContent() {
   const { status: syncStatus, syncNow, fetchUpdatesNow } = useSeasonSync(syncSeasonId, 'daily');
   const syncInProgress = syncStatus.status === 'syncing';
   const syncing = syncInProgress && syncStatus.mode === 'manual';
-  const fetchingUpdates = syncStatus.status === 'catching_up' && syncStatus.mode === 'manual';
+  const fetchingUpdates = syncStatus.status === 'catching_up';
+  const syncWriteInProgress = syncInProgress || fetchingUpdates;
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' || syncStatus.status === 'conflict' ? syncStatus.message : null);
   const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncSummary.pendingCount);
-  const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount);
-  const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
+  const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount);
+  const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount);
 
   const waitForDailyLocalCommit = useCallback(async () => {
     await currentMutationRef.current;
@@ -461,6 +463,7 @@ function DailyScheduleContent() {
     setModifications(nextModifications);
     setSyncSummary({
       pendingCount: syncMeta.pendingCount,
+      conflictCount: getLocalSyncConflictCount(syncMeta),
       lastLocalChangeAt: syncMeta.lastLocalChangeAt,
     });
     patchCachedSeasonData(seasonId, {
@@ -539,7 +542,7 @@ function DailyScheduleContent() {
           setSeason(null);
           setFlightRecords([]);
           setModifications(new Map());
-          setSyncSummary({ pendingCount: 0, lastLocalChangeAt: null });
+          setSyncSummary({ pendingCount: 0, conflictCount: 0, lastLocalChangeAt: null });
           return;
         }
 
@@ -642,8 +645,8 @@ function DailyScheduleContent() {
     dates: [fromDateTime.slice(0, 10), toDateTime.slice(0, 10)],
   }), [fromDateTime, toDateTime]);
   const hasSelectedRecords = selectedRecordIds.length > 0;
-  const actionsDisabled = !season || syncing || dailyImporting;
-  const dailyImportDisabled = syncInProgress || dailyImporting;
+  const actionsDisabled = !season || syncWriteInProgress || dailyImporting;
+  const dailyImportDisabled = syncWriteInProgress || dailyImporting;
   const selectedArrCount = selectedRowRecords.filter((record) => record.type === 'A').length;
   const selectedDepCount = selectedRowRecords.filter((record) => record.type === 'D').length;
   const selectedHasLinkInfo = selectedRows.some(hasDailyLinkInfo) ||
@@ -804,7 +807,7 @@ function DailyScheduleContent() {
   }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, fromDateTime, modifications, publishDailyWorkspaceChange, season, settings, toDateTime]);
 
   const handleDailyImportFile = useCallback(async (file: File | null) => {
-    if (!file || syncInProgress || dailyImporting) return;
+    if (!file || syncWriteInProgress || dailyImporting) return;
     setDailyImporting(true);
     try {
       const buffer = await file.arrayBuffer();
@@ -945,10 +948,10 @@ function DailyScheduleContent() {
       setDailyImporting(false);
       if (dailyImportInputRef.current) dailyImportInputRef.current.value = '';
     }
-  }, [applyDailyNativeState, dailyImporting, enqueueLocalMutation, publishDailyWorkspaceChange, router, season?.id, seasons, showAlert, syncInProgress]);
+  }, [applyDailyNativeState, dailyImporting, enqueueLocalMutation, publishDailyWorkspaceChange, router, season?.id, seasons, showAlert, syncWriteInProgress]);
 
   const handleAddFlights = useCallback(async (mods: FlightModification[]) => {
-    if (!season) return;
+    if (!season || syncWriteInProgress) return;
     const seasonId = season.id;
     try {
       await enqueueLocalMutation(async () => {
@@ -1008,10 +1011,10 @@ function DailyScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Add Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, showAlert]);
+  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, showAlert, syncWriteInProgress]);
 
   const handleDeleteSelected = useCallback(async () => {
-    if (!season || selectedRecordIds.length === 0) return;
+    if (!season || syncWriteInProgress || selectedRecordIds.length === 0) return;
     const shouldDelete = await showConfirm({
       title: 'Delete Selected Flights',
       message: `Delete ${selectedRecordIds.length} selected flight occurrence(s)?`,
@@ -1064,7 +1067,7 @@ function DailyScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Delete Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, selectedRecordIds, showAlert, showConfirm]);
+  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, selectedRecordIds, showAlert, showConfirm, syncWriteInProgress]);
 
   useEffect(() => {
     if (!season) return undefined;
@@ -1095,7 +1098,7 @@ function DailyScheduleContent() {
   }, [actionsDisabled, handleDeleteSelected, hasSelectedRecords, season]);
 
   const handleLinkSelected = useCallback(async () => {
-    if (!season || selectedRecordIds.length === 0) return;
+    if (!season || syncWriteInProgress || selectedRecordIds.length === 0) return;
     const seasonId = season.id;
     const ids = [...selectedRecordIds];
     try {
@@ -1153,10 +1156,10 @@ function DailyScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Link Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, selectedRecordIds, showAlert]);
+  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, selectedRecordIds, showAlert, syncWriteInProgress]);
 
   const handleUnlinkSelected = useCallback(async () => {
-    if (!season || selectedRecordIds.length === 0) return;
+    if (!season || syncWriteInProgress || selectedRecordIds.length === 0) return;
     const shouldUnlink = await showConfirm({
       title: 'Unlink Selected Flights',
       message: `Unlink ${selectedRecordIds.length} selected flight occurrence(s)?`,
@@ -1206,13 +1209,15 @@ function DailyScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Unlink Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, selectedRecordIds, showAlert, showConfirm]);
+  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, selectedRecordIds, showAlert, showConfirm, syncWriteInProgress]);
 
   const handleSync = useCallback(async () => {
     if (!season || syncInProgress) return;
     try {
       const result = await syncNow();
-      if (result.status !== 'synced') {
+      if (result.status === 'conflict' || (result.reviewCount ?? 0) > 0) {
+        void showAlert({ title: 'Save Needs Review', message: result.message ?? 'Saved non-conflicting changes. Review remaining conflicts.', tone: 'warning' });
+      } else if (result.status !== 'synced') {
         void showAlert({ title: 'Save Failed', message: result.message, tone: 'error' });
       }
     } catch (err) {
@@ -1224,7 +1229,10 @@ function DailyScheduleContent() {
     if (!syncSeasonId || fetchingUpdates || syncInProgress) return;
     try {
       const result = await fetchUpdatesNow();
-      if (result.status !== 'synced') {
+      if (result.status === 'busy') return;
+      if (result.status === 'conflict') {
+        void showAlert({ title: 'Fetch Updates Need Review', message: result.message, tone: 'warning' });
+      } else if (result.status !== 'synced') {
         void showAlert({ title: 'Fetch Updates Failed', message: result.message, tone: 'error' });
       }
     } catch (err) {
@@ -1233,8 +1241,8 @@ function DailyScheduleContent() {
   }, [fetchUpdatesNow, fetchingUpdates, showAlert, syncInProgress, syncSeasonId]);
 
   return (
-    <div className="flex h-screen bg-surface text-on-surface overflow-hidden font-sans">
-      <div className="flex-1 flex flex-col min-w-0 bg-surface h-screen overflow-hidden">
+    <div className="flex h-dvh bg-surface text-on-surface overflow-hidden font-sans">
+      <div className="flex-1 flex flex-col min-w-0 bg-surface h-dvh overflow-hidden">
         <header className="flex-none flex items-center justify-between px-6 py-3 w-full bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 shadow-sm z-30">
           <div>
             <h1 className="font-h3 text-h3 text-on-surface">Daily Schedule</h1>
@@ -1323,6 +1331,7 @@ function DailyScheduleContent() {
                   onClick={() => handleAllocationNavigation('/checkin')}
                   disabled={!season}
                   title="Open Check-in Allocation for current day range"
+                  aria-label="Open Check-in Allocation for current day range"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-[19px]">countertops</span>
@@ -1331,6 +1340,7 @@ function DailyScheduleContent() {
                   onClick={() => handleAllocationNavigation('/gate')}
                   disabled={!season}
                   title="Open Gate Allocation for current day range"
+                  aria-label="Open Gate Allocation for current day range"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <PbbIcon className="h-[19px] w-[19px]" />
@@ -1358,6 +1368,7 @@ function DailyScheduleContent() {
                   onClick={() => dailyImportInputRef.current?.click()}
                   disabled={dailyImportDisabled}
                   title="Import OperationalTurns file"
+                  aria-label="Import OperationalTurns file"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className={`material-symbols-outlined text-[19px] ${dailyImporting ? 'animate-spin' : ''}`}>
@@ -1379,6 +1390,7 @@ function DailyScheduleContent() {
                   onClick={() => setIsNewFlightOpen(true)}
                   disabled={actionsDisabled}
                   title="Add flight"
+                  aria-label="Add flight"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-[19px]">add</span>
@@ -1387,6 +1399,7 @@ function DailyScheduleContent() {
                   onClick={() => void handleLinkSelected()}
                   disabled={actionsDisabled || !canLinkSelection}
                   title="Link selected flights"
+                  aria-label="Link selected flights"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-[19px]">link</span>
@@ -1395,6 +1408,7 @@ function DailyScheduleContent() {
                   onClick={() => void handleUnlinkSelected()}
                   disabled={actionsDisabled || !canUnlinkSelection}
                   title="Unlink selected flights"
+                  aria-label="Unlink selected flights"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-[19px]">link_off</span>
@@ -1403,6 +1417,7 @@ function DailyScheduleContent() {
                   onClick={() => void handleDeleteSelected()}
                   disabled={actionsDisabled || !hasSelectedRecords}
                   title="Delete selected flights"
+                  aria-label="Delete selected flights"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-error/40 bg-surface-container text-error transition-colors hover:bg-error-container hover:text-on-error-container disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-[19px]">delete</span>
@@ -1437,7 +1452,7 @@ function DailyScheduleContent() {
                   <FetchServerUpdatesButton
                     fetching={fetchingUpdates}
                     progress={fetchProgress}
-                    disabled={syncing}
+                    disabled={syncInProgress}
                     onFetch={handleFetchUpdates}
                   />
                 )}
@@ -1449,7 +1464,7 @@ function DailyScheduleContent() {
                   <FetchServerUpdatesButton
                     fetching={fetchingUpdates}
                     progress={fetchProgress}
-                    disabled={syncing}
+                    disabled={syncInProgress}
                     onFetch={handleFetchUpdates}
                   />
                 )}

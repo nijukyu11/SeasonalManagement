@@ -5,6 +5,7 @@ export interface DirtyImportGuardInput {
   targetSeasonCode: string;
   activeSeasonId?: string | null;
   pendingCount: number;
+  conflictCount?: number | null;
 }
 
 export interface DirtyImportGuard {
@@ -54,17 +55,25 @@ export function buildSeasonDisplayLabel(season: { seasonCode: string; name?: str
 }
 
 export function getDirtyImportGuard(input: DirtyImportGuardInput): DirtyImportGuard {
-  if (!input.targetSeasonId || input.pendingCount <= 0) {
+  const pendingCount = Math.max(0, input.pendingCount);
+  const conflictCount = Math.max(0, input.conflictCount ?? 0);
+
+  if (!input.targetSeasonId || (pendingCount <= 0 && conflictCount <= 0)) {
     return { shouldBlock: false, scope: null, message: '' };
   }
 
   const scope: ImportDirtyScope = input.targetSeasonId === input.activeSeasonId ? 'active' : 'target';
   const seasonLabel = scope === 'active' ? 'current season' : `season ${input.targetSeasonCode}`;
+  const issues = [
+    pendingCount > 0 ? `${pendingCount} unsynced local change${pendingCount === 1 ? '' : 's'}` : null,
+    conflictCount > 0 ? `${conflictCount} conflict review item${conflictCount === 1 ? '' : 's'}` : null,
+  ].filter(Boolean).join(' and ');
+
   return {
     shouldBlock: true,
     scope,
     message:
-      `${seasonLabel} has ${input.pendingCount} unsynced local change${input.pendingCount === 1 ? '' : 's'}. ` +
-      'Re-import replaces the season baseline and cannot safely merge those edits.',
+      `${seasonLabel} has ${issues}. ` +
+      'Re-import replaces the season baseline and cannot safely merge those edits or review items.',
   };
 }

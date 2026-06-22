@@ -55,9 +55,11 @@ import {
   publishSeasonWorkspaceChanged,
   setCachedSeasonData,
   setCachedSeasons,
+  type SeasonWorkspaceChangeEvent,
 } from '@/lib/seasonDataCache';
 import {
   applyLocalModificationBatchDelta,
+  getLocalSyncConflictCount,
   type LocalSyncMeta,
 } from '@/lib/localSeasonStore';
 import { queryNativeAllocationWindow, runNativeLocalModificationBatchDeltaResult } from '@/lib/nativeSeasonRepository';
@@ -93,6 +95,7 @@ import {
 import { useSessionScrollRestoration } from '../hooks/useSessionScrollRestoration';
 import { useSessionState } from '../hooks/useSessionState';
 import { useSeasonWorkspaceRefresh } from '../hooks/useSeasonWorkspaceRefresh';
+import { shouldRefreshCheckInForWorkspaceChange } from './workspaceRefreshScope';
 
 const DEFAULT_TIMELINE_PIXELS_PER_MINUTE = 1.5;
 const MIN_TIMELINE_PIXELS_PER_MINUTE = 0.5;
@@ -792,10 +795,12 @@ function CheckInAllocationContent() {
   const [modifications, setModifications] = useState<Map<string, FlightModification>>(new Map());
   const [optimisticAllocationView, setOptimisticAllocationView] = useState<CheckInAllocationView | null>(null);
   const [settings, setSettings] = useState<OperationalSettings | null>(null);
-  const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; lastLocalChangeAt: number | null }>({
+  const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; conflictCount: number; lastLocalChangeAt: number | null }>({
     pendingCount: 0,
+    conflictCount: 0,
     lastLocalChangeAt: null,
   });
+  const [checkInLocalCommitPending, setCheckInLocalCommitPending] = useState(false);
   const [fromDateTime, setFromDateTime] = useSessionState('checkin:fromDateTime', defaultRange.from);
   const [toDateTime, setToDateTime] = useSessionState('checkin:toDateTime', defaultRange.to);
   const [loading, setLoading] = useState(true);
@@ -841,7 +846,7 @@ function CheckInAllocationContent() {
   const optimisticAllocationViewRef = useRef<CheckInAllocationView | null>(null);
   const checkInCommitAccumulatorRef = useRef<PendingAccumulatedCheckInCommit | null>(null);
   const checkInCommitFlushTimerRef = useRef<number | null>(null);
-  const pendingCheckInSyncSummaryRef = useRef<Pick<LocalSyncMeta, 'pendingCount' | 'lastLocalChangeAt'> | null>(null);
+  const pendingCheckInSyncSummaryRef = useRef<Pick<LocalSyncMeta, 'pendingCount' | 'conflicts' | 'lastLocalChangeAt'> | null>(null);
   const checkInSyncSummaryTimerRef = useRef<number | null>(null);
   const commitQueueRef = useRef(Promise.resolve());
   const currentMutationRef = useRef<Promise<unknown> | null>(null);
@@ -852,28 +857,21 @@ function CheckInAllocationContent() {
   const { status: syncStatus, syncNow, fetchUpdatesNow } = useSeasonSync(syncSeasonId, 'checkin');
   const syncInProgress = syncStatus.status === 'syncing';
   const syncing = syncInProgress && syncStatus.mode === 'manual';
-  const fetchingUpdates = syncStatus.status === 'catching_up' && syncStatus.mode === 'manual';
+  const fetchingUpdates = syncStatus.status === 'catching_up';
+  const syncWriteInProgress = syncInProgress || fetchingUpdates;
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' || syncStatus.status === 'conflict' ? syncStatus.message : null);
   const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncSummary.pendingCount);
-  const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount);
-  const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
+  const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount);
+  const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount);
 
-  const waitForCheckInLocalCommit = useCallback(async () => {
-    await currentMutationRef.current;
+  const updateCheckInLocalCommitPending = useCallback(() => {
+    setCheckInLocalCommitPending(Boolean(
+      checkInCommitAccumulatorRef.current ||
+      checkInCommitFlushTimerRef.current != null ||
+      currentMutationRef.current
+    ));
   }, []);
-
-  useSeasonSyncGuard(season?.id ?? targetSeasonId, 'checkin', {
-    blocked: Boolean(draggedGroupId) || resizeState !== null,
-    reason: resizeState ? 'Resizing check-in allocation' : draggedGroupId ? 'Dragging check-in allocation' : undefined,
-    beforeSync: waitForCheckInLocalCommit,
-  });
-  useSeasonSyncGuard(season?.id ?? targetSeasonId, 'checkin-hydration', {
-    blocked: loading,
-    reason: 'Loading server snapshot',
-    quiet: true,
-    blockingUi: false,
-  });
 
   const clearOptimisticAllocationView = useCallback(() => {
     optimisticAllocationViewRef.current = null;
@@ -905,7 +903,8 @@ function CheckInAllocationContent() {
       window.clearTimeout(checkInSyncSummaryTimerRef.current);
       checkInSyncSummaryTimerRef.current = null;
     }
-  }, []);
+    updateCheckInLocalCommitPending();
+  }, [updateCheckInLocalCommitPending]);
 
   useEffect(() => {
     if (!requestedRange) {
@@ -971,6 +970,7 @@ function CheckInAllocationContent() {
     replaceCheckInModifications(nextModifications);
     setSyncSummary({
       pendingCount: result.syncMeta.pendingCount,
+      conflictCount: getLocalSyncConflictCount(result.syncMeta),
       lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
     });
     setCachedSeasonData(season.id, {
@@ -990,26 +990,24 @@ function CheckInAllocationContent() {
     });
   }, [clearOptimisticAllocationView, fromDateTime, replaceCheckInModifications, season, toDateTime]);
 
-  useSeasonWorkspaceRefresh({
-    seasonId: season?.id ?? targetSeasonId,
-    policy: 'on-activation',
-    source: 'checkin',
-    onNativeRefresh: async () => {
-      await refreshCheckInWindow();
-    },
-  });
-
   const enqueueLocalMutation = useCallback(function enqueueLocalMutation<T>(operation: () => Promise<T>): Promise<T> {
     const queuedMutation = commitQueueRef.current.then(operation);
     currentMutationRef.current = queuedMutation;
+    setCheckInLocalCommitPending(true);
     void queuedMutation.then(() => {
-      if (currentMutationRef.current === queuedMutation) currentMutationRef.current = null;
+      if (currentMutationRef.current === queuedMutation) {
+        currentMutationRef.current = null;
+        updateCheckInLocalCommitPending();
+      }
     }, () => {
-      if (currentMutationRef.current === queuedMutation) currentMutationRef.current = null;
+      if (currentMutationRef.current === queuedMutation) {
+        currentMutationRef.current = null;
+        updateCheckInLocalCommitPending();
+      }
     });
     commitQueueRef.current = queuedMutation.then(() => undefined, () => undefined);
     return queuedMutation;
-  }, []);
+  }, [updateCheckInLocalCommitPending]);
 
   const commitCheckInModificationsOnMainThread = useCallback(async (
     seasonId: string,
@@ -1208,7 +1206,7 @@ function CheckInAllocationContent() {
           setSeason(null);
           setFlightRecords([]);
           replaceCheckInModifications(new Map());
-          setSyncSummary({ pendingCount: 0, lastLocalChangeAt: null });
+          setSyncSummary({ pendingCount: 0, conflictCount: 0, lastLocalChangeAt: null });
           return;
         }
 
@@ -1242,6 +1240,7 @@ function CheckInAllocationContent() {
         replaceCheckInModifications(nextModifications);
         setSyncSummary({
           pendingCount: result.syncMeta.pendingCount,
+          conflictCount: getLocalSyncConflictCount(result.syncMeta),
           lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
         });
         setCachedSeasonData(targetSeason.id, {
@@ -1305,6 +1304,14 @@ function CheckInAllocationContent() {
   }, [flightRecords, fromDateTime, groupByCounterGroup, modifications, settings, timelinePixelsPerMinute, toDateTime]);
 
   const displayAllocationView = optimisticAllocationView ?? allocationResult.view;
+
+  const visibleCheckInRecordIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    visibleCheckInRecordIdsRef.current = new Set(
+      displayAllocationView?.resourceBars.map((bar) => bar.recordId) ?? []
+    );
+  }, [displayAllocationView?.resourceBars]);
 
   useEffect(() => {
     if (optimisticAllocationViewRef.current) clearOptimisticAllocationView();
@@ -1539,10 +1546,11 @@ function CheckInAllocationContent() {
   }, [mergeCheckInUndoEntries]);
 
   const scheduleSyncSummaryUpdate = useCallback((
-    syncMeta: Pick<LocalSyncMeta, 'pendingCount' | 'lastLocalChangeAt'>
+    syncMeta: Pick<LocalSyncMeta, 'pendingCount' | 'conflicts' | 'lastLocalChangeAt'>
   ) => {
     pendingCheckInSyncSummaryRef.current = {
       pendingCount: syncMeta.pendingCount,
+      conflicts: syncMeta.conflicts,
       lastLocalChangeAt: syncMeta.lastLocalChangeAt,
     };
     if (checkInSyncSummaryTimerRef.current != null) return;
@@ -1553,11 +1561,13 @@ function CheckInAllocationContent() {
       if (!pendingSummary) return;
       setSyncSummary((current) => (
         current.pendingCount === pendingSummary.pendingCount &&
+        current.conflictCount === getLocalSyncConflictCount(pendingSummary) &&
         current.lastLocalChangeAt === pendingSummary.lastLocalChangeAt
           ? current
           : {
               ...current,
               pendingCount: pendingSummary.pendingCount,
+              conflictCount: getLocalSyncConflictCount(pendingSummary),
               lastLocalChangeAt: pendingSummary.lastLocalChangeAt,
             }
       ));
@@ -1616,6 +1626,7 @@ function CheckInAllocationContent() {
         replaceCheckInModifications(nextModifications);
         setSyncSummary({
           pendingCount: result.syncMeta.pendingCount,
+          conflictCount: getLocalSyncConflictCount(result.syncMeta),
           lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
         });
         useSeasonWorkspaceStore.getState().replaceSeasonWindow({
@@ -1637,6 +1648,7 @@ function CheckInAllocationContent() {
 
   const flushAccumulatedCheckInCommit = useCallback(async (entry: PendingAccumulatedCheckInCommit) => {
     if (!season) return;
+    setCheckInLocalCommitPending(true);
     try {
       const result = await persistCheckInModifications(season.id, entry.mods, entry.description);
       if (!result.syncMeta) return;
@@ -1658,8 +1670,10 @@ function CheckInAllocationContent() {
       scheduleCheckInAuditEntry(entry, result);
     } catch (error) {
       await rollbackAccumulatedCheckInCommit(entry, error);
+    } finally {
+      updateCheckInLocalCommitPending();
     }
-  }, [persistCheckInModifications, publishWorkspaceChange, pushCheckInUndoEntry, rollbackAccumulatedCheckInCommit, scheduleCheckInAuditEntry, scheduleSyncSummaryUpdate, season]);
+  }, [persistCheckInModifications, publishWorkspaceChange, pushCheckInUndoEntry, rollbackAccumulatedCheckInCommit, scheduleCheckInAuditEntry, scheduleSyncSummaryUpdate, season, updateCheckInLocalCommitPending]);
 
   const scheduleAccumulatedCheckInCommit = useCallback(({
     legIds,
@@ -1683,6 +1697,7 @@ function CheckInAllocationContent() {
       trackUndo,
     });
     checkInCommitAccumulatorRef.current = entry;
+    setCheckInLocalCommitPending(true);
     if (checkInCommitFlushTimerRef.current != null) {
       window.clearTimeout(checkInCommitFlushTimerRef.current);
     }
@@ -1695,6 +1710,59 @@ function CheckInAllocationContent() {
       }
     }, CHECKIN_COMMIT_DEBOUNCE_MS);
   }, [flushAccumulatedCheckInCommit, mergePendingCheckInCommit, season]);
+
+  const flushPendingCheckInLocalCommit = useCallback(async () => {
+    if (checkInCommitFlushTimerRef.current != null) {
+      window.clearTimeout(checkInCommitFlushTimerRef.current);
+      checkInCommitFlushTimerRef.current = null;
+    }
+    const entry = checkInCommitAccumulatorRef.current;
+    if (entry) {
+      checkInCommitAccumulatorRef.current = null;
+      setCheckInLocalCommitPending(true);
+      await flushAccumulatedCheckInCommit(entry);
+    }
+    await commitQueueRef.current;
+    updateCheckInLocalCommitPending();
+  }, [flushAccumulatedCheckInCommit, updateCheckInLocalCommitPending]);
+
+  useSeasonSyncGuard(season?.id ?? targetSeasonId, 'checkin', {
+    blocked: checkInLocalCommitPending || Boolean(draggedGroupId) || resizeState !== null,
+    reason: checkInLocalCommitPending
+      ? 'Saving check-in allocation'
+      : resizeState
+        ? 'Resizing check-in allocation'
+        : draggedGroupId
+          ? 'Dragging check-in allocation'
+          : undefined,
+    beforeSync: flushPendingCheckInLocalCommit,
+  });
+  useSeasonSyncGuard(season?.id ?? targetSeasonId, 'checkin-hydration', {
+    blocked: loading,
+    reason: 'Loading server snapshot',
+    quiet: true,
+    blockingUi: false,
+  });
+
+  const shouldDeferCheckInRefresh = useCallback(() => (
+    checkInLocalCommitPending || Boolean(draggedGroupId) || resizeState !== null
+  ), [checkInLocalCommitPending, draggedGroupId, resizeState]);
+
+  const shouldHandleCheckInWorkspaceChange = useCallback((event: SeasonWorkspaceChangeEvent) => (
+    shouldRefreshCheckInForWorkspaceChange(event, visibleCheckInRecordIdsRef.current)
+  ), []);
+
+  useSeasonWorkspaceRefresh({
+    seasonId: season?.id ?? targetSeasonId,
+    policy: 'on-activation',
+    source: 'checkin',
+    shouldDeferRefresh: shouldDeferCheckInRefresh,
+    shouldHandleWorkspaceChange: shouldHandleCheckInWorkspaceChange,
+    onNativeRefresh: async () => {
+      await flushPendingCheckInLocalCommit();
+      await refreshCheckInWindow();
+    },
+  });
 
   const commitOneModification = useCallback(async (
     mod: FlightModification,
@@ -1733,7 +1801,7 @@ function CheckInAllocationContent() {
   }, [applyOptimisticCheckInModifications, buildCheckInUndoEntry, scheduleAccumulatedCheckInCommit, season]);
 
   const handleUndoCheckInAllocation = useCallback(async () => {
-    if (syncing) return;
+    if (syncWriteInProgress) return;
     const entry = checkInUndoStackRef.current.pop();
     if (!entry) return;
     try {
@@ -1742,7 +1810,7 @@ function CheckInAllocationContent() {
       checkInUndoStackRef.current.push(entry);
       void showAlert({ title: 'Undo Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [commitCheckInModificationBatch, showAlert, syncing]);
+  }, [commitCheckInModificationBatch, showAlert, syncWriteInProgress]);
 
   const setActiveDropRowIndexIfChanged = useCallback((rowIndex: number | null) => {
     setActiveDropRowIndex((current) => current === rowIndex ? current : rowIndex);
@@ -1850,7 +1918,7 @@ function CheckInAllocationContent() {
   }, [setActiveDropRowIndexIfChanged, setActiveDropSpanIfChanged]);
 
   const startResizeInteraction = useCallback((edge: ResizeState['edge'], bar: CheckInResourceBar, clientX: number) => {
-    if (syncing) return;
+    if (syncWriteInProgress) return;
     resizeDragGuardRef.current = true;
     const left = (bar.leftPercent / 100) * timeline.width;
     const width = (bar.widthPercent / 100) * timeline.width;
@@ -1863,7 +1931,7 @@ function CheckInAllocationContent() {
     };
     setResizeState(nextResizeState);
     updateSnapLine(nextResizeState, clientX);
-  }, [syncing, timeline.width, updateSnapLine]);
+  }, [syncWriteInProgress, timeline.width, updateSnapLine]);
 
   useEffect(() => {
     const commitRequests = checkInCommitRequestsRef.current;
@@ -1896,7 +1964,9 @@ function CheckInAllocationContent() {
     setResizeState(null);
     try {
       const result = await syncNow();
-      if (result.status !== 'synced') {
+      if (result.status === 'conflict' || (result.reviewCount ?? 0) > 0) {
+        void showAlert({ title: 'Save Needs Review', message: result.message ?? 'Saved non-conflicting changes. Review remaining conflicts.', tone: 'warning' });
+      } else if (result.status !== 'synced') {
         void showAlert({ title: 'Save Failed', message: result.message, tone: 'error' });
       }
     } catch (err) {
@@ -1909,7 +1979,10 @@ function CheckInAllocationContent() {
     setResizeState(null);
     try {
       const result = await fetchUpdatesNow();
-      if (result.status !== 'synced') {
+      if (result.status === 'busy') return;
+      if (result.status === 'conflict') {
+        void showAlert({ title: 'Fetch Updates Need Review', message: result.message, tone: 'warning' });
+      } else if (result.status !== 'synced') {
         void showAlert({ title: 'Fetch Updates Failed', message: result.message, tone: 'error' });
       }
     } catch (err) {
@@ -2024,7 +2097,7 @@ function CheckInAllocationContent() {
 
   const handleResizeCommit = useCallback(async (state: ResizeState, endClientX: number) => {
     const view = displayAllocationView;
-    if (syncing || !view || !settings) return;
+    if (syncWriteInProgress || !view || !settings) return;
     const record = getEffectiveRecord(state.bar.recordId);
     if (!record) return;
     try {
@@ -2051,7 +2124,7 @@ function CheckInAllocationContent() {
     } catch (err) {
       void showAlert({ title: 'Resize Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [commitOneModification, displayAllocationView, flightRecords, getEffectiveRecord, settings, showAlert, syncing, timeline.width, timelinePixelsPerMinute]);
+  }, [commitOneModification, displayAllocationView, flightRecords, getEffectiveRecord, settings, showAlert, syncWriteInProgress, timeline.width, timelinePixelsPerMinute]);
 
   useEffect(() => {
     if (!isRouteActive) return undefined;
@@ -2146,13 +2219,13 @@ function CheckInAllocationContent() {
     dragStateRef.current = null;
     setDraggedGroupId(null);
     clearDropPreview();
-    if (!drag || syncing) return;
+    if (!drag || syncWriteInProgress) return;
     if (drag.kind === 'unallocated') {
       void handleAllocate(drag.recordId, counter);
       return;
     }
     void handleMove(drag, rowIndex);
-  }, [clearDropPreview, handleAllocate, handleMove, syncing]);
+  }, [clearDropPreview, handleAllocate, handleMove, syncWriteInProgress]);
 
   const handleResourceDragOver = useCallback((
     event: DragEvent<HTMLDivElement>,
@@ -2187,7 +2260,7 @@ function CheckInAllocationContent() {
     setDraggedGroupId(null);
     clearDropPreview();
     setPoolDropActiveIfChanged(false);
-    if (!drag || drag.kind !== 'allocated' || syncing) return;
+    if (!drag || drag.kind !== 'allocated' || syncWriteInProgress) return;
     const record = getEffectiveRecord(drag.recordId);
     if (!record) return;
     const currentCounters = normalizeCheckInCounterList(record.counter);
@@ -2214,7 +2287,7 @@ function CheckInAllocationContent() {
     ).catch((err) => {
       void showAlert({ title: 'Unallocate Failed', message: (err as Error).message, tone: 'error' });
     });
-  }, [clearDropPreview, commitOneModification, displayAllocationView, getEffectiveRecord, setPoolDropActiveIfChanged, settings, showAlert, syncing]);
+  }, [clearDropPreview, commitOneModification, displayAllocationView, getEffectiveRecord, setPoolDropActiveIfChanged, settings, showAlert, syncWriteInProgress]);
 
   const handleDragEnd = useCallback(() => {
     dragStateRef.current = null;
@@ -2234,12 +2307,12 @@ function CheckInAllocationContent() {
 
   const handlePoolDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
     const drag = dragStateRef.current;
-    if (!drag || drag.kind !== 'allocated' || syncing) return;
+    if (!drag || drag.kind !== 'allocated' || syncWriteInProgress) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
     setPoolDropActiveIfChanged(true);
     applyVerticalEdgeScroll(event.clientX, event.clientY);
-  }, [applyVerticalEdgeScroll, setPoolDropActiveIfChanged, syncing]);
+  }, [applyVerticalEdgeScroll, setPoolDropActiveIfChanged, syncWriteInProgress]);
 
   const handlePoolDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
@@ -2486,7 +2559,7 @@ function CheckInAllocationContent() {
       <button
         key={item.record.id}
         type="button"
-        draggable={!syncing}
+        draggable={!syncWriteInProgress}
         aria-label={`${label}, ${formatLocalDateTimeLabel(item.window.start)} to ${formatLocalDateTimeLabel(item.window.end)}`}
         onClick={(event) => {
           event.stopPropagation();
@@ -2539,7 +2612,7 @@ function CheckInAllocationContent() {
         width={width}
         groupedSpan={groupedSpan}
         groupStartIndex={groupStartIndex}
-        syncing={syncing}
+        syncing={syncWriteInProgress}
         resizing={resizeState !== null}
         onDragStart={handleResourceBarDragStart}
         onDragEnd={handleDragEnd}
@@ -2565,13 +2638,13 @@ function CheckInAllocationContent() {
     resizeState,
     settings,
     startResizeInteraction,
-    syncing,
+    syncWriteInProgress,
     timeline.width,
   ]);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-surface text-on-surface font-sans" onClick={() => setContextMenu(null)}>
-      <div className="flex h-screen min-w-0 flex-1 flex-col bg-surface">
+    <div className="flex h-dvh overflow-hidden bg-surface text-on-surface font-sans" onClick={() => setContextMenu(null)}>
+      <div className="flex h-dvh min-w-0 flex-1 flex-col bg-surface">
         <header className="z-30 flex flex-none items-center justify-between border-b border-slate-200 bg-white/80 px-6 py-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
           <div>
             <h1 className="font-h3 text-h3 text-on-surface">Check-in Allocation</h1>
@@ -2696,7 +2769,7 @@ function CheckInAllocationContent() {
 
           <section
             ref={ganttFullscreenRef}
-            className={`relative min-h-0 flex-1 overflow-hidden rounded-lg border border-surface-variant bg-surface-container-lowest shadow-sm ${isGanttFullscreen ? 'fixed inset-0 z-[100] h-screen w-screen rounded-none border-0 bg-surface shadow-none' : ''}`}
+            className={`relative min-h-0 flex-1 overflow-hidden rounded-lg border border-surface-variant bg-surface-container-lowest shadow-sm ${isGanttFullscreen ? 'fixed inset-0 z-[100] h-dvh w-screen rounded-none border-0 bg-surface shadow-none' : ''}`}
           >
             <div className="flex h-full min-h-0 flex-col">
               <div className="flex h-10 flex-none items-center justify-between border-b border-surface-variant bg-surface-container-low px-3">
@@ -2711,7 +2784,7 @@ function CheckInAllocationContent() {
                       event.stopPropagation();
                       void handleUnallocateAllInPeriod();
                     }}
-                    disabled={syncing || summary.counterBlocks === 0}
+                    disabled={syncWriteInProgress || summary.counterBlocks === 0}
                     className="flex h-7 items-center gap-1.5 rounded border border-outline-variant bg-surface-container-lowest px-2 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
                     aria-label="Unallocate all counters in selected period"
                     title="Unallocate all counters in selected period"
@@ -2784,7 +2857,7 @@ function CheckInAllocationContent() {
                   <FetchServerUpdatesButton
                     fetching={fetchingUpdates}
                     progress={fetchProgress}
-                    disabled={syncing}
+                    disabled={syncInProgress}
                     onFetch={handleFetchUpdates}
                   />
                 )}
@@ -2796,7 +2869,7 @@ function CheckInAllocationContent() {
                   <FetchServerUpdatesButton
                     fetching={fetchingUpdates}
                     progress={fetchProgress}
-                    disabled={syncing}
+                    disabled={syncInProgress}
                     onFetch={handleFetchUpdates}
                   />
                 )}
@@ -3024,7 +3097,7 @@ function CheckInAllocationContent() {
                     key={action}
                     type="button"
                     role="menuitem"
-                    disabled={syncing || (action === 'reshape' && contextMenu.bar.mode !== 'broken')}
+                    disabled={syncWriteInProgress || (action === 'reshape' && contextMenu.bar.mode !== 'broken')}
                     onClick={() => handleContextAction(action as 'break' | 'reshape' | 'add' | 'remove' | 'override' | 'unallocate')}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-on-surface hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -3089,7 +3162,7 @@ function CheckInAllocationContent() {
                     </button>
                     <button
                       type="submit"
-                      disabled={syncing}
+                      disabled={syncWriteInProgress}
                       className="rounded bg-primary px-3 py-1.5 text-sm font-semibold text-on-primary hover:bg-primary-container hover:text-on-primary-container disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       Apply

@@ -1,0 +1,142 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "app/src-tauri/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 31,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/src-tauri/src/lib.rs",
+      "language": "rust",
+      "sizeLines": 683,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src-tauri/src/main.rs",
+      "language": "rust",
+      "sizeLines": 5,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src-tauri/src/native_catchup.rs",
+      "language": "rust",
+      "sizeLines": 6607,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src-tauri/tauri.conf.json",
+      "language": "json",
+      "sizeLines": 55,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/src-tauri/tests/native_catchup.rs",
+      "language": "rust",
+      "sizeLines": 3507,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/allocationStoreIntegration.source.test.ts",
+      "language": "typescript",
+      "sizeLines": 19,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/globals.css",
+      "language": "css",
+      "sizeLines": 171,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "app/src/app/hooks/useSeasonWorkspaceRefresh.source.test.ts",
+      "language": "typescript",
+      "sizeLines": 14,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeLocalSeasonStore.source.test.ts",
+      "language": "typescript",
+      "sizeLines": 15,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/node-sqlite.d.ts",
+      "language": "typescript",
+      "sizeLines": 10,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonalImportModeGuard.test.ts",
+      "language": "typescript",
+      "sizeLines": 37,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase.env.example",
+      "language": "example",
+      "sizeLines": 12,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase/config.toml",
+      "language": "toml",
+      "sizeLines": 16,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/supabase/functions/schedule-telegram-notify/.npmrc",
+      "language": "unknown",
+      "sizeLines": 3,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase/functions/schedule-telegram-notify/deno.json",
+      "language": "json",
+      "sizeLines": 6,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/supabase/schema.sql",
+      "language": "sql",
+      "sizeLines": 1925,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/tailwind.config.ts",
+      "language": "typescript",
+      "sizeLines": 104,
+      "fileCategory": "code"
+    },
+    {
+      "path": "rule-regression-tests.cjs",
+      "language": "javascript",
+      "sizeLines": 9217,
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "app/src-tauri/Cargo.toml": [],
+    "app/src-tauri/src/lib.rs": [
+      "app/src-tauri/src/native_catchup.rs"
+    ],
+    "app/src-tauri/src/main.rs": [],
+    "app/src-tauri/src/native_catchup.rs": [],
+    "app/src-tauri/tauri.conf.json": [],
+    "app/src-tauri/tests/native_catchup.rs": [],
+    "app/src/app/allocationStoreIntegration.source.test.ts": [],
+    "app/src/app/globals.css": [],
+    "app/src/app/hooks/useSeasonWorkspaceRefresh.source.test.ts": [],
+    "app/src/lib/nativeLocalSeasonStore.source.test.ts": [],
+    "app/src/lib/node-sqlite.d.ts": [],
+    "app/src/lib/seasonalImportModeGuard.test.ts": [],
+    "app/supabase.env.example": [],
+    "app/supabase/config.toml": [],
+    "app/supabase/functions/schedule-telegram-notify/.npmrc": [],
+    "app/supabase/functions/schedule-telegram-notify/deno.json": [],
+    "app/supabase/schema.sql": [],
+    "app/tailwind.config.ts": [],
+    "rule-regression-tests.cjs": []
+  }
+}

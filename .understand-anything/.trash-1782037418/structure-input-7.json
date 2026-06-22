@@ -1,0 +1,130 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "app/src/app/dashboard/components/AiNotebookBlockRenderers.tsx",
+      "language": "typescript",
+      "sizeLines": 415,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/dashboard/components/AiNotebookCanvas.tsx",
+      "language": "typescript",
+      "sizeLines": 512,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/dashboard/components/AiWorkspacePanel.tsx",
+      "language": "typescript",
+      "sizeLines": 233,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/dashboard/components/DateRangeFilter.tsx",
+      "language": "typescript",
+      "sizeLines": 127,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/dashboard/page.tsx",
+      "language": "typescript",
+      "sizeLines": 3197,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/dashboardAiAnalysis.ts",
+      "language": "typescript",
+      "sizeLines": 6050,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/dashboardAiShared.ts",
+      "language": "typescript",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/dashboardAnalysis.ts",
+      "language": "typescript",
+      "sizeLines": 712,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/dashboardReportExport.ts",
+      "language": "typescript",
+      "sizeLines": 463,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/routeCountry.ts",
+      "language": "typescript",
+      "sizeLines": 251,
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "app/src/app/dashboard/components/AiNotebookBlockRenderers.tsx": [
+      "app/src/lib/dashboardAiAnalysis.ts"
+    ],
+    "app/src/app/dashboard/components/AiNotebookCanvas.tsx": [
+      "app/src/app/dashboard/components/AiNotebookBlockRenderers.tsx",
+      "app/src/lib/dashboardAiAnalysis.ts"
+    ],
+    "app/src/app/dashboard/components/AiWorkspacePanel.tsx": [
+      "app/src/app/dashboard/components/AiNotebookBlockRenderers.tsx",
+      "app/src/app/dashboard/components/AiNotebookCanvas.tsx",
+      "app/src/lib/dashboardAiAnalysis.ts",
+      "app/src/lib/dashboardReportExport.ts"
+    ],
+    "app/src/app/dashboard/components/DateRangeFilter.tsx": [],
+    "app/src/app/dashboard/page.tsx": [
+      "app/src/app/components/ExportNotificationProvider.tsx",
+      "app/src/app/components/FetchServerUpdatesButton.tsx",
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/app/components/RouteCacheContext.tsx",
+      "app/src/app/components/SeasonSyncProvider.tsx",
+      "app/src/app/dashboard/components/AiNotebookBlockRenderers.tsx",
+      "app/src/app/dashboard/components/AiNotebookCanvas.tsx",
+      "app/src/app/dashboard/components/AiWorkspacePanel.tsx",
+      "app/src/app/dashboard/components/DateRangeFilter.tsx",
+      "app/src/app/hooks/useSeasonWorkspaceRefresh.ts",
+      "app/src/app/hooks/useSessionScrollRestoration.ts",
+      "app/src/app/hooks/useSessionState.ts",
+      "app/src/lib/dashboardAiAnalysis.ts",
+      "app/src/lib/dashboardAnalysis.ts",
+      "app/src/lib/dashboardReportExport.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/importSeasonRules.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeSeasonBootstrap.ts",
+      "app/src/lib/nativeSeasonRepository.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/routeCountry.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/seasonWorkspaceStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/dashboardAiAnalysis.ts": [
+      "app/src/lib/dashboardAiShared.ts",
+      "app/src/lib/dashboardAnalysis.ts",
+      "app/src/lib/routeCountry.ts",
+      "app/src/lib/settingsRules.ts",
+      "app/src/lib/supabase.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/dashboardAiShared.ts": [],
+    "app/src/lib/dashboardAnalysis.ts": [
+      "app/src/lib/routeCountry.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/dashboardReportExport.ts": [
+      "app/src/lib/dashboardAiAnalysis.ts",
+      "app/src/lib/exportSave.ts",
+      "app/src/lib/routeCountry.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/routeCountry.ts": [
+      "app/src/lib/types.ts"
+    ]
+  }
+}

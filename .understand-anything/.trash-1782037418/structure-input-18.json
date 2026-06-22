@@ -1,0 +1,28 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "docs/superpowers/specs/2026-05-07-daily-schedule-design.md",
+      "language": "markdown",
+      "sizeLines": 165,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-05-08-checkin-allocation-discrete-grouping-design.md",
+      "language": "markdown",
+      "sizeLines": 321,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-05-08-checkin-counter-management-settings-design.md",
+      "language": "markdown",
+      "sizeLines": 240,
+      "fileCategory": "docs"
+    }
+  ],
+  "batchImportData": {
+    "docs/superpowers/specs/2026-05-07-daily-schedule-design.md": [],
+    "docs/superpowers/specs/2026-05-08-checkin-allocation-discrete-grouping-design.md": [],
+    "docs/superpowers/specs/2026-05-08-checkin-counter-management-settings-design.md": []
+  }
+}

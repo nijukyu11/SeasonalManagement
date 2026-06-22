@@ -1,0 +1,851 @@
+{
+  "scriptCompleted": true,
+  "stats": {
+    "filesScanned": 243,
+    "filesWithImports": 116,
+    "totalEdges": 482
+  },
+  "importMap": {
+    ".cursor/rules/Vietnamese.mdc": [],
+    ".github/workflows/release.yml": [],
+    ".kiro/specs/architecture-database-audit/.config.kiro": [],
+    ".kiro/specs/architecture-database-audit/design.md": [],
+    ".kiro/specs/architecture-database-audit/requirements.md": [],
+    ".kiro/specs/cold-start-sync-load-failure/.config.kiro": [],
+    ".kiro/specs/cold-start-sync-load-failure/bugfix.md": [],
+    ".kiro/specs/cold-start-sync-load-failure/design.md": [],
+    ".understand-anything/.understandignore": [],
+    "AGENTS.md": [],
+    "ai_agent_analysis.md": [],
+    "app/.firebaserc": [],
+    "app/AGENTS.md": [],
+    "app/ai-agent/agent_sidecar.py": [
+      "app/ai-agent/agent/main.py"
+    ],
+    "app/ai-agent/agent/__init__.py": [],
+    "app/ai-agent/agent/contracts.py": [],
+    "app/ai-agent/agent/main.py": [
+      "app/ai-agent/agent/contracts.py",
+      "app/ai-agent/agent/provider_clients.py",
+      "app/ai-agent/agent/sqlite_source.py"
+    ],
+    "app/ai-agent/agent/provider_clients.py": [],
+    "app/ai-agent/agent/sql_validator.py": [],
+    "app/ai-agent/agent/sqlite_source.py": [
+      "app/ai-agent/agent/contracts.py",
+      "app/ai-agent/agent/sql_validator.py"
+    ],
+    "app/ai-agent/requirements-build.txt": [],
+    "app/ai-agent/requirements.txt": [],
+    "app/ai-agent/tests/__init__.py": [],
+    "app/ai-agent/tests/test_local_agent_workflows.py": [
+      "app/ai-agent/agent/contracts.py",
+      "app/ai-agent/agent/main.py"
+    ],
+    "app/ai-agent/tests/test_provider_clients.py": [
+      "app/ai-agent/agent/provider_clients.py"
+    ],
+    "app/ai-agent/tests/test_sql_validator.py": [
+      "app/ai-agent/agent/sql_validator.py"
+    ],
+    "app/CLAUDE.md": [],
+    "app/eslint.config.mjs": [],
+    "app/firebase.json": [],
+    "app/firestore.indexes.json": [],
+    "app/firestore.rules": [],
+    "app/next.config.ts": [],
+    "app/package.json": [],
+    "app/postcss.config.js": [],
+    "app/README.md": [],
+    "app/scripts/build-python-agent.cjs": [],
+    "app/scripts/check-skawld-sdk.mjs": [],
+    "app/scripts/configure-release-repo.cjs": [],
+    "app/scripts/dashboard-ai-local-sql-source.mjs": [],
+    "app/scripts/migrate-firestore-to-supabase.mjs": [],
+    "app/scripts/rule-regression-tests.cjs": [],
+    "app/scripts/skawld-dashboard-agent-harness.mjs": [
+      "app/scripts/dashboard-ai-local-sql-source.mjs"
+    ],
+    "app/scripts/sync-release-version.cjs": [],
+    "app/scripts/test-skawld-dashboard-agent-harness.mjs": [
+      "app/scripts/dashboard-ai-local-sql-source.mjs",
+      "app/scripts/skawld-dashboard-agent-harness.mjs"
+    ],
+    "app/src-tauri/build.rs": [],
+    "app/src-tauri/capabilities/default.json": [],
+    "app/src-tauri/Cargo.toml": [],
+    "app/src-tauri/src/lib.rs": [
+      "app/src-tauri/src/native_catchup.rs"
+    ],
+    "app/src-tauri/src/main.rs": [],
+    "app/src-tauri/src/native_catchup.rs": [],
+    "app/src-tauri/tauri.conf.json": [],
+    "app/src-tauri/tests/native_catchup.rs": [],
+    "app/src/app/allocationStoreIntegration.source.test.ts": [],
+    "app/src/app/audit/page.tsx": [
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/remoteStore.ts"
+    ],
+    "app/src/app/checkin/checkInLocalCommitWorker.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/checkin/page.tsx": [
+      "app/src/app/components/AppDialog.tsx",
+      "app/src/app/components/ExportNotificationProvider.tsx",
+      "app/src/app/components/FetchServerUpdatesButton.tsx",
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/app/components/RouteCacheContext.tsx",
+      "app/src/app/components/SeasonConflictReviewControl.tsx",
+      "app/src/app/components/SeasonSyncProvider.tsx",
+      "app/src/app/components/SyncActionButton.tsx",
+      "app/src/app/hooks/useSeasonWorkspaceRefresh.ts",
+      "app/src/app/hooks/useSessionScrollRestoration.ts",
+      "app/src/app/hooks/useSessionState.ts",
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/checkinAllocation.ts",
+      "app/src/lib/checkinPdfExport.ts",
+      "app/src/lib/dailySchedule.ts",
+      "app/src/lib/flightBarDragImage.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/importSeasonRules.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeSeasonBootstrap.ts",
+      "app/src/lib/nativeSeasonRepository.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/seasonWorkspaceStore.ts",
+      "app/src/lib/types.ts",
+      "app/src/lib/uiUndoMemory.ts"
+    ],
+    "app/src/app/components/AppDialog.tsx": [
+      "app/src/app/components/RouteCacheContext.tsx"
+    ],
+    "app/src/app/components/AppRouteCache.tsx": [
+      "app/src/app/audit/page.tsx",
+      "app/src/app/checkin/page.tsx",
+      "app/src/app/components/RouteCacheContext.tsx",
+      "app/src/app/daily/page.tsx",
+      "app/src/app/dashboard/page.tsx",
+      "app/src/app/detailed/page.tsx",
+      "app/src/app/gate/page.tsx",
+      "app/src/app/page.tsx",
+      "app/src/app/seasonal/page.tsx",
+      "app/src/app/settings/page.tsx"
+    ],
+    "app/src/app/components/AppShell.tsx": [
+      "app/src/app/components/AppRouteCache.tsx",
+      "app/src/app/components/AppSidebar.tsx",
+      "app/src/app/components/AppUpdateProvider.tsx",
+      "app/src/app/components/ExportNotificationProvider.tsx",
+      "app/src/app/components/NativeCloseCleanupGuard.tsx",
+      "app/src/app/components/NativeRuntimeGate.tsx",
+      "app/src/app/components/NativeStartupSessionReset.tsx",
+      "app/src/app/components/OperatorAuthGate.tsx",
+      "app/src/app/components/SeasonSyncProvider.tsx"
+    ],
+    "app/src/app/components/AppSidebar.tsx": [
+      "app/src/app/components/OperatorAuthGate.tsx",
+      "app/src/app/components/PbbIcon.tsx"
+    ],
+    "app/src/app/components/AppUpdateProvider.tsx": [
+      "app/src/lib/appUpdater.ts"
+    ],
+    "app/src/app/components/ExportNotificationProvider.tsx": [
+      "app/src/lib/exportSave.ts"
+    ],
+    "app/src/app/components/FetchServerUpdatesButton.tsx": [],
+    "app/src/app/components/HeaderActionMenu.tsx": [],
+    "app/src/app/components/LoadingStatusPanel.tsx": [
+      "app/src/lib/importProgress.ts"
+    ],
+    "app/src/app/components/NativeCloseCleanupGuard.tsx": [
+      "app/src/app/components/AppDialog.tsx",
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/lib/appSessionCleanup.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/nativeClosePolicy.ts"
+    ],
+    "app/src/app/components/NativeRuntimeGate.tsx": [
+      "app/src/lib/nativeRuntime.ts"
+    ],
+    "app/src/app/components/NativeStartupSessionReset.tsx": [
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/lib/appSessionCleanup.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/uiUndoMemory.ts"
+    ],
+    "app/src/app/components/NewFlightModal.tsx": [
+      "app/src/lib/detailedScheduleState.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/components/OperatorAuthGate.tsx": [
+      "app/src/lib/supabase.ts"
+    ],
+    "app/src/app/components/PbbIcon.tsx": [],
+    "app/src/app/components/RouteCacheContext.tsx": [],
+    "app/src/app/components/SeasonConflictReviewControl.tsx": [
+      "app/src/app/components/AppDialog.tsx",
+      "app/src/lib/nativeSeasonRepository.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/seasonDataCache.ts"
+    ],
+    "app/src/app/components/SeasonSyncProvider.tsx": [
+      "app/src/app/components/RouteCacheContext.tsx",
+      "app/src/lib/nativeSeasonBootstrap.ts",
+      "app/src/lib/nativeSeasonRepository.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/seasonAutoSync.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/seasonDataCache.ts"
+    ],
+    "app/src/app/components/SyncActionButton.tsx": [],
+    "app/src/app/components/WorkspacePageHeader.tsx": [],
+    "app/src/app/daily/page.tsx": [
+      "app/src/app/components/AppDialog.tsx",
+      "app/src/app/components/ExportNotificationProvider.tsx",
+      "app/src/app/components/FetchServerUpdatesButton.tsx",
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/app/components/NewFlightModal.tsx",
+      "app/src/app/components/PbbIcon.tsx",
+      "app/src/app/components/RouteCacheContext.tsx",
+      "app/src/app/components/SeasonConflictReviewControl.tsx",
+      "app/src/app/components/SeasonSyncProvider.tsx",
+      "app/src/app/components/SyncActionButton.tsx",
+      "app/src/app/hooks/useSeasonWorkspaceRefresh.ts",
+      "app/src/app/hooks/useSessionScrollRestoration.ts",
+      "app/src/app/hooks/useSessionState.ts",
+      "app/src/lib/atomicSchedule.ts",
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/dailySchedule.ts",
+      "app/src/lib/dailyScheduleExport.ts",
+      "app/src/lib/dailyScheduleImport.ts",
+      "app/src/lib/detailedScheduleState.ts",
+      "app/src/lib/exportSave.ts",
+      "app/src/lib/gateAllocation.ts",
+      "app/src/lib/iataSeason.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/importSeasonRules.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeSeasonBootstrap.ts",
+      "app/src/lib/nativeSeasonRepository.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/seasonWorkspaceStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/dashboard/components/AiNotebookBlockRenderers.tsx": [
+      "app/src/lib/dashboardAiAnalysis.ts"
+    ],
+    "app/src/app/dashboard/components/AiNotebookCanvas.tsx": [
+      "app/src/app/dashboard/components/AiNotebookBlockRenderers.tsx",
+      "app/src/lib/dashboardAiAnalysis.ts"
+    ],
+    "app/src/app/dashboard/components/AiWorkspacePanel.tsx": [
+      "app/src/app/dashboard/components/AiNotebookBlockRenderers.tsx",
+      "app/src/app/dashboard/components/AiNotebookCanvas.tsx",
+      "app/src/lib/dashboardAiAnalysis.ts",
+      "app/src/lib/dashboardReportExport.ts"
+    ],
+    "app/src/app/dashboard/components/DateRangeFilter.tsx": [],
+    "app/src/app/dashboard/page.tsx": [
+      "app/src/app/components/ExportNotificationProvider.tsx",
+      "app/src/app/components/FetchServerUpdatesButton.tsx",
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/app/components/RouteCacheContext.tsx",
+      "app/src/app/components/SeasonSyncProvider.tsx",
+      "app/src/app/dashboard/components/AiNotebookBlockRenderers.tsx",
+      "app/src/app/dashboard/components/AiNotebookCanvas.tsx",
+      "app/src/app/dashboard/components/AiWorkspacePanel.tsx",
+      "app/src/app/dashboard/components/DateRangeFilter.tsx",
+      "app/src/app/hooks/useSeasonWorkspaceRefresh.ts",
+      "app/src/app/hooks/useSessionScrollRestoration.ts",
+      "app/src/app/hooks/useSessionState.ts",
+      "app/src/lib/dashboardAiAnalysis.ts",
+      "app/src/lib/dashboardAnalysis.ts",
+      "app/src/lib/dashboardReportExport.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/importSeasonRules.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeSeasonBootstrap.ts",
+      "app/src/lib/nativeSeasonRepository.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/routeCountry.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/seasonWorkspaceStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/detailed/ConfirmModal.tsx": [
+      "app/src/lib/sourceRowPatterns.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/detailed/EditModal.tsx": [
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/detailed/page.tsx": [
+      "app/src/app/components/AppDialog.tsx",
+      "app/src/app/components/ExportNotificationProvider.tsx",
+      "app/src/app/components/FetchServerUpdatesButton.tsx",
+      "app/src/app/components/HeaderActionMenu.tsx",
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/app/components/NewFlightModal.tsx",
+      "app/src/app/components/RouteCacheContext.tsx",
+      "app/src/app/components/SeasonConflictReviewControl.tsx",
+      "app/src/app/components/SeasonSyncProvider.tsx",
+      "app/src/app/components/SyncActionButton.tsx",
+      "app/src/app/components/WorkspacePageHeader.tsx",
+      "app/src/app/detailed/ConfirmModal.tsx",
+      "app/src/app/detailed/EditModal.tsx",
+      "app/src/app/hooks/useSeasonWorkspaceRefresh.ts",
+      "app/src/app/hooks/useSessionScrollRestoration.ts",
+      "app/src/lib/atomicSchedule.ts",
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/detailedScheduleState.ts",
+      "app/src/lib/exportSave.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/importSeasonRules.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeSeasonBootstrap.ts",
+      "app/src/lib/nativeSeasonRepository.ts",
+      "app/src/lib/pairDeletion.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/scheduleNotifications.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/seasonWorkspaceStore.ts",
+      "app/src/lib/types.ts",
+      "app/src/lib/uiUndoMemory.ts"
+    ],
+    "app/src/app/gate/gateLocalCommitWorker.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/gate/page.tsx": [
+      "app/src/app/components/AppDialog.tsx",
+      "app/src/app/components/ExportNotificationProvider.tsx",
+      "app/src/app/components/FetchServerUpdatesButton.tsx",
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/app/components/PbbIcon.tsx",
+      "app/src/app/components/RouteCacheContext.tsx",
+      "app/src/app/components/SeasonConflictReviewControl.tsx",
+      "app/src/app/components/SeasonSyncProvider.tsx",
+      "app/src/app/components/SyncActionButton.tsx",
+      "app/src/app/hooks/useSeasonWorkspaceRefresh.ts",
+      "app/src/app/hooks/useSessionScrollRestoration.ts",
+      "app/src/app/hooks/useSessionState.ts",
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/dailySchedule.ts",
+      "app/src/lib/gateAllocation.ts",
+      "app/src/lib/gatePdfExport.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/importSeasonRules.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeSeasonBootstrap.ts",
+      "app/src/lib/nativeSeasonRepository.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/seasonWorkspaceStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/globals.css": [],
+    "app/src/app/hooks/useSeasonWorkspaceRefresh.source.test.ts": [],
+    "app/src/app/hooks/useSeasonWorkspaceRefresh.ts": [
+      "app/src/app/components/RouteCacheContext.tsx",
+      "app/src/lib/seasonDataCache.ts"
+    ],
+    "app/src/app/hooks/useSessionScrollRestoration.ts": [],
+    "app/src/app/hooks/useSessionState.ts": [],
+    "app/src/app/layout.tsx": [
+      "app/src/app/components/AppShell.tsx",
+      "app/src/app/globals.css"
+    ],
+    "app/src/app/page.tsx": [
+      "app/src/app/dashboard/page.tsx"
+    ],
+    "app/src/app/seasonal/page.tsx": [],
+    "app/src/app/SeasonalSchedulePage.tsx": [
+      "app/src/app/components/AppDialog.tsx",
+      "app/src/app/components/ExportNotificationProvider.tsx",
+      "app/src/app/components/FetchServerUpdatesButton.tsx",
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/app/components/NewFlightModal.tsx",
+      "app/src/app/components/SeasonConflictReviewControl.tsx",
+      "app/src/app/components/SeasonSyncProvider.tsx",
+      "app/src/app/components/SyncActionButton.tsx",
+      "app/src/app/components/WorkspacePageHeader.tsx",
+      "app/src/app/hooks/useSeasonWorkspaceRefresh.ts",
+      "app/src/lib/atomicSchedule.ts",
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/canonicalSeasonalRows.ts",
+      "app/src/lib/detailedScheduleState.ts",
+      "app/src/lib/exporter.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/importSeasonRules.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeSeasonBootstrap.ts",
+      "app/src/lib/nativeSeasonRepository.ts",
+      "app/src/lib/pairDeletion.ts",
+      "app/src/lib/parser.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/scheduleNotifications.ts",
+      "app/src/lib/seasonalDisplayAggregator.ts",
+      "app/src/lib/seasonalFlightFilter.ts",
+      "app/src/lib/seasonalImportPatch.ts",
+      "app/src/lib/seasonalLinkActions.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/seasonWorkspaceStore.ts",
+      "app/src/lib/types.ts",
+      "app/src/lib/uiUndoMemory.ts"
+    ],
+    "app/src/app/settings/components/AcGroupTab.tsx": [
+      "app/src/app/settings/components/SettingsTabControls.tsx",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/settings/components/AiAnalysisTab.tsx": [
+      "app/src/app/settings/components/SettingsTabControls.tsx",
+      "app/src/lib/settingsRules.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/settings/components/AirlineColorsTab.tsx": [
+      "app/src/app/settings/components/SettingsTabControls.tsx",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/settings/components/CheckInCountersTab.tsx": [
+      "app/src/app/settings/components/SettingsTabControls.tsx",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/settings/components/GatesTab.tsx": [
+      "app/src/app/settings/components/SettingsTabControls.tsx",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/settings/components/LocksAndOutagesTab.tsx": [
+      "app/src/app/settings/components/SettingsTabControls.tsx",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/settings/components/RouteCountryTab.tsx": [
+      "app/src/app/settings/components/SettingsTabControls.tsx",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/settings/components/RulesTab.tsx": [
+      "app/src/app/settings/components/SettingsTabControls.tsx",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/settings/components/SeasonRepairTab.tsx": [],
+    "app/src/app/settings/components/SettingsTabControls.tsx": [],
+    "app/src/app/settings/components/UpdatesTab.tsx": [
+      "app/src/app/components/AppUpdateProvider.tsx",
+      "app/src/lib/appUpdater.ts"
+    ],
+    "app/src/app/settings/page.tsx": [
+      "app/src/app/components/AppDialog.tsx",
+      "app/src/app/components/LoadingStatusPanel.tsx",
+      "app/src/app/components/RouteCacheContext.tsx",
+      "app/src/app/hooks/useSessionScrollRestoration.ts",
+      "app/src/app/hooks/useSessionState.ts",
+      "app/src/app/settings/components/AcGroupTab.tsx",
+      "app/src/app/settings/components/AiAnalysisTab.tsx",
+      "app/src/app/settings/components/AirlineColorsTab.tsx",
+      "app/src/app/settings/components/CheckInCountersTab.tsx",
+      "app/src/app/settings/components/GatesTab.tsx",
+      "app/src/app/settings/components/LocksAndOutagesTab.tsx",
+      "app/src/app/settings/components/RouteCountryTab.tsx",
+      "app/src/app/settings/components/RulesTab.tsx",
+      "app/src/app/settings/components/SeasonRepairTab.tsx",
+      "app/src/app/settings/components/UpdatesTab.tsx",
+      "app/src/lib/atomicSchedule.ts",
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/canonicalSeasonalRows.ts",
+      "app/src/lib/checkInCounterSettings.ts",
+      "app/src/lib/dashboardAiAdmin.ts",
+      "app/src/lib/importProgress.ts",
+      "app/src/lib/importSeasonRules.ts",
+      "app/src/lib/nativeSeasonRepository.ts",
+      "app/src/lib/parser.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/routeCountry.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/settingsPageActions.ts",
+      "app/src/lib/settingsRules.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/appSessionCleanup.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/uiUndoMemory.ts"
+    ],
+    "app/src/lib/appUpdater.test.ts": [
+      "app/src/lib/appUpdater.ts"
+    ],
+    "app/src/lib/appUpdater.ts": [
+      "app/src/lib/nativeRuntime.ts"
+    ],
+    "app/src/lib/atomicSchedule.ts": [
+      "app/src/lib/iataSeason.ts",
+      "app/src/lib/parser.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/auditLog.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/canonicalSeasonalRows.ts": [
+      "app/src/lib/atomicSchedule.ts",
+      "app/src/lib/detailedScheduleState.ts",
+      "app/src/lib/exportSave.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/checkinAllocation.ts": [
+      "app/src/lib/checkInCounterSettings.ts",
+      "app/src/lib/settingsRules.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/checkInCounterSettings.ts": [
+      "app/src/lib/checkinAllocation.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/checkinPdfExport.ts": [
+      "app/src/lib/checkinAllocation.ts",
+      "app/src/lib/exportSave.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/dailySchedule.ts": [
+      "app/src/lib/atomicSchedule.ts",
+      "app/src/lib/detailedScheduleState.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/dailyScheduleExport.ts": [
+      "app/src/lib/dailySchedule.ts",
+      "app/src/lib/routeCountry.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/dailyScheduleImport.ts": [
+      "app/src/lib/atomicSchedule.ts",
+      "app/src/lib/iataSeason.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/dashboardAiAdmin.ts": [
+      "app/src/lib/supabase.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/dashboardAiAnalysis.ts": [
+      "app/src/lib/dashboardAiShared.ts",
+      "app/src/lib/dashboardAnalysis.ts",
+      "app/src/lib/routeCountry.ts",
+      "app/src/lib/settingsRules.ts",
+      "app/src/lib/supabase.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/dashboardAiShared.ts": [],
+    "app/src/lib/dashboardAnalysis.ts": [
+      "app/src/lib/routeCountry.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/dashboardReportExport.ts": [
+      "app/src/lib/dashboardAiAnalysis.ts",
+      "app/src/lib/exportSave.ts",
+      "app/src/lib/routeCountry.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/detailedScheduleState.test.ts": [
+      "app/src/lib/detailedScheduleState.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/detailedScheduleState.ts": [
+      "app/src/lib/flightPairIntegrity.ts",
+      "app/src/lib/iataSeason.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/exporter.test.ts": [
+      "app/src/lib/exporter.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/exporter.ts": [
+      "app/src/lib/exportSave.ts",
+      "app/src/lib/flightPairIntegrity.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/exportSave.ts": [],
+    "app/src/lib/firebase.ts": [],
+    "app/src/lib/firestore.ts": [
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/firebase.ts",
+      "app/src/lib/firestoreWritePlanner.ts",
+      "app/src/lib/modHistorySizing.ts",
+      "app/src/lib/persistenceSchema.ts",
+      "app/src/lib/settingsRules.ts",
+      "app/src/lib/sourceRowPatterns.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/firestoreWritePlanner.ts": [],
+    "app/src/lib/flightBarDragImage.ts": [],
+    "app/src/lib/flightPairIntegrity.ts": [
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/gateAllocation.ts": [
+      "app/src/lib/dailySchedule.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/gatePdfExport.ts": [
+      "app/src/lib/exportSave.ts",
+      "app/src/lib/gateAllocation.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/iataSeason.ts": [
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/importProgress.ts": [],
+    "app/src/lib/importSeasonRules.ts": [],
+    "app/src/lib/linking.ts": [
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/localSeasonSqlStore.test.ts": [
+      "app/src/lib/localSeasonSqlStore.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/localSeasonSqlStore.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/localSeasonStore.ts": [
+      "app/src/lib/localSeasonSqlStore.ts",
+      "app/src/lib/nativeLocalSeasonStore.ts",
+      "app/src/lib/nativeRuntime.ts",
+      "app/src/lib/persistenceSchema.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/modHistorySizing.ts": [
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/nativeClosePolicy.test.ts": [
+      "app/src/lib/nativeClosePolicy.ts"
+    ],
+    "app/src/lib/nativeClosePolicy.ts": [],
+    "app/src/lib/nativeLocalSeasonStore.source.test.ts": [],
+    "app/src/lib/nativeLocalSeasonStore.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeRuntime.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/nativeRuntime.ts": [],
+    "app/src/lib/nativeSeasonBootstrap.ts": [
+      "app/src/lib/nativeSeasonRepository.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/nativeSeasonCatchup.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeRuntime.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/supabase.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/nativeSeasonRepository.ts": [],
+    "app/src/lib/node-sqlite.d.ts": [],
+    "app/src/lib/pairDeletion.ts": [
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/parser.ts": [
+      "app/src/lib/importSeasonRules.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/persistenceSchema.ts": [
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/remoteStore.ts": [
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeRuntime.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/sourceRowPatterns.ts",
+      "app/src/lib/supabase.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/routeCountry.ts": [
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/scheduleNotifications.test.ts": [
+      "app/src/lib/pairDeletion.ts",
+      "app/src/lib/scheduleNotifications.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/scheduleNotifications.ts": [
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonalDisplayAggregator.ts": [
+      "app/src/lib/atomicSchedule.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonalFlightFilter.test.ts": [
+      "app/src/lib/seasonalFlightFilter.ts"
+    ],
+    "app/src/lib/seasonalFlightFilter.ts": [],
+    "app/src/lib/seasonalImportModeGuard.test.ts": [],
+    "app/src/lib/seasonalImportPatch.test.ts": [
+      "app/src/lib/seasonalImportPatch.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonalImportPatch.ts": [
+      "app/src/lib/iataSeason.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonalLinkActions.ts": [
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonAutoSync.ts": [
+      "app/src/lib/seasonSync.ts"
+    ],
+    "app/src/lib/seasonChangeEvents.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonConflictResolution.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/seasonDataCache.ts"
+    ],
+    "app/src/lib/seasonDataCache.test.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/seasonDataCache.ts"
+    ],
+    "app/src/lib/seasonDataCache.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonSync.ts": [
+      "app/src/lib/atomicSchedule.ts",
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonWorkspaceBootstrap.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/seasonSync.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonWorkspaceStore.test.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/seasonWorkspaceStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonWorkspaceStore.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/settingsPageActions.ts": [
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/settingsRules.ts": [
+      "app/src/lib/routeCountry.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/sourceRowPatterns.ts": [
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/supabase.ts": [],
+    "app/src/lib/supabaseRelationalMappers.ts": [
+      "app/src/lib/iataSeason.ts",
+      "app/src/lib/persistenceSchema.ts",
+      "app/src/lib/settingsRules.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/supabaseStore.ts": [
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/firestoreWritePlanner.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/modHistorySizing.ts",
+      "app/src/lib/persistenceSchema.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/settingsRules.ts",
+      "app/src/lib/sourceRowPatterns.ts",
+      "app/src/lib/supabase.ts",
+      "app/src/lib/supabaseRelationalMappers.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/types.ts": [],
+    "app/src/lib/uiUndoMemory.ts": [],
+    "app/supabase.env.example": [],
+    "app/supabase/config.toml": [],
+    "app/supabase/functions/_shared/cors.ts": [],
+    "app/supabase/functions/_shared/dashboardAiShared.ts": [],
+    "app/supabase/functions/dashboard-ai-analysis/index.ts": [
+      "app/supabase/functions/_shared/cors.ts",
+      "app/supabase/functions/_shared/dashboardAiShared.ts"
+    ],
+    "app/supabase/functions/rotate-dashboard-ai-key/index.ts": [
+      "app/supabase/functions/_shared/cors.ts"
+    ],
+    "app/supabase/functions/schedule-telegram-notify/.npmrc": [],
+    "app/supabase/functions/schedule-telegram-notify/deno.json": [],
+    "app/supabase/functions/schedule-telegram-notify/index.ts": [
+      "app/supabase/functions/_shared/cors.ts"
+    ],
+    "app/supabase/migrations/20260517000000_add_ai_operator_access.sql": [],
+    "app/supabase/migrations/20260520034255_relational_core_settings.sql": [],
+    "app/supabase/migrations/20260520084127_continuous_operational_data.sql": [],
+    "app/supabase/migrations/20260521185759_ai_workspace_reporting_security.sql": [],
+    "app/supabase/migrations/20260522000000_fix_sync_conflicts_and_ai_access.sql": [],
+    "app/supabase/migrations/20260522224947_ai_query_rich_notebook_reporting.sql": [],
+    "app/supabase/migrations/20260523090039_fix_checkin_window_json_null.sql": [],
+    "app/supabase/migrations/20260523112828_public_dashboard_ai_query_aggregated.sql": [],
+    "app/supabase/migrations/20260523175500_reporting_query_aggregated.sql": [],
+    "app/supabase/migrations/20260523234451_schedule_telegram_notifications.sql": [],
+    "app/supabase/migrations/20260524100927_optimize_sync_v2_timeout.sql": [],
+    "app/supabase/migrations/20260524160004_reliable_sync_cursor.sql": [],
+    "app/supabase/migrations/20260524173126_catchup_snapshot_rpc.sql": [],
+    "app/supabase/migrations/20260527061056_allow_deepseek_ai_provider.sql": [],
+    "app/supabase/migrations/20260527090000_public_dashboard_ai_query_rows.sql": [],
+    "app/supabase/migrations/20260527092757_exact_season_filtering.sql": [],
+    "app/supabase/migrations/20260528020520_ai_context_documents.sql": [],
+    "app/supabase/migrations/20260530093000_harden_sync_v2_ack_coverage.sql": [],
+    "app/supabase/migrations/20260531023846_prevent_orphan_modification_snapshots.sql": [],
+    "app/supabase/migrations/20260602093244_ai_local_provider_keys.sql": [],
+    "app/supabase/migrations/20260602110500_ai_provider_key_rpc.sql": [],
+    "app/supabase/migrations/20260616_unique_seasons_season_code.sql": [],
+    "app/supabase/schema.sql": [],
+    "app/tailwind.config.ts": [],
+    "app/tsconfig.json": [],
+    "architecture.md": [],
+    "code.html": [],
+    "context.md": [],
+    "DESIGN.md": [],
+    "docs/ai-report-export-guide.md": [],
+    "docs/backend-supabase-schema-functions.md": [],
+    "docs/superpowers/plans/2026-05-07-daily-schedule.md": [],
+    "docs/superpowers/plans/2026-05-08-checkin-allocation-discrete-grouping.md": [],
+    "docs/superpowers/plans/2026-05-08-checkin-counter-management-settings.md": [],
+    "docs/superpowers/plans/2026-05-08-checkin-gantt-ux-enhancements.md": [],
+    "docs/superpowers/plans/2026-06-16-native-sync-conflict-hardening.md": [],
+    "docs/superpowers/plans/2026-06-16-season-assignment-and-atomic-import-review.md": [],
+    "docs/superpowers/plans/2026-06-16-season-ownership-hardening-implementation.md": [],
+    "docs/superpowers/specs/2026-05-07-daily-schedule-design.md": [],
+    "docs/superpowers/specs/2026-05-08-checkin-allocation-discrete-grouping-design.md": [],
+    "docs/superpowers/specs/2026-05-08-checkin-counter-management-settings-design.md": [],
+    "docs/tauri-updater-release.md": [],
+    "issues.md": [],
+    "localSeasonSqlStore.test.ts": [
+      "localSeasonSqlStore.ts",
+      "localSeasonStore.ts"
+    ],
+    "localSeasonSqlStore.ts": [
+      "localSeasonStore.ts"
+    ],
+    "localSeasonStore.ts": [
+      "localSeasonSqlStore.ts"
+    ],
+    "Pattern Tuần Linh hoạt.md": [],
+    "rule-regression-tests.cjs": [],
+    "rules.md": []
+  }
+}

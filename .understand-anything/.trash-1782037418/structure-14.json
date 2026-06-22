@@ -1,0 +1,583 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 9,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "AGENTS.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 7,
+      "nonEmptyLines": 5,
+      "sections": [
+        {
+          "heading": "Memory Context",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "[SeasonalManagement] recent context, 2026-06-21 5:10pm GMT+7",
+          "level": 1,
+          "line": 4
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 2
+      }
+    },
+    {
+      "path": "DESIGN.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 151,
+      "nonEmptyLines": 138,
+      "sections": [
+        {
+          "heading": "Brand & Style",
+          "level": 2,
+          "line": 108
+        },
+        {
+          "heading": "Colors",
+          "level": 2,
+          "line": 113
+        },
+        {
+          "heading": "Typography",
+          "level": 2,
+          "line": 118
+        },
+        {
+          "heading": "Layout & Spacing",
+          "level": 2,
+          "line": 123
+        },
+        {
+          "heading": "Elevation & Depth",
+          "level": 2,
+          "line": 130
+        },
+        {
+          "heading": "Shapes",
+          "level": 2,
+          "line": 138
+        },
+        {
+          "heading": "Components",
+          "level": 2,
+          "line": 145
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 7
+      }
+    },
+    {
+      "path": "Pattern Tuần Linh hoạt.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 88,
+      "nonEmptyLines": 58,
+      "sections": [
+        {
+          "heading": "**1. Tổng quan: Pattern Tuần Linh hoạt**",
+          "level": 3,
+          "line": 1
+        },
+        {
+          "heading": "**2. Thuật toán Gom Pattern**",
+          "level": 3,
+          "line": 13
+        },
+        {
+          "heading": "**3. Ví dụ Tuần Lẻ Được Gom Hợp Lệ**",
+          "level": 3,
+          "line": 27
+        },
+        {
+          "heading": "**4. Link Type Export**",
+          "level": 3,
+          "line": 53
+        },
+        {
+          "heading": "**5. Overnight Manual Link**",
+          "level": 3,
+          "line": 63
+        },
+        {
+          "heading": "**6. Kết luận**",
+          "level": 3,
+          "line": 86
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 6
+      }
+    },
+    {
+      "path": "ai_agent_analysis.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 246,
+      "nonEmptyLines": 180,
+      "sections": [
+        {
+          "heading": "Dashboard AI Agent — Analysis & Improvement Suggestions",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Current Architecture Summary",
+          "level": 2,
+          "line": 3
+        },
+        {
+          "heading": "Flow",
+          "level": 3,
+          "line": 43
+        },
+        {
+          "heading": "What Works Well",
+          "level": 2,
+          "line": 54
+        },
+        {
+          "heading": "Issues & Improvement Opportunities",
+          "level": 2,
+          "line": 67
+        },
+        {
+          "heading": "1. Massive Code Duplication Between Client and Edge Function",
+          "level": 3,
+          "line": 69
+        },
+        {
+          "heading": "2. Regex-Based Tool Routing Is Fragile",
+          "level": 3,
+          "line": 87
+        },
+        {
+          "heading": "3. The 2-Round Limit Is Too Restrictive for Data Exploration",
+          "level": 3,
+          "line": 111
+        },
+        {
+          "heading": "4. No Conversation Memory Across Cells",
+          "level": 3,
+          "line": 127
+        },
+        {
+          "heading": "5. No Streaming — Long Wait Times with No Feedback",
+          "level": 3,
+          "line": 140
+        },
+        {
+          "heading": "6. Context Payload Is Bloated",
+          "level": 3,
+          "line": 152
+        },
+        {
+          "heading": "7. No Error Recovery or Retry Strategy",
+          "level": 3,
+          "line": 169
+        },
+        {
+          "heading": "8. Dashboard-Only Scope — No Cross-Feature AI",
+          "level": 3,
+          "line": 184
+        },
+        {
+          "heading": "9. No Observability / Analytics",
+          "level": 3,
+          "line": 195
+        },
+        {
+          "heading": "10. Fallback Board Patches Are Static",
+          "level": 3,
+          "line": 211
+        },
+        {
+          "heading": "Priority Ranking",
+          "level": 2,
+          "line": 233
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 16
+      }
+    },
+    {
+      "path": "architecture.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 209,
+      "nonEmptyLines": 157,
+      "sections": [
+        {
+          "heading": "SeasonalManagement Architecture",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Purpose",
+          "level": 2,
+          "line": 5
+        },
+        {
+          "heading": "Runtime Shape",
+          "level": 2,
+          "line": 11
+        },
+        {
+          "heading": "Current Codebase Map",
+          "level": 2,
+          "line": 27
+        },
+        {
+          "heading": "Primary Boundaries",
+          "level": 2,
+          "line": 42
+        },
+        {
+          "heading": "Data Model",
+          "level": 2,
+          "line": 54
+        },
+        {
+          "heading": "Import To Export Flow",
+          "level": 2,
+          "line": 76
+        },
+        {
+          "heading": "Sync And Catch-Up",
+          "level": 2,
+          "line": 91
+        },
+        {
+          "heading": "Route Responsibilities",
+          "level": 2,
+          "line": 121
+        },
+        {
+          "heading": "Dashboard AI",
+          "level": 2,
+          "line": 136
+        },
+        {
+          "heading": "Notifications",
+          "level": 2,
+          "line": 148
+        },
+        {
+          "heading": "Security Boundaries",
+          "level": 2,
+          "line": 164
+        },
+        {
+          "heading": "GitNexus Notes",
+          "level": 2,
+          "line": 172
+        },
+        {
+          "heading": "Review Watchlist",
+          "level": 2,
+          "line": 189
+        },
+        {
+          "heading": "Verification",
+          "level": 2,
+          "line": 196
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 15
+      }
+    },
+    {
+      "path": "code.html",
+      "language": "html",
+      "fileCategory": "markup",
+      "totalLines": 354,
+      "nonEmptyLines": 353,
+      "metrics": {}
+    },
+    {
+      "path": "context.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 554,
+      "nonEmptyLines": 451,
+      "sections": [
+        {
+          "heading": "Seasonal Schedule Management - Project Context",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Overview",
+          "level": 2,
+          "line": 3
+        },
+        {
+          "heading": "Latest Native Context - 2026-05-30",
+          "level": 2,
+          "line": 11
+        },
+        {
+          "heading": "Native Sync Hardening - 2026-06-16",
+          "level": 2,
+          "line": 35
+        },
+        {
+          "heading": "Codebase Review Refresh - 2026-06-21",
+          "level": 2,
+          "line": 51
+        },
+        {
+          "heading": "Codebase Refresh - 2026-05-28",
+          "level": 2,
+          "line": 65
+        },
+        {
+          "heading": "Dashboard AI Query-Only Context - 2026-06-01",
+          "level": 2,
+          "line": 80
+        },
+        {
+          "heading": "Current Architecture",
+          "level": 2,
+          "line": 99
+        },
+        {
+          "heading": "Import Layer",
+          "level": 2,
+          "line": 119
+        },
+        {
+          "heading": "`lib/parser.ts`",
+          "level": 3,
+          "line": 121
+        },
+        {
+          "heading": "`lib/atomicSchedule.ts`",
+          "level": 3,
+          "line": 128
+        },
+        {
+          "heading": "Supabase / Native SQLite Storage",
+          "level": 2,
+          "line": 140
+        },
+        {
+          "heading": "UI Rules",
+          "level": 2,
+          "line": 200
+        },
+        {
+          "heading": "Seasonal Schedule",
+          "level": 3,
+          "line": 202
+        },
+        {
+          "heading": "Check-in Allocation",
+          "level": 3,
+          "line": 216
+        },
+        {
+          "heading": "Gate Allocation",
+          "level": 3,
+          "line": 247
+        },
+        {
+          "heading": "Gantt Anti-Lag Mechanics",
+          "level": 3,
+          "line": 257
+        },
+        {
+          "heading": "Daily Schedule",
+          "level": 3,
+          "line": 265
+        },
+        {
+          "heading": "Dashboard",
+          "level": 3,
+          "line": 278
+        },
+        {
+          "heading": "Dashboard AI Notebook Canvas",
+          "level": 3,
+          "line": 289
+        },
+        {
+          "heading": "Dashboard AI Agent Boundary",
+          "level": 3,
+          "line": 321
+        },
+        {
+          "heading": "Detailed Schedule",
+          "level": 3,
+          "line": 354
+        },
+        {
+          "heading": "Business Rules",
+          "level": 2,
+          "line": 369
+        },
+        {
+          "heading": "Rule 1 - Atomic Truth",
+          "level": 3,
+          "line": 371
+        },
+        {
+          "heading": "Rule 2 - Link Type Is Explicit",
+          "level": 3,
+          "line": 380
+        },
+        {
+          "heading": "Rule 3 - Detailed Is Micro, Seasonal Is Macro",
+          "level": 3,
+          "line": 388
+        },
+        {
+          "heading": "Rule 4 - Export Integrity",
+          "level": 3,
+          "line": 394
+        },
+        {
+          "heading": "Export",
+          "level": 2,
+          "line": 408
+        },
+        {
+          "heading": "Native Packaging",
+          "level": 2,
+          "line": 428
+        },
+        {
+          "heading": "File Map",
+          "level": 2,
+          "line": 446
+        },
+        {
+          "heading": "Backup History",
+          "level": 2,
+          "line": 508
+        },
+        {
+          "heading": "Verification",
+          "level": 2,
+          "line": 532
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 32
+      }
+    },
+    {
+      "path": "issues.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 38,
+      "nonEmptyLines": 34,
+      "sections": [
+        {
+          "heading": "Kế hoạch Phát triển (Vertical Slices / Issues)",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Issue #1: Tracer Bullet - Parser cơ bản, chuẩn hóa số hiệu và UI nền tảng",
+          "level": 2,
+          "line": 3
+        },
+        {
+          "heading": "Issue #2: Data Expansion Engine & Liên kết cặp chuyến (Turnaround Linking)",
+          "level": 2,
+          "line": 13
+        },
+        {
+          "heading": "Issue #3: Sandbox Mutations - Chỉnh sửa & Xóa mềm (Soft-Delete)",
+          "level": 2,
+          "line": 21
+        },
+        {
+          "heading": "Issue #4: Export Engine - Gộp chuyến (Strict Pattern Splitting) & Xuất Excel",
+          "level": 2,
+          "line": 30
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 5
+      }
+    },
+    {
+      "path": "rules.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 29,
+      "nonEmptyLines": 24,
+      "sections": [
+        {
+          "heading": "BỘ QUY TẮC HOẠT ĐỘNG (SYSTEM RULES)",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "1. QUY TẮC ĐẦU VÀO & BUNG DỮ LIỆU (DATA EXPANSION RULES)",
+          "level": 2,
+          "line": 5
+        },
+        {
+          "heading": "2. QUY TẮC LIÊN KẾT & CẤU TRÚC (STRUCTURAL RULES)",
+          "level": 2,
+          "line": 12
+        },
+        {
+          "heading": "3. QUY TẮC THAO TÁC (MUTATION & STATE RULES)",
+          "level": 2,
+          "line": 17
+        },
+        {
+          "heading": "4. QUY TẮC GỘP CHUYẾN & XUẤT FILE (PATTERN GROUPING & EXPORT RULES)",
+          "level": 2,
+          "line": 25
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 5
+      }
+    }
+  ]
+}

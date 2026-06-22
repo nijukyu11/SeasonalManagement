@@ -33,6 +33,7 @@ export interface SeasonAutoSyncState {
 
 export interface SeasonAutoSyncSummary {
   pendingCount?: number | null;
+  conflictCount?: number | null;
   lastLocalChangeAt?: number | null;
   localRevision?: number | null;
   source?: string;
@@ -64,6 +65,7 @@ interface SeasonAutoSyncRecord {
   runningPromise: Promise<SyncResult> | null;
   queued: boolean;
   source: string | null;
+  conflictDuringRun: number;
 }
 
 export function createInitialSeasonAutoSyncState(): SeasonAutoSyncState {
@@ -120,7 +122,10 @@ export class SeasonAutoSyncScheduler {
     record.source = summary.source ?? record.source;
     const pendingCount = summary.pendingCount ?? record.state.pendingCount ?? 1;
     const hasPending = (pendingCount ?? 0) > 0;
+    const conflictCount = summary.conflictCount ?? record.state.conflictCount ?? 0;
+    const hasConflicts = conflictCount > 0;
     if (record.running) {
+      if (hasConflicts) record.conflictDuringRun = Math.max(record.conflictDuringRun, conflictCount);
       record.queued = hasPending;
       this.updateState(seasonId, {
         status: 'syncing',
@@ -130,31 +135,36 @@ export class SeasonAutoSyncScheduler {
         message: record.state.message ?? 'Saving',
         progress: record.state.progress ?? 'Saving',
         mode: record.state.mode ?? 'auto',
+        conflictCount: hasConflicts ? conflictCount : record.state.conflictCount,
       });
       return;
     }
 
     this.cancelScheduled(record);
     const canAutoSync = hasPending &&
+      !hasConflicts &&
       this.isOnline() &&
       record.state.status !== 'conflict' &&
       record.state.status !== 'needs_review' &&
       shouldAutoSyncSource(record.source);
     this.updateState(seasonId, {
-      status: hasPending ? (canAutoSync ? 'scheduled' : this.isOnline() ? 'dirty' : 'offline') : 'synced',
+      status: hasConflicts ? 'needs_review' : hasPending ? (canAutoSync ? 'scheduled' : this.isOnline() ? 'dirty' : 'offline') : 'synced',
       pendingCount,
       lastLocalChangeAt: summary.lastLocalChangeAt ?? record.state.lastLocalChangeAt,
       localRevision: summary.localRevision ?? record.state.localRevision,
-      message: summary.pendingCount === 0
+      message: hasConflicts
+        ? `${conflictCount} remote conflict${conflictCount === 1 ? '' : 's'} need review.`
+        : summary.pendingCount === 0
         ? null
         : canAutoSync
           ? 'Auto save queued'
           : 'Unsynced local changes. Use Save to push them to the server.',
       progress: null,
       mode: canAutoSync ? 'auto' : null,
+      conflictCount: hasConflicts ? conflictCount : hasPending ? record.state.conflictCount : 0,
     });
 
-    if (!hasPending) {
+      if (!hasPending) {
       this.updateState(seasonId, { retryAttempt: 0 });
       return;
     }
@@ -236,6 +246,7 @@ export class SeasonAutoSyncScheduler {
       runningPromise: null,
       queued: false,
       source: null,
+      conflictDuringRun: 0,
     };
     this.records.set(seasonId, record);
     return record;
@@ -314,8 +325,15 @@ export class SeasonAutoSyncScheduler {
       return { status: 'failed', message };
     }
 
-    const pendingCount = await this.runtime.getPendingCount(seasonId);
-    if (pendingCount <= 0) {
+    let pendingCount: number;
+    try {
+      pendingCount = await this.runtime.getPendingCount(seasonId);
+    } catch (err) {
+      const message = (err as Error).message;
+      this.handleFailure(seasonId, message);
+      return { status: 'failed', message };
+    }
+    if (pendingCount <= 0 && mode !== 'manual') {
       this.updateState(seasonId, {
         status: 'synced',
         pendingCount: 0,
@@ -324,12 +342,14 @@ export class SeasonAutoSyncScheduler {
         progress: null,
         mode: null,
         retryAttempt: 0,
+        conflictCount: 0,
       });
       return { status: 'synced', message: 'No local changes to save.' };
     }
 
     record.running = true;
     record.queued = false;
+    record.conflictDuringRun = 0;
     this.updateState(seasonId, {
       status: 'syncing',
       pendingCount,
@@ -342,11 +362,16 @@ export class SeasonAutoSyncScheduler {
       try {
         const result = await this.runtime.run(seasonId, mode, record.source);
         if (result.status === 'conflict') {
+          const nextPendingCount = await this.runtime.getPendingCount(seasonId);
           this.updateState(seasonId, {
             status: 'conflict',
+            pendingCount: nextPendingCount,
+            lastLocalChangeAt: nextPendingCount > 0 ? record.state.lastLocalChangeAt : null,
             message: result.message,
             progress: null,
             mode: null,
+            retryAttempt: 0,
+            conflictCount: result.reviewCount ?? 0,
           });
           return result;
         }
@@ -369,6 +394,19 @@ export class SeasonAutoSyncScheduler {
           });
           return result;
         }
+        if (record.conflictDuringRun > 0) {
+          this.updateState(seasonId, {
+            status: 'needs_review',
+            pendingCount: nextPendingCount,
+            lastLocalChangeAt: nextPendingCount > 0 ? record.state.lastLocalChangeAt : null,
+            message: `${record.conflictDuringRun} remote conflict${record.conflictDuringRun === 1 ? '' : 's'} need review.`,
+            progress: null,
+            mode: null,
+            retryAttempt: 0,
+            conflictCount: record.conflictDuringRun,
+          });
+          return result;
+        }
         this.updateState(seasonId, {
           status: nextPendingCount > 0 ? 'dirty' : 'synced',
           pendingCount: nextPendingCount,
@@ -377,6 +415,7 @@ export class SeasonAutoSyncScheduler {
           progress: null,
           mode: null,
           retryAttempt: 0,
+          conflictCount: 0,
         });
         return result;
       } catch (err) {
@@ -386,18 +425,21 @@ export class SeasonAutoSyncScheduler {
       } finally {
         record.running = false;
         record.runningPromise = null;
-        if (record.queued && record.state.status !== 'conflict') {
+        record.conflictDuringRun = 0;
+        if (record.queued) {
           record.queued = false;
-          const pendingCount = await this.runtime.getPendingCount(seasonId).catch(() => record.state.pendingCount ?? 0);
-          if (pendingCount > 0) {
-            const canAutoSync = this.isOnline() && shouldAutoSyncSource(record.source);
-            this.updateState(seasonId, {
-              status: canAutoSync ? 'scheduled' : 'dirty',
-              pendingCount,
-              message: canAutoSync ? 'Auto save queued' : 'Unsynced local changes. Use Save to push them to the server.',
-              mode: canAutoSync ? 'auto' : null,
-            });
-            if (canAutoSync) this.schedule(seasonId, record, AUTO_SYNC_DEBOUNCE_MS);
+          if (record.state.status !== 'conflict' && record.state.status !== 'needs_review') {
+            const pendingCount = await this.runtime.getPendingCount(seasonId).catch(() => record.state.pendingCount ?? 0);
+            if (pendingCount > 0) {
+              const canAutoSync = this.isOnline() && shouldAutoSyncSource(record.source);
+              this.updateState(seasonId, {
+                status: canAutoSync ? 'scheduled' : 'dirty',
+                pendingCount,
+                message: canAutoSync ? 'Auto save queued' : 'Unsynced local changes. Use Save to push them to the server.',
+                mode: canAutoSync ? 'auto' : null,
+              });
+              if (canAutoSync) this.schedule(seasonId, record, AUTO_SYNC_DEBOUNCE_MS);
+            }
           }
         }
       }

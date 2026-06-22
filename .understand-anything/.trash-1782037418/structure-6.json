@@ -1,0 +1,1747 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 10,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "app/src/app/components/AppShell.tsx",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 130,
+      "nonEmptyLines": 123,
+      "functions": [
+        {
+          "name": "SeasonSyncSessionWarningBanner",
+          "startLine": 15,
+          "endLine": 24,
+          "params": []
+        },
+        {
+          "name": "buildCatchUpProgressLabel",
+          "startLine": 26,
+          "endLine": 66,
+          "params": [
+            "progress",
+            "message"
+          ]
+        },
+        {
+          "name": "SeasonSyncStartupCatchUpStatus",
+          "startLine": 68,
+          "endLine": 96,
+          "params": []
+        },
+        {
+          "name": "AppShell",
+          "startLine": 98,
+          "endLine": 130,
+          "params": [
+            "{ children }"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "AppShell",
+          "line": 98,
+          "isDefault": true
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "SeasonSyncSessionWarningBanner",
+          "callee": "useSeasonSyncSessionWarning",
+          "lineNumber": 16
+        },
+        {
+          "caller": "buildCatchUpProgressLabel",
+          "callee": "text.match",
+          "lineNumber": 33
+        },
+        {
+          "caller": "buildCatchUpProgressLabel",
+          "callee": "Number",
+          "lineNumber": 35
+        },
+        {
+          "caller": "buildCatchUpProgressLabel",
+          "callee": "Number",
+          "lineNumber": 36
+        },
+        {
+          "caller": "buildCatchUpProgressLabel",
+          "callee": "Math.round",
+          "lineNumber": 40
+        },
+        {
+          "caller": "buildCatchUpProgressLabel",
+          "callee": "/snapshot/i.test",
+          "lineNumber": 44
+        },
+        {
+          "caller": "buildCatchUpProgressLabel",
+          "callee": "/failed/i.test",
+          "lineNumber": 52
+        },
+        {
+          "caller": "SeasonSyncStartupCatchUpStatus",
+          "callee": "useSeasonSyncGlobalStatus",
+          "lineNumber": 69
+        },
+        {
+          "caller": "SeasonSyncStartupCatchUpStatus",
+          "callee": "buildCatchUpProgressLabel",
+          "lineNumber": 72
+        },
+        {
+          "caller": "SeasonSyncStartupCatchUpStatus",
+          "callee": "Math.max",
+          "lineNumber": 73
+        },
+        {
+          "caller": "SeasonSyncStartupCatchUpStatus",
+          "callee": "Math.min",
+          "lineNumber": 73
+        }
+      ],
+      "metrics": {
+        "importCount": 9,
+        "exportCount": 1,
+        "functionCount": 4,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "app/src/app/components/AppSidebar.tsx",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 265,
+      "nonEmptyLines": 234,
+      "functions": [
+        {
+          "name": "resolveActiveSeasonId",
+          "startLine": 26,
+          "endLine": 32,
+          "params": [
+            "querySeasonId",
+            "includeStoredSeason"
+          ]
+        },
+        {
+          "name": "buildSeasonRouteHref",
+          "startLine": 34,
+          "endLine": 37,
+          "params": [
+            "pathname",
+            "seasonId"
+          ]
+        },
+        {
+          "name": "readStoredModuleRoutes",
+          "startLine": 39,
+          "endLine": 50,
+          "params": []
+        },
+        {
+          "name": "getPreservedModuleHref",
+          "startLine": 52,
+          "endLine": 67,
+          "params": [
+            "pathname",
+            "seasonId",
+            "lastModuleRoutes"
+          ]
+        },
+        {
+          "name": "scheduleAfterHydration",
+          "startLine": 69,
+          "endLine": 84,
+          "params": [
+            "callback"
+          ]
+        },
+        {
+          "name": "AppSidebar",
+          "startLine": 86,
+          "endLine": 265,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "AppSidebar",
+          "line": 86,
+          "isDefault": true
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "resolveActiveSeasonId",
+          "callee": "sessionStorage.getItem",
+          "lineNumber": 30
+        },
+        {
+          "caller": "resolveActiveSeasonId",
+          "callee": "sessionStorage.getItem",
+          "lineNumber": 30
+        },
+        {
+          "caller": "buildSeasonRouteHref",
+          "callee": "encodeURIComponent",
+          "lineNumber": 36
+        },
+        {
+          "caller": "readStoredModuleRoutes",
+          "callee": "sessionStorage.getItem",
+          "lineNumber": 44
+        },
+        {
+          "caller": "readStoredModuleRoutes",
+          "callee": "stored.split",
+          "lineNumber": 46
+        },
+        {
+          "caller": "getPreservedModuleHref",
+          "callee": "buildSeasonRouteHref",
+          "lineNumber": 57
+        },
+        {
+          "caller": "getPreservedModuleHref",
+          "callee": "preservedHref.split",
+          "lineNumber": 61
+        },
+        {
+          "caller": "getPreservedModuleHref",
+          "callee": "new URLSearchParams(preservedSearch).get",
+          "lineNumber": 64
+        },
+        {
+          "caller": "scheduleAfterHydration",
+          "callee": "window.setTimeout",
+          "lineNumber": 71
+        },
+        {
+          "caller": "scheduleAfterHydration",
+          "callee": "window.clearTimeout",
+          "lineNumber": 72
+        },
+        {
+          "caller": "scheduleAfterHydration",
+          "callee": "window.requestAnimationFrame",
+          "lineNumber": 76
+        },
+        {
+          "caller": "scheduleAfterHydration",
+          "callee": "window.requestAnimationFrame",
+          "lineNumber": 77
+        },
+        {
+          "caller": "scheduleAfterHydration",
+          "callee": "window.cancelAnimationFrame",
+          "lineNumber": 81
+        },
+        {
+          "caller": "scheduleAfterHydration",
+          "callee": "window.cancelAnimationFrame",
+          "lineNumber": 82
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useRouter",
+          "lineNumber": 87
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "usePathname",
+          "lineNumber": 88
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useSearchParams",
+          "lineNumber": 89
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useOperatorAuth",
+          "lineNumber": 90
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "searchParams.toString",
+          "lineNumber": 91
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "searchParams.get",
+          "lineNumber": 92
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useRef",
+          "lineNumber": 93
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useState",
+          "lineNumber": 94
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useState",
+          "lineNumber": 95
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useState",
+          "lineNumber": 96
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useState",
+          "lineNumber": 97
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useMemo",
+          "lineNumber": 98
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "resolveActiveSeasonId",
+          "lineNumber": 99
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useCallback",
+          "lineNumber": 103
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "setCollapsed",
+          "lineNumber": 104
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useCallback",
+          "lineNumber": 107
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "toggleCollapsed",
+          "lineNumber": 110
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useCallback",
+          "lineNumber": 113
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "toggleCollapsed",
+          "lineNumber": 118
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useCallback",
+          "lineNumber": 121
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "router.push",
+          "lineNumber": 122
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useEffect",
+          "lineNumber": 125
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "scheduleAfterHydration",
+          "lineNumber": 126
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "setCanReadStoredSeason",
+          "lineNumber": 127
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useEffect",
+          "lineNumber": 131
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "scheduleAfterHydration",
+          "lineNumber": 132
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "setCollapsed",
+          "lineNumber": 133
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "sessionStorage.getItem",
+          "lineNumber": 133
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "setCollapsedRestored",
+          "lineNumber": 134
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "setLastModuleRoutes",
+          "lineNumber": 135
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "readStoredModuleRoutes",
+          "lineNumber": 135
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useEffect",
+          "lineNumber": 139
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "sessionStorage.setItem",
+          "lineNumber": 141
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "String",
+          "lineNumber": 141
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useEffect",
+          "lineNumber": 144
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "sessionStorage.setItem",
+          "lineNumber": 145
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useEffect",
+          "lineNumber": 148
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "MODULE_PATHS.has",
+          "lineNumber": 149
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "sessionStorage.setItem",
+          "lineNumber": 152
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "scheduleAfterHydration",
+          "lineNumber": 154
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "setLastModuleRoutes",
+          "lineNumber": 155
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "useMemo",
+          "lineNumber": 163
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "NAV_ITEMS.map",
+          "lineNumber": 164
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "getPreservedModuleHref",
+          "lineNumber": 165
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "navigateTo",
+          "lineNumber": 179
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "navItems.map",
+          "lineNumber": 201
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "item.href.split",
+          "lineNumber": 204
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "navigateTo",
+          "lineNumber": 209
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "operatorAuth.signOut",
+          "lineNumber": 234
+        },
+        {
+          "caller": "AppSidebar",
+          "callee": "operatorAuth.signOut",
+          "lineNumber": 252
+        }
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 1,
+        "functionCount": 6,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "app/src/app/components/AppUpdateProvider.tsx",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 235,
+      "nonEmptyLines": 216,
+      "functions": [
+        {
+          "name": "errorMessage",
+          "startLine": 40,
+          "endLine": 42,
+          "params": [
+            "error"
+          ]
+        },
+        {
+          "name": "useAppUpdate",
+          "startLine": 44,
+          "endLine": 48,
+          "params": []
+        },
+        {
+          "name": "AppUpdateBanner",
+          "startLine": 50,
+          "endLine": 124,
+          "params": []
+        },
+        {
+          "name": "AppUpdateProvider",
+          "startLine": 126,
+          "endLine": 235,
+          "params": [
+            "{ children }"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "useAppUpdate",
+          "line": 44,
+          "isDefault": false
+        },
+        {
+          "name": "AppUpdateProvider",
+          "line": 126,
+          "isDefault": true
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "errorMessage",
+          "callee": "String",
+          "lineNumber": 41
+        },
+        {
+          "caller": "useAppUpdate",
+          "callee": "useContext",
+          "lineNumber": 45
+        },
+        {
+          "caller": "AppUpdateBanner",
+          "callee": "useAppUpdate",
+          "lineNumber": 59
+        },
+        {
+          "caller": "AppUpdateBanner",
+          "callee": "useState",
+          "lineNumber": 60
+        },
+        {
+          "caller": "AppUpdateBanner",
+          "callee": "relaunch",
+          "lineNumber": 71
+        },
+        {
+          "caller": "AppUpdateBanner",
+          "callee": "formatUpdateDate",
+          "lineNumber": 88
+        },
+        {
+          "caller": "AppUpdateBanner",
+          "callee": "downloadAndInstall",
+          "lineNumber": 99
+        },
+        {
+          "caller": "AppUpdateBanner",
+          "callee": "setDismissedVersion",
+          "lineNumber": 111
+        },
+        {
+          "caller": "AppUpdateBanner",
+          "callee": "dismissAvailableBanner",
+          "lineNumber": 112
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useMemo",
+          "lineNumber": 127
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "createAppUpdaterClient",
+          "lineNumber": 127
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useState",
+          "lineNumber": 128
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useState",
+          "lineNumber": 129
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useState",
+          "lineNumber": 130
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useState",
+          "lineNumber": 131
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useState",
+          "lineNumber": 132
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useState",
+          "lineNumber": 133
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useState",
+          "lineNumber": 134
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useState",
+          "lineNumber": 135
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useState",
+          "lineNumber": 136
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useCallback",
+          "lineNumber": 138
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setChecking",
+          "lineNumber": 139
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setError",
+          "lineNumber": 140
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "client.check",
+          "lineNumber": 142
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setCheckResult",
+          "lineNumber": 143
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setLastCheckedAt",
+          "lineNumber": 144
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "Date.now",
+          "lineNumber": 144
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setInstallResult",
+          "lineNumber": 146
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setBannerDismissed",
+          "lineNumber": 147
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setError",
+          "lineNumber": 150
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "errorMessage",
+          "lineNumber": 150
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setChecking",
+          "lineNumber": 152
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useEffect",
+          "lineNumber": 156
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "getCurrentAppVersion()\n      .then((version) => {\n        if (!cancelled) setCurrentVersion(version);\n      })\n      .catch",
+          "lineNumber": 158
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "getCurrentAppVersion()\n      .then",
+          "lineNumber": 158
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "getCurrentAppVersion",
+          "lineNumber": 158
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setCurrentVersion",
+          "lineNumber": 160
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setCurrentVersion",
+          "lineNumber": 163
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "window.setTimeout",
+          "lineNumber": 165
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "checkNow",
+          "lineNumber": 165
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "window.setInterval",
+          "lineNumber": 166
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "checkNow",
+          "lineNumber": 166
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "window.clearTimeout",
+          "lineNumber": 169
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "window.clearInterval",
+          "lineNumber": 170
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useCallback",
+          "lineNumber": 176
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setInstalling",
+          "lineNumber": 178
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setError",
+          "lineNumber": 179
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setProgress",
+          "lineNumber": 180
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "client.downloadAndInstall",
+          "lineNumber": 182
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setInstallResult",
+          "lineNumber": 183
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setError",
+          "lineNumber": 185
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "errorMessage",
+          "lineNumber": 185
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setInstalling",
+          "lineNumber": 187
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useCallback",
+          "lineNumber": 191
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setError",
+          "lineNumber": 192
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "client.relaunch",
+          "lineNumber": 194
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setError",
+          "lineNumber": 196
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "errorMessage",
+          "lineNumber": 196
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "useMemo",
+          "lineNumber": 200
+        },
+        {
+          "caller": "AppUpdateProvider",
+          "callee": "setBannerDismissed",
+          "lineNumber": 213
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 2,
+        "functionCount": 4,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "app/src/app/components/NativeRuntimeGate.tsx",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 31,
+      "nonEmptyLines": 26,
+      "functions": [
+        {
+          "name": "NativeAppRequiredPlaceholder",
+          "startLine": 7,
+          "endLine": 21,
+          "params": []
+        },
+        {
+          "name": "NativeRuntimeGate",
+          "startLine": 23,
+          "endLine": 31,
+          "params": [
+            "{ children }"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "NativeRuntimeGate",
+          "line": 23,
+          "isDefault": true
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "NativeRuntimeGate",
+          "callee": "useState",
+          "lineNumber": 24
+        },
+        {
+          "caller": "NativeRuntimeGate",
+          "callee": "isTauriRuntime",
+          "lineNumber": 24
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 1,
+        "functionCount": 2,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "app/src/app/components/OperatorAuthGate.tsx",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 315,
+      "nonEmptyLines": 280,
+      "functions": [
+        {
+          "name": "isSupabaseBackendEnabled",
+          "startLine": 33,
+          "endLine": 36,
+          "params": []
+        },
+        {
+          "name": "useOperatorAuth",
+          "startLine": 38,
+          "endLine": 40,
+          "params": []
+        },
+        {
+          "name": "OperatorAuthScreen",
+          "startLine": 42,
+          "endLine": 169,
+          "params": [
+            "{\n  status,\n  errorMessage,\n  onSubmit,\n  onSignOut,\n  busy,\n}"
+          ]
+        },
+        {
+          "name": "OperatorAuthGate",
+          "startLine": 171,
+          "endLine": 315,
+          "params": [
+            "{ children }"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "useOperatorAuth",
+          "line": 38,
+          "isDefault": false
+        },
+        {
+          "name": "OperatorAuthGate",
+          "line": 171,
+          "isDefault": true
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "isSupabaseBackendEnabled",
+          "callee": "process.env.NEXT_PUBLIC_REMOTE_BACKEND?.toLowerCase",
+          "lineNumber": 34
+        },
+        {
+          "caller": "useOperatorAuth",
+          "callee": "useContext",
+          "lineNumber": 39
+        },
+        {
+          "caller": "OperatorAuthScreen",
+          "callee": "useState",
+          "lineNumber": 55
+        },
+        {
+          "caller": "OperatorAuthScreen",
+          "callee": "useState",
+          "lineNumber": 56
+        },
+        {
+          "caller": "OperatorAuthScreen",
+          "callee": "useCallback",
+          "lineNumber": 58
+        },
+        {
+          "caller": "OperatorAuthScreen",
+          "callee": "event.preventDefault",
+          "lineNumber": 59
+        },
+        {
+          "caller": "OperatorAuthScreen",
+          "callee": "onSubmit",
+          "lineNumber": 60
+        },
+        {
+          "caller": "OperatorAuthScreen",
+          "callee": "email.trim",
+          "lineNumber": 60
+        },
+        {
+          "caller": "OperatorAuthScreen",
+          "callee": "onSignOut",
+          "lineNumber": 102
+        },
+        {
+          "caller": "OperatorAuthScreen",
+          "callee": "setEmail",
+          "lineNumber": 131
+        },
+        {
+          "caller": "OperatorAuthScreen",
+          "callee": "setPassword",
+          "lineNumber": 143
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "isSupabaseBackendEnabled",
+          "lineNumber": 172
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "useRef",
+          "lineNumber": 173
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "useState",
+          "lineNumber": 174
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "useState",
+          "lineNumber": 175
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "useState",
+          "lineNumber": 176
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "useState",
+          "lineNumber": 177
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "useState",
+          "lineNumber": 178
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "useCallback",
+          "lineNumber": 180
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setErrorMessage",
+          "lineNumber": 185
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setEmail",
+          "lineNumber": 188
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setStatus",
+          "lineNumber": 189
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setStatus",
+          "lineNumber": 193
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "getSupabaseClient",
+          "lineNumber": 194
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "supabase\n      .from('app_operators')\n      .select('user_id,email')\n      .eq('user_id', session.user.id)\n      .maybeSingle",
+          "lineNumber": 195
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "supabase\n      .from('app_operators')\n      .select('user_id,email')\n      .eq",
+          "lineNumber": 195
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "supabase\n      .from('app_operators')\n      .select",
+          "lineNumber": 195
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "supabase\n      .from",
+          "lineNumber": 195
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setEmail",
+          "lineNumber": 204
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setErrorMessage",
+          "lineNumber": 205
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setStatus",
+          "lineNumber": 206
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setEmail",
+          "lineNumber": 211
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setStatus",
+          "lineNumber": 212
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setEmail",
+          "lineNumber": 216
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setStatus",
+          "lineNumber": 217
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "useEffect",
+          "lineNumber": 220
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "getSupabaseClient",
+          "lineNumber": 223
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "supabase.auth.getSession().then",
+          "lineNumber": 226
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "supabase.auth.getSession",
+          "lineNumber": 226
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setErrorMessage",
+          "lineNumber": 229
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setStatus",
+          "lineNumber": 230
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "refreshSession",
+          "lineNumber": 233
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "supabase.auth.onAuthStateChange",
+          "lineNumber": 236
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "refreshSession",
+          "lineNumber": 237
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "listener.subscription.unsubscribe",
+          "lineNumber": 242
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "useCallback",
+          "lineNumber": 246
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setBusy",
+          "lineNumber": 247
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setErrorMessage",
+          "lineNumber": 248
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "getSupabaseClient",
+          "lineNumber": 251
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "supabase.auth.signInWithPassword",
+          "lineNumber": 252
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setErrorMessage",
+          "lineNumber": 257
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setStatus",
+          "lineNumber": 258
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "refreshSession",
+          "lineNumber": 261
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setBusy",
+          "lineNumber": 263
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "useCallback",
+          "lineNumber": 267
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setSigningOut",
+          "lineNumber": 268
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setBusy",
+          "lineNumber": 269
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "getSupabaseClient",
+          "lineNumber": 271
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "supabase.auth.signOut",
+          "lineNumber": 272
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setEmail",
+          "lineNumber": 273
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setStatus",
+          "lineNumber": 274
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setBusy",
+          "lineNumber": 276
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "setSigningOut",
+          "lineNumber": 277
+        },
+        {
+          "caller": "OperatorAuthGate",
+          "callee": "useMemo",
+          "lineNumber": 281
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 2,
+        "functionCount": 4,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "app/src/app/components/PbbIcon.tsx",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 30,
+      "nonEmptyLines": 29,
+      "functions": [
+        {
+          "name": "PbbIcon",
+          "startLine": 5,
+          "endLine": 30,
+          "params": [
+            "{ className = 'h-5 w-5' }"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "PbbIcon",
+          "line": 5,
+          "isDefault": true
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "app/src/app/layout.tsx",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 24,
+      "nonEmptyLines": 22,
+      "functions": [
+        {
+          "name": "RootLayout",
+          "startLine": 10,
+          "endLine": 24,
+          "params": [
+            "{ children }"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "metadata",
+          "line": 5,
+          "isDefault": false
+        },
+        {
+          "name": "RootLayout",
+          "line": 10,
+          "isDefault": true
+        }
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 2,
+        "functionCount": 1,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "app/src/app/settings/components/UpdatesTab.tsx",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 160,
+      "nonEmptyLines": 147,
+      "functions": [
+        {
+          "name": "formatBytes",
+          "startLine": 6,
+          "endLine": 12,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "statusText",
+          "startLine": 14,
+          "endLine": 19,
+          "params": [
+            "status"
+          ]
+        },
+        {
+          "name": "UpdatesTab",
+          "startLine": 21,
+          "endLine": 160,
+          "params": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "UpdatesTab",
+          "line": 21,
+          "isDefault": true
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "formatBytes",
+          "callee": "Math.min",
+          "lineNumber": 9
+        },
+        {
+          "caller": "formatBytes",
+          "callee": "Math.floor",
+          "lineNumber": 9
+        },
+        {
+          "caller": "formatBytes",
+          "callee": "Math.log",
+          "lineNumber": 9
+        },
+        {
+          "caller": "formatBytes",
+          "callee": "Math.log",
+          "lineNumber": 9
+        },
+        {
+          "caller": "formatBytes",
+          "callee": "amount.toFixed",
+          "lineNumber": 11
+        },
+        {
+          "caller": "UpdatesTab",
+          "callee": "useAppUpdate",
+          "lineNumber": 35
+        },
+        {
+          "caller": "UpdatesTab",
+          "callee": "formatUpdateDate",
+          "lineNumber": 39
+        },
+        {
+          "caller": "UpdatesTab",
+          "callee": "new Date(lastCheckedAt).toISOString",
+          "lineNumber": 39
+        },
+        {
+          "caller": "UpdatesTab",
+          "callee": "formatBytes",
+          "lineNumber": 41
+        },
+        {
+          "caller": "UpdatesTab",
+          "callee": "formatBytes",
+          "lineNumber": 42
+        },
+        {
+          "caller": "UpdatesTab",
+          "callee": "formatBytes",
+          "lineNumber": 42
+        },
+        {
+          "caller": "UpdatesTab",
+          "callee": "checkNow",
+          "lineNumber": 56
+        },
+        {
+          "caller": "UpdatesTab",
+          "callee": "statusText",
+          "lineNumber": 91
+        },
+        {
+          "caller": "UpdatesTab",
+          "callee": "formatUpdateDate",
+          "lineNumber": 94
+        },
+        {
+          "caller": "UpdatesTab",
+          "callee": "downloadAndInstall",
+          "lineNumber": 115
+        },
+        {
+          "caller": "UpdatesTab",
+          "callee": "Boolean",
+          "lineNumber": 116
+        },
+        {
+          "caller": "UpdatesTab",
+          "callee": "relaunch",
+          "lineNumber": 127
+        }
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 1,
+        "functionCount": 3,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "app/src/lib/appUpdater.test.ts",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 124,
+      "nonEmptyLines": 107,
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "app/src/lib/appUpdater.ts",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 200,
+      "nonEmptyLines": 175,
+      "functions": [
+        {
+          "name": "loadUpdaterCheck",
+          "startLine": 60,
+          "endLine": 63,
+          "params": []
+        },
+        {
+          "name": "loadRelaunch",
+          "startLine": 65,
+          "endLine": 68,
+          "params": []
+        },
+        {
+          "name": "loadGetVersion",
+          "startLine": 70,
+          "endLine": 73,
+          "params": []
+        },
+        {
+          "name": "getCurrentAppVersion",
+          "startLine": 75,
+          "endLine": 80,
+          "params": [
+            "deps"
+          ]
+        },
+        {
+          "name": "toDownloadProgress",
+          "startLine": 82,
+          "endLine": 119,
+          "params": [
+            "current",
+            "event"
+          ]
+        },
+        {
+          "name": "isRecord",
+          "startLine": 121,
+          "endLine": 123,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "formatUpdateDate",
+          "startLine": 125,
+          "endLine": 138,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "toUpdateMetadata",
+          "startLine": 140,
+          "endLine": 148,
+          "params": [
+            "update"
+          ]
+        },
+        {
+          "name": "checkForAppUpdate",
+          "startLine": 150,
+          "endLine": 172,
+          "params": [
+            "deps"
+          ]
+        },
+        {
+          "name": "createAppUpdaterClient",
+          "startLine": 174,
+          "endLine": 200,
+          "params": [
+            "deps"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "getCurrentAppVersion",
+          "line": 75,
+          "isDefault": false
+        },
+        {
+          "name": "toDownloadProgress",
+          "line": 82,
+          "isDefault": false
+        },
+        {
+          "name": "formatUpdateDate",
+          "line": 125,
+          "isDefault": false
+        },
+        {
+          "name": "checkForAppUpdate",
+          "line": 150,
+          "isDefault": false
+        },
+        {
+          "name": "createAppUpdaterClient",
+          "line": 174,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "loadUpdaterCheck",
+          "callee": "import",
+          "lineNumber": 61
+        },
+        {
+          "caller": "loadRelaunch",
+          "callee": "import",
+          "lineNumber": 66
+        },
+        {
+          "caller": "loadGetVersion",
+          "callee": "import",
+          "lineNumber": 71
+        },
+        {
+          "caller": "getCurrentAppVersion",
+          "callee": "nativeRuntime",
+          "lineNumber": 77
+        },
+        {
+          "caller": "getCurrentAppVersion",
+          "callee": "loadGetVersion",
+          "lineNumber": 78
+        },
+        {
+          "caller": "getCurrentAppVersion",
+          "callee": "getVersion",
+          "lineNumber": 79
+        },
+        {
+          "caller": "toDownloadProgress",
+          "callee": "isRecord",
+          "lineNumber": 87
+        },
+        {
+          "caller": "toDownloadProgress",
+          "callee": "isRecord",
+          "lineNumber": 97
+        },
+        {
+          "caller": "toDownloadProgress",
+          "callee": "Math.max",
+          "lineNumber": 99
+        },
+        {
+          "caller": "toDownloadProgress",
+          "callee": "Math.min",
+          "lineNumber": 101
+        },
+        {
+          "caller": "toDownloadProgress",
+          "callee": "Math.round",
+          "lineNumber": 101
+        },
+        {
+          "caller": "formatUpdateDate",
+          "callee": "Number.isNaN",
+          "lineNumber": 128
+        },
+        {
+          "caller": "formatUpdateDate",
+          "callee": "date.getTime",
+          "lineNumber": 128
+        },
+        {
+          "caller": "formatUpdateDate",
+          "callee": "new Intl.DateTimeFormat('en-GB', {\n    day: '2-digit',\n    month: 'short',\n    year: 'numeric',\n    hour: '2-digit',\n    minute: '2-digit',\n    hour12: false,\n    timeZone: 'Asia/Saigon',\n  }).format(date).replace",
+          "lineNumber": 129
+        },
+        {
+          "caller": "formatUpdateDate",
+          "callee": "new Intl.DateTimeFormat('en-GB', {\n    day: '2-digit',\n    month: 'short',\n    year: 'numeric',\n    hour: '2-digit',\n    minute: '2-digit',\n    hour12: false,\n    timeZone: 'Asia/Saigon',\n  }).format",
+          "lineNumber": 129
+        },
+        {
+          "caller": "toUpdateMetadata",
+          "callee": "update.body?.trim",
+          "lineNumber": 145
+        },
+        {
+          "caller": "checkForAppUpdate",
+          "callee": "nativeRuntime",
+          "lineNumber": 152
+        },
+        {
+          "caller": "checkForAppUpdate",
+          "callee": "loadUpdaterCheck",
+          "lineNumber": 159
+        },
+        {
+          "caller": "checkForAppUpdate",
+          "callee": "check",
+          "lineNumber": 160
+        },
+        {
+          "caller": "checkForAppUpdate",
+          "callee": "toUpdateMetadata",
+          "lineNumber": 170
+        },
+        {
+          "caller": "createAppUpdaterClient",
+          "callee": "checkForAppUpdate",
+          "lineNumber": 176
+        },
+        {
+          "caller": "downloadAndInstall",
+          "callee": "update.nativeUpdate.downloadAndInstall",
+          "lineNumber": 186
+        },
+        {
+          "caller": "downloadAndInstall",
+          "callee": "toDownloadProgress",
+          "lineNumber": 187
+        },
+        {
+          "caller": "downloadAndInstall",
+          "callee": "onProgress",
+          "lineNumber": 188
+        },
+        {
+          "caller": "relaunch",
+          "callee": "loadRelaunch",
+          "lineNumber": 196
+        },
+        {
+          "caller": "relaunch",
+          "callee": "relaunch",
+          "lineNumber": 197
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 5,
+        "functionCount": 10,
+        "classCount": 0
+      }
+    }
+  ]
+}

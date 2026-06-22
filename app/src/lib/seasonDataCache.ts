@@ -17,6 +17,7 @@ export interface SeasonWorkspaceChangeEvent {
   changedAt: number;
   source: string;
   affectedIds: string[];
+  changedTargets: string[];
   syncMeta: LocalSyncMeta | null;
 }
 
@@ -26,6 +27,7 @@ type WritableSeasonWorkspaceChangeEvent = {
   changedAt?: number;
   source?: string;
   affectedIds?: string[];
+  changedTargets?: string[];
   syncMeta?: LocalSyncMeta | null;
 };
 type SeasonWorkspaceChangeListener = (event: SeasonWorkspaceChangeEvent) => void;
@@ -98,6 +100,7 @@ export function publishSeasonWorkspaceChanged(event: WritableSeasonWorkspaceChan
     changedAt: event.changedAt ?? Date.now(),
     source: event.source ?? 'unknown',
     affectedIds: event.affectedIds ? Array.from(new Set(event.affectedIds)) : [],
+    changedTargets: event.changedTargets ? Array.from(new Set(event.changedTargets)) : [],
     syncMeta: event.syncMeta ?? null,
   };
   for (const listener of Array.from(seasonWorkspaceChangeListeners)) listener(nextEvent);

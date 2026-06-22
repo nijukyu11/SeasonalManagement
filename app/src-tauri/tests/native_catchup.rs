@@ -9,12 +9,13 @@ use seasonal_management_lib::native_catchup::{
     query_dashboard_ai_sql_on_connection, query_schedule_window_on_connection,
     query_season_freshness_on_connection, query_sync_summary_on_connection,
     reconcile_flight_record_manifest_on_connection, resolve_season_conflict_on_connection,
-    should_request_page_fetch_retry, should_request_token_refresh,
+    should_request_page_fetch_retry, should_request_token_refresh, sync_pending_changes_on_connection,
     upload_native_pending_chunks_with_retry, validate_pending_sync_result_coverage,
     ApplyLocalModificationBatchDeltaInput, ApplyLocalModificationHistoryInput,
     ApplyScheduleMutationInput, CheckSeasonIntegrityInput, EnsureLocalSeasonInput,
     ImportSeasonSnapshotInput, MergeSeasonSnapshotInput, NativeCatchupEvent,
     NativeCatchupEventPage, NativeHttpError, NativeSyncPendingRpcResult,
+    NativeSeasonOnlyInput,
     QueryAllocationWindowInput, QueryDashboardSummaryInput, QueryNativeDashboardAiSqlInput,
     QueryScheduleWindowInput, QuerySeasonFreshnessInput, ResolveSeasonConflictInput,
     WalCheckpointMode, MAX_NATIVE_PENDING_SYNC_CHUNK_BYTES, MAX_NATIVE_PENDING_SYNC_CHUNK_EVENTS,
@@ -2795,6 +2796,56 @@ fn native_local_modification_delta_preserves_review_status_without_pending_work(
     assert_eq!(sync_meta["conflicts"][0]["id"], "conflict-1");
 }
 
+#[test]
+fn native_pending_sync_reports_conflict_when_only_review_items_remain() {
+    let conn = open_test_db();
+    configure_sqlite_connection(&conn).expect("configure sqlite");
+    create_minimal_local_schema(&conn);
+    seed_flight(&conn);
+
+    conn.execute(
+        "UPDATE local_sync_meta SET pending_count = ?, sync_status = ?, payload_json = ? WHERE season_id = ?",
+        params![
+            0_i64,
+            "needs_review",
+            json!({
+                "seasonId": "season-1",
+                "baseServerVersion": 1,
+                "lastServerSeq": 4,
+                "localRevision": 2,
+                "pendingCount": 0,
+                "lastLocalChangeAt": null,
+                "syncStatus": "needs_review",
+                "conflicts": [{
+                    "id": "conflict-1",
+                    "targetType": "flightRecord",
+                    "targetId": "leg-1"
+                }]
+            })
+            .to_string(),
+            "season-1"
+        ],
+    )
+    .expect("seed review-only sync meta");
+
+    let result = sync_pending_changes_on_connection(
+        &conn,
+        &NativeSeasonOnlyInput {
+            season_id: "season-1".to_string(),
+        },
+    )
+    .expect("sync pending changes");
+
+    assert_eq!(result.status, "conflict");
+    assert_eq!(result.pending_count, 0);
+    assert_eq!(result.conflict_count, 1);
+    assert!(
+        result.message.contains("need review"),
+        "message should keep the user on conflict review, got: {}",
+        result.message
+    );
+}
+
 fn seed_flight(conn: &Connection) {
     let season = json!({
         "id": "season-1",
@@ -3045,6 +3096,58 @@ fn manifest_reconcile_prunes_local_only_records_without_pending_ops() {
     assert_eq!(stale_count, 0);
     assert_eq!(pending_count, 2);
     assert_eq!(local_revision, 1);
+}
+
+#[test]
+fn manifest_reconcile_does_not_protect_prefix_matched_pending_targets() {
+    let conn = open_test_db();
+    configure_sqlite_connection(&conn).expect("configure sqlite");
+    create_minimal_local_schema(&conn);
+    seed_flight(&conn);
+    seed_extra_flight(&conn, "leg-10", "2026-05-27", "arrival", 10);
+    conn.execute(
+        "INSERT INTO local_pending_ops (season_id, op_key, op_type, sort_order, payload_json)
+         VALUES (?, ?, ?, ?, ?)",
+        params![
+            "season-1",
+            "modification:leg-10",
+            "modification",
+            0_i64,
+            json!({
+                "type": "modification",
+                "mod": { "legId": "leg-10", "gate": 10 }
+            })
+            .to_string()
+        ],
+    )
+    .expect("seed leg-10 pending op");
+
+    let remote_ids = HashSet::new();
+    let result = reconcile_flight_record_manifest_on_connection(&conn, "season-1", &remote_ids)
+        .expect("reconcile manifest");
+
+    assert_eq!(
+        result.removed_record_ids,
+        vec!["leg-1".to_string()],
+        "pending leg-10 must not protect the stale leg-1 prefix target"
+    );
+    let leg_1_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM local_flight_records WHERE season_id = ? AND record_id = ?",
+            params!["season-1", "leg-1"],
+            |row| row.get(0),
+        )
+        .expect("leg-1 count");
+    let leg_10_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM local_flight_records WHERE season_id = ? AND record_id = ?",
+            params!["season-1", "leg-10"],
+            |row| row.get(0),
+        )
+        .expect("leg-10 count");
+
+    assert_eq!(leg_1_count, 0);
+    assert_eq!(leg_10_count, 2);
 }
 
 #[test]

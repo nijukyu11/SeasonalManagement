@@ -54,6 +54,7 @@ import { buildSeasonalDisplayGroups } from '@/lib/seasonalDisplayAggregator';
 import { matchesSeasonalFlightFilter } from '@/lib/seasonalFlightFilter';
 import {
   createLocalWorkspace,
+  getLocalSyncConflictCount,
   type LocalSyncMeta,
 } from '@/lib/localSeasonStore';
 import { appendAuditLogEntry, createFlightActionAuditFromHistory } from '@/lib/auditLog';
@@ -240,21 +241,22 @@ export default function HomePage() {
   const [isNewFlightOpen, setIsNewFlightOpen] = useState(false);
   const [linkModalGroupKey, setLinkModalGroupKey] = useState<string | null>(null);
   const [linkingCandidateKey, setLinkingCandidateKey] = useState<string | null>(null);
-  const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; lastLocalChangeAt: number | null }>({
+  const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; conflictCount: number; lastLocalChangeAt: number | null }>({
     pendingCount: 0,
+    conflictCount: 0,
     lastLocalChangeAt: null,
   });
   const [isUndoOpen, setIsUndoOpen] = useState(false);
   const [isUndoing, setIsUndoing] = useState(false);
   const { status: syncStatus, syncNow, fetchUpdatesNow } = useSeasonSync(activeSeason?.id, 'seasonal');
   const { syncNow: syncAnySeasonNow } = useSeasonSyncActions();
-  const syncing = syncStatus.status === 'syncing' && syncStatus.mode === 'manual';
-  const fetchingUpdates = syncStatus.status === 'catching_up' && syncStatus.mode === 'manual';
+  const syncInProgress = syncStatus.status === 'syncing';
+  const fetchingUpdates = syncStatus.status === 'catching_up';
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' || syncStatus.status === 'conflict' ? syncStatus.message : null);
   const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncSummary.pendingCount);
-  const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount);
-  const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
+  const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount);
+  const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount);
   const hasDraftChanges = (draftState?.records.length ?? 0) + (draftState?.modifications.length ?? 0) > 0;
 
   // Pagination
@@ -362,6 +364,7 @@ export default function HomePage() {
     setDraftState(null);
     setSyncSummary({
       pendingCount: scheduleWindow.syncMeta.pendingCount,
+      conflictCount: getLocalSyncConflictCount(scheduleWindow.syncMeta),
       lastLocalChangeAt: scheduleWindow.syncMeta.lastLocalChangeAt,
     });
   }, [applySeasonData, debouncedFilters.dateFrom, debouncedFilters.dateTo, debouncedFilters.flight, debouncedFilters.route]);
@@ -706,7 +709,7 @@ export default function HomePage() {
   }, [activeDisplayLegs, activeSeason, isExporting, notifyExportCompleted, selectedRecordIds, showAlert]);
 
   const handleUndo = useCallback(async (targetEntry: ModHistoryEntry) => {
-    if (!activeSeason || syncing) return;
+    if (!activeSeason || syncInProgress) return;
     setIsUndoing(true);
     try {
       const targetIdx = modHistory.findIndex((entry) => entry.id === targetEntry.id);
@@ -755,7 +758,7 @@ export default function HomePage() {
       const nextRows = buildPatternRowsFromRecords(nextRecords, nextMods);
       applySeasonData(nextRows, nextRecords, nextMods);
       setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession(historyToUndoFrom.slice(targetIdx + 1))));
-      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
+      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, conflictCount: getLocalSyncConflictCount(nativeSyncMeta), lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
       setCachedSeasonData(activeSeason.id, {
         rows: nextRows,
         records: nextRecords,
@@ -794,7 +797,7 @@ export default function HomePage() {
     } finally {
       setIsUndoing(false);
     }
-  }, [activeSeason, applySeasonData, flightRecords, modHistory, modifications, publishSeasonalWorkspaceChange, showAlert, syncing]);
+  }, [activeSeason, applySeasonData, flightRecords, modHistory, modifications, publishSeasonalWorkspaceChange, showAlert, syncInProgress]);
 
   const handleDiscardSeasonalDraft = useCallback(() => {
     if (!activeSeason || !draftState) return;
@@ -815,7 +818,7 @@ export default function HomePage() {
   }, [activeSeason, applySeasonData, draftState]);
 
   const commitDraftBeforeSave = useCallback(async () => {
-    if (!activeSeason || !draftState || syncing) return;
+    if (!activeSeason || !draftState || syncInProgress) return;
     const baseRecordIds = new Set(draftState.baseRecords.map((record) => record.id));
     const touchedIds = Array.from(new Set(draftState.modifications.map((mod) => mod.legId)));
     const addedRecords = flightRecords.filter((record) => !baseRecordIds.has(record.id));
@@ -876,7 +879,7 @@ export default function HomePage() {
       );
       if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
       setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
-      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
+      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, conflictCount: getLocalSyncConflictCount(nativeSyncMeta), lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
       setDraftState(null);
       useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
         seasonId: activeSeason.id,
@@ -907,7 +910,7 @@ export default function HomePage() {
     modHistory,
     modifications,
     publishSeasonalWorkspaceChange,
-    syncing,
+    syncInProgress,
   ]);
 
   useSeasonSyncGuard(activeSeason?.id, 'seasonal', {
@@ -928,7 +931,7 @@ export default function HomePage() {
   });
 
   const handleDeleteGroup = useCallback(async (group: DisplayGroup) => {
-    if (!activeSeason || syncing) return;
+    if (!activeSeason || syncInProgress) return;
     const ids = Array.from(group.recordIds);
     if (ids.length === 0) return;
 
@@ -998,10 +1001,10 @@ export default function HomePage() {
     } catch (err) {
       void showAlert({ title: 'Delete Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [activeDisplayLegs, activeSeason, displayRows, draftState, flightRecords, modifications, showAlert, showChoice, showConfirm, syncing]);
+  }, [activeDisplayLegs, activeSeason, displayRows, draftState, flightRecords, modifications, showAlert, showChoice, showConfirm, syncInProgress]);
 
   const handleUnlinkGroup = useCallback(async (group: DisplayGroup) => {
-    if (!activeSeason || syncing) return;
+    if (!activeSeason || syncInProgress) return;
     const persistedIds = new Set(flightRecords.map((record) => record.id));
     const linkedIds = group.legs
       .filter((leg) => persistedIds.has(leg.id) && (leg.linkedRecordId || leg.linkType))
@@ -1049,7 +1052,7 @@ export default function HomePage() {
       setFlightRecords(result.records);
       setDisplayRows(enrichRows(nextRows));
       if (historyEntry) setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
-      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
+      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, conflictCount: getLocalSyncConflictCount(nativeSyncMeta), lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
       setCachedSeasonData(activeSeason.id, {
         rows: nextRows,
         records: result.records,
@@ -1081,10 +1084,10 @@ export default function HomePage() {
     } catch (err) {
       void showAlert({ title: 'Unlink Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [activeSeason, flightRecords, modHistory, modifications, publishSeasonalWorkspaceChange, showAlert, showConfirm, syncing]);
+  }, [activeSeason, flightRecords, modHistory, modifications, publishSeasonalWorkspaceChange, showAlert, showConfirm, syncInProgress]);
 
   const handleApplySeasonalLinkCandidate = useCallback(async (candidate: SeasonalLinkCandidate) => {
-    if (!activeSeason || syncing) return;
+    if (!activeSeason || syncInProgress) return;
 
     try {
       setLinkingCandidateKey(candidate.key);
@@ -1115,7 +1118,7 @@ export default function HomePage() {
       setFlightRecords(result.records);
       setDisplayRows(enrichRows(nextRows));
       if (historyEntry) setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
-      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
+      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, conflictCount: getLocalSyncConflictCount(nativeSyncMeta), lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
       setCachedSeasonData(activeSeason.id, {
         rows: nextRows,
         records: result.records,
@@ -1145,37 +1148,41 @@ export default function HomePage() {
     } finally {
       setLinkingCandidateKey(null);
     }
-  }, [activeSeason, flightRecords, modHistory, modifications, publishSeasonalWorkspaceChange, showAlert, syncing]);
+  }, [activeSeason, flightRecords, modHistory, modifications, publishSeasonalWorkspaceChange, showAlert, syncInProgress]);
 
   const handleSync = useCallback(async () => {
-    if (!activeSeason || syncing) return;
+    if (!activeSeason || syncInProgress) return;
     try {
       const result = await syncNow();
+      const needsReview = result.status === 'conflict' || (result.reviewCount ?? 0) > 0;
       void showAlert({
-        title: result.status === 'synced' ? 'Save Complete' : 'Save Status',
+        title: needsReview ? 'Save Needs Review' : result.status === 'synced' ? 'Save Complete' : 'Save Failed',
         message: result.message ?? 'No pending local changes to save.',
-        tone: result.status === 'synced' ? 'success' : result.status === 'conflict' ? 'warning' : 'error',
+        tone: needsReview ? 'warning' : result.status === 'synced' ? 'success' : 'error',
       });
     } catch (err) {
       void showAlert({ title: 'Save Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [activeSeason, showAlert, syncing, syncNow]);
+  }, [activeSeason, showAlert, syncInProgress, syncNow]);
 
   const handleFetchUpdates = useCallback(async () => {
-    if (!activeSeason || fetchingUpdates || syncing) return;
+    if (!activeSeason || fetchingUpdates || syncInProgress) return;
     try {
       const result = await fetchUpdatesNow();
-      if (result.status !== 'synced') {
+      if (result.status === 'busy') return;
+      if (result.status === 'conflict') {
+        void showAlert({ title: 'Fetch Updates Need Review', message: result.message, tone: 'warning' });
+      } else if (result.status !== 'synced') {
         void showAlert({ title: 'Fetch Updates Failed', message: result.message, tone: 'error' });
       }
     } catch (err) {
       void showAlert({ title: 'Fetch Updates Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [activeSeason, fetchUpdatesNow, fetchingUpdates, showAlert, syncing]);
+  }, [activeSeason, fetchUpdatesNow, fetchingUpdates, showAlert, syncInProgress]);
 
   // Import handler
   const handleFile = useCallback(async (file: File) => {
-    if (uploading || syncing) return;
+    if (uploading || fetchingUpdates || syncInProgress) return;
     setUploading(true);
     try {
       setUploadProgress(buildImportProgress('Parsing file', 5));
@@ -1208,6 +1215,7 @@ export default function HomePage() {
           targetSeasonCode: seasonCode,
           activeSeasonId: activeSeason?.id ?? null,
           pendingCount: targetSummary?.pendingCount ?? 0,
+          conflictCount: targetSummary?.conflictCount ?? 0,
         });
 
         if (dirtyGuard.shouldBlock) {
@@ -1460,7 +1468,8 @@ export default function HomePage() {
     showAlert,
     showChoice,
     syncAnySeasonNow,
-    syncing,
+    fetchingUpdates,
+    syncInProgress,
     uploading,
   ]);
 
@@ -1519,11 +1528,11 @@ export default function HomePage() {
               <FetchServerUpdatesButton
                 fetching={fetchingUpdates}
                 progress={fetchProgress}
-                disabled={syncing}
+                disabled={syncInProgress}
                 onFetch={handleFetchUpdates}
               />
               <SyncActionButton
-                syncing={syncing}
+                syncing={syncInProgress}
                 pendingCount={syncPendingCount}
                 progress={syncProgress}
                 onSync={handleSync}
@@ -1538,7 +1547,7 @@ export default function HomePage() {
               </span>
               <button
                 onClick={handleDiscardSeasonalDraft}
-                disabled={syncing}
+                disabled={syncInProgress}
                 className="rounded px-3 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
               >
                 Discard
@@ -1550,7 +1559,7 @@ export default function HomePage() {
               <button
                 className="flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 font-label-caps text-label-caps text-on-primary shadow-sm transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
                 onClick={() => setIsNewFlightOpen(true)}
-                disabled={syncing || hasDraftChanges}
+                disabled={syncInProgress || hasDraftChanges}
                 title="Create a new seasonal flight"
               >
                 <span className="material-symbols-outlined text-[16px]">add</span>
@@ -1559,7 +1568,7 @@ export default function HomePage() {
               <div className="relative">
                 <button
                   className="flex items-center gap-2 rounded-lg border border-outline-variant px-3 py-1.5 font-label-caps text-label-caps text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={syncing || hasDraftChanges || modHistory.length === 0 || isUndoing}
+                  disabled={syncInProgress || hasDraftChanges || modHistory.length === 0 || isUndoing}
                   onClick={() => setIsUndoOpen(!isUndoOpen)}
                   title="Undo local changes"
                 >
@@ -1671,8 +1680,10 @@ export default function HomePage() {
           <div className="mb-lg flex flex-col gap-3 rounded-xl border border-surface-variant bg-surface-container-lowest px-4 py-3 shadow-sm md:flex-row md:items-center md:justify-between" aria-label="Seasonal schedule table toolbar">
             <div className="flex flex-wrap items-center gap-2">
               <button
-                className="flex items-center gap-1.5 bg-primary text-on-primary text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm"
+                type="button"
+                className="flex items-center gap-1.5 bg-primary text-on-primary text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-40"
                 onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || fetchingUpdates || syncInProgress}
               >
                 <span className="material-symbols-outlined text-[16px]">cloud_upload</span>
                 Import
@@ -1712,7 +1723,7 @@ export default function HomePage() {
                     <FetchServerUpdatesButton
                       fetching={fetchingUpdates}
                       progress={fetchProgress}
-                      disabled={syncing}
+                      disabled={syncInProgress}
                       onFetch={handleFetchUpdates}
                     />
                     <button
@@ -1742,7 +1753,7 @@ export default function HomePage() {
                   <FetchServerUpdatesButton
                     fetching={fetchingUpdates}
                     progress={fetchProgress}
-                    disabled={syncing}
+                    disabled={syncInProgress}
                     onFetch={handleFetchUpdates}
                   />
                 )}
@@ -2093,7 +2104,7 @@ export default function HomePage() {
         seasonStart={activeSeason?.effectiveStart}
         seasonEnd={activeSeason?.effectiveEnd}
         onSubmitSeasonal={async (row) => {
-          if (!activeSeason || syncing) return;
+          if (!activeSeason || syncInProgress) return;
           try {
             const nextRowIndex = Math.max(0, ...displayRows.map((displayRow) => displayRow.rowIndex)) + 1;
             const savedRow = { ...row, rowIndex: nextRowIndex };

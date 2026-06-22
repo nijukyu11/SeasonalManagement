@@ -1,0 +1,14 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": ".github/workflows/release.yml",
+      "language": "yaml",
+      "sizeLines": 127,
+      "fileCategory": "infra"
+    }
+  ],
+  "batchImportData": {
+    ".github/workflows/release.yml": []
+  }
+}

@@ -1,0 +1,206 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "app/src/app/checkin/checkInLocalCommitWorker.ts",
+      "language": "typescript",
+      "sizeLines": 95,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/gate/gateLocalCommitWorker.ts",
+      "language": "typescript",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/localSeasonSqlStore.test.ts",
+      "language": "typescript",
+      "sizeLines": 586,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/localSeasonSqlStore.ts",
+      "language": "typescript",
+      "sizeLines": 1144,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/localSeasonStore.ts",
+      "language": "typescript",
+      "sizeLines": 851,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeLocalSeasonStore.ts",
+      "language": "typescript",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeRuntime.ts",
+      "language": "typescript",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeSeasonCatchup.ts",
+      "language": "typescript",
+      "sizeLines": 466,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/remoteStore.ts",
+      "language": "typescript",
+      "sizeLines": 420,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonChangeEvents.ts",
+      "language": "typescript",
+      "sizeLines": 744,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonConflictResolution.ts",
+      "language": "typescript",
+      "sizeLines": 34,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonDataCache.test.ts",
+      "language": "typescript",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonDataCache.ts",
+      "language": "typescript",
+      "sizeLines": 105,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonSync.ts",
+      "language": "typescript",
+      "sizeLines": 782,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonWorkspaceBootstrap.ts",
+      "language": "typescript",
+      "sizeLines": 141,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonWorkspaceStore.test.ts",
+      "language": "typescript",
+      "sizeLines": 99,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonWorkspaceStore.ts",
+      "language": "typescript",
+      "sizeLines": 299,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/supabase.ts",
+      "language": "typescript",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "app/src/app/checkin/checkInLocalCommitWorker.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/app/gate/gateLocalCommitWorker.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/localSeasonSqlStore.test.ts": [
+      "app/src/lib/localSeasonSqlStore.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/localSeasonSqlStore.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/localSeasonStore.ts": [
+      "app/src/lib/localSeasonSqlStore.ts",
+      "app/src/lib/nativeLocalSeasonStore.ts",
+      "app/src/lib/nativeRuntime.ts",
+      "app/src/lib/persistenceSchema.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/nativeLocalSeasonStore.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeRuntime.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/nativeRuntime.ts": [],
+    "app/src/lib/nativeSeasonCatchup.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeRuntime.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/supabase.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/remoteStore.ts": [
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/nativeRuntime.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/sourceRowPatterns.ts",
+      "app/src/lib/supabase.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonChangeEvents.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonConflictResolution.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/seasonDataCache.ts"
+    ],
+    "app/src/lib/seasonDataCache.test.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/seasonDataCache.ts"
+    ],
+    "app/src/lib/seasonDataCache.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonSync.ts": [
+      "app/src/lib/atomicSchedule.ts",
+      "app/src/lib/auditLog.ts",
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/seasonChangeEvents.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonWorkspaceBootstrap.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/remoteStore.ts",
+      "app/src/lib/seasonDataCache.ts",
+      "app/src/lib/seasonSync.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonWorkspaceStore.test.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/seasonWorkspaceStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/seasonWorkspaceStore.ts": [
+      "app/src/lib/localSeasonStore.ts",
+      "app/src/lib/types.ts"
+    ],
+    "app/src/lib/supabase.ts": []
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "app/AGENTS.md",
+      "language": "markdown",
+      "sizeLines": 5,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "app/CLAUDE.md",
+      "language": "markdown",
+      "sizeLines": 1,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "app/README.md",
+      "language": "markdown",
+      "sizeLines": 58,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "app/firebase.json",
+      "language": "json",
+      "sizeLines": 11,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/firestore.indexes.json",
+      "language": "json",
+      "sizeLines": 12,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/package.json",
+      "language": "json",
+      "sizeLines": 60,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/tsconfig.json",
+      "language": "json",
+      "sizeLines": 35,
+      "fileCategory": "config"
+    }
+  ],
+  "batchImportData": {
+    "app/AGENTS.md": [],
+    "app/CLAUDE.md": [],
+    "app/README.md": [],
+    "app/firebase.json": [],
+    "app/firestore.indexes.json": [],
+    "app/package.json": [],
+    "app/tsconfig.json": []
+  }
+}

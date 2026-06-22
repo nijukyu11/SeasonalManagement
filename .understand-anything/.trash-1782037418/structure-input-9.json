@@ -1,0 +1,49 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "app/supabase/functions/_shared/cors.ts",
+      "language": "typescript",
+      "sizeLines": 15,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase/functions/_shared/dashboardAiShared.ts",
+      "language": "typescript",
+      "sizeLines": 285,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase/functions/dashboard-ai-analysis/index.ts",
+      "language": "typescript",
+      "sizeLines": 2327,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase/functions/rotate-dashboard-ai-key/index.ts",
+      "language": "typescript",
+      "sizeLines": 93,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase/functions/schedule-telegram-notify/index.ts",
+      "language": "typescript",
+      "sizeLines": 847,
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "app/supabase/functions/_shared/cors.ts": [],
+    "app/supabase/functions/_shared/dashboardAiShared.ts": [],
+    "app/supabase/functions/dashboard-ai-analysis/index.ts": [
+      "app/supabase/functions/_shared/cors.ts",
+      "app/supabase/functions/_shared/dashboardAiShared.ts"
+    ],
+    "app/supabase/functions/rotate-dashboard-ai-key/index.ts": [
+      "app/supabase/functions/_shared/cors.ts"
+    ],
+    "app/supabase/functions/schedule-telegram-notify/index.ts": [
+      "app/supabase/functions/_shared/cors.ts"
+    ]
+  }
+}

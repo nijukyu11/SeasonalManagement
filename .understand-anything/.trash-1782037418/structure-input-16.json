@@ -1,0 +1,28 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "docs/ai-report-export-guide.md",
+      "language": "markdown",
+      "sizeLines": 325,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/backend-supabase-schema-functions.md",
+      "language": "markdown",
+      "sizeLines": 809,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/tauri-updater-release.md",
+      "language": "markdown",
+      "sizeLines": 40,
+      "fileCategory": "docs"
+    }
+  ],
+  "batchImportData": {
+    "docs/ai-report-export-guide.md": [],
+    "docs/backend-supabase-schema-functions.md": [],
+    "docs/tauri-updater-release.md": []
+  }
+}

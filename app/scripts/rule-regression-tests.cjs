@@ -43,6 +43,20 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+const MOJIBAKE_MARKER_PATTERN = new RegExp(['\\u00c3', '\\u00c2', '\\u00e1\\u00ba', '\\u00c6', '\\u00c4', '\\ufffd'].join('|'));
+
+function assertNoMojibakeMarkers(source, label) {
+  const offendingLines = source
+    .split(/\r?\n/)
+    .map((line, index) => ({ line, lineNumber: index + 1 }))
+    .filter(({ line }) => MOJIBAKE_MARKER_PATTERN.test(line))
+    .slice(0, 8);
+  assert(
+    offendingLines.length === 0,
+    `${label} must preserve Vietnamese as UTF-8, found mojibake markers: ${offendingLines.map(({ lineNumber, line }) => `${lineNumber}:${line.trim()}`).join(' | ')}`
+  );
+}
+
 function sameDays(actual, expected, label) {
   assert(
     JSON.stringify(actual) === JSON.stringify(expected),
@@ -296,7 +310,8 @@ async function run() {
     parseRouteCountryRows,
     resolveCountryForRoute,
   } = require(path.join(tempDir, 'routeCountry.js'));
-  const { planSync, applySuccessfulSync, finalizeSuccessfulSync, isSeasonWorkspaceStale, createWorkspaceFromRemoteSnapshot } = require(path.join(tempDir, 'seasonSync.js'));
+  const { planSync, applySuccessfulSync, finalizeSuccessfulSync, isSeasonWorkspaceStale, createWorkspaceFromRemoteSnapshot, syncSeasonWorkspace } = require(path.join(tempDir, 'seasonSync.js'));
+  const remoteStoreModule = require(path.join(tempDir, 'remoteStore.js'));
   const {
     AUTO_SYNC_DEBOUNCE_MS,
     AUTO_SYNC_IDLE_TIMEOUT_MS,
@@ -1894,6 +1909,19 @@ async function run() {
     dirtyGuard.shouldBlock && dirtyGuard.scope === 'active' && dirtyGuard.message.includes('3 unsynced'),
     `same-season dirty re-import should be blocked before overwrite, got ${JSON.stringify(dirtyGuard)}`
   );
+  const conflictOnlyDirtyGuard = getDirtyImportGuard({
+    targetSeasonId: 'season-s26',
+    targetSeasonCode: 'S26',
+    activeSeasonId: 'season-s26',
+    pendingCount: 0,
+    conflictCount: 1,
+  });
+  assert(
+    conflictOnlyDirtyGuard.shouldBlock &&
+      conflictOnlyDirtyGuard.scope === 'active' &&
+      conflictOnlyDirtyGuard.message.includes('1 conflict review item'),
+    `same-season conflict-only re-import should be blocked before overwrite, got ${JSON.stringify(conflictOnlyDirtyGuard)}`
+  );
   const cleanGuard = getDirtyImportGuard({
     targetSeasonId: 'season-w26',
     targetSeasonCode: 'W26',
@@ -2526,6 +2554,59 @@ async function run() {
       reviewOnlySummary.syncStatus === 'needs_review',
     `pending sync summary must keep unresolved conflicts visible even when no pending ops remain, got ${JSON.stringify(reviewOnlySummary)}`
   );
+  const originalGetRemoteStore = remoteStoreModule.getRemoteStore;
+  const originalSaveAuditLogEntry = remoteStoreModule.saveAuditLogEntry;
+  const originalGetCurrentRemoteActor = remoteStoreModule.getCurrentRemoteActor;
+  remoteStoreModule.getRemoteStore = async () => ({
+    getSeason: async (seasonId) => seasonId === 'review-only-season'
+      ? { id: 'review-only-season', seasonCode: 'S26', dataVersion: 8 }
+      : null,
+    saveAuditLogEntry: async () => undefined,
+    syncSeasonWorkspaceRemoteV2: async () => {
+      throw new Error('syncSeasonWorkspace must not upload when only review conflicts remain');
+    },
+  });
+  remoteStoreModule.saveAuditLogEntry = async () => undefined;
+  remoteStoreModule.getCurrentRemoteActor = async () => null;
+  try {
+    const reviewOnlySyncResult = await syncSeasonWorkspace('review-only-season');
+    assert(
+      reviewOnlySyncResult.status === 'conflict' &&
+        reviewOnlySyncResult.reviewCount === 1 &&
+        reviewOnlySyncResult.message.includes('need review'),
+      `syncSeasonWorkspace must return conflict for review-only workspaces, got ${JSON.stringify(reviewOnlySyncResult)}`
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    remoteStoreModule.getRemoteStore = originalGetRemoteStore;
+    remoteStoreModule.saveAuditLogEntry = originalSaveAuditLogEntry;
+    remoteStoreModule.getCurrentRemoteActor = originalGetCurrentRemoteActor;
+  }
+  remoteStoreModule.getRemoteStore = async () => ({
+    getSeason: async (seasonId) => seasonId === 'review-only-season'
+      ? { id: 'review-only-season', seasonCode: 'S26', dataVersion: 8 }
+      : null,
+    saveAuditLogEntry: async () => undefined,
+    syncSeasonWorkspaceRemote: async () => {
+      throw new Error('legacy syncSeasonWorkspace must not upload when only review conflicts remain');
+    },
+  });
+  remoteStoreModule.saveAuditLogEntry = async () => undefined;
+  remoteStoreModule.getCurrentRemoteActor = async () => null;
+  try {
+    const legacyReviewOnlySyncResult = await syncSeasonWorkspace('review-only-season');
+    assert(
+      legacyReviewOnlySyncResult.status === 'conflict' &&
+        legacyReviewOnlySyncResult.reviewCount === 1 &&
+        legacyReviewOnlySyncResult.message.includes('need review'),
+      `legacy syncSeasonWorkspace must return conflict for review-only workspaces, got ${JSON.stringify(legacyReviewOnlySyncResult)}`
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    remoteStoreModule.getRemoteStore = originalGetRemoteStore;
+    remoteStoreModule.saveAuditLogEntry = originalSaveAuditLogEntry;
+    remoteStoreModule.getCurrentRemoteActor = originalGetCurrentRemoteActor;
+  }
   const schedulerTimers = [];
   const schedulerClearedTimers = [];
   const schedulerIdleCallbacks = [];
@@ -2560,6 +2641,13 @@ async function run() {
       schedulerRuns.push({ seasonId, mode });
       if (seasonId === 'daily-season') schedulerPendingCount = 0;
       if (seasonId === 'review-season') return { status: 'synced', message: 'Needs review', reviewCount: 1 };
+      if (seasonId === 'review-only-manual-season') return { status: 'conflict', message: '1 item needs review', reviewCount: 1 };
+      if (seasonId === 'cleared-review-season') {
+        const runCount = schedulerRuns.filter((entry) => entry.seasonId === 'cleared-review-season').length;
+        return runCount === 1
+          ? { status: 'conflict', message: '1 item needs review', reviewCount: 1 }
+          : { status: 'synced', message: 'ok' };
+      }
       return { status: 'synced', message: 'ok' };
     },
     onState: (seasonId, state) => schedulerStates.push({ seasonId, state }),
@@ -2572,6 +2660,15 @@ async function run() {
       !shouldAutoSyncSource('seasonal') &&
       !shouldAutoSyncSource(null),
     'guarded auto sync must only enable Daily, Check-in, and Gate source families'
+  );
+  scheduler.notifyLocalChange('summary-conflict-season', { source: 'gate', pendingCount: 0, conflictCount: 1 });
+  assert(
+    schedulerStates.at(-1)?.seasonId === 'summary-conflict-season' &&
+      schedulerStates.at(-1)?.state.status === 'needs_review' &&
+      schedulerStates.at(-1)?.state.pendingCount === 0 &&
+      schedulerStates.at(-1)?.state.conflictCount === 1 &&
+      !schedulerRuns.some((entry) => entry.seasonId === 'summary-conflict-season'),
+    `sync summaries with conflictCount and no pending changes must stay needs_review, got ${JSON.stringify({ schedulerStates, schedulerRuns })}`
   );
   scheduler.notifyLocalChange('daily-season', { source: 'daily', pendingCount: 1, lastLocalChangeAt: 100 });
   scheduler.notifyLocalChange('daily-season', { source: 'daily', pendingCount: 1, lastLocalChangeAt: 101 });
@@ -2660,6 +2757,80 @@ async function run() {
       runningStates.at(-1)?.state.pendingCount === 0,
     `completed auto sync should clear stale pending state, got ${JSON.stringify(runningStates)}`
   );
+  const queuedReviewStates = [];
+  const queuedReviewTimers = [];
+  let queuedReviewRelease = null;
+  let queuedReviewPendingCount = 1;
+  let queuedReviewRunStarted = false;
+  const queuedReviewScheduler = new SeasonAutoSyncScheduler({
+    setTimeout: (callback) => {
+      queuedReviewTimers.push(callback);
+      return queuedReviewTimers.length;
+    },
+    clearTimeout: () => undefined,
+    isOnline: () => true,
+    getPendingCount: async () => queuedReviewPendingCount,
+    run: async () => {
+      queuedReviewRunStarted = true;
+      await new Promise((resolve) => {
+        queuedReviewRelease = resolve;
+      });
+      return { status: 'synced', message: 'Synced non-conflicting changes. 1 item needs review.', reviewCount: 1 };
+    },
+    onState: (seasonId, state) => queuedReviewStates.push({ seasonId, state }),
+  });
+  queuedReviewScheduler.notifyLocalChange('queued-review-season', { source: 'daily', pendingCount: 1, lastLocalChangeAt: 300 });
+  queuedReviewTimers[0]();
+  for (let index = 0; index < 6; index++) await Promise.resolve();
+  assert(queuedReviewRunStarted, `queued review sync should have started, got ${JSON.stringify(queuedReviewStates)}`);
+  queuedReviewPendingCount = 2;
+  queuedReviewScheduler.notifyLocalChange('queued-review-season', { source: 'daily', pendingCount: 2, lastLocalChangeAt: 301 });
+  queuedReviewRelease();
+  for (let index = 0; index < 8; index++) await Promise.resolve();
+  assert(
+    queuedReviewStates.at(-1)?.state.status === 'needs_review' &&
+      queuedReviewStates.at(-1)?.state.pendingCount === 2 &&
+      queuedReviewStates.at(-1)?.state.conflictCount === 1 &&
+      queuedReviewTimers.length === 1,
+    `queued local changes during a review-result sync must not overwrite needs_review with scheduled/dirty, got ${JSON.stringify({ queuedReviewTimers: queuedReviewTimers.length, queuedReviewStates })}`
+  );
+  const inFlightConflictStates = [];
+  const inFlightConflictTimers = [];
+  let inFlightConflictRelease = null;
+  let inFlightConflictPendingCount = 1;
+  let inFlightConflictStarted = false;
+  const inFlightConflictScheduler = new SeasonAutoSyncScheduler({
+    setTimeout: (callback) => {
+      inFlightConflictTimers.push(callback);
+      return inFlightConflictTimers.length;
+    },
+    clearTimeout: () => undefined,
+    isOnline: () => true,
+    getPendingCount: async () => inFlightConflictPendingCount,
+    run: async () => {
+      inFlightConflictStarted = true;
+      await new Promise((resolve) => {
+        inFlightConflictRelease = resolve;
+      });
+      inFlightConflictPendingCount = 0;
+      return { status: 'synced', message: 'ok' };
+    },
+    onState: (seasonId, state) => inFlightConflictStates.push({ seasonId, state }),
+  });
+  inFlightConflictScheduler.notifyLocalChange('in-flight-conflict-season', { source: 'daily', pendingCount: 1, lastLocalChangeAt: 400 });
+  inFlightConflictTimers[0]();
+  for (let index = 0; index < 6; index++) await Promise.resolve();
+  assert(inFlightConflictStarted, `in-flight conflict sync should have started, got ${JSON.stringify(inFlightConflictStates)}`);
+  inFlightConflictPendingCount = 0;
+  inFlightConflictScheduler.notifyLocalChange('in-flight-conflict-season', { source: 'daily', pendingCount: 0, conflictCount: 1, lastLocalChangeAt: 401 });
+  inFlightConflictRelease();
+  for (let index = 0; index < 8; index++) await Promise.resolve();
+  assert(
+    inFlightConflictStates.at(-1)?.state.status === 'needs_review' &&
+      inFlightConflictStates.at(-1)?.state.pendingCount === 0 &&
+      inFlightConflictStates.at(-1)?.state.conflictCount === 1,
+    `in-flight conflict summaries must not be overwritten by a later clean sync result, got ${JSON.stringify(inFlightConflictStates)}`
+  );
   const timerCountBeforeDetailed = schedulerTimers.length;
   scheduler.notifyLocalChange('detailed-season', { source: 'detailed', pendingCount: 1 });
   assert(
@@ -2724,6 +2895,64 @@ async function run() {
   assert(
     schedulerRuns.some((entry) => entry.seasonId === 'manual-season' && entry.mode === 'manual'),
     `manual sync should still run on demand, got ${JSON.stringify(schedulerRuns)}`
+  );
+  const pendingFailureStates = [];
+  const pendingFailureScheduler = new SeasonAutoSyncScheduler({
+    setTimeout: () => 1,
+    clearTimeout: () => undefined,
+    isOnline: () => true,
+    getPendingCount: async () => {
+      throw new Error('summary unavailable');
+    },
+    run: async () => {
+      throw new Error('sync must not run when pending summary fails');
+    },
+    onState: (seasonId, state) => pendingFailureStates.push({ seasonId, state }),
+  });
+  let pendingFailureResult = null;
+  let pendingFailureThrow = null;
+  try {
+    pendingFailureResult = await pendingFailureScheduler.syncNow('pending-summary-failure-season', 'daily');
+  } catch (error) {
+    pendingFailureThrow = error;
+  }
+  assert(
+    pendingFailureThrow == null &&
+      pendingFailureResult?.status === 'failed' &&
+      pendingFailureResult.message === 'summary unavailable' &&
+      pendingFailureStates.at(-1)?.seasonId === 'pending-summary-failure-season' &&
+      pendingFailureStates.at(-1)?.state.status === 'failed' &&
+      pendingFailureStates.at(-1)?.state.message === 'summary unavailable',
+    `scheduler getPendingCount failures before a run must publish failed state instead of throwing or leaving stale UI, got ${JSON.stringify({ pendingFailureThrow: pendingFailureThrow?.message, pendingFailureResult, pendingFailureStates })}`
+  );
+  schedulerPendingCount = 0;
+  const reviewOnlyManualResult = await scheduler.syncNow('review-only-manual-season');
+  assert(
+    reviewOnlyManualResult.status === 'conflict' &&
+      schedulerRuns.some((entry) => entry.seasonId === 'review-only-manual-season' && entry.mode === 'manual') &&
+      schedulerStates.some((entry) =>
+        entry.seasonId === 'review-only-manual-season' &&
+        entry.state.status === 'conflict' &&
+        entry.state.pendingCount === 0 &&
+        entry.state.conflictCount === 1
+      ),
+    `manual sync must still call native when pendingCount=0 so review-only conflicts surface, got ${JSON.stringify({ reviewOnlyManualResult, schedulerRuns, schedulerStates })}`
+  );
+  schedulerPendingCount = 0;
+  const clearedReviewConflictResult = await scheduler.syncNow('cleared-review-season');
+  const clearedReviewSyncedResult = await scheduler.syncNow('cleared-review-season');
+  assert(
+    clearedReviewConflictResult.status === 'conflict' &&
+      clearedReviewSyncedResult.status === 'synced' &&
+      schedulerStates.some((entry) =>
+        entry.seasonId === 'cleared-review-season' &&
+        entry.state.status === 'conflict' &&
+        entry.state.conflictCount === 1
+      ) &&
+      schedulerStates.at(-1)?.seasonId === 'cleared-review-season' &&
+      schedulerStates.at(-1)?.state.status === 'synced' &&
+      schedulerStates.at(-1)?.state.conflictCount === 0,
+    `scheduler must clear stale conflictCount after a clean sync, got ${JSON.stringify({ clearedReviewConflictResult, clearedReviewSyncedResult, schedulerStates })}`
   );
   assert(getAutoSyncRetryDelayMs(0) === null && getAutoSyncRetryDelayMs(4) == null, `automatic retry delays should be disabled, got ${AUTO_SYNC_RETRY_DELAYS_MS.join(',')}`);
   assert(isTransientSyncFailure('Failed to fetch') && !isTransientSyncFailure('Server version changed from 1 to 2'), 'transient sync failure classification should stay available for status messaging');
@@ -2899,6 +3128,43 @@ async function run() {
       records: discardedAllWorkspace?.records,
       syncMeta: discardedAllWorkspace?.syncMeta,
       pendingOps: discardedAllWorkspace?.pendingOps,
+    })}`
+  );
+  const discardAllConflictWorkspace = rebuildPendingOpsFromBaseline(createLocalWorkspace({
+    season: { id: 'discard-all-conflict-season', seasonCode: 'S26', dataVersion: 10 },
+    rows: [{ rowIndex: 1, airline: 'LOCAL_CONFLICT' }],
+    records: [{ id: 'DISCARD-CONFLICT-1', route: 'LOCAL_CONFLICT', gate: 12 }],
+    modifications: new Map(),
+    modHistory: [{ id: 'LOCAL-CONFLICT-DISCARD', timestamp: 4, description: 'Local conflict edit', changes: [] }],
+    baseRows: [{ rowIndex: 1, airline: 'BASE_CONFLICT' }],
+    baseRecords: [{ id: 'DISCARD-CONFLICT-1', route: 'BASE_CONFLICT', gate: 5 }],
+    baseModificationEntries: [],
+    baseModHistory: [{ id: 'BASE-CONFLICT-DISCARD', timestamp: 3, description: 'Baseline conflict history', changes: [] }],
+    syncMeta: {
+      baseServerVersion: 10,
+      lastServerSeq: 20,
+      clientId: 'client-all-conflict',
+      localRevision: 3,
+      pendingCount: 1,
+      lastLocalChangeAt: 900,
+      syncStatus: 'dirty',
+      conflicts: [{ id: 'conflict-discard-all-1' }],
+    },
+  }), 900);
+  await saveLocalSeasonWorkspace(discardAllConflictWorkspace);
+  await discardAllLocalPendingChanges();
+  const discardedAllConflict = await loadLocalSeasonWorkspace('discard-all-conflict-season');
+  assert(
+    discardedAllConflict &&
+      discardedAllConflict.pendingOps.length === 0 &&
+      discardedAllConflict.syncMeta.pendingCount === 0 &&
+      discardedAllConflict.syncMeta.syncStatus === 'needs_review' &&
+      discardedAllConflict.syncMeta.conflicts?.[0]?.id === 'conflict-discard-all-1' &&
+      discardedAllConflict.records[0].route === 'BASE_CONFLICT',
+    `discardAllLocalPendingChanges should preserve conflict review state after discarding local edits, got ${JSON.stringify({
+      records: discardedAllConflict?.records,
+      syncMeta: discardedAllConflict?.syncMeta,
+      pendingOps: discardedAllConflict?.pendingOps,
     })}`
   );
   const linkedRecordsForUndo = [
@@ -4326,10 +4592,10 @@ async function run() {
     language: 'vi',
   });
   assert(
-    vietnamesePrompt.includes('STABLE_AGENT_CONTRACT') &&
+      vietnamesePrompt.includes('STABLE_AGENT_CONTRACT') &&
       vietnamesePrompt.includes('LANGUAGE_POLICY') &&
       vietnamesePrompt.includes('language: vi') &&
-      (vietnamesePrompt.includes('LuÃ´n tráº£ lá»i báº±ng tiáº¿ng Viá»‡t') || vietnamesePrompt.includes('LuÃƒÂ´n trÃ¡ÂºÂ£ lÃ¡Â»Âi bÃ¡ÂºÂ±ng tiÃ¡ÂºÂ¿ng ViÃ¡Â»â€¡t')) &&
+      vietnamesePrompt.includes('Luôn trả lời bằng tiếng Việt') &&
       vietnamesePrompt.includes('EPHEMERAL_DASHBOARD_CONTEXT') &&
       vietnamesePrompt.includes('month-comparison-drivers') &&
       vietnamesePrompt.includes('notebookContext') &&
@@ -5019,7 +5285,7 @@ async function run() {
           }
           return {
             data: {
-              assistantText: 'ÄÃ£ táº¡o bÃ¡o cÃ¡o trá»±c quan tá»« dá»¯ liá»‡u dashboard.',
+              assistantText: 'Đã tạo báo cáo trực quan từ dữ liệu dashboard.',
               boardPatch: markdownOnlyFallbackPatch,
             },
             error: null,
@@ -5030,8 +5296,8 @@ async function run() {
   });
   assert(
     retryAttempts === 2 &&
-      (transientRetryAnswer.assistantText.includes('ÄÃ£ táº¡o') || transientRetryAnswer.assistantText.includes('Ã„ÂÃƒÂ£ tÃ¡ÂºÂ¡o')) &&
-      transientRetryAnswer.toolTraceSummary.some((trace) => trace.providerAttempt === 2 && (trace.reason.includes('Thá»­ láº¡i') || trace.reason.includes('ThÃ¡Â»Â­ lÃ¡ÂºÂ¡i'))),
+      transientRetryAnswer.assistantText.includes('Đã tạo') &&
+      transientRetryAnswer.toolTraceSummary.some((trace) => trace.providerAttempt === 2 && trace.reason.includes('Thử lại')),
     `AI frontend helper should retry one transient provider failure and annotate the tool trace, got ${JSON.stringify({ retryAttempts, transientRetryAnswer })}`
   );
   let schemaAttempts = 0;
@@ -7929,6 +8195,7 @@ async function run() {
     `edge scrolling should accelerate near boundaries and stop in the center, got ${JSON.stringify({ edgeScroll, centeredScroll })}`
   );
   const checkInPageSource = fs.readFileSync(path.join(root, 'src', 'app', 'checkin', 'page.tsx'), 'utf8');
+  const checkInWorkspaceRefreshScopeSource = fs.readFileSync(path.join(root, 'src', 'app', 'checkin', 'workspaceRefreshScope.ts'), 'utf8');
   const checkInWorkerSource = fs.readFileSync(path.join(root, 'src', 'app', 'checkin', 'checkInLocalCommitWorker.ts'), 'utf8');
   const localSeasonStoreSource = fs.readFileSync(path.join(root, 'src', 'lib', 'localSeasonStore.ts'), 'utf8');
   const localSeasonSqlStoreSource = fs.readFileSync(path.join(root, 'src', 'lib', 'localSeasonSqlStore.ts'), 'utf8');
@@ -8273,7 +8540,7 @@ async function run() {
       checkInPageSource.includes('buildCheckInPeriodUnallocationModifications') &&
       checkInPageSource.includes('commitCheckInModificationBatch') &&
       checkInPageSource.includes('aria-label="Unallocate all counters in selected period"') &&
-      checkInPageSource.includes('disabled={syncing || summary.counterBlocks === 0}'),
+      checkInPageSource.includes('disabled={syncWriteInProgress || summary.counterBlocks === 0}'),
     'Check-in Allocation toolbar must expose an Unallocate All action that batch-clears counters in the selected timeline period'
   );
   assert(
@@ -8294,7 +8561,7 @@ async function run() {
     checkInPageSource.indexOf('const mergeCheckInUndoEntries')
   );
   const renderResourceBarStart = checkInPageSource.indexOf('const renderResourceBar = useCallback');
-  const renderResourceBarEnd = checkInPageSource.indexOf('  return (\n    <div className="flex h-screen', renderResourceBarStart + 1);
+  const renderResourceBarEnd = checkInPageSource.indexOf('  return (\n    <div className="flex h-dvh', renderResourceBarStart + 1);
   const renderResourceBarBody = renderResourceBarStart >= 0 && renderResourceBarEnd > renderResourceBarStart
     ? checkInPageSource.slice(renderResourceBarStart, renderResourceBarEnd)
     : '';
@@ -8762,7 +9029,7 @@ async function run() {
       gatePageSource.includes('handleUnallocateAllGatesInPeriod') &&
       gatePageSource.includes('commitGateModificationBatch') &&
       gatePageSource.includes('aria-label="Unallocate all gates in selected period"') &&
-      gatePageSource.includes('disabled={syncing || summary.gateBlocks === 0}') &&
+      gatePageSource.includes('disabled={syncWriteInProgress || summary.gateBlocks === 0}') &&
       gatePageSource.includes('Export PDF') &&
       gatePageSource.includes('exportDraft') &&
       gatePageSource.includes('selectedGroupIds') &&
@@ -8882,7 +9149,7 @@ async function run() {
   );
   const gateResourceBarBody = gatePageSource.slice(
     gatePageSource.indexOf('const renderResourceBar = (bar: GateResourceBar)'),
-    gatePageSource.indexOf('  return (\n    <div className="flex h-screen')
+    gatePageSource.indexOf('  return (\n    <div className="flex h-dvh')
   );
   assert(
     [gateUnallocatedBarBody, gateResourceBarBody].every((body) =>
@@ -8977,6 +9244,7 @@ async function run() {
   );
   const dashboardPageSource = fs.readFileSync(path.join(root, 'src', 'app', 'dashboard', 'page.tsx'), 'utf8');
   const dashboardAiSource = fs.readFileSync(path.join(root, 'src', 'lib', 'dashboardAiAnalysis.ts'), 'utf8');
+  assertNoMojibakeMarkers(dashboardAiSource, 'dashboardAiAnalysis.ts');
   const pythonAgentMainSource = fs.readFileSync(path.join(root, 'ai-agent', 'agent', 'main.py'), 'utf8');
   const pythonAgentContractsSource = fs.readFileSync(path.join(root, 'ai-agent', 'agent', 'contracts.py'), 'utf8');
   const pythonAgentProviderSource = fs.readFileSync(path.join(root, 'ai-agent', 'agent', 'provider_clients.py'), 'utf8');
@@ -9207,6 +9475,18 @@ async function run() {
   const nativeStartupSessionResetSource = fs.existsSync(nativeStartupSessionResetPath) ? fs.readFileSync(nativeStartupSessionResetPath, 'utf8') : '';
   const loadingStatusPanelPath = path.join(root, 'src', 'app', 'components', 'LoadingStatusPanel.tsx');
   const loadingStatusPanelSource = fs.existsSync(loadingStatusPanelPath) ? fs.readFileSync(loadingStatusPanelPath, 'utf8') : '';
+  const appUiFiles = walkFiles(path.join(root, 'src', 'app'), (filePath) => filePath.endsWith('.tsx'));
+  const fixedViewportViolations = appUiFiles.flatMap((filePath) => {
+    const relativePath = path.relative(root, filePath);
+    return fs.readFileSync(filePath, 'utf8')
+      .split(/\r?\n/)
+      .map((line, index) => ({ relativePath, lineNumber: index + 1, line }))
+      .filter(({ line }) => /(?<!min-)\bh-screen\b/.test(line));
+  });
+  assert(
+    fixedViewportViolations.length === 0,
+    `App UI must use dynamic viewport height (h-dvh) instead of h-screen, got ${fixedViewportViolations.slice(0, 12).map(({ relativePath, lineNumber }) => `${relativePath}:${lineNumber}`).join(', ')}`
+  );
   assert(
     seasonalPageSource.includes('if (selectedRecordIds.size === 0)') &&
       seasonalPageSource.includes('Select flights to export') &&
@@ -9668,6 +9948,26 @@ async function run() {
       ),
     'Cached flight-data modules must subscribe to same-session season workspace changes and refresh inactive route panels via native invalidation only on activation'
   );
+  const workspaceRefreshCatchStart = seasonWorkspaceRefreshHookSource.indexOf('} catch (error) {');
+  const workspaceRefreshCatchEnd = seasonWorkspaceRefreshHookSource.indexOf('} finally {', workspaceRefreshCatchStart);
+  const workspaceRefreshCatchBody = workspaceRefreshCatchStart >= 0 && workspaceRefreshCatchEnd > workspaceRefreshCatchStart
+    ? seasonWorkspaceRefreshHookSource.slice(workspaceRefreshCatchStart, workspaceRefreshCatchEnd)
+    : '';
+  assert(
+    seasonWorkspaceRefreshHookSource.includes('const failedRefreshEventSeqRef = useRef<number | null>(null)') &&
+      workspaceRefreshCatchBody.includes('staleEventRef.current = event') &&
+      workspaceRefreshCatchBody.includes('failedRefreshEventSeqRef.current = event.eventSeq') &&
+      !workspaceRefreshCatchBody.includes('lastHandledEventSeqRef.current = Math.max(lastHandledEventSeqRef.current, event.eventSeq)') &&
+      seasonWorkspaceRefreshHookSource.includes('pendingEvent.eventSeq !== failedRefreshEventSeqRef.current') &&
+      seasonWorkspaceRefreshHookSource.includes('failedRefreshEventSeqRef.current = null'),
+    'Workspace refresh failures must preserve the native event for a controlled retry instead of advancing the handled cursor and leaving cached route data stale'
+  );
+  assert(
+    seasonWorkspaceRefreshHookSource.includes('if (!currentSeasonId || event.seasonId !== currentSeasonId || event.eventSeq <= lastHandledEventSeqRef.current)') &&
+      seasonWorkspaceRefreshHookSource.includes('if (staleEventRef.current?.eventSeq === event.eventSeq) staleEventRef.current = null;') &&
+      seasonWorkspaceRefreshHookSource.includes('if (failedRefreshEventSeqRef.current === event.eventSeq) failedRefreshEventSeqRef.current = null;'),
+    'Workspace refresh must re-check event season at execution time so delayed stale events from a previous season cannot refresh the active route'
+  );
   assert(
     [seasonalPageSource, detailedPageSource, dailyPageSource, checkInPageSource, gatePageSource].every((source) =>
       source.includes('publishSeasonWorkspaceChanged(')
@@ -9691,12 +9991,79 @@ async function run() {
       seasonSyncProviderSource.includes('const seasonIds = Array.from(pendingWorkspaceChangeSeasonIdsRef.current)') &&
       seasonSyncProviderSource.includes('const source = pendingWorkspaceChangeSourcesRef.current.get(seasonId)') &&
       seasonSyncProviderSource.includes('pendingWorkspaceChangeSourcesRef.current.delete(seasonId)') &&
-      seasonSyncProviderSource.includes('void queryNativeSyncSummary(seasonId).then((summary) =>') &&
+      seasonSyncProviderSource.includes('void queryNativeSyncSummary(seasonId)') &&
+      seasonSyncProviderSource.includes('.then((summary) =>') &&
       seasonSyncProviderSource.includes('localRevision: summary.localRevision') &&
       seasonSyncProviderSource.includes('seedSeasonSyncFromNative: (seasonId: string) => Promise<void>') &&
       seasonSyncProviderSource.includes('const seedSeasonSyncFromNative = useCallback(async (seasonId: string)') &&
       seasonSyncProviderSource.includes('source,'),
     'SeasonSyncProvider must debounce rapid workspace-change notifications into one native sync-summary read and scheduler notification per season while preserving localRevision'
+  );
+  assert(
+    seasonSyncProviderSource.includes('.catch((error) => {') &&
+      seasonSyncProviderSource.includes("syncFailureMessageWithContext(error, 'Native sync summary refresh failed.')") &&
+      seasonSyncProviderSource.includes("status: 'failed'") &&
+      seasonSyncProviderSource.includes("message,") &&
+      seasonSyncProviderSource.includes("progress: null"),
+    'SeasonSyncProvider workspace-change summary refresh must catch native summary failures and expose a failed sync state instead of leaving stale pending UI'
+  );
+  const workspaceChangeListenerStart = seasonSyncProviderSource.indexOf('const unsubscribe = subscribeSeasonWorkspaceChanges((event) => {');
+  const workspaceChangeListenerEnd = seasonSyncProviderSource.indexOf('workspaceChangeDebounceTimerRef.current = window.setTimeout(() =>', workspaceChangeListenerStart);
+  const workspaceChangeListenerImmediateBody = workspaceChangeListenerStart >= 0 && workspaceChangeListenerEnd > workspaceChangeListenerStart
+    ? seasonSyncProviderSource.slice(workspaceChangeListenerStart, workspaceChangeListenerEnd)
+    : '';
+  assert(
+    workspaceChangeListenerImmediateBody.includes('event.syncMeta') &&
+      workspaceChangeListenerImmediateBody.includes('setSessionPendingSeason(event.seasonId') &&
+      workspaceChangeListenerImmediateBody.includes('patchSeasonState(event.seasonId') &&
+      workspaceChangeListenerImmediateBody.includes('scheduler.notifyLocalChange(event.seasonId'),
+    'SeasonSyncProvider workspace-change listener must publish event.syncMeta immediately before debounce so route badges do not stay Synced while pending/conflict work waits for native summary refresh'
+  );
+  const seedSeasonSyncStart = seasonSyncProviderSource.indexOf('const seedSeasonSyncFromNative = useCallback(async (seasonId: string)');
+  const seedSeasonSyncEnd = seasonSyncProviderSource.indexOf('useEffect(() => {', seedSeasonSyncStart + 1);
+  const seedSeasonSyncBody = seedSeasonSyncStart >= 0 && seedSeasonSyncEnd > seedSeasonSyncStart
+    ? seasonSyncProviderSource.slice(seedSeasonSyncStart, seedSeasonSyncEnd)
+    : '';
+  assert(
+    seedSeasonSyncBody.includes('await queryNativeSyncSummary(seasonId)') &&
+      seedSeasonSyncBody.includes("syncFailureMessageWithContext(error, 'Native sync summary seed failed.')") &&
+      seedSeasonSyncBody.includes("status: 'failed'") &&
+      seedSeasonSyncBody.includes('throw error'),
+    'SeasonSyncProvider native summary seed failures must publish failed sync state before rethrowing so Gate badges do not stay Checking silently'
+  );
+  const ensureLiveSeasonStart = seasonSyncProviderSource.indexOf('const ensureLiveSeason = useCallback((seasonId: string)');
+  const ensureLiveSeasonEnd = seasonSyncProviderSource.indexOf('useEffect(() => {', ensureLiveSeasonStart + 1);
+  const ensureLiveSeasonBody = ensureLiveSeasonStart >= 0 && ensureLiveSeasonEnd > ensureLiveSeasonStart
+    ? seasonSyncProviderSource.slice(ensureLiveSeasonStart, ensureLiveSeasonEnd)
+    : '';
+  assert(
+    ensureLiveSeasonBody.includes('remoteStore.subscribeToSeasonEvents') &&
+      ensureLiveSeasonBody.includes('.catch((error) => {') &&
+      ensureLiveSeasonBody.includes("syncFailureMessageWithContext(error, 'Live season subscription failed.')") &&
+      ensureLiveSeasonBody.includes("status: 'failed'") &&
+      ensureLiveSeasonBody.includes('liveSubscribingRef.current.delete(seasonId)'),
+    'SeasonSyncProvider ensureLiveSeason must catch remote subscription setup failures and publish failed sync state instead of leaving realtime/catch-up silently unavailable'
+  );
+  const globalStatusStart = seasonSyncProviderSource.indexOf('export function useSeasonSyncGlobalStatus()');
+  const globalStatusEnd = seasonSyncProviderSource.indexOf('export function getSeasonSyncPendingCount', globalStatusStart + 1);
+  const globalStatusBody = globalStatusStart >= 0 && globalStatusEnd > globalStatusStart
+    ? seasonSyncProviderSource.slice(globalStatusStart, globalStatusEnd)
+    : '';
+  assert(
+    seasonSyncProviderSource.includes('function isGlobalSyncFailureMessage') &&
+      seasonSyncProviderSource.includes('function syncFailureMessageWithContext') &&
+      seasonSyncProviderSource.includes('catch-up|subscription|sync summary|integrity|server update fetch|season is not available') &&
+      seasonSyncProviderSource.includes("syncFailureMessageWithContext(error, 'Remote change catch-up failed.')") &&
+      seasonSyncProviderSource.includes("syncFailureMessageWithContext(error, 'Local season integrity check failed.')") &&
+      seasonSyncProviderSource.includes("syncFailureMessageWithContext(error, 'Live season subscription failed.')") &&
+      seasonSyncProviderSource.includes("syncFailureMessageWithContext(error, 'Native sync summary seed failed.')") &&
+      seasonSyncProviderSource.includes("syncFailureMessageWithContext(error, 'Native sync summary refresh failed.')") &&
+      globalStatusBody.includes('isGlobalSyncFailureMessage(state.message)') &&
+      globalStatusBody.indexOf("state.status === 'failed' && isGlobalSyncFailureMessage(state.message)") <
+        globalStatusBody.indexOf('isRemoteCatchUpApplyingStatus(state)') &&
+      appShellSource.includes('Server sync failed') &&
+      !appShellSource.includes('Server catch-up failed'),
+    'Global sync status must prioritize server freshness failures over background catch-up progress and surface subscription/native summary failures'
   );
   const useSeasonSyncStart = seasonSyncProviderSource.indexOf('export function useSeasonSync(');
   const useSeasonSyncEnd = seasonSyncProviderSource.indexOf('export function useSeasonSyncActions', useSeasonSyncStart + 1);
@@ -9886,7 +10253,7 @@ async function run() {
   );
   assert(
     appShellSource.indexOf('<AppSidebar />') < appShellSource.indexOf('<SeasonSyncProvider>') &&
-      appShellSource.indexOf('<SeasonSyncSessionWarningBanner />') > appShellSource.indexOf('<SeasonSyncProvider>') &&
+      appShellSource.indexOf('<SeasonSyncBannerLayer />') > appShellSource.indexOf('<SeasonSyncProvider>') &&
       appShellSource.indexOf('<AppRouteCache>{children}</AppRouteCache>') > appShellSource.indexOf('<SeasonSyncProvider>'),
     'AppSidebar must stay outside SeasonSyncProvider so dirty sync state cannot block module navigation'
   );
@@ -9907,6 +10274,100 @@ async function run() {
     'SeasonSyncProvider must publish sync state through per-season external stores so inactive cached pages and global navigation are not invalidated by dirty state'
   );
   assert(
+    seasonSyncProviderSource.includes('const setSessionPendingSeason = useCallback((seasonId: string, pendingCount: number | null | undefined, conflictCount: number | null | undefined = 0)') &&
+      seasonSyncProviderSource.includes('const shouldTrack = (pendingCount ?? 0) > 0 || (conflictCount ?? 0) > 0;') &&
+      seasonSyncProviderSource.includes('setSessionPendingSeason(seasonId, state.pendingCount, state.conflictCount);') &&
+      seasonSyncProviderSource.includes('setSessionPendingSeason(seasonId, summary.pendingCount, summary.conflictCount);') &&
+      appShellSource.includes('unsynced local changes or conflict review items'),
+    'Session sync warning must track conflict-only review states and explain them separately from unsynced local edits'
+  );
+  assert(
+    seasonSyncProviderSource.indexOf('const flushWorkspaceChanges = () => {') >= 0 &&
+      seasonSyncProviderSource.indexOf('patchStateFromNativeSummary(seasonId, summary);', seasonSyncProviderSource.indexOf('const flushWorkspaceChanges = () => {')) >
+        seasonSyncProviderSource.indexOf('setSessionPendingSeason(seasonId, summary.pendingCount, summary.conflictCount);') &&
+      seasonSyncProviderSource.indexOf('patchStateFromNativeSummary(seasonId, summary);', seasonSyncProviderSource.indexOf('const flushWorkspaceChanges = () => {')) <
+        seasonSyncProviderSource.indexOf('scheduler.notifyLocalChange(seasonId, {', seasonSyncProviderSource.indexOf('const flushWorkspaceChanges = () => {')),
+    'Workspace-change summary refresh must patch provider state from native summary even when the last conflict is resolved'
+  );
+  assert(
+    settingsPageSource.includes('syncSummary?.conflictCount') &&
+      settingsPageSource.includes('conflict review item') &&
+      settingsPageSource.includes('pending local change') &&
+      settingsPageSource.includes('will be discarded by the repair import'),
+    'Settings repair import confirmation must warn about conflict review items as well as pending local changes'
+  );
+  const settingsRepairImportStart = settingsPageSource.indexOf('const handleSeasonRepairImport');
+  const settingsRepairPublishStart = settingsPageSource.indexOf('publishSeasonWorkspaceChanged({', settingsRepairImportStart);
+  const settingsRepairPublishBlock = settingsPageSource.slice(settingsRepairPublishStart, settingsRepairPublishStart + 260);
+  assert(
+    settingsRepairImportStart >= 0 &&
+      settingsRepairPublishStart > settingsRepairImportStart &&
+      settingsRepairPublishBlock.includes('syncMeta: imported.syncMeta'),
+    'Settings repair import must publish imported syncMeta so sync badges and session warnings update immediately after replacement'
+  );
+  assert(
+    seasonalPageSource.includes('conflictCount: targetSummary?.conflictCount ?? 0') &&
+      seasonalPageSource.indexOf('const targetSummary = await queryNativeSyncSummary(existing.id);') < seasonalPageSource.indexOf('conflictCount: targetSummary?.conflictCount ?? 0'),
+    'Seasonal re-import guard must pass conflict review counts from native sync summary before allowing baseline replacement'
+  );
+  assert(
+    seasonSyncProviderSource.includes("if (status.status === 'failed') return 'error';") &&
+      seasonSyncProviderSource.includes("if (status.status === 'conflict' || status.status === 'needs_review') return 'warning';") &&
+      !seasonSyncProviderSource.includes("if (status.status === 'conflict' || status.status === 'failed') return 'error';"),
+    'Sync status tone must render conflict review as warning and reserve error tone for failed sync states'
+  );
+  assert(
+    [seasonalPageSource, dailyPageSource, checkInPageSource, gatePageSource, detailedPageSource].every((source) =>
+      source.includes('(result.reviewCount ?? 0) > 0') &&
+      source.includes('Save Needs Review') &&
+      source.includes("tone: 'warning'")
+    ),
+    'Route Save handlers must warn when sync returns reviewCount even if non-conflicting changes were saved'
+  );
+  assert(
+    [seasonalPageSource, dailyPageSource, checkInPageSource, gatePageSource, detailedPageSource].every((source) =>
+      source.includes('Save Failed')
+    ) &&
+      ![seasonalPageSource, detailedPageSource].some((source) =>
+        source.includes("result.status === 'synced' ? 'Save Complete' : 'Save Status'")
+      ),
+    'Route Save handlers must label failed sync results as Save Failed instead of generic Save Status'
+  );
+  assert(
+    seasonSyncProviderSource.includes("? { status: 'synced', message: nativeResult.message, reviewCount: nativeResult.conflictCount || undefined }") &&
+      !seasonSyncProviderSource.includes("? { status: 'synced', message: nativeResult.message }"),
+    'Native sync publishResult must preserve reviewCount on synced results so downstream sync events keep the review contract'
+  );
+  assert(
+    seasonSyncProviderSource.includes("status: conflictCount > 0 ? 'conflict' : 'synced'") &&
+      [seasonalPageSource, detailedPageSource, dailyPageSource, checkInPageSource, gatePageSource].every((source) =>
+        source.includes("if (result.status === 'conflict')") &&
+          source.includes("title: 'Fetch Updates Need Review'") &&
+          source.includes("tone: 'warning'")
+      ) &&
+      dashboardPageSource.includes("if (result.status === 'conflict')") &&
+      dashboardPageSource.includes('Fetch Updates Need Review') &&
+      dashboardPageSource.includes("const syncInProgress = syncStatus.status === 'syncing';") &&
+      dashboardPageSource.includes('if (!syncSeasonId || fetchingUpdates || syncInProgress) return;') &&
+      dashboardPageSource.includes('disabled={syncInProgress || loading}') &&
+      !dashboardPageSource.includes("if (result.status !== 'synced') {\n        setError(result.message);"),
+    'Fetch Server Updates must return and handle conflict review states as warnings/status notices, and Dashboard must disable fetch while same-season sync is running'
+  );
+  const fetchAlreadyRunningStart = seasonSyncProviderSource.indexOf("const message = 'Server update fetch is already running.'");
+  const fetchAlreadyRunningEnd = seasonSyncProviderSource.indexOf('catchUpInFlightRef.current.add(seasonId);', fetchAlreadyRunningStart);
+  const fetchAlreadyRunningBlock = fetchAlreadyRunningStart >= 0 && fetchAlreadyRunningEnd > fetchAlreadyRunningStart
+    ? seasonSyncProviderSource.slice(fetchAlreadyRunningStart, fetchAlreadyRunningEnd)
+    : '';
+  assert(
+    seasonSyncProviderSource.includes("status: 'busy'") &&
+      fetchAlreadyRunningBlock.includes("return { status: 'busy', message };") &&
+      !fetchAlreadyRunningBlock.includes("return { status: 'failed', message };") &&
+      [seasonalPageSource, detailedPageSource, dailyPageSource, checkInPageSource, gatePageSource, dashboardPageSource].every((source) =>
+        source.includes("if (result.status === 'busy') return;")
+      ),
+    'Fetch Updates already-running state must be treated as busy/in-progress, not failed/error UI'
+  );
+  assert(
     seasonSyncSource.includes('export const SNAPSHOT_CATCHUP_BACKLOG_THRESHOLD = 100') &&
       seasonSyncSource.includes('export const MAX_EVENT_REPLAY_BACKLOG = SNAPSHOT_CATCHUP_BACKLOG_THRESHOLD') &&
       !seasonSyncProviderSource.includes('SNAPSHOT_CATCHUP_BACKLOG_THRESHOLD') &&
@@ -9918,6 +10379,9 @@ async function run() {
       seasonSyncProviderSource.includes('const getBlockedGuard = useCallback') &&
       seasonSyncProviderSource.includes('if (!blockedGuard.quiet)') &&
       seasonSyncProviderSource.includes('MANUAL_FETCH_REPLAY_EVENT_WINDOW') &&
+      !seasonSyncProviderSource.includes('if (!remoteStore.subscribeToSeasonEvents) return;') &&
+      seasonSyncProviderSource.includes('if (!remoteStore.subscribeToSeasonEvents) {') &&
+      seasonSyncProviderSource.includes('liveUnsubscribersRef.current.set(seasonId, () => undefined);\n        runCatchUpSeason(seasonId);\n        return;\n      }') &&
       seasonSyncProviderSource.includes('const workspaceIsFresh = Boolean(') &&
       seasonSyncProviderSource.includes('initialSummary.localRecordCount === 0') &&
       seasonSyncProviderSource.includes('initialSummary.entityVersionCount === 0') &&
@@ -10205,6 +10669,40 @@ async function run() {
     'Live local-first sync must expose event-level merge helpers, Supabase v2 RPC, Realtime subscription, catch-up, and review status plumbing'
   );
   assert(
+    !seasonSyncProviderSource.includes("if (!isTauriRuntime()) return { status: 'failed', message: 'Native server update fetch is unavailable.' };") &&
+      seasonSyncProviderSource.includes('const nativeDesktopRuntime = isTauriRuntime();') &&
+      seasonSyncProviderSource.includes("const message = 'Native desktop runtime is required for server update fetch.'") &&
+      seasonSyncProviderSource.indexOf('const nativeDesktopRuntime = isTauriRuntime();') <
+        seasonSyncProviderSource.indexOf("const message = 'Native desktop runtime is required for server update fetch.'"),
+    'Server update fetch runtime-unavailable failures must patch failed provider state before returning failed results'
+  );
+  const seasonalImportHandlerStart = seasonalPageSource.indexOf('const handleFile = useCallback(async (file: File) => {');
+  const seasonalImportHandlerEnd = seasonalPageSource.indexOf('const handleRowDoubleClick', seasonalImportHandlerStart + 1);
+  const seasonalImportHandlerBody = seasonalImportHandlerStart >= 0 && seasonalImportHandlerEnd > seasonalImportHandlerStart
+    ? seasonalPageSource.slice(seasonalImportHandlerStart, seasonalImportHandlerEnd)
+    : '';
+  const seasonalImportButtonStart = seasonalPageSource.indexOf('onClick={() => fileInputRef.current?.click()}');
+  const seasonalImportButtonBody = seasonalImportButtonStart >= 0
+    ? seasonalPageSource.slice(Math.max(0, seasonalImportButtonStart - 300), seasonalImportButtonStart + 200)
+    : '';
+  assert(
+    seasonalImportHandlerBody.includes('if (uploading || fetchingUpdates || syncInProgress) return;') &&
+      seasonalImportHandlerBody.includes('fetchingUpdates,') &&
+      seasonalImportButtonBody.includes('disabled={uploading || fetchingUpdates || syncInProgress}'),
+    'Seasonal import must be disabled and guarded while Fetch Updates/catch-up is applying server changes so baseline replacement cannot race catch-up'
+  );
+  const dailyImportHandlerStart = dailyPageSource.indexOf('const handleDailyImportFile = useCallback(async (file: File | null) => {');
+  const dailyImportHandlerEnd = dailyPageSource.indexOf('const handleAddFlights', dailyImportHandlerStart + 1);
+  const dailyImportHandlerBody = dailyImportHandlerStart >= 0 && dailyImportHandlerEnd > dailyImportHandlerStart
+    ? dailyPageSource.slice(dailyImportHandlerStart, dailyImportHandlerEnd)
+    : '';
+  assert(
+    dailyImportHandlerBody.includes('if (!file || syncWriteInProgress || dailyImporting) return;') &&
+      dailyImportHandlerBody.includes('syncWriteInProgress') &&
+      dailyPageSource.includes('const dailyImportDisabled = syncWriteInProgress || dailyImporting;'),
+    'Daily OperationalTurns import must be disabled and guarded while Fetch Updates/catch-up is applying server changes so bulk local import cannot race catch-up'
+  );
+  assert(
       supabaseSchemaSource.includes('create or replace function public.get_season_workspace_snapshot') &&
       supabaseSchemaSource.includes('create or replace function public.get_season_change_event_page') &&
       supabaseSchemaSource.includes('least(greatest(coalesce(p_limit, 200), 1), 500)') &&
@@ -10365,8 +10863,158 @@ async function run() {
     'All module save buttons must use the shared immediate-lock action button with Save/Saving labels, spinner, aria-busy, and stable width'
   );
   assert(
+    [dailyPageSource, checkInPageSource, gatePageSource].every((source) =>
+      !/<FetchServerUpdatesButton[\s\S]{0,260}disabled=\{syncing\}/.test(source)
+    ) &&
+      [dailyPageSource, checkInPageSource, gatePageSource].every((source) =>
+        /<FetchServerUpdatesButton[\s\S]{0,260}disabled=\{syncInProgress\}/.test(source)
+    ),
+    'Daily, Check-in, and Gate Fetch Updates buttons must disable during any syncInProgress state, including auto sync, so visible buttons do not accept clicks that handlers immediately ignore'
+  );
+  assert(
+    dailyPageSource.includes('aria-label="Open Check-in Allocation for current day range"') &&
+      dailyPageSource.includes('aria-label="Open Gate Allocation for current day range"') &&
+      dailyPageSource.includes('aria-label="Import OperationalTurns file"') &&
+      dailyPageSource.includes('aria-label="Add flight"') &&
+      dailyPageSource.includes('aria-label="Link selected flights"') &&
+      dailyPageSource.includes('aria-label="Unlink selected flights"') &&
+      dailyPageSource.includes('aria-label="Delete selected flights"'),
+    'Daily toolbar icon-only buttons must have aria-labels, not only title tooltips'
+  );
+  assert(
+    dailyPageSource.includes('const syncWriteInProgress = syncInProgress || fetchingUpdates;') &&
+      dailyPageSource.includes('const actionsDisabled = !season || syncWriteInProgress || dailyImporting;') &&
+      dailyPageSource.includes('const dailyImportDisabled = syncWriteInProgress || dailyImporting;') &&
+      dailyPageSource.includes('const handleAddFlights = useCallback(async (mods: FlightModification[]) => {\n    if (!season || syncWriteInProgress) return;') &&
+      dailyPageSource.includes('const handleDeleteSelected = useCallback(async () => {\n    if (!season || syncWriteInProgress || selectedRecordIds.length === 0) return;') &&
+      dailyPageSource.includes('const handleLinkSelected = useCallback(async () => {\n    if (!season || syncWriteInProgress || selectedRecordIds.length === 0) return;') &&
+      dailyPageSource.includes('const handleUnlinkSelected = useCallback(async () => {\n    if (!season || syncWriteInProgress || selectedRecordIds.length === 0) return;'),
+    'Daily local mutation buttons and handlers must block during any same-season sync write state, including auto sync and catch-up'
+  );
+  assert(
+    checkInPageSource.includes('const syncWriteInProgress = syncInProgress || fetchingUpdates;') &&
+      checkInPageSource.includes('const handleUndoCheckInAllocation = useCallback(async () => {\n    if (syncWriteInProgress) return;') &&
+      checkInPageSource.includes('const startResizeInteraction = useCallback((edge: ResizeState') &&
+      checkInPageSource.includes('if (syncWriteInProgress) return;\n    resizeDragGuardRef.current = true;') &&
+      checkInPageSource.includes('if (syncWriteInProgress || !view || !settings) return;') &&
+      checkInPageSource.includes('if (!drag || syncWriteInProgress) return;') &&
+      checkInPageSource.includes("if (!drag || drag.kind !== 'allocated' || syncWriteInProgress) return;") &&
+      checkInPageSource.includes('draggable={!syncWriteInProgress}') &&
+      checkInPageSource.includes('syncing={syncWriteInProgress}') &&
+      checkInPageSource.includes('disabled={syncWriteInProgress || summary.counterBlocks === 0}') &&
+      checkInPageSource.includes("disabled={syncWriteInProgress || (action === 'reshape' && contextMenu.bar.mode !== 'broken')}"),
+    'Check-in allocation write interactions must block during any same-season sync write state, including auto sync and catch-up'
+  );
+  assert(
+    appShellSource.includes('app-shell-sync-banner-layer') &&
+      appShellSource.includes('pointer-events-none absolute inset-x-3 top-3 z-[70]') &&
+      appShellSource.includes('pointer-events-auto') &&
+      appShellSource.indexOf('<SeasonSyncBannerLayer />') > appShellSource.indexOf('<SeasonSyncProvider>') &&
+      appShellSource.indexOf('<SeasonSyncBannerLayer />') < appShellSource.indexOf('<div className="min-h-0 flex-1 overflow-hidden">'),
+    'Global sync warning/catch-up banners must render in an overlay layer so status changes do not shift active module layouts during drag interactions'
+  );
+  assert(
+    seasonSyncProviderSource.includes('function isRemoteCatchUpApplyingStatus(state: SeasonAutoSyncState): boolean') &&
+      seasonSyncProviderSource.includes("if (state.status !== 'catching_up') return false;") &&
+      seasonSyncProviderSource.includes("if (state.mode === 'manual') return true;") &&
+      seasonSyncProviderSource.includes("return /Updating in background:\\s*\\d+\\s*\\/\\s*[1-9]\\d*|Updating \\d+ remote change|Refreshing server snapshot/i.test(text);") &&
+      seasonSyncProviderSource.includes('const catchingUp = states.find(({ state }) => isRemoteCatchUpApplyingStatus(state));') &&
+      !seasonSyncProviderSource.includes("state.progress !== 'Checking server changes' &&") &&
+      !seasonSyncProviderSource.includes("!/^Checking server changes\\.?$/.test(state.message ?? '')"),
+    'Global sync banner must be whitelisted to manual Fetch Updates, real remote catch-up application, or server sync failures; local autosave/checking states from any view must not trigger it'
+  );
+  assert(
+    checkInPageSource.includes('const [checkInLocalCommitPending, setCheckInLocalCommitPending] = useState(false);') &&
+      checkInPageSource.includes('const flushPendingCheckInLocalCommit = useCallback(async () => {') &&
+      checkInPageSource.includes('window.clearTimeout(checkInCommitFlushTimerRef.current);') &&
+      checkInPageSource.includes('await flushAccumulatedCheckInCommit(entry);') &&
+      checkInPageSource.includes('await commitQueueRef.current;') &&
+      seasonWorkspaceRefreshHookSource.includes('shouldDeferRefresh?: () => boolean;') &&
+      seasonWorkspaceRefreshHookSource.includes('const shouldDeferRefreshRef = useRef(shouldDeferRefresh);') &&
+      seasonWorkspaceRefreshHookSource.includes('if (shouldDeferRefreshRef.current?.()) {') &&
+      seasonWorkspaceRefreshHookSource.includes('if (pendingEvent && !shouldDeferRefreshRef.current?.()) scheduleRefreshRef.current(pendingEvent);') &&
+      checkInPageSource.includes('const shouldDeferCheckInRefresh = useCallback(() => (') &&
+      checkInPageSource.includes('checkInLocalCommitPending || Boolean(draggedGroupId) || resizeState !== null') &&
+      checkInPageSource.includes('shouldDeferRefresh: shouldDeferCheckInRefresh') &&
+      checkInPageSource.includes('await flushPendingCheckInLocalCommit();\n      await refreshCheckInWindow();') &&
+      checkInPageSource.includes('blocked: checkInLocalCommitPending || Boolean(draggedGroupId) || resizeState !== null') &&
+      checkInPageSource.includes('beforeSync: flushPendingCheckInLocalCommit'),
+    'Check-in sync/refresh guards must defer native refresh during drag/resize/pending local commits and flush debounced local allocation commits before rebuilding the allocation view'
+  );
+  assert(
+    seasonSyncProviderSource.includes('changedTargets: nativeResult.changedTargets') &&
+      seasonSyncProviderSource.includes('const nativeCatchUpChanged = nativeResult.changedTargets.length > 0 || nativeResult.conflictCount > 0;') &&
+      !seasonSyncProviderSource.includes('nativeResult.appliedEvents > 0 || nativeResult.changedTargets.length > 0 || nativeResult.lastServerSeq > lastServerSeq'),
+    'Native catch-up must publish workspace refreshes only for real changed targets or conflicts; cursor-only catch-up must not refresh active routes'
+  );
+  assert(
+    checkInPageSource.includes('shouldHandleWorkspaceChange: shouldHandleCheckInWorkspaceChange') &&
+      checkInPageSource.includes('visibleCheckInRecordIdsRef') &&
+      checkInWorkspaceRefreshScopeSource.includes("event.source === 'native-catchup' && event.changedTargets.length === 0"),
+    'Check-in workspace refresh must filter non-own-source events by target scope and ignore cursor-only native catch-up'
+  );
+  assert(
+    gatePageSource.includes('const syncWriteInProgress = syncInProgress || fetchingUpdates;') &&
+      gatePageSource.includes('if (!isRouteActive || syncWriteInProgress || event.button !== 0) return;') &&
+      gatePageSource.includes('if (!record || syncWriteInProgress) return;') &&
+      gatePageSource.includes("${syncWriteInProgress ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}") &&
+      gatePageSource.includes('disabled={syncWriteInProgress}') &&
+      gatePageSource.includes('disabled={syncWriteInProgress || summary.gateBlocks === 0}'),
+    'Gate allocation write interactions must block during any same-season sync write state, including auto sync and catch-up'
+  );
+  assert(
+    [seasonalPageSource, detailedPageSource].every((source) =>
+      source.includes("const syncInProgress = syncStatus.status === 'syncing';") &&
+      /<FetchServerUpdatesButton[\s\S]{0,260}disabled=\{syncInProgress\}/.test(source) &&
+      /<SyncActionButton[\s\S]{0,260}syncing=\{syncInProgress\}/.test(source) &&
+      !/<FetchServerUpdatesButton[\s\S]{0,260}disabled=\{syncing\}/.test(source) &&
+      !/<SyncActionButton[\s\S]{0,260}syncing=\{syncing\}/.test(source) &&
+      !/if \([^\n]+ \|\| syncing\) return/.test(source)
+    ),
+    'Seasonal and Detailed must block save/fetch/mutation UI during any syncing state, not only manual Save'
+  );
+  assert(
+    [seasonalPageSource, detailedPageSource, dailyPageSource, checkInPageSource, gatePageSource, dashboardPageSource].every((source) =>
+      source.includes("const fetchingUpdates = syncStatus.status === 'catching_up';") &&
+      !source.includes("const fetchingUpdates = syncStatus.status === 'catching_up' && syncStatus.mode === 'manual';")
+    ),
+    'Fetch Updates controls must show busy/disabled during any catch-up state, including background server update replay'
+  );
+  const manualSyncFunctionStart = seasonSyncProviderSource.indexOf('const syncNow = useCallback(async (seasonId: string, source: string) => {');
+  const manualFetchFunctionStart = seasonSyncProviderSource.indexOf('const fetchUpdatesNow = useCallback(async (seasonId: string, source: string) => {');
+  const manualSyncFunctionBody = seasonSyncProviderSource.slice(manualSyncFunctionStart, manualFetchFunctionStart);
+  const manualFetchFunctionBody = seasonSyncProviderSource.slice(
+    manualFetchFunctionStart,
+    seasonSyncProviderSource.indexOf('const seedSeasonSyncFromNative = useCallback', manualFetchFunctionStart)
+  );
+  assert(
+    manualSyncFunctionStart >= 0 &&
+      manualFetchFunctionStart > manualSyncFunctionStart &&
+      manualSyncFunctionBody.indexOf('scheduler?.syncNow(seasonId, source)') >= 0 &&
+      manualSyncFunctionBody.indexOf('ensureLiveSeason(seasonId);') > manualSyncFunctionBody.indexOf('scheduler?.syncNow(seasonId, source)') &&
+      manualFetchFunctionBody.indexOf('runManualFetchSeason(seasonId, source)') >= 0 &&
+      manualFetchFunctionBody.indexOf('ensureLiveSeason(seasonId);') > manualFetchFunctionBody.indexOf('runManualFetchSeason(seasonId, source)'),
+    'Manual Save and Fetch Updates must not call ensureLiveSeason before the manual operation starts, otherwise background catch-up can race the manual action'
+  );
+  const catchUpSeasonStart = seasonSyncProviderSource.indexOf('const catchUpSeason = useCallback(async (');
+  const catchUpSeasonEnd = seasonSyncProviderSource.indexOf('const runCatchUpSeason = useCallback', catchUpSeasonStart + 1);
+  const catchUpSeasonBody = catchUpSeasonStart >= 0 && catchUpSeasonEnd > catchUpSeasonStart
+    ? seasonSyncProviderSource.slice(catchUpSeasonStart, catchUpSeasonEnd)
+    : '';
+  const blockedCatchUpStart = catchUpSeasonBody.indexOf('if (blockedGuard) {');
+  const blockedCatchUpEnd = catchUpSeasonBody.indexOf('const nativeDesktopRuntime = isTauriRuntime();', blockedCatchUpStart + 1);
+  const blockedCatchUpBody = blockedCatchUpStart >= 0 && blockedCatchUpEnd > blockedCatchUpStart
+    ? catchUpSeasonBody.slice(blockedCatchUpStart, blockedCatchUpEnd)
+    : '';
+  assert(
+    blockedCatchUpBody.includes("status: 'catching_up'") &&
+      blockedCatchUpBody.includes("return { status: 'busy', message };") &&
+      !blockedCatchUpBody.includes("return { status: 'failed', message };"),
+    'Fetch Updates blocked by a local operation must return busy after queuing catch-up, not failed, so routes do not show a false Fetch Updates Failed alert'
+  );
+  assert(
     seasonAutoSyncSource.includes('prepareSync?: (seasonId: string, mode: AutoSyncMode, source: string | null) => Promise<void> | void') &&
-      seasonAutoSyncSource.indexOf('await this.runtime.prepareSync?.(seasonId, mode, record.source);') < seasonAutoSyncSource.indexOf('const pendingCount = await this.runtime.getPendingCount(seasonId);') &&
+      seasonAutoSyncSource.indexOf('await this.runtime.prepareSync?.(seasonId, mode, record.source);') < seasonAutoSyncSource.indexOf('pendingCount = await this.runtime.getPendingCount(seasonId);') &&
       seasonSyncProviderSource.includes('prepareSync: async (seasonId, mode, source)') &&
       seasonSyncProviderSource.includes('await guard.beforeSync?.();') &&
       detailedPageSource.includes('beforeSync: commitDraftBeforeSave') &&
@@ -10744,7 +11392,7 @@ async function run() {
       auditPageSource.includes('Audit Log') &&
       !auditPageSource.includes('<aside') &&
       auditPageSource.includes('aria-label="Audit sessions"') &&
-      auditPageSource.includes('h-screen min-w-0 overflow-hidden') &&
+      auditPageSource.includes('h-dvh min-w-0 overflow-hidden') &&
       auditPageSource.includes('grid-cols-1') &&
       auditPageSource.includes('lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]') &&
       auditPageSource.includes('sm:grid-cols-2') &&
@@ -10770,6 +11418,21 @@ async function run() {
       seasonSyncSource.includes("plan.status === 'refresh'") &&
       seasonSyncSource.includes('loadServerSeasonWorkspace'),
     'Sync actions must stay available for remote refresh and pull newer server workspaces when local has no pending changes'
+  );
+  assert(
+    seasonSyncProviderSource.includes('fallbackConflictCount: number | null = null') &&
+      seasonSyncProviderSource.includes('const conflictCount = status.conflictCount ?? fallbackConflictCount ?? 0;') &&
+      seasonSyncProviderSource.includes("if (conflictCount > 0) return 'Review needed';") &&
+      seasonSyncProviderSource.includes('if (conflictCount > 0) return') &&
+      [seasonalPageSource, detailedPageSource, dailyPageSource, checkInPageSource].every((source) =>
+        source.includes('conflictCount: 0') &&
+        source.includes('conflictCount:') &&
+        source.includes('getSeasonSyncLabel(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount)') &&
+        source.includes('getSeasonSyncTone(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount)')
+      ) &&
+      seasonSyncProviderSource.indexOf("if (pendingCount > 0) return 'warning';") <
+        seasonSyncProviderSource.indexOf("status.status === 'syncing' || status.status === 'offline'"),
+    'Route sync badges must use fallback conflictCount/pendingCount so conflict-only states and unsynced fallback states do not render as Synced or info before provider seed finishes'
   );
   assert(
     JSON.parse(tsconfigSource).exclude.includes('out'),
@@ -10931,6 +11594,7 @@ async function run() {
   );
   const schemaSource = fs.readFileSync(path.join(root, 'supabase', 'schema.sql'), 'utf8');
   const dashboardAiFunctionSource = fs.readFileSync(path.join(root, 'supabase', 'functions', 'dashboard-ai-analysis', 'index.ts'), 'utf8');
+  assertNoMojibakeMarkers(dashboardAiFunctionSource, 'dashboard-ai-analysis/index.ts');
   const aiWorkspacePanelSource = fs.readFileSync(path.join(root, 'src', 'app', 'dashboard', 'components', 'AiWorkspacePanel.tsx'), 'utf8');
   const aiNotebookCanvasSource = fs.readFileSync(path.join(root, 'src', 'app', 'dashboard', 'components', 'AiNotebookCanvas.tsx'), 'utf8');
   const aiNotebookBlockRenderersSource = fs.readFileSync(path.join(root, 'src', 'app', 'dashboard', 'components', 'AiNotebookBlockRenderers.tsx'), 'utf8');
@@ -11217,7 +11881,7 @@ async function run() {
       dashboardAiSource.includes('LANGUAGE_POLICY') &&
       dashboardAiSource.includes('language: vi') &&
       dashboardAiSource.includes('providerFallback') &&
-      (dashboardAiSource.includes('LuÃ´n tráº£ lá»i báº±ng tiáº¿ng Viá»‡t') || dashboardAiSource.includes('LuÃƒÂ´n trÃ¡ÂºÂ£ lÃ¡Â»Âi bÃ¡ÂºÂ±ng tiÃ¡ÂºÂ¿ng ViÃ¡Â»â€¡t')) &&
+      dashboardAiSource.includes('Luôn trả lời bằng tiếng Việt') &&
       dashboardAiSource.includes('DASHBOARD_AI_TOOL_SELECTION_FIXTURES') &&
       dashboardAiSource.includes('resolveDashboardAgentToolForPrompt') &&
       dashboardAiSource.includes('resolveDashboardAiVisualReport') &&

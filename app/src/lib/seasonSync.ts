@@ -642,8 +642,8 @@ export async function syncSeasonWorkspace(
       const message = reviewCount > 0
         ? `${reviewCount} item${reviewCount === 1 ? '' : 's'} need review. No unrelated local changes to sync.`
         : 'No local changes to sync.';
-      appendSyncAudit('noop', message, countPendingOps(workspace.pendingOps));
-      return { status: 'synced', message, writtenCounts: countPendingOps(workspace.pendingOps), reviewCount };
+      appendSyncAudit(reviewCount > 0 ? 'conflict' : 'noop', message, countPendingOps(workspace.pendingOps));
+      return { status: reviewCount > 0 ? 'conflict' : 'synced', message, writtenCounts: countPendingOps(workspace.pendingOps), reviewCount };
     }
 
     const actor = await remoteStore.getCurrentRemoteActor().catch(() => null);
@@ -714,8 +714,12 @@ export async function syncSeasonWorkspace(
   });
 
   if (plan.status === 'noop') {
-    appendSyncAudit('noop', plan.message, plan.writtenCounts);
-    return { status: 'synced', message: plan.message, writtenCounts: plan.writtenCounts };
+    const reviewCount = workspace.syncMeta.conflicts?.length ?? 0;
+    const message = reviewCount > 0
+      ? `${reviewCount} item${reviewCount === 1 ? '' : 's'} need review. No unrelated local changes to sync.`
+      : plan.message;
+    appendSyncAudit(reviewCount > 0 ? 'conflict' : 'noop', message, plan.writtenCounts);
+    return { status: reviewCount > 0 ? 'conflict' : 'synced', message, writtenCounts: plan.writtenCounts, reviewCount };
   }
   if (plan.status === 'refresh') {
     try {

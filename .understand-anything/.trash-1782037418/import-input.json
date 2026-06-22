@@ -1,0 +1,1463 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "files": [
+    {
+      "path": ".cursor/rules/Vietnamese.mdc",
+      "language": "mdc",
+      "sizeLines": 5,
+      "fileCategory": "code"
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "language": "yaml",
+      "sizeLines": 127,
+      "fileCategory": "infra"
+    },
+    {
+      "path": ".kiro/specs/architecture-database-audit/.config.kiro",
+      "language": "kiro",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": ".kiro/specs/architecture-database-audit/design.md",
+      "language": "markdown",
+      "sizeLines": 494,
+      "fileCategory": "docs"
+    },
+    {
+      "path": ".kiro/specs/architecture-database-audit/requirements.md",
+      "language": "markdown",
+      "sizeLines": 446,
+      "fileCategory": "docs"
+    },
+    {
+      "path": ".kiro/specs/cold-start-sync-load-failure/.config.kiro",
+      "language": "kiro",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": ".kiro/specs/cold-start-sync-load-failure/bugfix.md",
+      "language": "markdown",
+      "sizeLines": 213,
+      "fileCategory": "docs"
+    },
+    {
+      "path": ".kiro/specs/cold-start-sync-load-failure/design.md",
+      "language": "markdown",
+      "sizeLines": 464,
+      "fileCategory": "docs"
+    },
+    {
+      "path": ".understand-anything/.understandignore",
+      "language": "unknown",
+      "sizeLines": 54,
+      "fileCategory": "code"
+    },
+    {
+      "path": "AGENTS.md",
+      "language": "markdown",
+      "sizeLines": 6,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "ai_agent_analysis.md",
+      "language": "markdown",
+      "sizeLines": 246,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "app/.firebaserc",
+      "language": "unknown",
+      "sizeLines": 7,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/AGENTS.md",
+      "language": "markdown",
+      "sizeLines": 5,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "app/ai-agent/agent_sidecar.py",
+      "language": "python",
+      "sizeLines": 16,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/agent/__init__.py",
+      "language": "python",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/agent/contracts.py",
+      "language": "python",
+      "sizeLines": 69,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/agent/main.py",
+      "language": "python",
+      "sizeLines": 317,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/agent/provider_clients.py",
+      "language": "python",
+      "sizeLines": 90,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/agent/sql_validator.py",
+      "language": "python",
+      "sizeLines": 106,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/agent/sqlite_source.py",
+      "language": "python",
+      "sizeLines": 72,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/requirements-build.txt",
+      "language": "txt",
+      "sizeLines": 1,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "app/ai-agent/requirements.txt",
+      "language": "txt",
+      "sizeLines": 4,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "app/ai-agent/tests/__init__.py",
+      "language": "python",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/tests/test_local_agent_workflows.py",
+      "language": "python",
+      "sizeLines": 94,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/tests/test_provider_clients.py",
+      "language": "python",
+      "sizeLines": 45,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/ai-agent/tests/test_sql_validator.py",
+      "language": "python",
+      "sizeLines": 35,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/CLAUDE.md",
+      "language": "markdown",
+      "sizeLines": 1,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "app/eslint.config.mjs",
+      "language": "javascript",
+      "sizeLines": 21,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/firebase.json",
+      "language": "json",
+      "sizeLines": 11,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/firestore.indexes.json",
+      "language": "json",
+      "sizeLines": 12,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/firestore.rules",
+      "language": "rules",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/next.config.ts",
+      "language": "typescript",
+      "sizeLines": 7,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/package.json",
+      "language": "json",
+      "sizeLines": 60,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/postcss.config.js",
+      "language": "javascript",
+      "sizeLines": 6,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/README.md",
+      "language": "markdown",
+      "sizeLines": 58,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "app/scripts/build-python-agent.cjs",
+      "language": "javascript",
+      "sizeLines": 53,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/scripts/check-skawld-sdk.mjs",
+      "language": "javascript",
+      "sizeLines": 110,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/scripts/configure-release-repo.cjs",
+      "language": "javascript",
+      "sizeLines": 23,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/scripts/dashboard-ai-local-sql-source.mjs",
+      "language": "javascript",
+      "sizeLines": 152,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/scripts/migrate-firestore-to-supabase.mjs",
+      "language": "javascript",
+      "sizeLines": 484,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/scripts/rule-regression-tests.cjs",
+      "language": "javascript",
+      "sizeLines": 11611,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/scripts/skawld-dashboard-agent-harness.mjs",
+      "language": "javascript",
+      "sizeLines": 454,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/scripts/sync-release-version.cjs",
+      "language": "javascript",
+      "sizeLines": 38,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/scripts/test-skawld-dashboard-agent-harness.mjs",
+      "language": "javascript",
+      "sizeLines": 163,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src-tauri/build.rs",
+      "language": "rust",
+      "sizeLines": 3,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src-tauri/capabilities/default.json",
+      "language": "json",
+      "sizeLines": 14,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/src-tauri/Cargo.toml",
+      "language": "toml",
+      "sizeLines": 31,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/src-tauri/src/lib.rs",
+      "language": "rust",
+      "sizeLines": 683,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src-tauri/src/main.rs",
+      "language": "rust",
+      "sizeLines": 5,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src-tauri/src/native_catchup.rs",
+      "language": "rust",
+      "sizeLines": 6607,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src-tauri/tauri.conf.json",
+      "language": "json",
+      "sizeLines": 55,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/src-tauri/tests/native_catchup.rs",
+      "language": "rust",
+      "sizeLines": 3507,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/allocationStoreIntegration.source.test.ts",
+      "language": "typescript",
+      "sizeLines": 19,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/audit/page.tsx",
+      "language": "typescript",
+      "sizeLines": 383,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/checkin/checkInLocalCommitWorker.ts",
+      "language": "typescript",
+      "sizeLines": 95,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/checkin/page.tsx",
+      "language": "typescript",
+      "sizeLines": 3262,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/AppDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 261,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/AppRouteCache.tsx",
+      "language": "typescript",
+      "sizeLines": 177,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/AppShell.tsx",
+      "language": "typescript",
+      "sizeLines": 130,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/AppSidebar.tsx",
+      "language": "typescript",
+      "sizeLines": 265,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/AppUpdateProvider.tsx",
+      "language": "typescript",
+      "sizeLines": 235,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/ExportNotificationProvider.tsx",
+      "language": "typescript",
+      "sizeLines": 96,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/FetchServerUpdatesButton.tsx",
+      "language": "typescript",
+      "sizeLines": 52,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/HeaderActionMenu.tsx",
+      "language": "typescript",
+      "sizeLines": 64,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/LoadingStatusPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 72,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/NativeCloseCleanupGuard.tsx",
+      "language": "typescript",
+      "sizeLines": 122,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/NativeRuntimeGate.tsx",
+      "language": "typescript",
+      "sizeLines": 31,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/NativeStartupSessionReset.tsx",
+      "language": "typescript",
+      "sizeLines": 78,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/NewFlightModal.tsx",
+      "language": "typescript",
+      "sizeLines": 326,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/OperatorAuthGate.tsx",
+      "language": "typescript",
+      "sizeLines": 315,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/PbbIcon.tsx",
+      "language": "typescript",
+      "sizeLines": 30,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/RouteCacheContext.tsx",
+      "language": "typescript",
+      "sizeLines": 45,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/SeasonConflictReviewControl.tsx",
+      "language": "typescript",
+      "sizeLines": 148,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/SeasonSyncProvider.tsx",
+      "language": "typescript",
+      "sizeLines": 966,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/SyncActionButton.tsx",
+      "language": "typescript",
+      "sizeLines": 51,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/components/WorkspacePageHeader.tsx",
+      "language": "typescript",
+      "sizeLines": 75,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/daily/page.tsx",
+      "language": "typescript",
+      "sizeLines": 1593,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/dashboard/components/AiNotebookBlockRenderers.tsx",
+      "language": "typescript",
+      "sizeLines": 415,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/dashboard/components/AiNotebookCanvas.tsx",
+      "language": "typescript",
+      "sizeLines": 512,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/dashboard/components/AiWorkspacePanel.tsx",
+      "language": "typescript",
+      "sizeLines": 233,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/dashboard/components/DateRangeFilter.tsx",
+      "language": "typescript",
+      "sizeLines": 127,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/dashboard/page.tsx",
+      "language": "typescript",
+      "sizeLines": 3197,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/detailed/ConfirmModal.tsx",
+      "language": "typescript",
+      "sizeLines": 146,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/detailed/EditModal.tsx",
+      "language": "typescript",
+      "sizeLines": 190,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/detailed/page.tsx",
+      "language": "typescript",
+      "sizeLines": 2057,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/gate/gateLocalCommitWorker.ts",
+      "language": "typescript",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/gate/page.tsx",
+      "language": "typescript",
+      "sizeLines": 1985,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/globals.css",
+      "language": "css",
+      "sizeLines": 171,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "app/src/app/hooks/useSeasonWorkspaceRefresh.source.test.ts",
+      "language": "typescript",
+      "sizeLines": 14,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/hooks/useSeasonWorkspaceRefresh.ts",
+      "language": "typescript",
+      "sizeLines": 162,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/hooks/useSessionScrollRestoration.ts",
+      "language": "typescript",
+      "sizeLines": 61,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/hooks/useSessionState.ts",
+      "language": "typescript",
+      "sizeLines": 36,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/layout.tsx",
+      "language": "typescript",
+      "sizeLines": 24,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/page.tsx",
+      "language": "typescript",
+      "sizeLines": 5,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/seasonal/page.tsx",
+      "language": "typescript",
+      "sizeLines": 3,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/SeasonalSchedulePage.tsx",
+      "language": "typescript",
+      "sizeLines": 2142,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/settings/components/AcGroupTab.tsx",
+      "language": "typescript",
+      "sizeLines": 101,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/settings/components/AiAnalysisTab.tsx",
+      "language": "typescript",
+      "sizeLines": 480,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/settings/components/AirlineColorsTab.tsx",
+      "language": "typescript",
+      "sizeLines": 85,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/settings/components/CheckInCountersTab.tsx",
+      "language": "typescript",
+      "sizeLines": 234,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/settings/components/GatesTab.tsx",
+      "language": "typescript",
+      "sizeLines": 237,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/settings/components/LocksAndOutagesTab.tsx",
+      "language": "typescript",
+      "sizeLines": 271,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/settings/components/RouteCountryTab.tsx",
+      "language": "typescript",
+      "sizeLines": 118,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/settings/components/RulesTab.tsx",
+      "language": "typescript",
+      "sizeLines": 171,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/settings/components/SeasonRepairTab.tsx",
+      "language": "typescript",
+      "sizeLines": 61,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/settings/components/SettingsTabControls.tsx",
+      "language": "typescript",
+      "sizeLines": 34,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/settings/components/UpdatesTab.tsx",
+      "language": "typescript",
+      "sizeLines": 160,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/app/settings/page.tsx",
+      "language": "typescript",
+      "sizeLines": 1654,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/appSessionCleanup.ts",
+      "language": "typescript",
+      "sizeLines": 58,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/appUpdater.test.ts",
+      "language": "typescript",
+      "sizeLines": 124,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/appUpdater.ts",
+      "language": "typescript",
+      "sizeLines": 200,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/atomicSchedule.ts",
+      "language": "typescript",
+      "sizeLines": 1017,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/auditLog.ts",
+      "language": "typescript",
+      "sizeLines": 607,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/canonicalSeasonalRows.ts",
+      "language": "typescript",
+      "sizeLines": 630,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/checkinAllocation.ts",
+      "language": "typescript",
+      "sizeLines": 1442,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/checkInCounterSettings.ts",
+      "language": "typescript",
+      "sizeLines": 392,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/checkinPdfExport.ts",
+      "language": "typescript",
+      "sizeLines": 967,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/dailySchedule.ts",
+      "language": "typescript",
+      "sizeLines": 492,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/dailyScheduleExport.ts",
+      "language": "typescript",
+      "sizeLines": 176,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/dailyScheduleImport.ts",
+      "language": "typescript",
+      "sizeLines": 749,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/dashboardAiAdmin.ts",
+      "language": "typescript",
+      "sizeLines": 214,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/dashboardAiAnalysis.ts",
+      "language": "typescript",
+      "sizeLines": 6050,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/dashboardAiShared.ts",
+      "language": "typescript",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/dashboardAnalysis.ts",
+      "language": "typescript",
+      "sizeLines": 712,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/dashboardReportExport.ts",
+      "language": "typescript",
+      "sizeLines": 463,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/detailedScheduleState.test.ts",
+      "language": "typescript",
+      "sizeLines": 175,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/detailedScheduleState.ts",
+      "language": "typescript",
+      "sizeLines": 654,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/exporter.test.ts",
+      "language": "typescript",
+      "sizeLines": 135,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/exporter.ts",
+      "language": "typescript",
+      "sizeLines": 461,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/exportSave.ts",
+      "language": "typescript",
+      "sizeLines": 120,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/firebase.ts",
+      "language": "typescript",
+      "sizeLines": 18,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/firestore.ts",
+      "language": "typescript",
+      "sizeLines": 560,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/firestoreWritePlanner.ts",
+      "language": "typescript",
+      "sizeLines": 16,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/flightBarDragImage.ts",
+      "language": "typescript",
+      "sizeLines": 77,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/flightPairIntegrity.ts",
+      "language": "typescript",
+      "sizeLines": 62,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/gateAllocation.ts",
+      "language": "typescript",
+      "sizeLines": 673,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/gatePdfExport.ts",
+      "language": "typescript",
+      "sizeLines": 853,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/iataSeason.ts",
+      "language": "typescript",
+      "sizeLines": 148,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/importProgress.ts",
+      "language": "typescript",
+      "sizeLines": 55,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/importSeasonRules.ts",
+      "language": "typescript",
+      "sizeLines": 70,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/linking.ts",
+      "language": "typescript",
+      "sizeLines": 199,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/localSeasonSqlStore.test.ts",
+      "language": "typescript",
+      "sizeLines": 586,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/localSeasonSqlStore.ts",
+      "language": "typescript",
+      "sizeLines": 1144,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/localSeasonStore.ts",
+      "language": "typescript",
+      "sizeLines": 851,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/modHistorySizing.ts",
+      "language": "typescript",
+      "sizeLines": 103,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeClosePolicy.test.ts",
+      "language": "typescript",
+      "sizeLines": 14,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeClosePolicy.ts",
+      "language": "typescript",
+      "sizeLines": 10,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeLocalSeasonStore.source.test.ts",
+      "language": "typescript",
+      "sizeLines": 15,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeLocalSeasonStore.ts",
+      "language": "typescript",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeRuntime.ts",
+      "language": "typescript",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeSeasonBootstrap.ts",
+      "language": "typescript",
+      "sizeLines": 103,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeSeasonCatchup.ts",
+      "language": "typescript",
+      "sizeLines": 466,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/nativeSeasonRepository.ts",
+      "language": "typescript",
+      "sizeLines": 54,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/node-sqlite.d.ts",
+      "language": "typescript",
+      "sizeLines": 10,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/pairDeletion.ts",
+      "language": "typescript",
+      "sizeLines": 67,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/parser.ts",
+      "language": "typescript",
+      "sizeLines": 493,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/persistenceSchema.ts",
+      "language": "typescript",
+      "sizeLines": 253,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/remoteStore.ts",
+      "language": "typescript",
+      "sizeLines": 420,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/routeCountry.ts",
+      "language": "typescript",
+      "sizeLines": 251,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/scheduleNotifications.test.ts",
+      "language": "typescript",
+      "sizeLines": 824,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/scheduleNotifications.ts",
+      "language": "typescript",
+      "sizeLines": 1060,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonalDisplayAggregator.ts",
+      "language": "typescript",
+      "sizeLines": 133,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonalFlightFilter.test.ts",
+      "language": "typescript",
+      "sizeLines": 33,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonalFlightFilter.ts",
+      "language": "typescript",
+      "sizeLines": 26,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonalImportModeGuard.test.ts",
+      "language": "typescript",
+      "sizeLines": 37,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonalImportPatch.test.ts",
+      "language": "typescript",
+      "sizeLines": 423,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonalImportPatch.ts",
+      "language": "typescript",
+      "sizeLines": 357,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonalLinkActions.ts",
+      "language": "typescript",
+      "sizeLines": 187,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonAutoSync.ts",
+      "language": "typescript",
+      "sizeLines": 417,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonChangeEvents.ts",
+      "language": "typescript",
+      "sizeLines": 744,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonConflictResolution.ts",
+      "language": "typescript",
+      "sizeLines": 34,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonDataCache.test.ts",
+      "language": "typescript",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonDataCache.ts",
+      "language": "typescript",
+      "sizeLines": 105,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonSync.ts",
+      "language": "typescript",
+      "sizeLines": 782,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonWorkspaceBootstrap.ts",
+      "language": "typescript",
+      "sizeLines": 141,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonWorkspaceStore.test.ts",
+      "language": "typescript",
+      "sizeLines": 99,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/seasonWorkspaceStore.ts",
+      "language": "typescript",
+      "sizeLines": 299,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/settingsPageActions.ts",
+      "language": "typescript",
+      "sizeLines": 150,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/settingsRules.ts",
+      "language": "typescript",
+      "sizeLines": 1086,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/sourceRowPatterns.ts",
+      "language": "typescript",
+      "sizeLines": 286,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/supabase.ts",
+      "language": "typescript",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/supabaseRelationalMappers.ts",
+      "language": "typescript",
+      "sizeLines": 1078,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/supabaseStore.ts",
+      "language": "typescript",
+      "sizeLines": 1326,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/types.ts",
+      "language": "typescript",
+      "sizeLines": 384,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/src/lib/uiUndoMemory.ts",
+      "language": "typescript",
+      "sizeLines": 28,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase.env.example",
+      "language": "example",
+      "sizeLines": 12,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase/config.toml",
+      "language": "toml",
+      "sizeLines": 16,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/supabase/functions/_shared/cors.ts",
+      "language": "typescript",
+      "sizeLines": 15,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase/functions/_shared/dashboardAiShared.ts",
+      "language": "typescript",
+      "sizeLines": 285,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase/functions/dashboard-ai-analysis/index.ts",
+      "language": "typescript",
+      "sizeLines": 2327,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase/functions/rotate-dashboard-ai-key/index.ts",
+      "language": "typescript",
+      "sizeLines": 93,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase/functions/schedule-telegram-notify/.npmrc",
+      "language": "unknown",
+      "sizeLines": 3,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase/functions/schedule-telegram-notify/deno.json",
+      "language": "json",
+      "sizeLines": 6,
+      "fileCategory": "config"
+    },
+    {
+      "path": "app/supabase/functions/schedule-telegram-notify/index.ts",
+      "language": "typescript",
+      "sizeLines": 847,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/supabase/migrations/20260517000000_add_ai_operator_access.sql",
+      "language": "sql",
+      "sizeLines": 14,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260520034255_relational_core_settings.sql",
+      "language": "sql",
+      "sizeLines": 1236,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260520084127_continuous_operational_data.sql",
+      "language": "sql",
+      "sizeLines": 1274,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260521185759_ai_workspace_reporting_security.sql",
+      "language": "sql",
+      "sizeLines": 15,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260522000000_fix_sync_conflicts_and_ai_access.sql",
+      "language": "sql",
+      "sizeLines": 226,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260522224947_ai_query_rich_notebook_reporting.sql",
+      "language": "sql",
+      "sizeLines": 47,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260523090039_fix_checkin_window_json_null.sql",
+      "language": "sql",
+      "sizeLines": 308,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260523112828_public_dashboard_ai_query_aggregated.sql",
+      "language": "sql",
+      "sizeLines": 23,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260523175500_reporting_query_aggregated.sql",
+      "language": "sql",
+      "sizeLines": 183,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260523234451_schedule_telegram_notifications.sql",
+      "language": "sql",
+      "sizeLines": 93,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260524100927_optimize_sync_v2_timeout.sql",
+      "language": "sql",
+      "sizeLines": 143,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260524160004_reliable_sync_cursor.sql",
+      "language": "sql",
+      "sizeLines": 202,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260524173126_catchup_snapshot_rpc.sql",
+      "language": "sql",
+      "sizeLines": 174,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260527061056_allow_deepseek_ai_provider.sql",
+      "language": "sql",
+      "sizeLines": 6,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260527090000_public_dashboard_ai_query_rows.sql",
+      "language": "sql",
+      "sizeLines": 210,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260527092757_exact_season_filtering.sql",
+      "language": "sql",
+      "sizeLines": 215,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260528020520_ai_context_documents.sql",
+      "language": "sql",
+      "sizeLines": 30,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260530093000_harden_sync_v2_ack_coverage.sql",
+      "language": "sql",
+      "sizeLines": 235,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260531023846_prevent_orphan_modification_snapshots.sql",
+      "language": "sql",
+      "sizeLines": 259,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260602093244_ai_local_provider_keys.sql",
+      "language": "sql",
+      "sizeLines": 83,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260602110500_ai_provider_key_rpc.sql",
+      "language": "sql",
+      "sizeLines": 170,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260616_unique_seasons_season_code.sql",
+      "language": "sql",
+      "sizeLines": 14,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/schema.sql",
+      "language": "sql",
+      "sizeLines": 1925,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/tailwind.config.ts",
+      "language": "typescript",
+      "sizeLines": 104,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/tsconfig.json",
+      "language": "json",
+      "sizeLines": 35,
+      "fileCategory": "config"
+    },
+    {
+      "path": "architecture.md",
+      "language": "markdown",
+      "sizeLines": 209,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "code.html",
+      "language": "html",
+      "sizeLines": 353,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "context.md",
+      "language": "markdown",
+      "sizeLines": 554,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "DESIGN.md",
+      "language": "markdown",
+      "sizeLines": 150,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/ai-report-export-guide.md",
+      "language": "markdown",
+      "sizeLines": 325,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/backend-supabase-schema-functions.md",
+      "language": "markdown",
+      "sizeLines": 809,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-07-daily-schedule.md",
+      "language": "markdown",
+      "sizeLines": 1541,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-08-checkin-allocation-discrete-grouping.md",
+      "language": "markdown",
+      "sizeLines": 1887,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-08-checkin-counter-management-settings.md",
+      "language": "markdown",
+      "sizeLines": 1572,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-08-checkin-gantt-ux-enhancements.md",
+      "language": "markdown",
+      "sizeLines": 45,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-06-16-native-sync-conflict-hardening.md",
+      "language": "markdown",
+      "sizeLines": 312,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-06-16-season-assignment-and-atomic-import-review.md",
+      "language": "markdown",
+      "sizeLines": 335,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-06-16-season-ownership-hardening-implementation.md",
+      "language": "markdown",
+      "sizeLines": 490,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-05-07-daily-schedule-design.md",
+      "language": "markdown",
+      "sizeLines": 165,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-05-08-checkin-allocation-discrete-grouping-design.md",
+      "language": "markdown",
+      "sizeLines": 321,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-05-08-checkin-counter-management-settings-design.md",
+      "language": "markdown",
+      "sizeLines": 240,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/tauri-updater-release.md",
+      "language": "markdown",
+      "sizeLines": 40,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "issues.md",
+      "language": "markdown",
+      "sizeLines": 38,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "localSeasonSqlStore.test.ts",
+      "language": "typescript",
+      "sizeLines": 392,
+      "fileCategory": "code"
+    },
+    {
+      "path": "localSeasonSqlStore.ts",
+      "language": "typescript",
+      "sizeLines": 922,
+      "fileCategory": "code"
+    },
+    {
+      "path": "localSeasonStore.ts",
+      "language": "typescript",
+      "sizeLines": 1160,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Pattern Tuần Linh hoạt.md",
+      "language": "markdown",
+      "sizeLines": 88,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "rule-regression-tests.cjs",
+      "language": "javascript",
+      "sizeLines": 9217,
+      "fileCategory": "code"
+    },
+    {
+      "path": "rules.md",
+      "language": "markdown",
+      "sizeLines": 29,
+      "fileCategory": "docs"
+    }
+  ]
+}

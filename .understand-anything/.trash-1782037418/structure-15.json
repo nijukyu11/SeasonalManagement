@@ -1,0 +1,222 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 7,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "app/AGENTS.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 5,
+      "nonEmptyLines": 4,
+      "sections": [
+        {
+          "heading": "This is NOT the Next.js you know",
+          "level": 1,
+          "line": 2
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 1
+      }
+    },
+    {
+      "path": "app/CLAUDE.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 1,
+      "nonEmptyLines": 1,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 0
+      }
+    },
+    {
+      "path": "app/README.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 58,
+      "nonEmptyLines": 37,
+      "sections": [
+        {
+          "heading": "Seasonal Management App",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Development",
+          "level": 2,
+          "line": 5
+        },
+        {
+          "heading": "Remote Backend",
+          "level": 2,
+          "line": 13
+        },
+        {
+          "heading": "Migration",
+          "level": 2,
+          "line": 29
+        },
+        {
+          "heading": "Native Windows Build",
+          "level": 2,
+          "line": 39
+        },
+        {
+          "heading": "Rollback Backup",
+          "level": 2,
+          "line": 50
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 6
+      }
+    },
+    {
+      "path": "app/firebase.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 11,
+      "nonEmptyLines": 11,
+      "sections": [
+        {
+          "heading": "firestore",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "hosting",
+          "level": 1,
+          "line": 6
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 2
+      }
+    },
+    {
+      "path": "app/firestore.indexes.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 12,
+      "nonEmptyLines": 12,
+      "sections": [
+        {
+          "heading": "indexes",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "fieldOverrides",
+          "level": 1,
+          "line": 11
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 2
+      }
+    },
+    {
+      "path": "app/package.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 60,
+      "nonEmptyLines": 60,
+      "sections": [
+        {
+          "heading": "name",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "version",
+          "level": 1,
+          "line": 3
+        },
+        {
+          "heading": "private",
+          "level": 1,
+          "line": 4
+        },
+        {
+          "heading": "type",
+          "level": 1,
+          "line": 5
+        },
+        {
+          "heading": "scripts",
+          "level": 1,
+          "line": 6
+        },
+        {
+          "heading": "dependencies",
+          "level": 1,
+          "line": 27
+        },
+        {
+          "heading": "devDependencies",
+          "level": 1,
+          "line": 43
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 7
+      }
+    },
+    {
+      "path": "app/tsconfig.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 35,
+      "nonEmptyLines": 35,
+      "sections": [
+        {
+          "heading": "compilerOptions",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "include",
+          "level": 1,
+          "line": 26
+        },
+        {
+          "heading": "exclude",
+          "level": 1,
+          "line": 34
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 3
+      }
+    }
+  ]
+}

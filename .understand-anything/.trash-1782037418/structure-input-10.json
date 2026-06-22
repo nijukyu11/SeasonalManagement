@@ -1,0 +1,33 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "app/scripts/dashboard-ai-local-sql-source.mjs",
+      "language": "javascript",
+      "sizeLines": 152,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/scripts/skawld-dashboard-agent-harness.mjs",
+      "language": "javascript",
+      "sizeLines": 454,
+      "fileCategory": "code"
+    },
+    {
+      "path": "app/scripts/test-skawld-dashboard-agent-harness.mjs",
+      "language": "javascript",
+      "sizeLines": 163,
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "app/scripts/dashboard-ai-local-sql-source.mjs": [],
+    "app/scripts/skawld-dashboard-agent-harness.mjs": [
+      "app/scripts/dashboard-ai-local-sql-source.mjs"
+    ],
+    "app/scripts/test-skawld-dashboard-agent-harness.mjs": [
+      "app/scripts/dashboard-ai-local-sql-source.mjs",
+      "app/scripts/skawld-dashboard-agent-harness.mjs"
+    ]
+  }
+}

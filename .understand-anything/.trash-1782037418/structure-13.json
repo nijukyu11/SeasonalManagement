@@ -1,0 +1,1947 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 22,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "app/supabase/migrations/20260517000000_add_ai_operator_access.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 14,
+      "nonEmptyLines": 14,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 0
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260520034255_relational_core_settings.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 1236,
+      "nonEmptyLines": 1156,
+      "definitions": [
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "user_id",
+            "email",
+            "can_manage_ai",
+            "created_at"
+          ],
+          "startLine": 53,
+          "endLine": 58
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "season_code",
+            "name",
+            "file_name",
+            "uploaded_at",
+            "effective_start",
+            "effective_end",
+            "total_legs",
+            "total_source_rows",
+            "data_version",
+            "last_synced_at"
+          ],
+          "startLine": 88,
+          "endLine": 100
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "row_index",
+            "effective",
+            "discontinue",
+            "airline",
+            "aircraft",
+            "sta",
+            "arr_flight",
+            "arr_route",
+            "arr_category",
+            "arr_code_shares",
+            "arr_int_dom_ind",
+            "std",
+            "dep_flight",
+            "dep_route",
+            "dep_category",
+            "dep_code_shares",
+            "dep_int_dom_ind",
+            "overnight_link_row_index",
+            "link_type"
+          ],
+          "startLine": 102,
+          "endLine": 124
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "row_index",
+            "iso_dow"
+          ],
+          "startLine": 126,
+          "endLine": 132
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "record_id",
+            "link_id",
+            "type",
+            "airline",
+            "flight_number",
+            "raw_flight_number",
+            "request_status_code",
+            "route",
+            "schedule",
+            "aircraft",
+            "category",
+            "code_shares",
+            "int_dom_ind",
+            "pax",
+            "gate",
+            "stand",
+            "carousel",
+            "mct",
+            "fb",
+            "lb",
+            "bhs",
+            "ghs",
+            "date",
+            "day_of_week",
+            "action",
+            "source_row_index",
+            "linked_source_row_index",
+            "link_type",
+            "pair_anchor_date",
+            "linked_record_id",
+            "source_kind",
+            "source_side",
+            "status",
+            "turnaround_id"
+          ],
+          "startLine": 134,
+          "endLine": 171
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "record_id",
+            "counter_group",
+            "item_index",
+            "counter_value"
+          ],
+          "startLine": 173,
+          "endLine": 181
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "record_id",
+            "counter_key",
+            "window_start",
+            "window_end"
+          ],
+          "startLine": 183,
+          "endLine": 191
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "leg_id",
+            "action",
+            "changed_fields",
+            "schedule",
+            "aircraft",
+            "route",
+            "code_shares",
+            "pax",
+            "gate",
+            "stand",
+            "carousel",
+            "mct",
+            "fb",
+            "lb",
+            "bhs",
+            "ghs"
+          ],
+          "startLine": 193,
+          "endLine": 215
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "leg_id",
+            "counter_group",
+            "item_index",
+            "counter_value"
+          ],
+          "startLine": 217,
+          "endLine": 225
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "leg_id",
+            "counter_key",
+            "window_start",
+            "window_end"
+          ],
+          "startLine": 227,
+          "endLine": 235
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "leg_id",
+            "record_id",
+            "link_id",
+            "type",
+            "airline",
+            "flight_number",
+            "raw_flight_number",
+            "request_status_code",
+            "route",
+            "schedule",
+            "aircraft",
+            "category",
+            "code_shares",
+            "int_dom_ind",
+            "pax",
+            "gate",
+            "stand",
+            "carousel",
+            "mct",
+            "fb",
+            "lb",
+            "bhs",
+            "ghs",
+            "date",
+            "day_of_week",
+            "action",
+            "source_row_index",
+            "linked_source_row_index",
+            "link_type",
+            "pair_anchor_date",
+            "linked_record_id",
+            "source_kind",
+            "source_side",
+            "status",
+            "turnaround_id"
+          ],
+          "startLine": 237,
+          "endLine": 276
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "entry_id",
+            "timestamp",
+            "description"
+          ],
+          "startLine": 278,
+          "endLine": 284
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "entry_id",
+            "change_index",
+            "leg_id",
+            "previous_mod_snapshot",
+            "new_mod_snapshot"
+          ],
+          "startLine": 286,
+          "endLine": 295
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "entry_id",
+            "change_index",
+            "record_id",
+            "previous_record_snapshot",
+            "new_record_snapshot"
+          ],
+          "startLine": 297,
+          "endLine": 306
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "event_id",
+            "season_id",
+            "client_id",
+            "op_id",
+            "actor_user_id",
+            "server_seq",
+            "target_type",
+            "target_id",
+            "changed_fields",
+            "op_payload",
+            "created_at"
+          ],
+          "startLine": 308,
+          "endLine": 321
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "target_type",
+            "target_id",
+            "entity_version",
+            "field_versions",
+            "updated_by",
+            "updated_at"
+          ],
+          "startLine": 323,
+          "endLine": 332
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "updated_at",
+            "ai_enabled",
+            "ai_active_model_id",
+            "ai_updated_at"
+          ],
+          "startLine": 334,
+          "endLine": 340
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "route",
+            "country"
+          ],
+          "startLine": 342,
+          "endLine": 345
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "airline_code",
+            "color"
+          ],
+          "startLine": 347,
+          "endLine": 350
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "name",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 352,
+          "endLine": 357
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "group_id",
+            "aircraft_type"
+          ],
+          "startLine": 359,
+          "endLine": 363
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "name",
+            "enabled",
+            "priority_score",
+            "sort_order",
+            "condition_aircraft_types",
+            "condition_aircraft_groups",
+            "condition_airline_codes",
+            "counter_value",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 365,
+          "endLine": 377
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "label",
+            "enabled",
+            "sort_order",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 379,
+          "endLine": 386
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "name",
+            "bhs",
+            "sort_order",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 388,
+          "endLine": 395
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "group_id",
+            "counter_id",
+            "sort_order"
+          ],
+          "startLine": 397,
+          "endLine": 402
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "name",
+            "start_time",
+            "end_time",
+            "reason",
+            "enabled",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 404,
+          "endLine": 413
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "lock_id",
+            "counter_id",
+            "sort_order"
+          ],
+          "startLine": 415,
+          "endLine": 420
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "label",
+            "enabled",
+            "sort_order",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 422,
+          "endLine": 429
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "name",
+            "sort_order",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 431,
+          "endLine": 437
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "group_id",
+            "gate_id",
+            "sort_order"
+          ],
+          "startLine": 439,
+          "endLine": 444
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "name",
+            "start_time",
+            "end_time",
+            "reason",
+            "enabled",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 446,
+          "endLine": 455
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "lock_id",
+            "gate_id",
+            "sort_order"
+          ],
+          "startLine": 457,
+          "endLine": 462
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "stand",
+            "gate",
+            "sort_order",
+            "enabled",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 464,
+          "endLine": 472
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "label",
+            "provider",
+            "model",
+            "base_url",
+            "enabled",
+            "sort_order"
+          ],
+          "startLine": 474,
+          "endLine": 483
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "started_at",
+            "last_seen_at",
+            "payload"
+          ],
+          "startLine": 485,
+          "endLine": 490
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "session_id",
+            "id",
+            "timestamp",
+            "payload"
+          ],
+          "startLine": 492,
+          "endLine": 498
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "session_id",
+            "entry_id",
+            "id",
+            "chunk_index",
+            "payload"
+          ],
+          "startLine": 500,
+          "endLine": 508
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1091,
+          "endLine": 1091
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1120,
+          "endLine": 1120
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1125,
+          "endLine": 1125
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1130,
+          "endLine": 1130
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1135,
+          "endLine": 1135
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1140,
+          "endLine": 1140
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1145,
+          "endLine": 1145
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1150,
+          "endLine": 1150
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1155,
+          "endLine": 1155
+        },
+        {
+          "name": "seasons_uploaded_at_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 512,
+          "endLine": 512
+        },
+        {
+          "name": "seasons_season_code_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 513,
+          "endLine": 513
+        },
+        {
+          "name": "season_source_rows_season_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 514,
+          "endLine": 514
+        },
+        {
+          "name": "season_flight_records_date_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 515,
+          "endLine": 515
+        },
+        {
+          "name": "season_flight_records_reporting_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 516,
+          "endLine": 516
+        },
+        {
+          "name": "season_mod_history_timestamp_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 517,
+          "endLine": 517
+        },
+        {
+          "name": "season_change_events_seq_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 518,
+          "endLine": 518
+        },
+        {
+          "name": "season_change_events_target_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 519,
+          "endLine": 519
+        },
+        {
+          "name": "season_entity_versions_target_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 520,
+          "endLine": 520
+        },
+        {
+          "name": "audit_sessions_last_seen_at_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 521,
+          "endLine": 521
+        },
+        {
+          "name": "audit_entries_timestamp_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 522,
+          "endLine": 522
+        },
+        {
+          "name": "audit_delta_chunks_order_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 523,
+          "endLine": 523
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 58
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260520084127_continuous_operational_data.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 1274,
+      "nonEmptyLines": 1193,
+      "definitions": [
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "user_id",
+            "email",
+            "can_manage_ai",
+            "created_at"
+          ],
+          "startLine": 53,
+          "endLine": 58
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "season_code",
+            "name",
+            "file_name",
+            "uploaded_at",
+            "effective_start",
+            "effective_end",
+            "total_legs",
+            "total_source_rows",
+            "data_version",
+            "last_synced_at"
+          ],
+          "startLine": 88,
+          "endLine": 100
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "row_index",
+            "effective",
+            "discontinue",
+            "airline",
+            "aircraft",
+            "sta",
+            "arr_flight",
+            "arr_route",
+            "arr_category",
+            "arr_code_shares",
+            "arr_int_dom_ind",
+            "std",
+            "dep_flight",
+            "dep_route",
+            "dep_category",
+            "dep_code_shares",
+            "dep_int_dom_ind",
+            "overnight_link_row_index",
+            "link_type"
+          ],
+          "startLine": 102,
+          "endLine": 124
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "row_index",
+            "iso_dow"
+          ],
+          "startLine": 126,
+          "endLine": 132
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "record_id",
+            "link_id",
+            "type",
+            "airline",
+            "flight_number",
+            "raw_flight_number",
+            "request_status_code",
+            "route",
+            "schedule",
+            "aircraft",
+            "category",
+            "code_shares",
+            "int_dom_ind",
+            "pax",
+            "gate",
+            "stand",
+            "carousel",
+            "mct",
+            "fb",
+            "lb",
+            "bhs",
+            "ghs",
+            "date",
+            "scheduled_date",
+            "scheduled_time",
+            "operational_date",
+            "iata_season_code",
+            "flight_series_id",
+            "day_of_week",
+            "action",
+            "source_row_index",
+            "linked_source_row_index",
+            "link_type",
+            "pair_anchor_date",
+            "linked_record_id",
+            "source_kind",
+            "source_side",
+            "status",
+            "turnaround_id"
+          ],
+          "startLine": 134,
+          "endLine": 175
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "record_id",
+            "counter_group",
+            "item_index",
+            "counter_value"
+          ],
+          "startLine": 177,
+          "endLine": 184
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "record_id",
+            "counter_key",
+            "window_start",
+            "window_end"
+          ],
+          "startLine": 186,
+          "endLine": 193
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "leg_id",
+            "action",
+            "changed_fields",
+            "schedule",
+            "aircraft",
+            "route",
+            "code_shares",
+            "pax",
+            "gate",
+            "stand",
+            "carousel",
+            "mct",
+            "fb",
+            "lb",
+            "bhs",
+            "ghs"
+          ],
+          "startLine": 195,
+          "endLine": 216
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "leg_id",
+            "counter_group",
+            "item_index",
+            "counter_value"
+          ],
+          "startLine": 218,
+          "endLine": 225
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "leg_id",
+            "counter_key",
+            "window_start",
+            "window_end"
+          ],
+          "startLine": 227,
+          "endLine": 234
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "leg_id",
+            "record_id",
+            "link_id",
+            "type",
+            "airline",
+            "flight_number",
+            "raw_flight_number",
+            "request_status_code",
+            "route",
+            "schedule",
+            "aircraft",
+            "category",
+            "code_shares",
+            "int_dom_ind",
+            "pax",
+            "gate",
+            "stand",
+            "carousel",
+            "mct",
+            "fb",
+            "lb",
+            "bhs",
+            "ghs",
+            "date",
+            "scheduled_date",
+            "scheduled_time",
+            "operational_date",
+            "iata_season_code",
+            "flight_series_id",
+            "day_of_week",
+            "action",
+            "source_row_index",
+            "linked_source_row_index",
+            "link_type",
+            "pair_anchor_date",
+            "linked_record_id",
+            "source_kind",
+            "source_side",
+            "status",
+            "turnaround_id"
+          ],
+          "startLine": 236,
+          "endLine": 279
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "entry_id",
+            "timestamp",
+            "description"
+          ],
+          "startLine": 281,
+          "endLine": 286
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "entry_id",
+            "change_index",
+            "leg_id",
+            "previous_mod_snapshot",
+            "new_mod_snapshot"
+          ],
+          "startLine": 288,
+          "endLine": 296
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "entry_id",
+            "change_index",
+            "record_id",
+            "previous_record_snapshot",
+            "new_record_snapshot"
+          ],
+          "startLine": 298,
+          "endLine": 306
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "event_id",
+            "season_id",
+            "client_id",
+            "op_id",
+            "actor_user_id",
+            "server_seq",
+            "target_type",
+            "target_id",
+            "changed_fields",
+            "op_payload",
+            "created_at"
+          ],
+          "startLine": 308,
+          "endLine": 321
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "season_id",
+            "target_type",
+            "target_id",
+            "entity_version",
+            "field_versions",
+            "updated_by",
+            "updated_at"
+          ],
+          "startLine": 323,
+          "endLine": 332
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "updated_at",
+            "ai_enabled",
+            "ai_active_model_id",
+            "ai_updated_at"
+          ],
+          "startLine": 334,
+          "endLine": 340
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "route",
+            "country"
+          ],
+          "startLine": 342,
+          "endLine": 345
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "airline_code",
+            "color"
+          ],
+          "startLine": 347,
+          "endLine": 350
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "name",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 352,
+          "endLine": 357
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "group_id",
+            "aircraft_type"
+          ],
+          "startLine": 359,
+          "endLine": 363
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "name",
+            "enabled",
+            "priority_score",
+            "sort_order",
+            "condition_aircraft_types",
+            "condition_aircraft_groups",
+            "condition_airline_codes",
+            "counter_value",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 365,
+          "endLine": 377
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "label",
+            "enabled",
+            "sort_order",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 379,
+          "endLine": 386
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "name",
+            "bhs",
+            "sort_order",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 388,
+          "endLine": 395
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "group_id",
+            "counter_id",
+            "sort_order"
+          ],
+          "startLine": 397,
+          "endLine": 402
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "name",
+            "start_time",
+            "end_time",
+            "reason",
+            "enabled",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 404,
+          "endLine": 413
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "lock_id",
+            "counter_id",
+            "sort_order"
+          ],
+          "startLine": 415,
+          "endLine": 420
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "label",
+            "enabled",
+            "sort_order",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 422,
+          "endLine": 429
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "name",
+            "sort_order",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 431,
+          "endLine": 437
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "group_id",
+            "gate_id",
+            "sort_order"
+          ],
+          "startLine": 439,
+          "endLine": 444
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "name",
+            "start_time",
+            "end_time",
+            "reason",
+            "enabled",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 446,
+          "endLine": 455
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "lock_id",
+            "gate_id",
+            "sort_order"
+          ],
+          "startLine": 457,
+          "endLine": 462
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "stand",
+            "gate",
+            "sort_order",
+            "enabled",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 464,
+          "endLine": 472
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "label",
+            "provider",
+            "model",
+            "base_url",
+            "enabled",
+            "sort_order"
+          ],
+          "startLine": 474,
+          "endLine": 483
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "started_at",
+            "last_seen_at",
+            "payload"
+          ],
+          "startLine": 485,
+          "endLine": 490
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "session_id",
+            "id",
+            "timestamp",
+            "payload"
+          ],
+          "startLine": 492,
+          "endLine": 498
+        },
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "session_id",
+            "entry_id",
+            "id",
+            "chunk_index",
+            "payload"
+          ],
+          "startLine": 500,
+          "endLine": 508
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1121,
+          "endLine": 1121
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1154,
+          "endLine": 1154
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1159,
+          "endLine": 1159
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1164,
+          "endLine": 1164
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1169,
+          "endLine": 1169
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1174,
+          "endLine": 1174
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1179,
+          "endLine": 1179
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1184,
+          "endLine": 1184
+        },
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1189,
+          "endLine": 1189
+        },
+        {
+          "name": "seasons_uploaded_at_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 512,
+          "endLine": 512
+        },
+        {
+          "name": "seasons_season_code_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 513,
+          "endLine": 513
+        },
+        {
+          "name": "season_source_rows_season_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 514,
+          "endLine": 514
+        },
+        {
+          "name": "season_flight_records_date_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 515,
+          "endLine": 515
+        },
+        {
+          "name": "season_flight_records_iata_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 516,
+          "endLine": 516
+        },
+        {
+          "name": "season_flight_records_series_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 517,
+          "endLine": 517
+        },
+        {
+          "name": "season_flight_records_reporting_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 518,
+          "endLine": 518
+        },
+        {
+          "name": "season_mod_history_timestamp_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 519,
+          "endLine": 519
+        },
+        {
+          "name": "season_change_events_seq_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 520,
+          "endLine": 520
+        },
+        {
+          "name": "season_change_events_target_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 521,
+          "endLine": 521
+        },
+        {
+          "name": "season_entity_versions_target_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 522,
+          "endLine": 522
+        },
+        {
+          "name": "audit_sessions_last_seen_at_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 523,
+          "endLine": 523
+        },
+        {
+          "name": "audit_entries_timestamp_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 524,
+          "endLine": 524
+        },
+        {
+          "name": "audit_delta_chunks_order_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 525,
+          "endLine": 525
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 60
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260521185759_ai_workspace_reporting_security.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 15,
+      "nonEmptyLines": 13,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 0
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260522000000_fix_sync_conflicts_and_ai_access.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 226,
+      "nonEmptyLines": 207,
+      "definitions": [
+        {
+          "name": "season_entity_versions_target_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 37,
+          "endLine": 37
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 1
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260522224947_ai_query_rich_notebook_reporting.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 47,
+      "nonEmptyLines": 45,
+      "definitions": [
+        {
+          "name": "reporting",
+          "kind": "view",
+          "fields": [],
+          "startLine": 1,
+          "endLine": 1
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 1
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260523090039_fix_checkin_window_json_null.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 308,
+      "nonEmptyLines": 302,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 0
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260523112828_public_dashboard_ai_query_aggregated.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 23,
+      "nonEmptyLines": 22,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 0
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260523175500_reporting_query_aggregated.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 183,
+      "nonEmptyLines": 162,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 0
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260523234451_schedule_telegram_notifications.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 93,
+      "nonEmptyLines": 84,
+      "definitions": [
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "season_id",
+            "history_entry_id",
+            "actor_user_id",
+            "module",
+            "payload",
+            "status",
+            "attempts",
+            "telegram_message_ids",
+            "error",
+            "created_at",
+            "updated_at",
+            "sent_at"
+          ],
+          "startLine": 1,
+          "endLine": 16
+        },
+        {
+          "name": "schedule_notification_deliveries_status_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 18,
+          "endLine": 18
+        },
+        {
+          "name": "schedule_notification_deliveries_season_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 21,
+          "endLine": 21
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 3
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260524100927_optimize_sync_v2_timeout.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 143,
+      "nonEmptyLines": 132,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 0
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260524160004_reliable_sync_cursor.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 202,
+      "nonEmptyLines": 187,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 0
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260524173126_catchup_snapshot_rpc.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 174,
+      "nonEmptyLines": 167,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 0
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260527061056_allow_deepseek_ai_provider.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 6,
+      "nonEmptyLines": 5,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 0
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260527090000_public_dashboard_ai_query_rows.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 210,
+      "nonEmptyLines": 192,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 0
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260527092757_exact_season_filtering.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 215,
+      "nonEmptyLines": 199,
+      "definitions": [
+        {
+          "name": "season_flight_records_season_operational_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 116,
+          "endLine": 116
+        },
+        {
+          "name": "season_modifications_season_leg_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 118,
+          "endLine": 118
+        },
+        {
+          "name": "season_modification_added_legs_season_leg_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 120,
+          "endLine": 120
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 3
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260528020520_ai_context_documents.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 30,
+      "nonEmptyLines": 25,
+      "definitions": [
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "id",
+            "kind",
+            "title",
+            "content_md",
+            "enabled",
+            "sort_order",
+            "created_at",
+            "updated_at"
+          ],
+          "startLine": 1,
+          "endLine": 10
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 1
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260530093000_harden_sync_v2_ack_coverage.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 235,
+      "nonEmptyLines": 217,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 0
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260531023846_prevent_orphan_modification_snapshots.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 259,
+      "nonEmptyLines": 251,
+      "definitions": [
+        {
+          "name": "maintenance",
+          "kind": "table",
+          "fields": [
+            "backup_id",
+            "backed_up_at",
+            "backup_reason",
+            "season_id",
+            "leg_id",
+            "action",
+            "changed_fields",
+            "schedule",
+            "aircraft",
+            "route",
+            "code_shares",
+            "pax",
+            "gate",
+            "stand",
+            "carousel",
+            "mct",
+            "fb",
+            "lb",
+            "bhs",
+            "ghs"
+          ],
+          "startLine": 3,
+          "endLine": 27
+        },
+        {
+          "name": "orphan_season_modifications_backup_once_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 29,
+          "endLine": 29
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 2
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260602093244_ai_local_provider_keys.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 83,
+      "nonEmptyLines": 72,
+      "definitions": [
+        {
+          "name": "public",
+          "kind": "table",
+          "fields": [
+            "provider",
+            "secret_value",
+            "updated_at",
+            "updated_by"
+          ],
+          "startLine": 9,
+          "endLine": 15
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 1
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260602110500_ai_provider_key_rpc.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 170,
+      "nonEmptyLines": 153,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 0
+      }
+    },
+    {
+      "path": "app/supabase/migrations/20260616_unique_seasons_season_code.sql",
+      "language": "sql",
+      "fileCategory": "data",
+      "totalLines": 14,
+      "nonEmptyLines": 13,
+      "definitions": [
+        {
+          "name": "seasons_season_code_unique_idx",
+          "kind": "index",
+          "fields": [],
+          "startLine": 14,
+          "endLine": 14
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "definitionCount": 1
+      }
+    }
+  ]
+}

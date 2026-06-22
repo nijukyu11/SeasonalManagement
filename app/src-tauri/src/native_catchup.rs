@@ -2564,6 +2564,54 @@ fn remove_related_mod_history_pending_ops(
     Ok(())
 }
 
+fn pending_manifest_target_from_op_key(op_key: &str) -> Option<String> {
+    let (target_type, target_id) = op_key.split_once(':')?;
+    match target_type {
+        "flightRecord" | "modification" | "modHistory" if !target_id.is_empty() => {
+            Some(target_id.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn populate_pending_manifest_targets(conn: &Connection, season_id: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TEMP TABLE IF NOT EXISTS temp_pending_manifest_targets (
+          target_id TEXT PRIMARY KEY
+        );
+        DELETE FROM temp_pending_manifest_targets;
+        "#,
+    )?;
+    let mut stmt = conn.prepare(
+        "SELECT op_key, payload_json FROM local_pending_ops WHERE season_id = ?",
+    )?;
+    let rows = stmt.query_map(params![season_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut targets = HashSet::new();
+    for row in rows {
+        let (op_key, payload_json) = row?;
+        if let Some(target_id) = pending_manifest_target_from_op_key(&op_key) {
+            targets.insert(target_id);
+        }
+        if let Ok(payload) = serde_json::from_str::<Value>(&payload_json) {
+            if let Some((_target_type, target_id, _fallback_fields)) = pending_op_target(&payload) {
+                targets.insert(target_id);
+            }
+        }
+        let (_history_id, history_targets) = mod_history_pending_op_targets(&payload_json)?;
+        targets.extend(history_targets);
+    }
+    let mut insert_target = conn.prepare(
+        "INSERT OR IGNORE INTO temp_pending_manifest_targets (target_id) VALUES (?)",
+    )?;
+    for target_id in targets {
+        insert_target.execute(params![target_id])?;
+    }
+    Ok(())
+}
+
 pub fn resolve_season_conflict_on_connection(
     conn: &Connection,
     input: &ResolveSeasonConflictInput,
@@ -3813,9 +3861,25 @@ pub fn sync_pending_changes_on_connection(
 ) -> rusqlite::Result<NativeSyncPendingChangesResult> {
     let summary = query_sync_summary_on_connection(conn, &input.season_id)?;
     if summary.pending_count == 0 {
+        let review_message = || {
+            format!(
+                "{} item{} need review. No unrelated local changes to sync.",
+                summary.conflict_count,
+                if summary.conflict_count == 1 { "" } else { "s" }
+            )
+        };
         return Ok(NativeSyncPendingChangesResult {
-            status: "synced".to_string(),
-            message: "No local changes to sync.".to_string(),
+            status: if summary.conflict_count > 0 {
+                "conflict"
+            } else {
+                "synced"
+            }
+            .to_string(),
+            message: if summary.conflict_count > 0 {
+                review_message()
+            } else {
+                "No local changes to sync.".to_string()
+            },
             pending_count: 0,
             conflict_count: summary.conflict_count,
             notification_sent: 0,
@@ -5368,17 +5432,13 @@ pub fn reconcile_flight_record_manifest_on_connection(
                 insert_remote.execute(params![record_id])?;
             }
         }
+        populate_pending_manifest_targets(conn, season_id)?;
 
         let pending_predicate = r#"
             NOT EXISTS (
               SELECT 1
-              FROM local_pending_ops p
-              WHERE p.season_id = l.season_id
-                AND (
-                  p.op_key = 'flightRecord:' || l.record_id
-                  OR p.op_key LIKE '%' || l.record_id || '%'
-                  OR p.payload_json LIKE '%"' || l.record_id || '"%'
-                )
+              FROM temp_pending_manifest_targets p
+              WHERE p.target_id = l.record_id
             )
         "#;
         let stale_record_sql = format!(
@@ -5427,12 +5487,8 @@ pub fn reconcile_flight_record_manifest_on_connection(
                  )
                  AND NOT EXISTS (
                    SELECT 1
-                   FROM local_pending_ops p
-                   WHERE p.season_id = m.season_id
-                     AND (
-                       p.op_key LIKE '%' || m.leg_id || '%'
-                       OR p.payload_json LIKE '%"' || m.leg_id || '"%'
-                     )
+                   FROM temp_pending_manifest_targets p
+                   WHERE p.target_id = m.leg_id
                  )"#,
             params![season_id],
         )?;
@@ -5448,12 +5504,8 @@ pub fn reconcile_flight_record_manifest_on_connection(
                  )
                  AND NOT EXISTS (
                    SELECT 1
-                   FROM local_pending_ops p
-                   WHERE p.season_id = ev.season_id
-                     AND (
-                       p.op_key LIKE '%' || ev.target_id || '%'
-                       OR p.payload_json LIKE '%"' || ev.target_id || '"%'
-                     )
+                   FROM temp_pending_manifest_targets p
+                   WHERE p.target_id = ev.target_id
                  )"#,
             params![season_id],
         )?;
@@ -6346,7 +6398,12 @@ pub async fn sync_native_pending_changes(
         .map_err(|error| format!("Native pending sync summary failed: {error}"))?;
     if summary.pending_count == 0 {
         return Ok(NativeSyncPendingChangesResult {
-            status: "synced".to_string(),
+            status: if summary.conflict_count > 0 {
+                "conflict"
+            } else {
+                "synced"
+            }
+            .to_string(),
             message: if summary.conflict_count > 0 {
                 format!(
                     "{} item{} need review. No unrelated local changes to sync.",

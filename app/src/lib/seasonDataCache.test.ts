@@ -37,3 +37,12 @@ test('workspace change events carry affected ids and sync metadata', () => {
   assert.deepEqual((received[0] as typeof event).affectedIds, ['LEG-1']);
 });
 
+test('workspace change events preserve deduped native changed targets', () => {
+  const event = publishSeasonWorkspaceChanged({
+    seasonId: 'season-1',
+    source: 'native-catchup',
+    changedTargets: ['modification:leg-1', 'flightRecord:leg-2', 'modification:leg-1'],
+  });
+
+  assert.deepEqual(event.changedTargets, ['modification:leg-1', 'flightRecord:leg-2']);
+});

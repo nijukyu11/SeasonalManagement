@@ -1,0 +1,35 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "localSeasonSqlStore.test.ts",
+      "language": "typescript",
+      "sizeLines": 392,
+      "fileCategory": "code"
+    },
+    {
+      "path": "localSeasonSqlStore.ts",
+      "language": "typescript",
+      "sizeLines": 922,
+      "fileCategory": "code"
+    },
+    {
+      "path": "localSeasonStore.ts",
+      "language": "typescript",
+      "sizeLines": 1160,
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "localSeasonSqlStore.test.ts": [
+      "localSeasonSqlStore.ts",
+      "localSeasonStore.ts"
+    ],
+    "localSeasonSqlStore.ts": [
+      "localSeasonStore.ts"
+    ],
+    "localSeasonStore.ts": [
+      "localSeasonSqlStore.ts"
+    ]
+  }
+}

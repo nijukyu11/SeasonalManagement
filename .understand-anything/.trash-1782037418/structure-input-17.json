@@ -1,0 +1,56 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "docs/superpowers/plans/2026-05-07-daily-schedule.md",
+      "language": "markdown",
+      "sizeLines": 1541,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-08-checkin-allocation-discrete-grouping.md",
+      "language": "markdown",
+      "sizeLines": 1887,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-08-checkin-counter-management-settings.md",
+      "language": "markdown",
+      "sizeLines": 1572,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-05-08-checkin-gantt-ux-enhancements.md",
+      "language": "markdown",
+      "sizeLines": 45,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-06-16-native-sync-conflict-hardening.md",
+      "language": "markdown",
+      "sizeLines": 312,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-06-16-season-assignment-and-atomic-import-review.md",
+      "language": "markdown",
+      "sizeLines": 335,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-06-16-season-ownership-hardening-implementation.md",
+      "language": "markdown",
+      "sizeLines": 490,
+      "fileCategory": "docs"
+    }
+  ],
+  "batchImportData": {
+    "docs/superpowers/plans/2026-05-07-daily-schedule.md": [],
+    "docs/superpowers/plans/2026-05-08-checkin-allocation-discrete-grouping.md": [],
+    "docs/superpowers/plans/2026-05-08-checkin-counter-management-settings.md": [],
+    "docs/superpowers/plans/2026-05-08-checkin-gantt-ux-enhancements.md": [],
+    "docs/superpowers/plans/2026-06-16-native-sync-conflict-hardening.md": [],
+    "docs/superpowers/plans/2026-06-16-season-assignment-and-atomic-import-review.md": [],
+    "docs/superpowers/plans/2026-06-16-season-ownership-hardening-implementation.md": []
+  }
+}

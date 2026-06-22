@@ -49,6 +49,10 @@ export interface LocalSyncMeta {
   syncStatus: 'synced' | 'dirty' | 'syncing' | 'conflict' | 'needs_review' | 'failed';
 }
 
+export function getLocalSyncConflictCount(syncMeta: Pick<LocalSyncMeta, 'conflicts'> | null | undefined): number {
+  return syncMeta?.conflicts?.length ?? 0;
+}
+
 export interface SeasonalDisplayGroupCache {
   groups: unknown[];
   builtAt: number;
@@ -557,7 +561,8 @@ export async function discardAllLocalPendingChanges(): Promise<{ seasonIds: stri
   if (!sqlDb) {
     for (const [seasonId, stored] of Array.from(memoryLocalSeasonWorkspaces.entries())) {
       const workspace = cloneMemoryWorkspace(stored);
-      if (workspace.syncMeta.pendingCount <= 0 && (workspace.syncMeta.conflicts?.length ?? 0) <= 0) continue;
+      const conflictCount = workspace.syncMeta.conflicts?.length ?? 0;
+      if (workspace.syncMeta.pendingCount <= 0 && conflictCount <= 0) continue;
       const next: LocalSeasonWorkspace = {
         ...workspace,
         rows: cloneJson(workspace.baseRows),
@@ -570,7 +575,7 @@ export async function discardAllLocalPendingChanges(): Promise<{ seasonIds: stri
           ...workspace.syncMeta,
           pendingCount: 0,
           lastLocalChangeAt: null,
-          syncStatus: 'synced',
+          syncStatus: conflictCount > 0 ? 'needs_review' : 'synced',
         },
       };
       memoryLocalSeasonWorkspaces.set(seasonId, cloneMemoryWorkspace(next));

@@ -84,7 +84,7 @@ import { useSeasonWorkspaceRefresh } from '../hooks/useSeasonWorkspaceRefresh';
 import { queryNativeScheduleWindow, runNativeScheduleMutation } from '@/lib/nativeSeasonRepository';
 import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
-import type { LocalSyncMeta } from '@/lib/localSeasonStore';
+import { getLocalSyncConflictCount, type LocalSyncMeta } from '@/lib/localSeasonStore';
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -171,19 +171,20 @@ function DetailedScheduleContent() {
   const [isNewFlightOpen, setIsNewFlightOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null); // for pre-filling Add Flight date
   const detailedCommitSeqRef = useRef(0);
-  const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; lastLocalChangeAt: number | null }>({
+  const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; conflictCount: number; lastLocalChangeAt: number | null }>({
     pendingCount: 0,
+    conflictCount: 0,
     lastLocalChangeAt: null,
   });
   const syncSeasonId = season?.id ?? targetSeasonId;
   const { status: syncStatus, syncNow, fetchUpdatesNow } = useSeasonSync(syncSeasonId, 'detailed');
-  const syncing = syncStatus.status === 'syncing' && syncStatus.mode === 'manual';
-  const fetchingUpdates = syncStatus.status === 'catching_up' && syncStatus.mode === 'manual';
+  const syncInProgress = syncStatus.status === 'syncing';
+  const fetchingUpdates = syncStatus.status === 'catching_up';
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' || syncStatus.status === 'conflict' ? syncStatus.message : null);
   const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncSummary.pendingCount);
-  const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount);
-  const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
+  const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount);
+  const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount);
   const hasDraftChanges = (draftState?.modifications.length ?? 0) > 0;
 
   // Sweep Selection State
@@ -293,6 +294,7 @@ function DetailedScheduleContent() {
     setDraftState(null);
     setSyncSummary({
       pendingCount: result.syncMeta.pendingCount,
+      conflictCount: getLocalSyncConflictCount(result.syncMeta),
       lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
     });
     patchCachedSeasonData(season.id, {
@@ -465,7 +467,7 @@ function DetailedScheduleContent() {
   }, [allLegs, selectedLegIds, selectedLegs]);
 
   const handleUnlinkSelected = useCallback(async () => {
-    if (!season || syncing) return;
+    if (!season || syncInProgress) return;
     const ids = selectedLegs.filter((leg) => leg.linkType || leg.linkedRecordId).map((leg) => leg.id);
     if (ids.length === 0) return;
     const shouldUnlink = await showConfirm({
@@ -509,7 +511,7 @@ function DetailedScheduleContent() {
         syncMeta: nativeSyncMeta,
       });
       if (historyEntry) setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
-      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
+      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, conflictCount: getLocalSyncConflictCount(nativeSyncMeta), lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
       refreshDetailedState(result.records, currentMods, { preserveSelection: true });
       publishDetailedWorkspaceChange(season.id, nativeSyncMeta.localRevision, result.updatedIds, nativeSyncMeta);
       void appendAuditLogEntry(createFlightActionAuditFromHistory({
@@ -523,10 +525,10 @@ function DetailedScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Unlink Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [currentMods, flightRecords, modHistory, publishDetailedWorkspaceChange, refreshDetailedState, season, selectedLegs, showAlert, showConfirm, syncing]);
+  }, [currentMods, flightRecords, modHistory, publishDetailedWorkspaceChange, refreshDetailedState, season, selectedLegs, showAlert, showConfirm, syncInProgress]);
 
   const handleApplyLinkCandidate = useCallback(async (candidate: DetailedLinkCandidate) => {
-    if (!season || syncing) return;
+    if (!season || syncInProgress) return;
     try {
       const result = linkFlightRecordPairs(flightRecords, candidate.arrIds, candidate.depIds, candidate.linkType);
       const historyTimestamp = Date.now();
@@ -560,7 +562,7 @@ function DetailedScheduleContent() {
         syncMeta: nativeSyncMeta,
       });
       if (historyEntry) setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
-      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
+      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, conflictCount: getLocalSyncConflictCount(nativeSyncMeta), lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
       refreshDetailedState(result.records, currentMods, { preserveSelection: true });
       publishDetailedWorkspaceChange(season.id, nativeSyncMeta.localRevision, result.updatedIds, nativeSyncMeta);
       setIsLinkModalOpen(false);
@@ -575,7 +577,7 @@ function DetailedScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Link Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [currentMods, flightRecords, modHistory, publishDetailedWorkspaceChange, refreshDetailedState, season, showAlert, syncing]);
+  }, [currentMods, flightRecords, modHistory, publishDetailedWorkspaceChange, refreshDetailedState, season, showAlert, syncInProgress]);
 
   const handleEditNext = useCallback(async (mods: FlightModification[]) => {
     let finalMods = mods;
@@ -613,7 +615,7 @@ function DetailedScheduleContent() {
   const handleDeleteSelectedLegs = useCallback(() => {
     if (
       !season ||
-      syncing ||
+      syncInProgress ||
       isSaving ||
       isUndoing ||
       isEditModalOpen ||
@@ -624,7 +626,7 @@ function DetailedScheduleContent() {
     }
     const deleteMods = selectedLegs.map((leg) => ({ legId: leg.id, action: 'deleted' as const }));
     void handleEditNext(deleteMods);
-  }, [handleEditNext, isConfirmModalOpen, isEditModalOpen, isSaving, isUndoing, season, selectedLegs, syncing]);
+  }, [handleEditNext, isConfirmModalOpen, isEditModalOpen, isSaving, isUndoing, season, selectedLegs, syncInProgress]);
 
   const handleAddToDraft = async () => {
     if (!season) return;
@@ -789,7 +791,7 @@ function DetailedScheduleContent() {
         return;
       }
       setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
-      setSyncSummary({ pendingCount: syncMeta.pendingCount, lastLocalChangeAt: syncMeta.lastLocalChangeAt });
+      setSyncSummary({ pendingCount: syncMeta.pendingCount, conflictCount: getLocalSyncConflictCount(syncMeta), lastLocalChangeAt: syncMeta.lastLocalChangeAt });
       setDraftState(null);
       useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
         seasonId: season.id,
@@ -846,7 +848,7 @@ function DetailedScheduleContent() {
   });
 
   const handleUndo = async (targetEntry: ModHistoryEntry) => {
-    if (!season || syncing) return;
+    if (!season || syncInProgress) return;
     setIsUndoing(true);
     try {
       const historyToUndoFrom = modHistory;
@@ -914,7 +916,7 @@ function DetailedScheduleContent() {
         ...entry.changes.map((change) => change.legId),
         ...(entry.recordChanges?.map((change) => change.recordId) ?? []),
       ]);
-      setSyncSummary({ pendingCount: syncMeta.pendingCount, lastLocalChangeAt: syncMeta.lastLocalChangeAt });
+      setSyncSummary({ pendingCount: syncMeta.pendingCount, conflictCount: getLocalSyncConflictCount(syncMeta), lastLocalChangeAt: syncMeta.lastLocalChangeAt });
       useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
         seasonId: season.id,
         affectedIds,
@@ -943,30 +945,34 @@ function DetailedScheduleContent() {
   };
 
   const handleSync = useCallback(async () => {
-    if (!season || syncing) return;
+    if (!season || syncInProgress) return;
     try {
       const result = await syncNow();
+      const needsReview = result.status === 'conflict' || (result.reviewCount ?? 0) > 0;
       void showAlert({
-        title: result.status === 'synced' ? 'Save Complete' : 'Save Status',
+        title: needsReview ? 'Save Needs Review' : result.status === 'synced' ? 'Save Complete' : 'Save Failed',
         message: result.message ?? 'No pending local changes to save.',
-        tone: result.status === 'synced' ? 'success' : result.status === 'conflict' ? 'warning' : 'error',
+        tone: needsReview ? 'warning' : result.status === 'synced' ? 'success' : 'error',
       });
     } catch (err) {
       void showAlert({ title: 'Save Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [season, showAlert, syncing, syncNow]);
+  }, [season, showAlert, syncInProgress, syncNow]);
 
   const handleFetchUpdates = useCallback(async () => {
-    if (!syncSeasonId || fetchingUpdates || syncing) return;
+    if (!syncSeasonId || fetchingUpdates || syncInProgress) return;
     try {
       const result = await fetchUpdatesNow();
-      if (result.status !== 'synced') {
+      if (result.status === 'busy') return;
+      if (result.status === 'conflict') {
+        void showAlert({ title: 'Fetch Updates Need Review', message: result.message, tone: 'warning' });
+      } else if (result.status !== 'synced') {
         void showAlert({ title: 'Fetch Updates Failed', message: result.message, tone: 'error' });
       }
     } catch (err) {
       void showAlert({ title: 'Fetch Updates Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [fetchUpdatesNow, fetchingUpdates, showAlert, syncSeasonId, syncing]);
+  }, [fetchUpdatesNow, fetchingUpdates, showAlert, syncSeasonId, syncInProgress]);
 
   const handleSeasonalNavigation = () => {
     if (season && typeof window !== 'undefined') {
@@ -1092,6 +1098,7 @@ function DetailedScheduleContent() {
         ));
         setSyncSummary({
           pendingCount: result.syncMeta.pendingCount,
+          conflictCount: getLocalSyncConflictCount(result.syncMeta),
           lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
         });
         setLoadProgress(buildLoadProgress('Rendering calendar', 95, 'Applying filters'));
@@ -1460,7 +1467,7 @@ function DetailedScheduleContent() {
 
   if (loadError) {
     return (
-      <div className="flex h-screen items-center justify-center bg-surface p-6">
+      <div className="flex h-dvh items-center justify-center bg-surface p-6">
         <div className="max-w-xl rounded-lg border border-error/30 bg-surface-container-lowest p-6 text-center shadow-sm">
           <div className="font-title-sm text-title-sm text-error">Cannot load detailed schedule</div>
           <div className="mt-2 font-body-sm text-body-sm text-on-surface-variant">{loadError}</div>
@@ -1469,7 +1476,7 @@ function DetailedScheduleContent() {
               <FetchServerUpdatesButton
                 fetching={fetchingUpdates}
                 progress={fetchProgress}
-                disabled={syncing}
+                disabled={syncInProgress}
                 onFetch={handleFetchUpdates}
               />
             </div>
@@ -1480,9 +1487,9 @@ function DetailedScheduleContent() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-surface">
+    <div className="flex h-dvh overflow-hidden bg-surface">
       {/* Main Content */}
-      <div className="flex-1 flex flex-col min-w-0 bg-surface h-screen overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 bg-surface h-dvh overflow-hidden">
         <WorkspacePageHeader
           leading={(
             <button onClick={handleSeasonalNavigation} className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-outline transition-colors hover:bg-surface-container-high" title="Back to Seasonal Schedule" aria-label="Back to Seasonal Schedule">
@@ -1508,11 +1515,11 @@ function DetailedScheduleContent() {
               <FetchServerUpdatesButton
                 fetching={fetchingUpdates}
                 progress={fetchProgress}
-                disabled={syncing}
+                disabled={syncInProgress}
                 onFetch={handleFetchUpdates}
               />
               <SyncActionButton
-                syncing={syncing}
+                syncing={syncInProgress}
                 pendingCount={syncPendingCount}
                 progress={syncProgress}
                 onSync={handleSync}
@@ -1525,7 +1532,7 @@ function DetailedScheduleContent() {
               <span className="text-xs font-semibold">{draftState?.modifications.length ?? 0} draft changes</span>
               <button
                 onClick={handleDiscardDraft}
-                disabled={isSaving || syncing}
+                disabled={isSaving || syncInProgress}
                 className="rounded px-3 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
               >
                 Discard
@@ -1554,7 +1561,7 @@ function DetailedScheduleContent() {
               </label>
               <button
                 onClick={() => setIsNewFlightOpen(true)}
-                disabled={!newFlightDateSelection || syncing}
+                disabled={!newFlightDateSelection || syncInProgress}
                 title={newFlightDateSelection ? `Add flights on ${newFlightDateLabel}` : 'Select date cells first'}
                 className="flex min-h-10 items-center gap-2 rounded-lg border border-outline-variant px-4 py-2 font-label-caps text-label-caps text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -1584,7 +1591,7 @@ function DetailedScheduleContent() {
               <div className="hidden flex-wrap items-center gap-2 xl:flex">
                 <button
                   onClick={() => setIsLinkModalOpen(true)}
-                  disabled={linkCandidates.length === 0 || syncing}
+                  disabled={linkCandidates.length === 0 || syncInProgress}
                   className="flex min-h-10 items-center gap-2 rounded-lg border border-outline-variant px-4 py-2 font-label-caps text-label-caps text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <span className="material-symbols-outlined text-[18px]">link</span>
@@ -1592,7 +1599,7 @@ function DetailedScheduleContent() {
                 </button>
                 <button
                   onClick={handleUnlinkSelected}
-                  disabled={syncing || !selectedLegs.some((leg) => leg.linkType || leg.linkedRecordId)}
+                  disabled={syncInProgress || !selectedLegs.some((leg) => leg.linkType || leg.linkedRecordId)}
                   className="flex min-h-10 items-center gap-2 rounded-lg border border-outline-variant px-4 py-2 font-label-caps text-label-caps text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <span className="material-symbols-outlined text-[18px]">link_off</span>
@@ -1606,8 +1613,8 @@ function DetailedScheduleContent() {
               <HeaderActionMenu
                 className="xl:hidden"
                 items={[
-                  { label: 'Link', icon: 'link', onSelect: () => setIsLinkModalOpen(true), disabled: linkCandidates.length === 0 || syncing },
-                  { label: 'Unlink', icon: 'link_off', onSelect: () => void handleUnlinkSelected(), disabled: syncing || !selectedLegs.some((leg) => leg.linkType || leg.linkedRecordId) },
+                  { label: 'Link', icon: 'link', onSelect: () => setIsLinkModalOpen(true), disabled: linkCandidates.length === 0 || syncInProgress },
+                  { label: 'Unlink', icon: 'link_off', onSelect: () => void handleUnlinkSelected(), disabled: syncInProgress || !selectedLegs.some((leg) => leg.linkType || leg.linkedRecordId) },
                   { label: 'Export Excel', icon: 'download', onSelect: () => void handleExport() },
                 ]}
               />
@@ -1699,7 +1706,7 @@ function DetailedScheduleContent() {
                   </button>
                   <button
                     onClick={handleDeleteSelectedLegs}
-                    disabled={syncing || isSaving || isUndoing}
+                    disabled={syncInProgress || isSaving || isUndoing}
                     className="flex-1 border border-error/50 text-error font-label-caps text-label-caps py-2 rounded hover:bg-error-container hover:text-on-error-container transition-colors shadow-sm flex items-center justify-center gap-2 disabled:opacity-50"
                   >
                     <span className="material-symbols-outlined text-[18px]">delete</span>
@@ -1777,7 +1784,7 @@ function DetailedScheduleContent() {
                   </button>
                   <button
                     onClick={handleDeleteSelectedLegs}
-                    disabled={syncing || isSaving || isUndoing}
+                    disabled={syncInProgress || isSaving || isUndoing}
                     className="w-full border border-error/50 text-error font-label-caps text-label-caps py-2 rounded hover:bg-error-container hover:text-on-error-container transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
                   >
                     <span className="material-symbols-outlined text-[18px]">delete</span>

@@ -1,0 +1,161 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "app/supabase/migrations/20260517000000_add_ai_operator_access.sql",
+      "language": "sql",
+      "sizeLines": 14,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260520034255_relational_core_settings.sql",
+      "language": "sql",
+      "sizeLines": 1236,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260520084127_continuous_operational_data.sql",
+      "language": "sql",
+      "sizeLines": 1274,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260521185759_ai_workspace_reporting_security.sql",
+      "language": "sql",
+      "sizeLines": 15,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260522000000_fix_sync_conflicts_and_ai_access.sql",
+      "language": "sql",
+      "sizeLines": 226,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260522224947_ai_query_rich_notebook_reporting.sql",
+      "language": "sql",
+      "sizeLines": 47,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260523090039_fix_checkin_window_json_null.sql",
+      "language": "sql",
+      "sizeLines": 308,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260523112828_public_dashboard_ai_query_aggregated.sql",
+      "language": "sql",
+      "sizeLines": 23,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260523175500_reporting_query_aggregated.sql",
+      "language": "sql",
+      "sizeLines": 183,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260523234451_schedule_telegram_notifications.sql",
+      "language": "sql",
+      "sizeLines": 93,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260524100927_optimize_sync_v2_timeout.sql",
+      "language": "sql",
+      "sizeLines": 143,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260524160004_reliable_sync_cursor.sql",
+      "language": "sql",
+      "sizeLines": 202,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260524173126_catchup_snapshot_rpc.sql",
+      "language": "sql",
+      "sizeLines": 174,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260527061056_allow_deepseek_ai_provider.sql",
+      "language": "sql",
+      "sizeLines": 6,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260527090000_public_dashboard_ai_query_rows.sql",
+      "language": "sql",
+      "sizeLines": 210,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260527092757_exact_season_filtering.sql",
+      "language": "sql",
+      "sizeLines": 215,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260528020520_ai_context_documents.sql",
+      "language": "sql",
+      "sizeLines": 30,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260530093000_harden_sync_v2_ack_coverage.sql",
+      "language": "sql",
+      "sizeLines": 235,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260531023846_prevent_orphan_modification_snapshots.sql",
+      "language": "sql",
+      "sizeLines": 259,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260602093244_ai_local_provider_keys.sql",
+      "language": "sql",
+      "sizeLines": 83,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260602110500_ai_provider_key_rpc.sql",
+      "language": "sql",
+      "sizeLines": 170,
+      "fileCategory": "data"
+    },
+    {
+      "path": "app/supabase/migrations/20260616_unique_seasons_season_code.sql",
+      "language": "sql",
+      "sizeLines": 14,
+      "fileCategory": "data"
+    }
+  ],
+  "batchImportData": {
+    "app/supabase/migrations/20260517000000_add_ai_operator_access.sql": [],
+    "app/supabase/migrations/20260520034255_relational_core_settings.sql": [],
+    "app/supabase/migrations/20260520084127_continuous_operational_data.sql": [],
+    "app/supabase/migrations/20260521185759_ai_workspace_reporting_security.sql": [],
+    "app/supabase/migrations/20260522000000_fix_sync_conflicts_and_ai_access.sql": [],
+    "app/supabase/migrations/20260522224947_ai_query_rich_notebook_reporting.sql": [],
+    "app/supabase/migrations/20260523090039_fix_checkin_window_json_null.sql": [],
+    "app/supabase/migrations/20260523112828_public_dashboard_ai_query_aggregated.sql": [],
+    "app/supabase/migrations/20260523175500_reporting_query_aggregated.sql": [],
+    "app/supabase/migrations/20260523234451_schedule_telegram_notifications.sql": [],
+    "app/supabase/migrations/20260524100927_optimize_sync_v2_timeout.sql": [],
+    "app/supabase/migrations/20260524160004_reliable_sync_cursor.sql": [],
+    "app/supabase/migrations/20260524173126_catchup_snapshot_rpc.sql": [],
+    "app/supabase/migrations/20260527061056_allow_deepseek_ai_provider.sql": [],
+    "app/supabase/migrations/20260527090000_public_dashboard_ai_query_rows.sql": [],
+    "app/supabase/migrations/20260527092757_exact_season_filtering.sql": [],
+    "app/supabase/migrations/20260528020520_ai_context_documents.sql": [],
+    "app/supabase/migrations/20260530093000_harden_sync_v2_ack_coverage.sql": [],
+    "app/supabase/migrations/20260531023846_prevent_orphan_modification_snapshots.sql": [],
+    "app/supabase/migrations/20260602093244_ai_local_provider_keys.sql": [],
+    "app/supabase/migrations/20260602110500_ai_provider_key_rpc.sql": [],
+    "app/supabase/migrations/20260616_unique_seasons_season_code.sql": []
+  }
+}

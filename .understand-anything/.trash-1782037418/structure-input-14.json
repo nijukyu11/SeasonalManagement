@@ -1,0 +1,70 @@
+{
+  "projectRoot": "C:\\Users\\tuan\\Documents\\SeasonalManagement",
+  "batchFiles": [
+    {
+      "path": "AGENTS.md",
+      "language": "markdown",
+      "sizeLines": 6,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "DESIGN.md",
+      "language": "markdown",
+      "sizeLines": 150,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "Pattern Tuần Linh hoạt.md",
+      "language": "markdown",
+      "sizeLines": 88,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "ai_agent_analysis.md",
+      "language": "markdown",
+      "sizeLines": 246,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "architecture.md",
+      "language": "markdown",
+      "sizeLines": 209,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "code.html",
+      "language": "html",
+      "sizeLines": 353,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "context.md",
+      "language": "markdown",
+      "sizeLines": 554,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "issues.md",
+      "language": "markdown",
+      "sizeLines": 38,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "rules.md",
+      "language": "markdown",
+      "sizeLines": 29,
+      "fileCategory": "docs"
+    }
+  ],
+  "batchImportData": {
+    "AGENTS.md": [],
+    "DESIGN.md": [],
+    "Pattern Tuần Linh hoạt.md": [],
+    "ai_agent_analysis.md": [],
+    "architecture.md": [],
+    "code.html": [],
+    "context.md": [],
+    "issues.md": [],
+    "rules.md": []
+  }
+}
