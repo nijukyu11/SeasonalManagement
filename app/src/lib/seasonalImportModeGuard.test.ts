@@ -39,6 +39,9 @@ test('Supabase auth survives self-hosted cutover storage and JWT refresh', () =>
   assert.match(supabaseSource, /sb-supabase-auth-token/);
   assert.match(authGateSource, /refreshSession\(data\.session\)/);
   assert.match(authGateSource, /refreshSession\(refreshed\.data\.session \?\? data\.session\)/);
+  assert.match(authGateSource, /resolveOperatorLoginIdentity/);
+  assert.match(authGateSource, /username,display_name/);
+  assert.match(authGateSource, /operatorLabel/);
 });
 
 test('app operator schema supports username login metadata without changing auth uid authorization', () => {
