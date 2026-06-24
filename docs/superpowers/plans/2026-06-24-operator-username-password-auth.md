@@ -202,17 +202,9 @@ git commit -m "feat: add operator username identity helper"
 - Modify: `app/supabase/schema.sql`
 - Modify: `app/src/lib/seasonalImportModeGuard.test.ts`
 
-- [ ] **Step 1: Write the failing source guard**
+- [ ] **Step 1: Write the failing schema source guard**
 
-In `app/src/lib/seasonalImportModeGuard.test.ts`, extend the existing `Supabase auth survives self-hosted cutover storage and JWT refresh` test with these assertions:
-
-```ts
-  assert.match(authGateSource, /resolveOperatorLoginIdentity/);
-  assert.match(authGateSource, /username,display_name/);
-  assert.match(authGateSource, /operatorLabel/);
-```
-
-Add a new test below it:
+In `app/src/lib/seasonalImportModeGuard.test.ts`, add a new test below `Supabase auth survives self-hosted cutover storage and JWT refresh`:
 
 ```ts
 test('app operator schema supports username login metadata without changing auth uid authorization', () => {
@@ -234,7 +226,7 @@ Run from `app`:
 node --experimental-strip-types --test src/lib/seasonalImportModeGuard.test.ts
 ```
 
-Expected: FAIL because `OperatorAuthGate.tsx` and `schema.sql` do not yet contain the username-login markers.
+Expected: FAIL because `schema.sql` does not yet contain the username-login schema markers.
 
 - [ ] **Step 3: Generate the Supabase migration file**
 
@@ -297,7 +289,7 @@ Run from `app`:
 node --experimental-strip-types --test src/lib/seasonalImportModeGuard.test.ts
 ```
 
-Expected: the schema assertions pass, while the `OperatorAuthGate` assertions still fail until Task 3.
+Expected: the schema assertions pass and `seasonalImportModeGuard.test.ts` exits 0.
 
 - [ ] **Step 7: Commit Task 2**
 
@@ -317,7 +309,17 @@ git commit -m "feat: add operator username schema"
 - Modify: `app/src/app/components/OperatorAuthGate.tsx`
 - Modify: `app/src/lib/seasonalImportModeGuard.test.ts`
 
-- [ ] **Step 1: Confirm the current source guard fails for UI markers**
+- [ ] **Step 1: Add failing UI/auth source guard markers**
+
+In `app/src/lib/seasonalImportModeGuard.test.ts`, extend the existing `Supabase auth survives self-hosted cutover storage and JWT refresh` test with these assertions:
+
+```ts
+  assert.match(authGateSource, /resolveOperatorLoginIdentity/);
+  assert.match(authGateSource, /username,display_name/);
+  assert.match(authGateSource, /operatorLabel/);
+```
+
+- [ ] **Step 2: Confirm the source guard fails for UI markers**
 
 Run from `app`:
 
@@ -328,7 +330,7 @@ node --experimental-strip-types --test src/lib/seasonalImportModeGuard.test.ts
 
 Expected: FAIL on `resolveOperatorLoginIdentity`, `username,display_name`, or `operatorLabel` markers.
 
-- [ ] **Step 2: Import the auth identity helper**
+- [ ] **Step 3: Import the auth identity helper**
 
 In `app/src/app/components/OperatorAuthGate.tsx`, add this import:
 
@@ -340,7 +342,7 @@ import {
 } from '@/lib/operatorAuthIdentity';
 ```
 
-- [ ] **Step 3: Expand the context shape**
+- [ ] **Step 4: Expand the context shape**
 
 Replace `OperatorAuthContextValue` and the default context value with:
 
@@ -372,7 +374,7 @@ const OperatorAuthContext = createContext<OperatorAuthContextValue>({
 });
 ```
 
-- [ ] **Step 4: Rename the form input from email to username**
+- [ ] **Step 5: Rename the form input from email to username**
 
 Inside `OperatorAuthScreen`, change the `onSubmit` prop and local state:
 
@@ -413,7 +415,7 @@ Change the helper copy to:
           <p className="mt-1 text-sm text-slate-400">Sign in with your operator username</p>
 ```
 
-- [ ] **Step 5: Store an operator profile instead of email-only state**
+- [ ] **Step 6: Store an operator profile instead of email-only state**
 
 In the component state, replace:
 
@@ -466,7 +468,7 @@ Replace the successful profile assignment with:
     });
 ```
 
-- [ ] **Step 6: Add generic credential errors without hiding transport failures**
+- [ ] **Step 7: Add generic credential errors without hiding transport failures**
 
 Add this helper near the top-level functions in `OperatorAuthGate.tsx`:
 
@@ -480,7 +482,7 @@ function formatOperatorSignInErrorMessage(message: string): string {
 }
 ```
 
-- [ ] **Step 7: Use username resolution during sign-in**
+- [ ] **Step 8: Use username resolution during sign-in**
 
 Replace the `signIn` callback with:
 
@@ -511,7 +513,7 @@ Replace the `signIn` callback with:
   }, [refreshSession]);
 ```
 
-- [ ] **Step 8: Reset operator profile on sign-out**
+- [ ] **Step 9: Reset operator profile on sign-out**
 
 Inside `signOut`, replace:
 
@@ -525,7 +527,7 @@ with:
       setOperatorProfile(EMPTY_OPERATOR_PROFILE);
 ```
 
-- [ ] **Step 9: Publish the richer context value**
+- [ ] **Step 10: Publish the richer context value**
 
 Replace the `contextValue` memo with:
 
@@ -543,7 +545,7 @@ Replace the `contextValue` memo with:
   }), [enabled, operatorLabel, operatorProfile, signOut, signingOut]);
 ```
 
-- [ ] **Step 10: Update unauthorized copy**
+- [ ] **Step 11: Update unauthorized copy**
 
 In the unauthorized state, replace:
 
@@ -557,7 +559,7 @@ with:
                 Operator access is not enabled for this account. Add this Auth user to public.app_operators with a username, then sign in again.
 ```
 
-- [ ] **Step 11: Run focused tests**
+- [ ] **Step 12: Run focused tests**
 
 Run from `app`:
 
@@ -569,7 +571,7 @@ node --experimental-strip-types --test src/lib/seasonalImportModeGuard.test.ts
 
 Expected: both commands pass.
 
-- [ ] **Step 12: Commit Task 3**
+- [ ] **Step 13: Commit Task 3**
 
 ```powershell
 git add app/src/app/components/OperatorAuthGate.tsx app/src/lib/seasonalImportModeGuard.test.ts
