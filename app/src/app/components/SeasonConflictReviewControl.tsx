@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { queryNativeConflictSummary, resolveNativeSeasonConflict } from '@/lib/nativeSeasonRepository';
 import type { SeasonConflictItem, SeasonConflictResolution } from '@/lib/seasonChangeEvents';
 import { publishSeasonWorkspaceChanged, subscribeSeasonWorkspaceChanges } from '@/lib/seasonDataCache';
+import { LEGACY_NATIVE_SYNC_ENABLED } from '@/lib/legacyNativeSyncAdapter';
 import { useAppDialog } from './AppDialog';
 
 interface SeasonConflictReviewControlProps {
@@ -76,7 +77,7 @@ export default function SeasonConflictReviewControl({ seasonId }: SeasonConflict
     }
   };
 
-  if (!seasonId || conflicts.length === 0) return null;
+  if (!LEGACY_NATIVE_SYNC_ENABLED || !seasonId || conflicts.length === 0) return null;
 
   return (
     <details className="group relative">

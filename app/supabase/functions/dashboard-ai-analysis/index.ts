@@ -6,6 +6,7 @@ import {
   DASHBOARD_AI_QUERY_LIMIT_CAP,
   DASHBOARD_AI_QUERY_METRICS,
   DASHBOARD_AI_QUERY_ORDER_COLUMNS,
+  DASHBOARD_AI_PAX_STATUSES,
   DASHBOARD_AI_REPORTING_VIEWS,
   isDashboardAiQueryIntentPrompt,
   type DashboardAiDataQuery,
@@ -21,7 +22,7 @@ type AiToolName = DashboardAiToolName;
 type AiReportTemplateId = 'mom-wow-analysis' | 'sanluong-summary';
 type AiVisualReportTemplateId = 'season-overview' | 'driver-waterfall' | 'peak-hour' | 'route-country' | 'airline-mix';
 type AiVisualReportBlockType = 'kpi-summary' | 'monthly-trend' | 'driver-waterfall' | 'peak-hour' | 'route-country-ranking' | 'airline-mix-ranking' | 'insight-notes';
-type AiVisualReportBlockSource = 'overview' | 'comparison' | 'seasonCatalog' | 'resolvedDataRequest';
+type AiVisualReportBlockSource = 'seasonCatalog' | 'resolvedDataRequest';
 type AiWorkspaceBlockType = 'kpi' | 'table' | 'chart' | 'insight-list' | 'data-quality-notes' | 'rich-markdown' | 'html-preview';
 type AiWorkspaceBlockSource = AiVisualReportBlockSource | 'multiSeason';
 type AiWorkspaceChartType = 'bar-ranking' | 'line-trend' | 'waterfall' | 'heatmap' | 'kpi-strip' | 'stacked-bar' | 'area' | 'pie';
@@ -302,15 +303,15 @@ interface OpenAiCompatibleResponse {
 
 const DASHBOARD_AI_GROUNDING_INSTRUCTIONS = [
   'You are an aviation operations analyst for the Seasonal Management dashboard.',
-  'Answer only from the supplied dashboard JSON context.',
+  'Answer only from Supabase reporting queryResults, result profiles, and the supplied season catalog context.',
   'Luôn trả lời bằng tiếng Việt cho mọi nội dung người dùng nhìn thấy.',
   'If the supplied data is insufficient, say what is missing instead of inventing a cause.',
   'Reference exact periods, filters, deltas, drivers, and record examples when relevant.',
   'Avoid generic aviation explanations that are not supported by the provided data.',
-      'The context may include a seasonCatalog with compact history beyond the active table and one resolvedDataRequest payload with broader local records.',
-      'If the user asks for historical or cross-month data that is not present in resolvedDataRequest, return a dashboard-data-request instead of guessing.',
-      'Prefer fixed Excel exports when applicable, but you may return a dashboard-custom-workbook spec for custom spreadsheet needs.',
-      'When returning actions, use a single JSON object with assistantText plus optional dataRequest, exportAction, visualReport, or boardPatch.',
+      'The context may include a seasonCatalog, selectedSeasonCatalog, dataQueries, and queryResults from reporting RPCs.',
+      'If the user asks for historical or cross-month data that is not present in queryResults, return dataQueries instead of guessing.',
+      'For spreadsheet needs, return a dashboard-custom-workbook spec built from queryResults/custom rows.',
+      'When returning actions, use a single JSON object with assistantText plus optional dataQueries, exportAction, visualReport, or boardPatch.',
   'Dùng văn phong vận hành tiếng Việt ngắn gọn; giữ nguyên ARR/DEP, MoM/WoW, KPI, airline code và route code.',
 ].join('\n');
 
@@ -347,9 +348,9 @@ const DEFAULT_ALLOWED_TOOLS: AiToolName[] = ['query_dashboard_data', 'suggest_cu
 const DEFAULT_ALLOWED_REPORT_TEMPLATES: AiReportTemplateId[] = ['mom-wow-analysis', 'sanluong-summary'];
 const DEFAULT_ALLOWED_VISUAL_REPORTS: AiVisualReportTemplateId[] = ['season-overview', 'driver-waterfall', 'peak-hour', 'route-country', 'airline-mix'];
 const VISUAL_BLOCK_TYPES: AiVisualReportBlockType[] = ['kpi-summary', 'monthly-trend', 'driver-waterfall', 'peak-hour', 'route-country-ranking', 'airline-mix-ranking', 'insight-notes'];
-const VISUAL_BLOCK_SOURCES: AiVisualReportBlockSource[] = ['overview', 'comparison', 'seasonCatalog', 'resolvedDataRequest'];
+const VISUAL_BLOCK_SOURCES: AiVisualReportBlockSource[] = ['seasonCatalog', 'resolvedDataRequest'];
 const WORKSPACE_BLOCK_TYPES: AiWorkspaceBlockType[] = ['kpi', 'table', 'chart', 'insight-list', 'data-quality-notes', 'rich-markdown', 'html-preview'];
-const WORKSPACE_BLOCK_SOURCES: AiWorkspaceBlockSource[] = ['overview', 'seasonCatalog', 'resolvedDataRequest', 'multiSeason'];
+const WORKSPACE_BLOCK_SOURCES: AiWorkspaceBlockSource[] = ['seasonCatalog', 'resolvedDataRequest', 'multiSeason'];
 const WORKSPACE_CHART_TYPES: AiWorkspaceChartType[] = ['bar-ranking', 'line-trend', 'waterfall', 'heatmap', 'kpi-strip', 'stacked-bar', 'area', 'pie'];
 const WORKSPACE_TABLE_TEMPLATES: AiWorkspaceTableTemplateId[] = ['season-summary', 'monthly-trend', 'airline-ranking', 'route-country-ranking', 'peak-hour', 'multi-season-summary', 'custom-table'];
 const TOOL_TRACE_STATUSES: AiToolTraceStatus[] = ['accepted', 'rejected', 'executed', 'skipped'];
@@ -358,6 +359,10 @@ const QUERY_METRICS: AiQueryMetric[] = [...DASHBOARD_AI_QUERY_METRICS];
 const QUERY_GROUP_BY_COLUMNS = [...DASHBOARD_AI_QUERY_GROUP_BY_COLUMNS];
 const QUERY_ORDER_COLUMNS = [...DASHBOARD_AI_QUERY_ORDER_COLUMNS];
 const QUERY_LIMIT_CAP = DASHBOARD_AI_QUERY_LIMIT_CAP;
+const NORMALIZED_QUERY_COLUMNS = new Set<string>([
+  ...QUERY_GROUP_BY_COLUMNS,
+  ...QUERY_ORDER_COLUMNS,
+]);
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
@@ -733,16 +738,16 @@ function buildDashboardAiPrompt(userPrompt: string, context: unknown, body: Vali
         { id: 'route-country-report', descriptionVi: 'Tạo báo cáo đường bay/quốc gia.', contextProfile: 'route-country', preferredTool: 'compose_dashboard_ai_board' },
         { id: 'airline-mix-report', descriptionVi: 'Tạo báo cáo cơ cấu hãng bay.', contextProfile: 'airline-mix', preferredTool: 'compose_dashboard_ai_board' },
         { id: 'season-overview-report', descriptionVi: 'Tạo báo cáo tổng quan mùa.', contextProfile: 'season-overview', preferredTool: 'compose_dashboard_ai_board' },
-        { id: 'validated-sql-analyst', descriptionVi: 'Sinh SQL SELECT/CTE read-only cho SQLite local khi cần dữ liệu chi tiết.', contextProfile: 'validated-sql', preferredTool: 'query_dashboard_data' },
+        { id: 'validated-sql-analyst', descriptionVi: 'Tạo dataQueries read-only qua Supabase reporting khi cần dữ liệu chi tiết.', contextProfile: 'validated-sql', preferredTool: 'query_dashboard_data' },
         { id: 'eda-profile', descriptionVi: 'Lập hồ sơ EDA: coverage, null/missing, distinct, min/max, top values và outlier.', contextProfile: 'eda-profile', preferredTool: 'query_dashboard_data' },
         { id: 'data-quality-audit', descriptionVi: 'Kiểm tra chất lượng dữ liệu, field thiếu, scope và truncation.', contextProfile: 'data-quality', preferredTool: 'query_dashboard_data' },
         { id: 'driver-decomposition', descriptionVi: 'Phân rã driver theo airline, route, local hour, ARR/DEP, country hoặc aircraft.', contextProfile: 'validated-sql', preferredTool: 'query_dashboard_data' },
         { id: 'visualization-grammar', descriptionVi: 'Chọn bảng, KPI và biểu đồ declarative phù hợp với dữ liệu truy vấn.', contextProfile: 'visualization', preferredTool: 'compose_dashboard_ai_board' },
         { id: 'answer-verification', descriptionVi: 'Không nêu số liệu nếu không khớp query result/profile.', contextProfile: 'answer-verification', preferredTool: 'query_dashboard_data' },
         { id: 'safe-rendering-policy', descriptionVi: 'HTML preview chỉ là HTML/CSS tĩnh trong iframe sandbox; không script/Python.', contextProfile: 'safe-rendering', preferredTool: 'compose_dashboard_ai_board' },
-        { id: 'supabase-reporting-safety', descriptionVi: 'Dùng Supabase reporting qua RPC allowlist khi remote-safe.', contextProfile: 'data-quality', preferredTool: 'query_dashboard_data' },
+        { id: 'supabase-reporting-safety', descriptionVi: 'Dùng Supabase reporting qua RPC allowlist và trả queryResults có sourceQueryId.', contextProfile: 'data-quality', preferredTool: 'query_dashboard_data' },
       ],
-      safety: 'Read-only. Chỉ được sinh SQL trong sqlQueryPlans dưới dạng SELECT/CTE đọc dashboard_ai_flight_operations; không sinh đường dẫn file hoặc thao tác ghi dữ liệu. Không chạy raw HTML/script/Python trong DOM chính; HTML chỉ được phép qua html-preview để app render HTML/CSS tĩnh trong iframe sandbox.',
+      safety: 'Read-only. Chỉ được đề xuất dataQueries qua Supabase reporting RPC allowlist; không sinh SQL/raw query, đường dẫn file hoặc thao tác ghi dữ liệu. Không chạy raw HTML/script/Python trong DOM chính; HTML chỉ được phép qua html-preview để app render HTML/CSS tĩnh trong iframe sandbox.',
     }, null, 2),
     '',
     'LANGUAGE_POLICY:',
@@ -766,25 +771,23 @@ function buildDashboardAiPrompt(userPrompt: string, context: unknown, body: Vali
       `preferredTool: ${preferredTool ?? 'none'}`,
       `selectedSkillId: ${body.selectedSkillId ?? 'none'}`,
       `contextProfile: ${body.contextProfile ?? 'none'}`,
-      `allowDataRequest: ${allowDataRequest}`,
-      'Tools are read-only. SQL execution is allowed only through sqlQueryPlans with SELECT/CTE over dashboard_ai_flight_operations; do not propose writes, scripts in DOM, Python execution, external resources, or operational mutations.',
+      `allowDataQueries: ${allowDataRequest}`,
+      'Tools are read-only. query_dashboard_data chạy qua Supabase reporting RPC allowlist bằng dataQueries và trả queryResults; không đề xuất ghi dữ liệu, SQL/raw query, script trong DOM, Python execution, external resources hoặc operational mutations.',
     ].join('\n'),
     '',
     'OUTPUT_CONTRACT:',
     [
-      'Return normal text when the supplied context is sufficient.',
-      'AI Workspace is query-only and independent from dashboard MoM/WoW state. If detailed local rows are needed, return sqlQueryPlans or dataQueries; do not return legacy dataRequest.',
-      'If queryResults already exist or allowDataRequest is false, produce the final analysis from queryResults/profile instead of asking for data again.',
+      'Return normal text when queryResults/profile and seasonCatalog are sufficient.',
+      'AI Workspace is query-only and independent from dashboard MoM/WoW state. If detailed rows are needed, return dataQueries for Supabase reporting; do not return legacy dataRequest or raw SQL plans.',
+      'If queryResults already exist or additional queries are not allowed, produce the final analysis from queryResults/profile instead of asking for data again.',
       'Khi queryResults/profile đã có, chỉ nêu số liệu có trong query result/profile. Nếu chưa có bằng chứng, ghi chú thiếu dữ liệu thay vì suy đoán.',
       'Khi render HTML, chỉ trả HTML/CSS tĩnh trong html-preview; tuyệt đối không yêu cầu chạy Python, JavaScript, package runtime, network hoặc filesystem.',
       'If dashboard rows are needed, return dataQueries immediately. Example: {"assistantText":"Đang truy vấn dữ liệu phù hợp.","dataQueries":[{"queryId":"q1","view":"flight_operations","filters":{"months":["YYYY-MM"],"iataSeasonCodes":["S26"],"typeFilter":"all"},"groupBy":["route"],"metrics":["pax","flights"],"orderBy":"pax","limit":10}]}',
-      'query_dashboard_data is read-only and may query only these views: flight_operations, summary_airline, summary_country, summary_route, summary_month, summary_week, summary_peak_hour, summary_aircraft, summary_arr_dep_mix. Do not write SQL.',
-      'When dataSourcePolicy is local-sqlite or mixed and flexible detail is needed, return sqlQueryPlans for the frontend Tauri gateway. Example: {"assistantText":"Đang chạy truy vấn SQLite local read-only.","sqlQueryPlans":[{"queryId":"peak-day-daily","source":"local-sqlite","sql":"SELECT ops_date, COUNT(*) AS flights, SUM(pax) AS pax FROM dashboard_ai_flight_operations WHERE month = ? GROUP BY ops_date ORDER BY flights DESC LIMIT 31","params":["YYYY-MM"],"reasonVi":"Tìm ngày cao điểm theo phân bổ ngày trong tháng.","expectedColumns":["ops_date","flights","pax"],"visualizationHint":"line-trend"}]}',
-      'sqlQueryPlans chỉ được dùng SELECT hoặc WITH ... SELECT, một statement, đọc dashboard_ai_flight_operations, có LIMIT, không dùng PRAGMA/ATTACH/DDL/DML/transaction/extension.',
+      'query_dashboard_data is read-only and may query only these views: flight_operations, summary_airline, summary_country, summary_route, summary_month, summary_week, summary_peak_hour, summary_aircraft, summary_arr_dep_mix. It can group/filter by isoweek, weeknum, local/UTC buckets, ac_group, and pax_status through allowlisted RPCs. Do not write SQL.',
       'If suggesting Excel, return dashboard-custom-workbook only, built from queryResults/custom rows. Do not suggest fixed MoM/WoW dashboard templates from AI Workspace.',
       'exportAction may be {"type":"dashboard-custom-workbook","format":"xlsx","fileName":"custom.xlsx","workbookSpec":{"title":"...","sheets":[{"name":"...","columns":["..."],"rows":[{"Column":"value"}]}]}}.',
       'For visual requests, prefer boardPatch backed by queryResults/sourceQueryId. visualReport may use metric/dimension filters only, without comparisonMode or MoM/WoW assumptions.',
-      'For AI Workspace whiteboard requests, return boardPatch: {"title":"...","blocks":[{"id":"drivers","type":"table|chart|kpi|insight-list|data-quality-notes|rich-markdown|html-preview","title":"...","source":"overview|seasonCatalog|resolvedDataRequest|multiSeason","markdown":{"content":"## Tóm tắt..."},"htmlPreview":{"html":"<section>...</section>"},"table":{"templateId":"season-summary|monthly-trend|airline-ranking|route-country-ranking|peak-hour|multi-season-summary|custom-table","columns":["label","flights"],"rows":[{"label":"VN","flights":10}],"sourceQueryId":"q1","source":"resolvedDataRequest","limit":12},"chart":{"chartType":"bar-ranking|line-trend|waterfall|heatmap|kpi-strip|stacked-bar|area|pie","sourceQueryId":"q1","x":"label","source":"resolvedDataRequest","series":["flights"],"rows":[{"label":"VN","flights":10}],"limit":12},"insights":["..."]}],"append":false}.',
+      'For AI Workspace whiteboard requests, return boardPatch: {"title":"...","blocks":[{"id":"drivers","type":"table|chart|kpi|insight-list|data-quality-notes|rich-markdown|html-preview","title":"...","source":"seasonCatalog|resolvedDataRequest|multiSeason","markdown":{"content":"## Tóm tắt..."},"htmlPreview":{"html":"<section>...</section>"},"table":{"templateId":"season-summary|monthly-trend|airline-ranking|route-country-ranking|peak-hour|multi-season-summary|custom-table","columns":["label","flights"],"rows":[{"label":"VN","flights":10}],"sourceQueryId":"q1","source":"resolvedDataRequest","limit":12},"chart":{"chartType":"bar-ranking|line-trend|waterfall|heatmap|kpi-strip|stacked-bar|area|pie","sourceQueryId":"q1","x":"label","source":"resolvedDataRequest","series":["flights"],"rows":[{"label":"VN","flights":10}],"limit":12},"insights":["..."]}],"append":false}.',
       'HTML chỉ được dùng trong html-preview để app render bằng iframe sandbox; chỉ HTML/CSS tĩnh, không dùng script, Python, form, iframe con, object/embed, external script hoặc event handler.',
       'If preferredTool is compose_dashboard_ai_board, visual/table/chart output must include boardPatch; narrative text alone is not sufficient.',
       'When a tool is used, include toolTraceSummary with whitelisted tool/status/reason entries.',
@@ -986,6 +989,8 @@ function sanitizeDataQueryFilters(value: unknown): AiDataQuery['filters'] {
   const dateTo = optionalIsoDate(raw.dateTo);
   const months = optionalKeyList(raw.months, isMonthKey);
   const weeks = optionalKeyList(raw.weeks, isWeekKey);
+  const isoweeks = optionalKeyList(raw.isoweeks, isWeekKey);
+  const weeknums = optionalIntegerList(raw.weeknums, 1, 53);
   const typeFilter = optionalEnum(raw.typeFilter, ['all', 'A', 'D'] as const);
   const seasonIds = optionalTextList(raw.seasonIds, false);
   const iataSeasonCodes = optionalTextList(raw.iataSeasonCodes, true);
@@ -993,9 +998,35 @@ function sanitizeDataQueryFilters(value: unknown): AiDataQuery['filters'] {
   const routes = optionalTextList(raw.routes, true);
   const countries = optionalTextList(raw.countries, false);
   const aircraft = optionalTextList(raw.aircraft, true);
+  const acGroups = optionalTextList(raw.acGroups, false);
+  const paxStatuses = optionalEnumList(raw.paxStatuses, DASHBOARD_AI_PAX_STATUSES);
+  const localBuckets30 = optionalTextList(raw.localBuckets30, false);
+  const localBuckets60 = optionalTextList(raw.localBuckets60, false);
+  const utcBuckets30 = optionalTextList(raw.utcBuckets30, false);
+  const utcBuckets60 = optionalTextList(raw.utcBuckets60, false);
   const localHourFrom = optionalHour(raw.localHourFrom);
   const localHourTo = optionalHour(raw.localHourTo);
-  const invalid = [dateFrom, dateTo, months, weeks, typeFilter, seasonIds, iataSeasonCodes, airlines, routes, countries, aircraft]
+  const invalid = [
+    dateFrom,
+    dateTo,
+    months,
+    weeks,
+    isoweeks,
+    weeknums,
+    typeFilter,
+    seasonIds,
+    iataSeasonCodes,
+    airlines,
+    routes,
+    countries,
+    aircraft,
+    acGroups,
+    paxStatuses,
+    localBuckets30,
+    localBuckets60,
+    utcBuckets30,
+    utcBuckets60,
+  ]
     .some((entry) => entry === false);
   if (invalid) return {};
   return {
@@ -1005,11 +1036,19 @@ function sanitizeDataQueryFilters(value: unknown): AiDataQuery['filters'] {
     ...(dateTo ? { dateTo } : {}),
     ...(months ? { months } : {}),
     ...(weeks ? { weeks } : {}),
+    ...(isoweeks ? { isoweeks } : {}),
+    ...(weeknums ? { weeknums } : {}),
     ...(typeFilter ? { typeFilter } : {}),
     ...(airlines ? { airlines } : {}),
     ...(routes ? { routes } : {}),
     ...(countries ? { countries } : {}),
     ...(aircraft ? { aircraft } : {}),
+    ...(acGroups ? { acGroups } : {}),
+    ...(paxStatuses ? { paxStatuses } : {}),
+    ...(localBuckets30 ? { localBuckets30 } : {}),
+    ...(localBuckets60 ? { localBuckets60 } : {}),
+    ...(utcBuckets30 ? { utcBuckets30 } : {}),
+    ...(utcBuckets60 ? { utcBuckets60 } : {}),
     ...(localHourFrom != null ? { localHourFrom } : {}),
     ...(localHourTo != null ? { localHourTo } : {}),
   };
@@ -1036,10 +1075,10 @@ function inferDataQueryForPrompt(userPrompt: string | undefined, context: unknow
   const airlines = /\b(vn|vietnam airlines)\b/i.test(rawPrompt) ? ['VN'] : [];
   const hasPax = /\b(pax|khach|khách)\b/.test(prompt);
   const wantsRoute = /\b(route|duong bay|đường bay)\b/.test(prompt);
-  const wantsCountry = /\b(country|quoc gia|quá»‘c gia)\b/.test(prompt);
+  const wantsCountry = /\b(country|quoc gia)\b/.test(prompt);
   const wantsAircraft = /\b(aircraft|may bay|máy bay|tau bay|tàu bay)\b/.test(prompt);
   const wantsTypeMix = /\b(arr\/dep|arr dep|arrival|departure|arrivals|departures|mix|co cau arr|co cau dep)\b/.test(prompt);
-  const wantsGate = /\b(gate|cong|cá»•ng)\b/.test(prompt);
+  const wantsGate = /\b(gate|cong)\b/.test(prompt);
   const wantsWeek = /\b(weekly|hang tuan|hàng tuần|tuan|tuần|week)\b/.test(prompt);
   const wantsPeak = /\b(peak hour|cao diem|cao điểm|7-8|7am|8am)\b/.test(prompt);
   const wantsDailyPeak = /\b(ngay|daily|theo ngay|phan bo theo ngay|cao diem|bat thuong|anomaly)\b/.test(prompt) &&
@@ -1194,7 +1233,7 @@ async function resolveAggregatedDashboardDataQuery(
 }
 
 function buildQueryDataQualityNotes(query: AiDataQuery): string[] {
-  const notes = [`Nguá»“n dá»¯ liá»‡u: reporting.${query.groupBy.length > 0 ? 'flight_operations' : query.view}; queryId=${query.queryId}.`];
+  const notes = [`Nguồn dữ liệu: reporting.${query.groupBy.length > 0 ? 'flight_operations' : query.view}; queryId=${query.queryId}.`];
   if (/\binternational|domestic|quoc te|quốc tế|noi dia|nội địa\b/.test(JSON.stringify(query).toLowerCase())) {
     notes.push('Reporting view hiện chưa có field quốc tế/nội địa chuẩn hóa, nên không áp filter này.');
   }
@@ -1280,8 +1319,7 @@ function sanitizeQueryCell(value: unknown): AiQueryCell {
 
 function normalizeQueryColumn(value: string): string {
   const normalized = value.trim().replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
-  const allowed = new Set(['season_id', 'season', 'season_code', 'iata_season_code', 'record_id', 'type', 'flight', 'airline', 'route', 'country', 'aircraft', 'pax', 'scheduled_date', 'scheduled_time', 'ops_date', 'month', 'iso_week', 'local_hour', 'utc_hour', 'weekday', 'status', 'gate', 'stand', 'carousel', 'flights', 'arrivals', 'departures']);
-  return allowed.has(normalized) ? normalized : '';
+  return NORMALIZED_QUERY_COLUMNS.has(normalized) ? normalized : '';
 }
 
 function sanitizeExportAction(value: unknown, body: AiRequestBody): AiExportAction | null {
@@ -1426,10 +1464,10 @@ function boardPatchFromVisualReport(report: AiVisualReport, body: AiRequestBody)
     if (block) blocks.push(block);
   }
   if (report.insights.length > 0) {
-    blocks.push(workspaceInsightBlock('visual-insights', 'Key Insights', 'comparison', report.insights));
+    blocks.push(workspaceInsightBlock('visual-insights', 'Key Insights', 'resolvedDataRequest', report.insights));
   }
   if (report.dataQualityNotes.length > 0) {
-    blocks.push(workspaceInsightBlock('visual-data-quality', 'Ghi chú chất lượng dữ liệu', 'overview', report.dataQualityNotes, 'data-quality-notes'));
+    blocks.push(workspaceInsightBlock('visual-data-quality', 'Ghi chú chất lượng dữ liệu', 'resolvedDataRequest', report.dataQualityNotes, 'data-quality-notes'));
   }
   return sanitizeBoardPatch({ title: report.title, blocks, append: false }, body);
 }
@@ -1442,11 +1480,11 @@ function convertVisualBlockToWorkspaceBlock(block: AiVisualReportBlock, filters:
     timeBasis: filters.timeBasis,
   };
   if (block.type === 'kpi-summary') return workspaceKpiBlock(`visual-${block.id}`, block.title, block.source);
-  if (block.type === 'monthly-trend') return workspaceChartBlock(`visual-${block.id}`, block.title, 'overview', 'line-trend', { ...baseFilters, dimension: 'month' }, block.limit ?? 12);
+  if (block.type === 'monthly-trend') return workspaceChartBlock(`visual-${block.id}`, block.title, 'resolvedDataRequest', 'line-trend', { ...baseFilters, dimension: 'month' }, block.limit ?? 12);
   if (block.type === 'driver-waterfall') return workspaceChartBlock(`visual-${block.id}`, block.title, 'resolvedDataRequest', 'waterfall', { ...baseFilters, dimension: block.dimension ?? filters.dimension }, block.limit ?? 12);
-  if (block.type === 'peak-hour') return workspaceChartBlock(`visual-${block.id}`, block.title, 'overview', 'bar-ranking', { ...baseFilters, dimension: 'hourBucket' }, block.limit ?? 12);
-  if (block.type === 'route-country-ranking') return workspaceChartBlock(`visual-${block.id}`, block.title, 'overview', 'bar-ranking', { ...baseFilters, dimension: 'route' }, block.limit ?? 12);
-  if (block.type === 'airline-mix-ranking') return workspaceChartBlock(`visual-${block.id}`, block.title, 'overview', 'bar-ranking', { ...baseFilters, dimension: 'airline' }, block.limit ?? 12);
+  if (block.type === 'peak-hour') return workspaceChartBlock(`visual-${block.id}`, block.title, 'resolvedDataRequest', 'bar-ranking', { ...baseFilters, dimension: 'hourBucket' }, block.limit ?? 12);
+  if (block.type === 'route-country-ranking') return workspaceChartBlock(`visual-${block.id}`, block.title, 'resolvedDataRequest', 'bar-ranking', { ...baseFilters, dimension: 'route' }, block.limit ?? 12);
+  if (block.type === 'airline-mix-ranking') return workspaceChartBlock(`visual-${block.id}`, block.title, 'resolvedDataRequest', 'bar-ranking', { ...baseFilters, dimension: 'airline' }, block.limit ?? 12);
   return workspaceInsightBlock(`visual-${block.id}`, block.title, block.source, ['Review this visual block from the AI report.']);
 }
 
@@ -1458,7 +1496,7 @@ function defaultBoardPatchForPrompt(userPrompt: string | undefined, body: AiRequ
       blocks: [
         workspaceTableBlock('difference-driver-table', 'Bảng driver từ truy vấn độc lập', 'resolvedDataRequest', 'custom-table', 12, comparisonDifferenceFilters(userPrompt)),
         workspaceChartBlock('difference-waterfall', 'Waterfall biến động từ query result', 'resolvedDataRequest', 'waterfall', { ...comparisonDifferenceFilters(userPrompt), dimension: 'airline', metric: 'flights' }, 12),
-        workspaceInsightBlock('difference-notes', 'Nhận định khác biệt', 'resolvedDataRequest', ['AI Workspace ưu tiên SQL/queryResults độc lập theo prompt; không dùng bảng MoM/WoW hiện tại.']),
+        workspaceInsightBlock('difference-notes', 'Nhận định khác biệt', 'resolvedDataRequest', ['AI Workspace ưu tiên Supabase reporting queryResults độc lập theo prompt; không dùng bảng MoM/WoW hiện tại.']),
       ],
       append: false,
     }, body);
@@ -1478,9 +1516,9 @@ function defaultBoardPatchForPrompt(userPrompt: string | undefined, body: AiRequ
     return sanitizeBoardPatch({
       title: 'Bảng phân tích khung giờ cao điểm',
       blocks: [
-        workspaceChartBlock('peak-hour-chart', 'Peak Hour Distribution', 'overview', 'bar-ranking', { dimension: 'hourBucket', metric: 'flights' }, 24),
-        workspaceTableBlock('peak-hour-table', 'Peak Hour Table', 'overview', 'peak-hour', 24),
-        workspaceInsightBlock('peak-hour-notes', 'Ghi chú peak hour', 'overview', ['Block peak hour sử dụng time basis và filter dashboard đang chọn.']),
+        workspaceChartBlock('peak-hour-chart', 'Peak Hour Distribution', 'resolvedDataRequest', 'bar-ranking', { dimension: 'hourBucket', metric: 'flights' }, 24),
+        workspaceTableBlock('peak-hour-table', 'Peak Hour Table', 'resolvedDataRequest', 'custom-table', 24),
+        workspaceInsightBlock('peak-hour-notes', 'Ghi chú peak hour', 'resolvedDataRequest', ['Block peak hour cần dataQueries/queryResults từ Supabase reporting theo khung giờ.']),
       ],
       append: false,
     }, body);
@@ -1501,8 +1539,8 @@ function defaultBoardPatchForPrompt(userPrompt: string | undefined, body: AiRequ
       title: 'Bảng báo cáo dạng bảng',
       blocks: [
         workspaceTableBlock('season-summary-table', 'Season Summary Table', 'multiSeason', 'season-summary', 3),
-        workspaceTableBlock('airline-ranking-table', 'Bảng xếp hạng hãng bay', 'overview', 'airline-ranking', 12),
-        workspaceTableBlock('route-country-table', 'Route Country Table', 'overview', 'route-country-ranking', 12),
+        workspaceTableBlock('airline-ranking-table', 'Bảng xếp hạng hãng bay', 'resolvedDataRequest', 'custom-table', 12),
+        workspaceTableBlock('route-country-table', 'Route Country Table', 'resolvedDataRequest', 'custom-table', 12),
       ],
       append: false,
     }, body);
@@ -1511,11 +1549,11 @@ function defaultBoardPatchForPrompt(userPrompt: string | undefined, body: AiRequ
     return sanitizeBoardPatch({
       title: 'Bảng báo cáo trực quan AI',
       blocks: [
-        workspaceKpiBlock('visual-kpis', 'KPI tá»•ng quan', 'overview'),
-        workspaceChartBlock('visual-monthly-trend', 'Xu hướng chuyến bay theo tháng', 'overview', 'line-trend', { dimension: 'month', metric: 'flights' }, 12),
-        workspaceChartBlock('visual-peak-hour', 'Peak Hour Distribution', 'overview', 'bar-ranking', { dimension: 'hourBucket', metric: 'flights' }, 12),
-        workspaceTableBlock('visual-airline-ranking', 'Bảng xếp hạng hãng bay', 'overview', 'airline-ranking', 12),
-        workspaceInsightBlock('visual-board-notes', 'Nhận định phân tích', 'resolvedDataRequest', ['Các block được tạo từ truy vấn dashboard local độc lập.']),
+        workspaceKpiBlock('visual-kpis', 'KPI tổng quan', 'seasonCatalog'),
+        workspaceChartBlock('visual-monthly-trend', 'Xu hướng chuyến bay theo tháng', 'resolvedDataRequest', 'line-trend', { dimension: 'month', metric: 'flights' }, 12),
+        workspaceChartBlock('visual-peak-hour', 'Peak Hour Distribution', 'resolvedDataRequest', 'bar-ranking', { dimension: 'hourBucket', metric: 'flights' }, 12),
+        workspaceTableBlock('visual-airline-ranking', 'Bảng xếp hạng hãng bay', 'resolvedDataRequest', 'custom-table', 12),
+        workspaceInsightBlock('visual-board-notes', 'Nhận định phân tích', 'resolvedDataRequest', ['Các block cần dữ liệu từ Supabase reporting queryResults/sourceQueryId.']),
       ],
       append: false,
     }, body);
@@ -1523,10 +1561,10 @@ function defaultBoardPatchForPrompt(userPrompt: string | undefined, body: AiRequ
   return sanitizeBoardPatch({
     title: 'AI Workspace Board',
     blocks: [
-      workspaceKpiBlock('workspace-kpis', 'KPI tá»•ng quan', 'overview'),
+      workspaceKpiBlock('workspace-kpis', 'KPI tổng quan', 'seasonCatalog'),
       workspaceTableBlock('workspace-season-summary', 'Selected Season Summary', 'multiSeason', 'season-summary', 3),
-      workspaceChartBlock('workspace-monthly-trend', 'Xu hướng chuyến bay theo tháng', 'overview', 'line-trend', { dimension: 'month', metric: 'flights' }, 12),
-      workspaceChartBlock('workspace-airline-ranking', 'Top Airlines', 'overview', 'bar-ranking', { dimension: 'airline', metric: 'flights' }, 12),
+      workspaceChartBlock('workspace-monthly-trend', 'Xu hướng chuyến bay theo tháng', 'resolvedDataRequest', 'line-trend', { dimension: 'month', metric: 'flights' }, 12),
+      workspaceChartBlock('workspace-airline-ranking', 'Top Airlines', 'resolvedDataRequest', 'bar-ranking', { dimension: 'airline', metric: 'flights' }, 12),
     ],
     append: false,
   }, body);
@@ -2012,6 +2050,27 @@ function optionalTextList(value: unknown, uppercase: boolean): string[] | false 
     .slice(0, 40))];
 }
 
+function optionalEnumList<T extends readonly string[]>(value: unknown, allowed: T): T[number][] | false | null {
+  if (value == null) return null;
+  if (!Array.isArray(value)) return false;
+  const list = value
+    .filter((entry): entry is T[number] => typeof entry === 'string' && (allowed as readonly string[]).includes(entry))
+    .slice(0, 40);
+  if (list.length !== value.length) return false;
+  return [...new Set(list)];
+}
+
+function optionalIntegerList(value: unknown, min: number, max: number): number[] | false | null {
+  if (value == null) return null;
+  if (!Array.isArray(value)) return false;
+  const list = value
+    .map((entry) => typeof entry === 'number' || typeof entry === 'string' ? Number(entry) : NaN)
+    .filter((entry) => Number.isInteger(entry) && entry >= min && entry <= max)
+    .slice(0, 40);
+  if (list.length !== value.length) return false;
+  return [...new Set(list)];
+}
+
 function optionalEnum<T extends readonly string[]>(value: unknown, allowed: T): T[number] | false | null {
   if (value == null || value === '') return null;
   return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? value as T[number] : false;
@@ -2161,11 +2220,19 @@ function buildToolDeclarations(body: AiRequestBody): GeminiFunctionDeclaration[]
               dateTo: { type: 'STRING' },
               months: { type: 'ARRAY', items: { type: 'STRING' } },
               weeks: { type: 'ARRAY', items: { type: 'STRING' } },
+              isoweeks: { type: 'ARRAY', items: { type: 'STRING' } },
+              weeknums: { type: 'ARRAY', items: { type: 'NUMBER' } },
               typeFilter: { type: 'STRING', enum: ['all', 'A', 'D'] },
               airlines: { type: 'ARRAY', items: { type: 'STRING' } },
               routes: { type: 'ARRAY', items: { type: 'STRING' } },
               countries: { type: 'ARRAY', items: { type: 'STRING' } },
               aircraft: { type: 'ARRAY', items: { type: 'STRING' } },
+              acGroups: { type: 'ARRAY', items: { type: 'STRING' } },
+              paxStatuses: { type: 'ARRAY', items: { type: 'STRING', enum: [...DASHBOARD_AI_PAX_STATUSES] } },
+              localBuckets30: { type: 'ARRAY', items: { type: 'STRING' } },
+              localBuckets60: { type: 'ARRAY', items: { type: 'STRING' } },
+              utcBuckets30: { type: 'ARRAY', items: { type: 'STRING' } },
+              utcBuckets60: { type: 'ARRAY', items: { type: 'STRING' } },
               localHourFrom: { type: 'NUMBER' },
               localHourTo: { type: 'NUMBER' },
             },

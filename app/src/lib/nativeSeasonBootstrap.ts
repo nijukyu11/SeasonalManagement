@@ -39,7 +39,6 @@ export async function ensureNativeSeasonBaseline(season: Season): Promise<Native
     const importLatestSnapshot = async (source: 'server' | 'merged') => {
       const snapshot = await getSeasonWorkspaceSnapshot(season.id, {
         modHistoryLimit: 50,
-        transport: 'paged',
       });
       if (!snapshot) {
         throw new Error(`Server season snapshot is unavailable for ${season.seasonCode}.`);

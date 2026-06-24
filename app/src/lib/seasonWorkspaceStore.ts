@@ -88,15 +88,42 @@ function replaceOrCreateWorkspace(
   updatedAt: number
 ): SeasonWorkspaceSlice {
   const previous = current ?? createEmptyWorkspace();
-  const recordOrder = input.records.map((record) => record.id);
-  const recordsById = new Map<string, FlightRecord>();
+  const nextWindowIds = input.records.map((record) => record.id);
+  const previousWindowIds = input.windowKey ? previous.windowIds.get(input.windowKey) ?? [] : [];
+  const recordsById = new Map(previous.recordsById);
   for (const record of input.records) recordsById.set(record.id, record);
 
   const windowIds = new Map(previous.windowIds);
   const staleWindowKeys = new Set(previous.staleWindowKeys);
   if (input.windowKey) {
-    windowIds.set(input.windowKey, recordOrder);
+    windowIds.set(input.windowKey, nextWindowIds);
     staleWindowKeys.delete(input.windowKey);
+  }
+
+  const retainedWindowIds = new Set<string>();
+  if (input.windowKey) {
+    for (const [key, ids] of windowIds) {
+      if (key === input.windowKey) continue;
+      for (const id of ids) retainedWindowIds.add(id);
+    }
+  }
+
+  const nextWindowIdSet = new Set(nextWindowIds);
+  for (const id of previousWindowIds) {
+    if (nextWindowIdSet.has(id)) continue;
+    if (!retainedWindowIds.has(id)) recordsById.delete(id);
+  }
+
+  const previousRecordOrderSet = new Set(previous.recordOrder);
+  const recordOrder = [
+    ...previous.recordOrder.filter((id) => recordsById.has(id)),
+    ...nextWindowIds.filter((id) => !previousRecordOrderSet.has(id) && recordsById.has(id)),
+  ];
+
+  const modificationsByLegId = new Map(previous.modificationsByLegId);
+  for (const id of nextWindowIds) modificationsByLegId.delete(id);
+  for (const [legId, modification] of normalizeModifications(input.modifications)) {
+    modificationsByLegId.set(legId, modification);
   }
 
   return {
@@ -104,7 +131,7 @@ function replaceOrCreateWorkspace(
     rows: input.rows ?? previous.rows,
     recordsById,
     recordOrder,
-    modificationsByLegId: normalizeModifications(input.modifications),
+    modificationsByLegId,
     syncMeta: input.syncMeta === undefined ? previous.syncMeta : input.syncMeta,
     windowIds,
     staleWindowKeys,

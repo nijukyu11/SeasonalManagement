@@ -74,14 +74,14 @@ export default function DateRangeFilter({
         <div className="min-w-[220px] flex-1">
           <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Khoảng thời gian</div>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            <button type="button" onClick={applyAll} className="rounded-full border border-outline-variant bg-surface px-3 py-1.5 text-xs font-semibold text-on-surface hover:bg-surface-container">
+            <button type="button" onClick={applyAll} className="min-h-10 rounded-full border border-outline-variant bg-surface px-3 py-2 text-xs font-semibold text-on-surface hover:bg-surface-container">
               Toàn mùa
             </button>
-            <button type="button" onClick={applyLastThree} className="rounded-full border border-outline-variant bg-surface px-3 py-1.5 text-xs font-semibold text-on-surface hover:bg-surface-container">
+            <button type="button" onClick={applyLastThree} className="min-h-10 rounded-full border border-outline-variant bg-surface px-3 py-2 text-xs font-semibold text-on-surface hover:bg-surface-container">
               3 tháng gần nhất
             </button>
             {[1, 2, 3, 4].map((quarter) => (
-              <button key={quarter} type="button" onClick={() => applyQuarter(quarter as 1 | 2 | 3 | 4)} className="rounded-full border border-outline-variant bg-surface px-3 py-1.5 text-xs font-semibold text-on-surface hover:bg-surface-container">
+              <button key={quarter} type="button" onClick={() => applyQuarter(quarter as 1 | 2 | 3 | 4)} className="min-h-10 rounded-full border border-outline-variant bg-surface px-3 py-2 text-xs font-semibold text-on-surface hover:bg-surface-container">
                 Q{quarter}
               </button>
             ))}
@@ -111,7 +111,7 @@ export default function DateRangeFilter({
                 type="button"
                 onClick={() => onToggleSeason(item.id)}
                 title={item.seasonCode}
-                className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${selectedSeasonSet.has(item.id) ? 'border-primary bg-primary text-on-primary' : 'border-outline-variant bg-surface text-on-surface-variant hover:bg-surface-container'}`}
+                className={`min-h-10 rounded-full border px-3 py-2 text-xs font-semibold ${selectedSeasonSet.has(item.id) ? 'border-primary bg-primary text-on-primary' : 'border-outline-variant bg-surface text-on-surface-variant hover:bg-surface-container'}`}
               >
                 {item.seasonCode}
               </button>

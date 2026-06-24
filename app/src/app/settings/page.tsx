@@ -81,10 +81,11 @@ import LocksAndOutagesTab from './components/LocksAndOutagesTab';
 import RouteCountryTab from './components/RouteCountryTab';
 import AirlineColorsTab from './components/AirlineColorsTab';
 import AiAnalysisTab from './components/AiAnalysisTab';
+import DashboardAlertsTab from './components/DashboardAlertsTab';
 import SeasonRepairTab from './components/SeasonRepairTab';
 import UpdatesTab from './components/UpdatesTab';
 
-type SettingsTab = 'checkinCounters' | 'gateAllocation' | 'locksAndOutages' | 'groups' | 'rules' | 'routeCountries' | 'airlineColors' | 'aiAnalysis' | 'seasonRepair' | 'updates';
+type SettingsTab = 'checkinCounters' | 'gateAllocation' | 'locksAndOutages' | 'groups' | 'rules' | 'routeCountries' | 'airlineColors' | 'dashboardAlerts' | 'aiAnalysis' | 'seasonRepair' | 'updates';
 
 const emptySettings = (): OperationalSettings => hydrateOperationalSettings(null);
 
@@ -281,12 +282,13 @@ export default function SettingsPage() {
   const settingsScrollRef = useRef<HTMLElement | null>(null);
   useSessionScrollRestoration('settings:scroll', settingsScrollRef);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
+  const selectedSeasonId = useMemo(() => {
+    if (typeof window === 'undefined') return null;
     const querySeasonId = searchParams.get('season');
     const storedSeasonId = sessionStorage.getItem('activeSeasonId') || sessionStorage.getItem('detailed_season');
-    const resolvedSeasonId = querySeasonId || storedSeasonId;
+    const resolvedSeasonId = querySeasonId || storedSeasonId || null;
     if (resolvedSeasonId) sessionStorage.setItem('activeSeasonId', resolvedSeasonId);
+    return resolvedSeasonId;
   }, [searchParams]);
 
   useEffect(() => {
@@ -1429,6 +1431,7 @@ export default function SettingsPage() {
               { id: 'rules' as const, label: 'Allocation Rules' },
               { id: 'routeCountries' as const, label: 'Route-Country' },
               { id: 'airlineColors' as const, label: 'Airline Colors' },
+              { id: 'dashboardAlerts' as const, label: 'Dashboard Alerts' },
               { id: 'aiAnalysis' as const, label: 'AI Analysis' },
               { id: 'seasonRepair' as const, label: 'Season Repair' },
               { id: 'updates' as const, label: 'Updates' },
@@ -1614,6 +1617,15 @@ export default function SettingsPage() {
             />
           )}
 
+          {activeTab === 'dashboardAlerts' && (
+            <DashboardAlertsTab
+              settings={settings}
+              setSettings={setSettings}
+              setStatus={setStatus}
+              currentTimestamp={currentTimestamp}
+            />
+          )}
+
           {activeTab === 'aiAnalysis' && (
             <AiAnalysisTab
               settings={settings}
@@ -1648,6 +1660,7 @@ export default function SettingsPage() {
             <SeasonRepairTab
               running={seasonRepairRunning}
               status={seasonRepairStatus}
+              selectedSeasonId={selectedSeasonId}
               onImport={handleSeasonRepairImport}
             />
           )}

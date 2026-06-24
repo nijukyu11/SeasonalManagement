@@ -10,18 +10,7 @@ import NativeCloseCleanupGuard from './NativeCloseCleanupGuard';
 import NativeRuntimeGate from './NativeRuntimeGate';
 import NativeStartupSessionReset from './NativeStartupSessionReset';
 import OperatorAuthGate from './OperatorAuthGate';
-import SeasonSyncProvider, { useSeasonSyncGlobalStatus, useSeasonSyncSessionWarning } from './SeasonSyncProvider';
-
-function SeasonSyncSessionWarningBanner() {
-  const { hasPending, pendingSeasonCount } = useSeasonSyncSessionWarning();
-  if (!hasPending) return null;
-
-  return (
-    <div className="pointer-events-auto rounded border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-900 shadow-sm dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100" role="status">
-      {pendingSeasonCount === 1 ? '1 season has' : `${pendingSeasonCount} seasons have`} unsynced local changes or conflict review items. You can switch modules safely. Closing the app discards unsynced edits but keeps downloaded season data.
-    </div>
-  );
-}
+import SeasonSyncProvider, { useSeasonSyncGlobalStatus } from './SeasonSyncProvider';
 
 function buildCatchUpProgressLabel(progress: string | null | undefined, message: string | null | undefined): {
   label: string;
@@ -97,8 +86,7 @@ function SeasonSyncStartupCatchUpStatus() {
 
 function SeasonSyncBannerLayer() {
   return (
-    <div className="app-shell-sync-banner-layer pointer-events-none absolute inset-x-3 top-3 z-[70] flex flex-col gap-2">
-      <SeasonSyncSessionWarningBanner />
+    <div className="app-shell-sync-banner-layer pointer-events-none absolute bottom-3 left-3 right-3 z-[70] flex flex-col gap-2 sm:left-auto sm:w-[420px]">
       <SeasonSyncStartupCatchUpStatus />
     </div>
   );

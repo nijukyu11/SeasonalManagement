@@ -5,17 +5,17 @@ import test from 'node:test';
 
 const source = readFileSync(join(process.cwd(), 'src/app/hooks/useSeasonWorkspaceRefresh.ts'), 'utf8');
 
-test('season workspace refresh awaits native refresh before handling the next event', () => {
-  assert.match(source, /onNativeRefresh\?:\s*\(event:\s*SeasonWorkspaceChangeEvent\)\s*=>\s*Promise<void>\s*\|\s*void/);
-  assert.match(source, /async function refreshFromNativeEvent/);
-  assert.match(source, /await onNativeRefreshRef\.current\?\.\(event\)/);
+test('season workspace refresh awaits refresh before handling the next event', () => {
+  assert.match(source, /onRefresh\?:\s*\(event:\s*SeasonWorkspaceChangeEvent\)\s*=>\s*Promise<void>\s*\|\s*void/);
+  assert.match(source, /async function refreshFromWorkspaceEvent/);
+  assert.match(source, /await onRefreshRef\.current\?\.\(event\)/);
   assert.match(source, /void scheduleRefreshRef\.current\(pendingEvent\)/);
 });
 
-test('season workspace refresh preserves failed native events for a controlled retry', () => {
+test('season workspace refresh preserves failed workspace events for a controlled retry', () => {
   const catchStart = source.indexOf('} catch (error) {');
   const catchEnd = source.indexOf('} finally {', catchStart);
-  assert(catchStart >= 0 && catchEnd > catchStart, 'refreshFromNativeEvent catch block should be present');
+  assert(catchStart >= 0 && catchEnd > catchStart, 'refreshFromWorkspaceEvent catch block should be present');
   const catchBlock = source.slice(catchStart, catchEnd);
 
   assert.match(source, /failedRefreshEventSeqRef\s*=\s*useRef<number \| null>\(null\)/);
@@ -26,7 +26,7 @@ test('season workspace refresh preserves failed native events for a controlled r
   assert.match(source, /failedRefreshEventSeqRef\.current\s*=\s*null/);
 });
 
-test('season workspace refresh drops pending events from a previous season before native refresh', () => {
+test('season workspace refresh drops pending events from a previous season before refresh', () => {
   assert.match(
     source,
     /if \(!currentSeasonId \|\| event\.seasonId !== currentSeasonId \|\| event\.eventSeq <= lastHandledEventSeqRef\.current\) \{/
@@ -35,7 +35,7 @@ test('season workspace refresh drops pending events from a previous season befor
   assert.match(source, /if \(failedRefreshEventSeqRef\.current === event\.eventSeq\) failedRefreshEventSeqRef\.current = null;/);
 });
 
-test('season workspace refresh defers native refresh while a route interaction is active', () => {
+test('season workspace refresh defers refresh while a route interaction is active', () => {
   assert.match(source, /shouldDeferRefresh\?:\s*\(\)\s*=>\s*boolean/);
   assert.match(source, /const shouldDeferRefreshRef = useRef\(shouldDeferRefresh\)/);
   assert.match(source, /if \(shouldDeferRefreshRef\.current\?\.\(\)\) \{/);
@@ -52,4 +52,13 @@ test('season workspace refresh lets active routes filter non-own-source events b
     source,
     /if \(currentRouteActive && shouldHandleWorkspaceChangeRef\.current && !shouldHandleWorkspaceChangeRef\.current\(event\)\) return;/
   );
+});
+
+test('season workspace refresh ignores server window hydration events', () => {
+  assert.match(source, /if \(event\.source === 'server-window'\) return;/);
+});
+
+test('season workspace refresh does not use old native refresh names', () => {
+  assert.doesNotMatch(source, /\bonNativeRefresh\b/);
+  assert.doesNotMatch(source, /\brefreshFromNativeEvent\b/);
 });

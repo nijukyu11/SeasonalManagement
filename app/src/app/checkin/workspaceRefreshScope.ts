@@ -5,6 +5,10 @@ const FULL_REFRESH_SOURCES = new Set([
   'native-baseline-refresh',
   'native-baseline-merge',
 ]);
+const EMPTY_TARGET_SYNC_SOURCES = new Set([
+  'auto-sync',
+  'remote-sync',
+]);
 
 type ParsedChangedTarget = {
   targetType: string;
@@ -27,7 +31,7 @@ export function shouldRefreshCheckInForWorkspaceChange(
   if (FULL_REFRESH_SOURCES.has(event.source)) return true;
   if (event.affectedIds.some((id) => visibleRecordIds.has(id))) return true;
 
-  if (event.source === 'native-catchup' && event.changedTargets.length === 0) return false;
+  if (EMPTY_TARGET_SYNC_SOURCES.has(event.source) && event.changedTargets.length === 0) return false;
 
   for (const rawTarget of event.changedTargets) {
     const target = parseChangedTarget(rawTarget);

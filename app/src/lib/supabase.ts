@@ -1,6 +1,11 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 let client: SupabaseClient | null = null;
+const AUTH_STORAGE_KEY = 'seasonal-management-supabase-auth-token';
+const LEGACY_AUTH_STORAGE_KEYS = [
+  'sb-rhmehiinfchiiuqmdukz-auth-token',
+  'sb-supabase-auth-token',
+];
 
 export function isSupabaseConfigured(): boolean {
   return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
@@ -8,6 +13,40 @@ export function isSupabaseConfigured(): boolean {
 
 function boundSupabaseFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   return globalThis.fetch(input, init);
+}
+
+function createAuthStorage() {
+  return {
+    getItem(key: string): string | null {
+      if (typeof window === 'undefined') return null;
+      const current = window.localStorage.getItem(key);
+      if (current) return current;
+      if (key !== AUTH_STORAGE_KEY) return null;
+      for (const legacyKey of LEGACY_AUTH_STORAGE_KEYS) {
+        const legacy = window.localStorage.getItem(legacyKey);
+        if (legacy) return legacy;
+      }
+      return null;
+    },
+    setItem(key: string, value: string): void {
+      if (typeof window === 'undefined') return;
+      window.localStorage.setItem(key, value);
+      if (key === AUTH_STORAGE_KEY) {
+        for (const legacyKey of LEGACY_AUTH_STORAGE_KEYS) {
+          window.localStorage.removeItem(legacyKey);
+        }
+      }
+    },
+    removeItem(key: string): void {
+      if (typeof window === 'undefined') return;
+      window.localStorage.removeItem(key);
+      if (key === AUTH_STORAGE_KEY) {
+        for (const legacyKey of LEGACY_AUTH_STORAGE_KEYS) {
+          window.localStorage.removeItem(legacyKey);
+        }
+      }
+    },
+  };
 }
 
 export async function invokeSupabaseFunction<T>(functionName: string, body?: unknown): Promise<T> {
@@ -55,6 +94,8 @@ export function getSupabaseClient(): SupabaseClient {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
+        storageKey: AUTH_STORAGE_KEY,
+        storage: createAuthStorage(),
       },
       global: {
         fetch: boundSupabaseFetch,

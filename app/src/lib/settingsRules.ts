@@ -11,6 +11,7 @@ import type {
   CheckInCounterResource,
   CounterAllocationRule,
   CounterRuleConditions,
+  DashboardAlertSettings,
   FlightRecord,
   GateGroup,
   GateLock,
@@ -19,9 +20,11 @@ import type {
   RouteCountryMapping,
   StandGateMapping,
 } from './types';
-import { listRouteCountries, normalizeRouteCode } from './routeCountry';
+import { listRouteCountries, normalizeRouteCode } from './routeCountry.ts';
 
-type SettingsInput = Partial<OperationalSettings> | null | undefined;
+type SettingsInput = (Partial<Omit<OperationalSettings, 'dashboardAlerts'>> & {
+  dashboardAlerts?: Partial<DashboardAlertSettings> | null;
+}) | null | undefined;
 type RuleMatch = {
   rule: CounterAllocationRule;
   counterValue: number;
@@ -359,6 +362,14 @@ export const DEFAULT_AI_ANALYSIS_SETTINGS: AiAnalysisSettings = {
   updatedAt: null,
 };
 
+export const DEFAULT_DASHBOARD_ALERT_SETTINGS: DashboardAlertSettings = {
+  arrivalBucketFlights: null,
+  departureBucketFlights: null,
+  adGapFlights: null,
+  ctgAbsPct: null,
+  paxCoverageMinPct: null,
+};
+
 export const DEFAULT_AIRLINE_COLORS: AirlineColorSetting[] = [
   { airlineCode: 'VJ', color: '#ED1B24' },
   { airlineCode: 'VN', color: '#004B87' },
@@ -571,6 +582,23 @@ function normalizeAiAnalysisSettings(settings: Partial<AiAnalysisSettings> | nul
   };
 }
 
+function normalizeNullableNumber(value: unknown, min: number, max: number): number | null {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function normalizeDashboardAlerts(settings: Partial<DashboardAlertSettings> | null | undefined): DashboardAlertSettings {
+  return {
+    arrivalBucketFlights: normalizeNullableNumber(settings?.arrivalBucketFlights, 1, 999),
+    departureBucketFlights: normalizeNullableNumber(settings?.departureBucketFlights, 1, 999),
+    adGapFlights: normalizeNullableNumber(settings?.adGapFlights, 1, 999),
+    ctgAbsPct: normalizeNullableNumber(settings?.ctgAbsPct, 0, 10),
+    paxCoverageMinPct: normalizeNullableNumber(settings?.paxCoverageMinPct, 0, 1),
+  };
+}
+
 function normalizeUniqueIds(values: unknown[] | undefined): string[] {
   const seen = new Set<string>();
   const normalized: string[] = [];
@@ -757,6 +785,7 @@ export function hydrateOperationalSettings(settings: SettingsInput): Operational
     airlineColors: settings?.airlineColors ?? DEFAULT_AIRLINE_COLORS,
     routeCountries: settings?.routeCountries ?? listRouteCountries(),
     aiAnalysis: settings?.aiAnalysis ?? DEFAULT_AI_ANALYSIS_SETTINGS,
+    dashboardAlerts: settings?.dashboardAlerts ?? DEFAULT_DASHBOARD_ALERT_SETTINGS,
     aircraftGroups: settings?.aircraftGroups ?? [],
     counterAllocationRules: settings?.counterAllocationRules ?? [],
     checkInCounters: settings?.checkInCounters ?? [],
@@ -774,6 +803,7 @@ export function validateOperationalSettings(settings: SettingsInput): Operationa
   const airlineColors = (settings?.airlineColors ?? []).map((setting) => normalizeAirlineColor(setting));
   const routeCountries = (settings?.routeCountries ?? []).map((setting) => normalizeRouteCountry(setting));
   const aiAnalysis = normalizeAiAnalysisSettings(settings?.aiAnalysis);
+  const dashboardAlerts = normalizeDashboardAlerts(settings?.dashboardAlerts);
   const groups = (settings?.aircraftGroups ?? []).map((group) => normalizeGroup(group));
   const rules = (settings?.counterAllocationRules ?? []).map((rule) => normalizeRule(rule));
   const counters = (settings?.checkInCounters ?? []).map((counter) => normalizeCounterResource(counter));
@@ -990,6 +1020,7 @@ export function validateOperationalSettings(settings: SettingsInput): Operationa
     airlineColors,
     routeCountries,
     aiAnalysis,
+    dashboardAlerts,
     aircraftGroups: groups,
     counterAllocationRules: rules,
     checkInCounters: counters,
@@ -1081,6 +1112,8 @@ export function removeAircraftGroupFromSettings(
     standGateMappings: normalized.standGateMappings,
     airlineColors: normalized.airlineColors,
     routeCountries: normalized.routeCountries,
+    aiAnalysis: normalized.aiAnalysis,
+    dashboardAlerts: normalized.dashboardAlerts,
     updatedAt,
   });
 }

@@ -223,14 +223,25 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
     const supabase = getSupabaseClient();
     let active = true;
 
-    supabase.auth.getSession().then(({ data, error }) => {
+    supabase.auth.getSession().then(async ({ data, error }) => {
       if (!active) return;
       if (error) {
         setErrorMessage(error.message);
         setStatus('signedOut');
         return;
       }
-      void refreshSession(data.session);
+      if (!data.session) {
+        void refreshSession(null);
+        return;
+      }
+      const refreshed = await supabase.auth.refreshSession(data.session);
+      if (!active) return;
+      if (refreshed.error) {
+        setErrorMessage(refreshed.error.message);
+        setStatus('signedOut');
+        return;
+      }
+      void refreshSession(refreshed.data.session ?? data.session);
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {

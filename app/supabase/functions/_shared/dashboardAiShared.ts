@@ -19,6 +19,8 @@ export type DashboardAiReportingView =
 
 export type DashboardAiQueryMetric = 'flights' | 'pax' | 'arrivals' | 'departures';
 export type DashboardAiQueryCell = string | number | boolean | null;
+export const DASHBOARD_AI_PAX_STATUSES = ['reported', 'planned_zero', 'missing_after_1_day'] as const;
+export type DashboardAiPaxStatus = (typeof DASHBOARD_AI_PAX_STATUSES)[number];
 
 export interface DashboardAiDataQuery {
   queryId: string;
@@ -30,11 +32,19 @@ export interface DashboardAiDataQuery {
     dateTo?: string;
     months?: string[];
     weeks?: string[];
+    isoweeks?: string[];
+    weeknums?: number[];
     typeFilter?: 'all' | 'A' | 'D';
     airlines?: string[];
     routes?: string[];
     countries?: string[];
     aircraft?: string[];
+    acGroups?: string[];
+    paxStatuses?: DashboardAiPaxStatus[];
+    localBuckets30?: string[];
+    localBuckets60?: string[];
+    utcBuckets30?: string[];
+    utcBuckets60?: string[];
     localHourFrom?: number;
     localHourTo?: number;
   };
@@ -82,14 +92,27 @@ export const DASHBOARD_AI_QUERY_GROUP_BY_COLUMNS = [
   'route',
   'country',
   'aircraft',
+  'ac_group',
   'month',
   'iso_week',
+  'isoweek',
+  'weeknum',
   'local_hour',
+  'utc_hour',
+  'local_bucket_30',
+  'local_bucket_30_index',
+  'local_bucket_60',
+  'local_bucket_60_index',
+  'utc_bucket_30',
+  'utc_bucket_30_index',
+  'utc_bucket_60',
+  'utc_bucket_60_index',
   'ops_date',
   'season',
   'gate',
   'type',
   'weekday',
+  'pax_status',
 ];
 export const DASHBOARD_AI_QUERY_ORDER_COLUMNS = ['flights', 'pax', 'arrivals', 'departures'];
 

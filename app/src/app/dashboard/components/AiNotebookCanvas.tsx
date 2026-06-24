@@ -132,7 +132,7 @@ function LoadingNotebookCell({
           type="button"
           data-testid="ai-notebook-cancel"
           onClick={onCancel}
-          className="inline-flex items-center gap-1 rounded-md border border-outline-variant bg-surface px-2.5 py-1.5 text-xs font-semibold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary hover:bg-surface-container"
+          className="inline-flex min-h-10 items-center gap-1 rounded-md border border-outline-variant bg-surface px-3 py-2 text-xs font-semibold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary hover:bg-surface-container"
         >
           <span className="material-symbols-outlined text-[15px]">cancel</span>
           Hủy
@@ -284,7 +284,7 @@ function AiNotebookCellView({
           <button
             type="button"
             onClick={onTogglePrompt}
-            className="user bubble mb-2 ml-auto inline-flex max-w-[82%] items-center gap-2 rounded-2xl bg-primary px-3 py-1.5 text-left text-xs font-semibold text-on-primary shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
+            className="user bubble mb-2 ml-auto inline-flex min-h-10 max-w-full items-center gap-2 rounded-2xl bg-primary px-3 py-2 text-left text-xs font-semibold text-on-primary shadow-sm focus:outline-none focus:ring-2 focus:ring-primary sm:max-w-[82%]"
           >
             <span className="material-symbols-outlined text-[15px]">person</span>
             <span className={promptExpanded ? 'whitespace-normal' : 'line-clamp-2'}>{cell.prompt}</span>
@@ -295,7 +295,7 @@ function AiNotebookCellView({
           <button
             type="button"
             onClick={onToggleCollapsed}
-            className="rounded-md border border-outline-variant bg-surface px-2 py-1 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary"
+            className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-md border border-outline-variant bg-surface px-2 py-1 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary"
             title={collapsed ? 'Mở rộng trả lời' : 'Thu gọn trả lời'}
             aria-label={collapsed ? 'Mở rộng trả lời' : 'Thu gọn trả lời'}
           >
@@ -304,7 +304,7 @@ function AiNotebookCellView({
           <button
             type="button"
             onClick={() => actions.duplicatePrompt(cell)}
-            className="rounded-md border border-outline-variant bg-surface px-2 py-1 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary"
+            className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-md border border-outline-variant bg-surface px-2 py-1 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary"
             title="Dùng lại prompt"
             aria-label="Dùng lại prompt"
           >
@@ -313,7 +313,7 @@ function AiNotebookCellView({
           <button
             type="button"
             onClick={() => actions.onPinContext(cell)}
-            className="rounded-md border border-outline-variant bg-surface px-2 py-1 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary"
+            className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-md border border-outline-variant bg-surface px-2 py-1 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary"
             title="Tiếp tục từ cell này"
             aria-label="Tiếp tục từ cell này"
           >
@@ -322,7 +322,7 @@ function AiNotebookCellView({
           <button
             type="button"
             onClick={() => actions.deleteCell(cell.id)}
-            className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200"
+            className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200"
             title="Xóa phản hồi"
             aria-label="Xóa phản hồi"
           >
@@ -342,7 +342,7 @@ function AiNotebookCellView({
             <button
               type="button"
             onClick={() => actions.downloadExport(cell.exportAction as DashboardAiExportAction)}
-              className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 font-semibold text-on-primary focus:outline-none focus:ring-2 focus:ring-primary hover:bg-primary-container hover:text-on-primary-container"
+              className="inline-flex min-h-10 items-center gap-1 rounded-md bg-primary px-3 py-2 font-semibold text-on-primary focus:outline-none focus:ring-2 focus:ring-primary hover:bg-primary-container hover:text-on-primary-container"
             >
               <span className="material-symbols-outlined text-[15px]">download</span>
               Tải Excel
@@ -403,7 +403,7 @@ export function AiNotebookCanvas({
           type="button"
           onClick={() => { void actions.submitPrompt('Tạo rich chat gồm KPI, bảng, biểu đồ và nhận định.'); }}
           disabled={aiLoading || !aiConfigured}
-          className="inline-flex items-center gap-1 rounded-md border border-outline-variant bg-surface px-2.5 py-1.5 text-xs font-semibold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary hover:bg-surface-container disabled:opacity-40"
+          className="inline-flex min-h-10 items-center gap-1 rounded-md border border-outline-variant bg-surface px-3 py-2 text-xs font-semibold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary hover:bg-surface-container disabled:opacity-40"
         >
           <span className="material-symbols-outlined text-[15px]">dashboard_customize</span>
           Tạo nhanh
@@ -456,7 +456,7 @@ export function AiNotebookCanvas({
                   type="button"
                   onClick={() => { void actions.submitPrompt(prompt); }}
                   disabled={aiLoading || !aiConfigured}
-                  className="rounded-full border border-outline-variant bg-surface px-3 py-1.5 text-xs font-semibold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary hover:bg-surface-container disabled:opacity-40"
+                  className="min-h-10 rounded-full border border-outline-variant bg-surface px-3 py-2 text-xs font-semibold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary hover:bg-surface-container disabled:opacity-40"
                 >
                   {prompt}
                 </button>

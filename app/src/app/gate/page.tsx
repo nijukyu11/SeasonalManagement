@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import {
   getOperationalSettings,
   getSeasons,
+  loadSeasonWorkspaceWindow,
 } from '@/lib/remoteStore';
 import { buildDefaultDailyDateRange, readDailyDateRangeQuery } from '@/lib/dailySchedule';
 import { buildSeasonDisplayLabel } from '@/lib/importSeasonRules';
@@ -35,7 +36,9 @@ import {
 } from '@/lib/localSeasonStore';
 import { queryNativeAllocationWindow, runNativeLocalModificationBatchDeltaResult } from '@/lib/nativeSeasonRepository';
 import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
+import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
+import { readCachedWorkspaceWindow } from '@/lib/seasonWorkspaceReadModel';
 import {
   buildGatePdfPreviewPlan,
   exportGateAllocationPdf,
@@ -53,14 +56,12 @@ import { useCachedRouteActivity, useCachedRouteSearchParams } from '../component
 import FetchServerUpdatesButton from '../components/FetchServerUpdatesButton';
 import LoadingStatusPanel from '../components/LoadingStatusPanel';
 import PbbIcon from '../components/PbbIcon';
-import SeasonConflictReviewControl from '../components/SeasonConflictReviewControl';
 import SyncActionButton from '../components/SyncActionButton';
 import {
   getSeasonSyncLabel,
   getSeasonSyncPendingCount,
   getSeasonSyncTone,
   useSeasonSync,
-  useSeasonSyncActions,
   useSeasonSyncGuard,
 } from '../components/SeasonSyncProvider';
 import { useSessionScrollRestoration } from '../hooks/useSessionScrollRestoration';
@@ -89,6 +90,41 @@ function getAffectedIdsFromGateModifications(mods: FlightModification[]): string
 
 function buildGateWindowKey(fromDateTime: string, toDateTime: string): string {
   return `gate:${fromDateTime.slice(0, 10)}:${toDateTime.slice(0, 10)}`;
+}
+
+interface GateRouteState {
+  seasons: Season[];
+  season: Season;
+  flightRecords: FlightRecord[];
+  modifications: Map<string, FlightModification>;
+  settings: OperationalSettings | null;
+  windowKey: string;
+}
+
+function readInitialGateRouteState(input: {
+  targetSeasonId: string | null;
+  fromDateTime: string;
+  toDateTime: string;
+}): GateRouteState | null {
+  const storeState = useSeasonWorkspaceStore.getState();
+  const cachedSeasons = getCachedSeasons() ?? storeState.seasons;
+  if (!cachedSeasons || cachedSeasons.length === 0) return null;
+
+  const targetSeason = cachedSeasons.find((item) => item.id === input.targetSeasonId) ?? cachedSeasons[0];
+  if (!input.targetSeasonId || input.targetSeasonId !== targetSeason.id) return null;
+
+  const windowKey = buildGateWindowKey(input.fromDateTime, input.toDateTime);
+  const cachedWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+  if (!cachedWindow) return null;
+
+  return {
+    seasons: cachedSeasons,
+    season: targetSeason,
+    flightRecords: cachedWindow.records,
+    modifications: cachedWindow.modifications,
+    settings: storeState.operationalSettings,
+    windowKey,
+  };
 }
 
 function todayIso(): string {
@@ -414,20 +450,22 @@ function GateAllocationContent() {
   const targetSeasonId = searchParams.get('season');
   const requestedRange = readDailyDateRangeQuery(searchParams);
   const defaultRange = requestedRange ?? buildDefaultDailyDateRange(todayIso());
-  const [seasons, setSeasons] = useState<Season[]>([]);
-  const [season, setSeason] = useState<Season | null>(null);
-  const [flightRecords, setFlightRecords] = useState<FlightRecord[]>([]);
-  const [modifications, setModifications] = useState<Map<string, FlightModification>>(new Map());
-  const [optimisticGateAllocationView, setOptimisticGateAllocationView] = useState<GateAllocationView | null>(null);
-  const [settings, setSettings] = useState<OperationalSettings | null>(null);
   const [fromDateTime, setFromDateTime] = useSessionState('gate:fromDateTime', defaultRange.from);
   const [toDateTime, setToDateTime] = useSessionState('gate:toDateTime', defaultRange.to);
-  const [loading, setLoading] = useState(true);
+  const initialGateRouteState = readInitialGateRouteState({ targetSeasonId, fromDateTime, toDateTime });
+  const [seasons, setSeasons] = useState<Season[]>(() => initialGateRouteState?.seasons ?? []);
+  const [season, setSeason] = useState<Season | null>(() => initialGateRouteState?.season ?? null);
+  const [flightRecords, setFlightRecords] = useState<FlightRecord[]>(() => initialGateRouteState?.flightRecords ?? []);
+  const [modifications, setModifications] = useState<Map<string, FlightModification>>(
+    () => initialGateRouteState?.modifications ?? new Map()
+  );
+  const [optimisticGateAllocationView, setOptimisticGateAllocationView] = useState<GateAllocationView | null>(null);
+  const [settings, setSettings] = useState<OperationalSettings | null>(() => initialGateRouteState?.settings ?? null);
+  const [loading, setLoading] = useState(() => !initialGateRouteState);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
     buildLoadProgress('Loading gate allocation...', 10, 'Preparing workspace')
   );
-  const [seededSyncSeasonId, setSeededSyncSeasonId] = useState<string | null>(null);
   const [draggedRecordId, setDraggedRecordId] = useState<string | null>(null);
   const [activeDropRowIndex, setActiveDropRowIndex] = useState<number | null>(null);
   const [poolDropActive, setPoolDropActive] = useState(false);
@@ -443,7 +481,9 @@ function GateAllocationContent() {
   const [exportingPdf, setExportingPdf] = useState(false);
   const ganttScrollRef = useRef<HTMLDivElement | null>(null);
   const ganttFullscreenRef = useRef<HTMLElement | null>(null);
-  const latestGateModificationsRef = useRef<Map<string, FlightModification>>(new Map());
+  const latestGateModificationsRef = useRef<Map<string, FlightModification>>(
+    initialGateRouteState?.modifications ?? new Map()
+  );
   const optimisticGateAllocationViewRef = useRef<GateAllocationView | null>(null);
   const optimisticBaseLocalRevisionRef = useRef<number | null>(null);
   const gateCommitWorkerRef = useRef<Worker | null>(null);
@@ -453,23 +493,33 @@ function GateAllocationContent() {
   const gateCommitFlushTimerRef = useRef<number | null>(null);
   const commitQueueRef = useRef(Promise.resolve());
   const currentMutationRef = useRef<Promise<unknown> | null>(null);
+  const loadedWindowKeyRef = useRef<string | null>(initialGateRouteState?.windowKey ?? null);
+  const fetchServerDataRequestRef = useRef(0);
+  const latestRouteWindowRef = useRef<{ seasonId: string | null; windowKey: string }>({
+    seasonId: initialGateRouteState?.season.id ?? null,
+    windowKey: initialGateRouteState?.windowKey ?? '',
+  });
   const historySeqRef = useRef(0);
   const appliedRangeQueryRef = useRef<string | null>(null);
   useSessionScrollRestoration('gate:gantt-scroll', ganttScrollRef);
   const syncSeasonId = season?.id ?? targetSeasonId;
-  const { status: syncStatus, syncNow, fetchUpdatesNow } = useSeasonSync(syncSeasonId, 'gate');
-  const { seedSeasonSyncFromNative } = useSeasonSyncActions();
+  const { status: syncStatus, syncNow } = useSeasonSync(syncSeasonId, 'gate');
+  const [fetchingServerData, setFetchingServerData] = useState(false);
   const syncInProgress = syncStatus.status === 'syncing';
   const syncing = syncInProgress && syncStatus.mode === 'manual';
-  const fetchingUpdates = syncStatus.status === 'catching_up';
-  const syncWriteInProgress = syncInProgress || fetchingUpdates;
-  const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' || syncStatus.status === 'conflict' ? syncStatus.message : null);
-  const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
-  const syncSummarySeeded = syncSeasonId != null && seededSyncSeasonId === syncSeasonId;
-  const syncFallbackPendingCount = syncSummarySeeded ? 0 : null;
+  const syncWriteInProgress = syncInProgress || fetchingServerData;
+  const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' ? syncStatus.message : null);
+  const fetchProgress = fetchingServerData ? 'Fetching server data' : syncStatus.message;
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, 0);
-  const syncLabel = getSeasonSyncLabel(syncStatus, syncFallbackPendingCount);
-  const syncTone = getSeasonSyncTone(syncStatus, syncFallbackPendingCount);
+  const syncLabel = getSeasonSyncLabel(syncStatus, 0);
+  const syncTone = getSeasonSyncTone(syncStatus, 0);
+  const currentGateWindowKey = buildGateWindowKey(fromDateTime, toDateTime);
+  useEffect(() => {
+    latestRouteWindowRef.current = {
+      seasonId: season?.id ?? null,
+      windowKey: currentGateWindowKey,
+    };
+  }, [currentGateWindowKey, season?.id]);
 
   const waitForGateLocalCommit = useCallback(async () => {
     await currentMutationRef.current;
@@ -486,19 +536,6 @@ function GateAllocationContent() {
     quiet: true,
     blockingUi: false,
   });
-
-  useEffect(() => {
-    if (!syncSeasonId) return undefined;
-    let cancelled = false;
-    void seedSeasonSyncFromNative(syncSeasonId).then(() => {
-      if (!cancelled) setSeededSyncSeasonId(syncSeasonId);
-    }).catch((error) => {
-      console.debug('[gate-sync] native summary seed failed', error);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [seedSeasonSyncFromNative, syncSeasonId]);
 
   const clearOptimisticGateAllocationView = useCallback(() => {
     optimisticGateAllocationViewRef.current = null;
@@ -584,11 +621,36 @@ function GateAllocationContent() {
     });
   }, [clearOptimisticGateAllocationView, fromDateTime, replaceGateModifications, season, toDateTime]);
 
+  const tryApplyCachedGateRouteWindow = useCallback((): boolean => {
+    const storeState = useSeasonWorkspaceStore.getState();
+    const cachedSeasons = getCachedSeasons() ?? storeState.seasons;
+    const cachedSettings = storeState.operationalSettings;
+    if (!cachedSeasons || !cachedSettings || cachedSeasons.length === 0) return false;
+
+    const targetSeason = cachedSeasons.find((item) => item.id === targetSeasonId) ?? cachedSeasons[0];
+    if (!targetSeasonId || targetSeasonId !== targetSeason.id) return false;
+
+    const windowKey = buildGateWindowKey(fromDateTime, toDateTime);
+    const cachedWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+    if (!cachedWindow) return false;
+
+    setLoadError(null);
+    clearOptimisticGateAllocationView();
+    setSettings(cachedSettings);
+    setSeasons(cachedSeasons);
+    setSeason(targetSeason);
+    loadedWindowKeyRef.current = windowKey;
+    setFlightRecords(cachedWindow.records);
+    replaceGateModifications(cachedWindow.modifications);
+    setLoading(false);
+    return true;
+  }, [clearOptimisticGateAllocationView, fromDateTime, replaceGateModifications, targetSeasonId, toDateTime]);
+
   useSeasonWorkspaceRefresh({
     seasonId: season?.id ?? targetSeasonId,
     policy: 'on-activation',
     source: 'gate',
-    onNativeRefresh: async () => {
+    onRefresh: async () => {
       await refreshGateWindow();
     },
   });
@@ -596,6 +658,7 @@ function GateAllocationContent() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      if (tryApplyCachedGateRouteWindow()) return;
       setLoading(true);
       setLoadError(null);
       setLoadProgress(buildLoadProgress('Loading seasons and settings', 15, 'Preparing gate allocation'));
@@ -612,6 +675,7 @@ function GateAllocationContent() {
         useSeasonWorkspaceStore.getState().setOperationalSettings(loadedSettings);
         useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
         if (nextSeasons.length === 0) {
+          loadedWindowKeyRef.current = null;
           clearOptimisticGateAllocationView();
           setSeason(null);
           setFlightRecords([]);
@@ -626,10 +690,61 @@ function GateAllocationContent() {
           return;
         }
         setSeason(targetSeason);
-        setLoadProgress(buildLoadProgress('Checking local season baseline', 30, targetSeason.seasonCode));
+        const windowKey = buildGateWindowKey(fromDateTime, toDateTime);
+        const cachedWindow = readCachedWorkspaceWindow(
+          useSeasonWorkspaceStore.getState().workspaces[targetSeason.id],
+          windowKey
+        );
+        if (cachedWindow) {
+          loadedWindowKeyRef.current = windowKey;
+          setFlightRecords(cachedWindow.records);
+          replaceGateModifications(cachedWindow.modifications);
+          return;
+        }
+
+        setLoadProgress(buildLoadProgress('Loading server workspace', 35, targetSeason.seasonCode));
+        const serverWindow = await loadSeasonWorkspaceWindow({
+          seasonId: targetSeason.id,
+          dateFrom: fromDateTime.slice(0, 10),
+          dateTo: toDateTime.slice(0, 10),
+          resourceType: 'gate',
+          limit: 100000,
+        }).catch((error) => {
+          if (SERVER_AUTHORITATIVE_MODE) throw error;
+          console.warn('Server gate allocation window unavailable, falling back to native SQLite', error);
+          return null;
+        });
+        if (cancelled) return;
+        if (serverWindow) {
+          loadedWindowKeyRef.current = windowKey;
+          replaceGateModifications(serverWindow.modifications);
+          useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+            seasonId: targetSeason.id,
+            season: targetSeason,
+            records: serverWindow.records,
+            modifications: serverWindow.modifications,
+            syncMeta: serverWindow.syncMeta,
+            windowKey,
+          });
+          setLoadProgress(buildLoadProgress(
+            'Preparing gate allocation',
+            80,
+            `${serverWindow.records.length} records`
+          ));
+          setFlightRecords(serverWindow.records);
+          publishSeasonWorkspaceChanged({
+            seasonId: targetSeason.id,
+            localRevision: serverWindow.syncMeta.localRevision,
+            source: 'server-window',
+            syncMeta: serverWindow.syncMeta,
+          });
+          return;
+        }
+
+        setLoadProgress(buildLoadProgress('Checking local season baseline', 40, targetSeason.seasonCode));
         await ensureNativeSeasonBaseline(targetSeason);
         if (cancelled) return;
-        setLoadProgress(buildLoadProgress('Querying native SQLite', 45, targetSeason.seasonCode));
+        setLoadProgress(buildLoadProgress('Querying native SQLite fallback', 50, targetSeason.seasonCode));
         const result = await queryNativeAllocationWindow({
           seasonId: targetSeason.id,
           dateFrom: fromDateTime.slice(0, 10),
@@ -657,8 +772,9 @@ function GateAllocationContent() {
           records: result.records,
           modifications: nextModifications,
           syncMeta: result.syncMeta,
-          windowKey: buildGateWindowKey(fromDateTime, toDateTime),
+          windowKey,
         });
+        loadedWindowKeyRef.current = windowKey;
       } catch (err) {
         console.error('Error loading gate allocation', err);
         if (!cancelled) {
@@ -673,7 +789,7 @@ function GateAllocationContent() {
     return () => {
       cancelled = true;
     };
-  }, [clearOptimisticGateAllocationView, fromDateTime, replaceGateModifications, router, showAlert, targetSeasonId, toDateTime]);
+  }, [clearOptimisticGateAllocationView, fromDateTime, replaceGateModifications, router, showAlert, targetSeasonId, toDateTime, tryApplyCachedGateRouteWindow]);
 
   const allocationResult = useMemo(() => {
     if (!settings) return { view: null, error: null };
@@ -858,7 +974,7 @@ function GateAllocationContent() {
         id: `LOCAL_GATE_${timestamp}_${++historySeqRef.current}`,
         timestamp,
         description,
-      });
+      }, 'gate');
       if (!nativeResult) return null;
       return {
         syncMeta: nativeResult.syncMeta,
@@ -1030,6 +1146,7 @@ function GateAllocationContent() {
     try {
       const result = await persistGateModifications(season.id, entry.mods, entry.description);
       if (!result.syncMeta) return;
+      promoteLatestGateModificationsForView();
       useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
         seasonId: season.id,
         affectedIds: result.affectedIds ?? entry.legIds,
@@ -1047,7 +1164,7 @@ function GateAllocationContent() {
     } catch (error) {
       await rollbackAccumulatedGateCommit(error);
     }
-  }, [persistGateModifications, publishWorkspaceChange, rollbackAccumulatedGateCommit, scheduleGateAuditEntry, season]);
+  }, [persistGateModifications, promoteLatestGateModificationsForView, publishWorkspaceChange, rollbackAccumulatedGateCommit, scheduleGateAuditEntry, season]);
 
   const scheduleAccumulatedGateCommit = useCallback(({
     legIds,
@@ -1304,30 +1421,76 @@ function GateAllocationContent() {
     if (!season || syncInProgress) return;
     try {
       const result = await syncNow();
-      if (result.status === 'conflict' || (result.reviewCount ?? 0) > 0) {
-        void showAlert({ title: 'Save Needs Review', message: result.message ?? 'Saved non-conflicting changes. Review remaining conflicts.', tone: 'warning' });
-      } else if (result.status !== 'synced') {
-        void showAlert({ title: 'Save Failed', message: result.message, tone: 'error' });
+      if (result.status !== 'synced') {
+        void showAlert({ title: 'Save Failed', message: result.message ?? 'Save failed.', tone: 'error' });
       }
     } catch (err) {
       void showAlert({ title: 'Save Failed', message: (err as Error).message, tone: 'error' });
     }
   };
 
-  const handleFetchUpdates = async () => {
-    if (!syncSeasonId || fetchingUpdates || syncInProgress) return;
-    try {
-      const result = await fetchUpdatesNow();
-      if (result.status === 'busy') return;
-      if (result.status === 'conflict') {
-        void showAlert({ title: 'Fetch Updates Need Review', message: result.message, tone: 'warning' });
-      } else if (result.status !== 'synced') {
-        void showAlert({ title: 'Fetch Updates Failed', message: result.message, tone: 'error' });
-      }
-    } catch (err) {
-      void showAlert({ title: 'Fetch Updates Failed', message: (err as Error).message, tone: 'error' });
+  const fetchServerData = useCallback(async () => {
+    if (!season || fetchingServerData || syncInProgress) return;
+    const windowKey = buildGateWindowKey(fromDateTime, toDateTime);
+    if (gateCommitAccumulatorRef.current || gateCommitFlushTimerRef.current != null) {
+      void showAlert({
+        title: 'Fetch data blocked',
+        message: 'Save pending gate changes before fetching server data.',
+        tone: 'warning',
+      });
+      return;
     }
-  };
+    const requestId = ++fetchServerDataRequestRef.current;
+    const requestedSeasonId = season.id;
+    const hasRouteDataLoaded = loadedWindowKeyRef.current === windowKey;
+    setFetchingServerData(true);
+    if (!hasRouteDataLoaded) setLoadError(null);
+    setLoadProgress(buildLoadProgress('Loading server workspace', 35, season.seasonCode));
+    try {
+      await currentMutationRef.current;
+      await commitQueueRef.current;
+      const serverWindow = await loadSeasonWorkspaceWindow({
+        seasonId: season.id,
+        dateFrom: fromDateTime.slice(0, 10),
+        dateTo: toDateTime.slice(0, 10),
+        resourceType: 'gate',
+        limit: 100000,
+      });
+      if (!serverWindow) throw new Error('Server gate allocation window is unavailable.');
+      if (
+        fetchServerDataRequestRef.current !== requestId ||
+        latestRouteWindowRef.current.seasonId !== requestedSeasonId ||
+        latestRouteWindowRef.current.windowKey !== windowKey
+      ) {
+        return;
+      }
+      loadedWindowKeyRef.current = windowKey;
+      clearOptimisticGateAllocationView();
+      replaceGateModifications(serverWindow.modifications);
+      useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+        seasonId: season.id,
+        season,
+        records: serverWindow.records,
+        modifications: serverWindow.modifications,
+        syncMeta: serverWindow.syncMeta,
+        windowKey,
+      });
+      setLoadProgress(buildLoadProgress('Preparing gate allocation', 80, `${serverWindow.records.length} records`));
+      setFlightRecords(serverWindow.records);
+      publishSeasonWorkspaceChanged({
+        seasonId: season.id,
+        localRevision: serverWindow.syncMeta.localRevision,
+        source: 'server-window',
+        syncMeta: serverWindow.syncMeta,
+      });
+    } catch (err) {
+      const message = err instanceof Error && err.message ? err.message : 'Could not fetch gate data from the server.';
+      if (!hasRouteDataLoaded) setLoadError(message);
+      void showAlert({ title: 'Fetch data failed', message, tone: 'error' });
+    } finally {
+      setFetchingServerData(false);
+    }
+  }, [clearOptimisticGateAllocationView, fetchingServerData, fromDateTime, replaceGateModifications, season, showAlert, syncInProgress, toDateTime]);
 
   const handleOpenExportDialog = useCallback(() => {
     promoteLatestGateModificationsForView();
@@ -1528,12 +1691,11 @@ function GateAllocationContent() {
                 }`}>
                   {syncLabel}
                 </span>
-                <SeasonConflictReviewControl seasonId={season?.id} />
                 <FetchServerUpdatesButton
-                  fetching={fetchingUpdates}
+                  fetching={fetchingServerData}
                   progress={fetchProgress}
                   disabled={syncInProgress}
-                  onFetch={handleFetchUpdates}
+                  onFetch={fetchServerData}
                 />
                 <SyncActionButton
                   syncing={syncInProgress}
@@ -1685,10 +1847,10 @@ function GateAllocationContent() {
                     <div className="max-w-xl text-sm text-on-surface-variant">{loadError}</div>
                     {syncSeasonId && (
                       <FetchServerUpdatesButton
-                        fetching={fetchingUpdates}
+                        fetching={fetchingServerData}
                         progress={fetchProgress}
                         disabled={syncInProgress}
-                        onFetch={handleFetchUpdates}
+                        onFetch={fetchServerData}
                       />
                     )}
                   </div>
@@ -1697,10 +1859,10 @@ function GateAllocationContent() {
                     <div>No season data.</div>
                     {syncSeasonId && (
                       <FetchServerUpdatesButton
-                        fetching={fetchingUpdates}
+                        fetching={fetchingServerData}
                         progress={fetchProgress}
                         disabled={syncInProgress}
-                        onFetch={handleFetchUpdates}
+                        onFetch={fetchServerData}
                       />
                     )}
                   </div>

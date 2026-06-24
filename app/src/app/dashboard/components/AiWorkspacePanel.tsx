@@ -96,13 +96,13 @@ export function AiWorkspacePanel({
             <h2 className="text-lg font-bold text-on-surface">AI Workspace</h2>
             <p className="mt-1 text-sm text-on-surface-variant">Rich Chat AI read-only để tạo bảng, biểu đồ và báo cáo trực quan.</p>
           </div>
-          <label className="min-w-[180px] text-[10px] font-bold uppercase text-on-surface-variant">
+          <label className="w-full min-w-[180px] text-xs font-bold uppercase text-on-surface-variant sm:w-auto">
             Model
             <select
               value={selectedModelId}
               onChange={(event) => onModelChange(event.target.value)}
               disabled={models.length === 0 || aiLoading}
-              className="mt-1 w-full rounded-md border border-outline-variant bg-surface px-2 py-1.5 text-xs font-semibold normal-case text-on-surface focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+              className="mt-1 min-h-10 w-full rounded-md border border-outline-variant bg-surface px-3 py-2 text-sm font-semibold normal-case text-on-surface focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
             >
               {models.length === 0 ? (
                 <option value="">Chưa có model</option>
@@ -126,7 +126,7 @@ export function AiWorkspacePanel({
                     type="button"
                     onClick={() => onToggleSeason(item.id)}
                     disabled={disabled || aiLoading}
-                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-40 ${
+                    className={`inline-flex min-h-10 items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-40 ${
                       checked
                         ? 'border-primary bg-primary text-on-primary'
                         : 'border-outline-variant bg-surface text-on-surface-variant hover:bg-surface-container'
@@ -162,7 +162,7 @@ export function AiWorkspacePanel({
               if (groupPresets.length === 0) return null;
               return (
                 <div key={group.id}>
-                  <div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-on-surface-variant">{group.label}</div>
+                  <div className="mb-2 text-xs font-bold uppercase tracking-wide text-on-surface-variant">{group.label}</div>
                   <div className="flex flex-wrap gap-2">
                     {groupPresets.map((preset) => (
                       <button
@@ -170,7 +170,7 @@ export function AiWorkspacePanel({
                         type="button"
                         onClick={() => { void actions.submitPrompt(preset.prompt, { preferredTool: preset.preferredTool }); }}
                         disabled={aiLoading || !aiConfigured}
-                        className={`rounded-full border px-2.5 py-1 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-50 ${
+                        className={`min-h-10 rounded-full border px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-50 ${
                           preset.mode === 'board'
                             ? 'border-primary/40 bg-primary-container/30 text-on-surface'
                             : 'border-outline-variant bg-surface text-on-surface'
@@ -186,13 +186,13 @@ export function AiWorkspacePanel({
           </div>
 
           <div>
-            <div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-on-surface-variant">Xuất Excel</div>
+            <div className="mb-2 text-xs font-bold uppercase tracking-wide text-on-surface-variant">Xuất Excel</div>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => onDownloadReport('sanluong-summary')}
                 disabled={summaryExportDisabled}
-                className="inline-flex items-center gap-1 rounded-full border border-outline-variant bg-surface px-2.5 py-1 text-xs font-semibold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex min-h-10 items-center gap-1 rounded-full border border-outline-variant bg-surface px-3 py-2 text-xs font-semibold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <span className="material-symbols-outlined text-[15px]">download</span>
                 Xuất tổng hợp sản lượng
@@ -201,7 +201,7 @@ export function AiWorkspacePanel({
                 type="button"
                 onClick={onClearNotebook}
                 disabled={aiLoading}
-                className="inline-flex items-center gap-1 rounded-full border border-outline-variant bg-surface px-2.5 py-1 text-xs font-semibold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary hover:bg-surface-container disabled:opacity-50"
+                className="inline-flex min-h-10 items-center gap-1 rounded-full border border-outline-variant bg-surface px-3 py-2 text-xs font-semibold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary hover:bg-surface-container disabled:opacity-50"
               >
                 <span className="material-symbols-outlined text-[15px]">backspace</span>
                 Xóa chat

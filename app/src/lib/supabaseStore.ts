@@ -11,8 +11,14 @@ import type {
   RemoteDashboardSeasonData,
   RemoteSeasonEventPage,
   RemoteSeasonImportCounts,
+  RemoteSeasonalImportInput,
+  RemoteSeasonalImportResult,
   RemoteSeasonSyncCursorState,
+  RemoteSeasonWorkspaceWindowInput,
+  RemoteSeasonWorkspaceWindowResult,
   RemoteSeasonWorkspaceSnapshot,
+  ServerSeasonMutationPayload,
+  ServerSeasonMutationResult,
 } from './remoteStore';
 import { seasonEventTargetKey, type SeasonChangeEvent, type SeasonChangeEventPayload, type SeasonChangeTargetType } from './seasonChangeEvents';
 import type { Season, ParsedRow, FlightModification, ModHistoryEntry, FlightRecord, OperationalSettings } from './types';
@@ -77,13 +83,33 @@ import { splitModHistoryEntriesForFirestore } from './modHistorySizing';
 import { splitAuditDeltaChunks } from './auditLog';
 import type { LocalEntityVersionMap } from './localSeasonStore';
 
-type SupabaseResult<T> = { data: T | null; error: { message: string } | null };
+type SupabaseError = { message: string; code?: string | null; details?: string | null; hint?: string | null };
+type SupabaseResult<T> = { data: T | null; error: SupabaseError | null };
 type JsonRecord = Record<string, unknown>;
 type PayloadRow<T> = { payload: T | null };
 type SourceRowIndexRow = { row_index: number | null };
 const SUPABASE_SELECT_PAGE_SIZE = 1000;
 const SUPABASE_IN_FILTER_BATCH_SIZE = 500;
 const SYNC_V2_EVENT_CHUNK_SIZE = 50;
+const OPERATIONAL_SETTINGS_BASE_COLUMNS = [
+  'id',
+  'updated_at',
+  'ai_enabled',
+  'ai_active_model_id',
+  'ai_updated_at',
+] as const;
+const OPERATIONAL_SETTINGS_DASHBOARD_ALERT_COLUMNS = [
+  'dashboard_arrival_bucket_flights',
+  'dashboard_departure_bucket_flights',
+  'dashboard_ad_gap_flights',
+  'dashboard_ctg_abs_pct',
+  'dashboard_pax_coverage_min_pct',
+] as const;
+const OPERATIONAL_SETTINGS_BASE_SELECT = OPERATIONAL_SETTINGS_BASE_COLUMNS.join(',');
+const OPERATIONAL_SETTINGS_SELECT = [
+  ...OPERATIONAL_SETTINGS_BASE_COLUMNS,
+  ...OPERATIONAL_SETTINGS_DASHBOARD_ALERT_COLUMNS,
+].join(',');
 type SeasonChangeEventRow = {
   event_id: string;
   season_id: string;
@@ -128,6 +154,38 @@ type SeasonEventPageRpc = {
   serverHighWater?: number | string | null;
   server_high_water?: number | string | null;
 };
+type SeasonalImportRpc = {
+  seasonId?: string | null;
+  season_id?: string | null;
+  serverHighWater?: number | string | null;
+  server_high_water?: number | string | null;
+  sourceRows?: number | string | null;
+  source_rows?: number | string | null;
+  flightRecords?: number | string | null;
+  flight_records?: number | string | null;
+  status?: string | null;
+};
+type ServerSeasonMutationRpc = {
+  seasonId?: string | null;
+  season_id?: string | null;
+  serverHighWater?: number | string | null;
+  server_high_water?: number | string | null;
+  nextServerSeq?: number | string | null;
+  next_server_seq?: number | string | null;
+  changedTargets?: string[] | null;
+  changed_targets?: string[] | null;
+  affectedIds?: string[] | null;
+  affected_ids?: string[] | null;
+  appliedEvents?: unknown[] | null;
+  applied_events?: unknown[] | null;
+  rejectedEvents?: unknown[] | null;
+  rejected_events?: unknown[] | null;
+};
+type SeasonWorkspaceWindowRpc = Omit<SeasonWorkspaceSnapshotRpc, 'season' | 'modHistoryEntries' | 'modHistoryChanges' | 'modHistoryRecordChanges' | 'sourceRows' | 'sourceRowDays'> & {
+  seasonId?: string | null;
+  season_id?: string | null;
+  cursor?: { serverHighWater?: number | string | null; server_high_water?: number | string | null };
+};
 
 function client() {
   return getSupabaseClient();
@@ -148,6 +206,27 @@ function stripUndefinedDeep<T>(value: T): T {
 function assertOk<T>(result: SupabaseResult<T>, action: string): T {
   if (result.error) throw new Error(`${action}: ${result.error.message}`);
   return result.data as T;
+}
+
+function isMissingDashboardAlertColumnError(error: unknown): boolean {
+  if (!error) return false;
+  const details = typeof error === 'object'
+    ? [
+        (error as { code?: unknown }).code,
+        (error as { message?: unknown }).message,
+        (error as { details?: unknown }).details,
+        (error as { hint?: unknown }).hint,
+      ].filter(Boolean).join(' ')
+    : String(error);
+  return (
+    /PGRST204|42703|column .* does not exist/i.test(details) &&
+    OPERATIONAL_SETTINGS_DASHBOARD_ALERT_COLUMNS.some((column) => details.includes(column))
+  );
+}
+
+function isMissingRpcSignatureError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return /could not find the function|schema cache|PGRST202|function .* does not exist/i.test(message);
 }
 
 function isStatementTimeoutError(error: unknown): boolean {
@@ -179,11 +258,15 @@ function groupRowsByKey<T>(rows: T[], getKey: (row: T) => string): Map<string, T
 
 type SelectFilter =
   | { type: 'eq'; column: string; value: string | number | boolean | null }
+  | { type: 'gte'; column: string; value: string | number }
+  | { type: 'lte'; column: string; value: string | number }
   | { type: 'in'; column: string; values: Array<string | number> }
   | { type: 'order'; column: string; ascending?: boolean };
 
 type FilterableQuery = {
   eq(column: string, value: unknown): FilterableQuery;
+  gte(column: string, value: unknown): FilterableQuery;
+  lte(column: string, value: unknown): FilterableQuery;
   in(column: string, values: readonly unknown[]): FilterableQuery;
   order(column: string, options?: { ascending?: boolean }): FilterableQuery;
 };
@@ -196,6 +279,8 @@ function applySelectFilters<TQuery extends FilterableQuery>(query: TQuery, filte
   let next: FilterableQuery = query;
   for (const filter of filters) {
     if (filter.type === 'eq') next = next.eq(filter.column, filter.value);
+    if (filter.type === 'gte') next = next.gte(filter.column, filter.value);
+    if (filter.type === 'lte') next = next.lte(filter.column, filter.value);
     if (filter.type === 'in') next = next.in(filter.column, filter.values);
     if (filter.type === 'order') next = next.order(filter.column, { ascending: filter.ascending ?? true });
   }
@@ -286,6 +371,92 @@ function numberFromRpc(value: number | string | null | undefined, fallback = 0):
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+function normalizeSeasonalImportResult(
+  result: SeasonalImportRpc | null,
+  fallback: { seasonId?: string | null; sourceRows: number; flightRecords: number }
+): RemoteSeasonalImportResult {
+  const seasonId = result?.seasonId ?? result?.season_id ?? fallback.seasonId;
+  if (!seasonId) throw new Error('apply seasonal import remote: response did not include seasonId');
+  return {
+    seasonId,
+    serverHighWater: numberFromRpc(result?.serverHighWater ?? result?.server_high_water),
+    sourceRows: numberFromRpc(result?.sourceRows ?? result?.source_rows, fallback.sourceRows),
+    flightRecords: numberFromRpc(result?.flightRecords ?? result?.flight_records, fallback.flightRecords),
+    status: result?.status ?? 'committed',
+  };
+}
+
+function normalizeServerSeasonMutationResult(result: ServerSeasonMutationRpc | null): ServerSeasonMutationResult {
+  const seasonId = result?.seasonId ?? result?.season_id;
+  if (!seasonId) throw new Error('apply season server mutation: response did not include seasonId');
+  const serverHighWater = numberFromRpc(result?.serverHighWater ?? result?.server_high_water);
+  return {
+    seasonId,
+    serverHighWater,
+    nextServerSeq: numberFromRpc(result?.nextServerSeq ?? result?.next_server_seq, serverHighWater),
+    changedTargets: result?.changedTargets ?? result?.changed_targets ?? [],
+    affectedIds: result?.affectedIds ?? result?.affected_ids ?? [],
+    appliedEvents: result?.appliedEvents ?? result?.applied_events ?? [],
+    rejectedEvents: result?.rejectedEvents ?? result?.rejected_events ?? [],
+  };
+}
+
+async function callSeasonalImportRpc(payload: JsonRecord): Promise<SeasonalImportRpc | null> {
+  try {
+    return assertOk(
+      await client().rpc('apply_seasonal_import_remote', { p_import: payload }),
+      'apply seasonal import remote'
+    ) as SeasonalImportRpc | null;
+  } catch (error) {
+    if (!isMissingRpcSignatureError(error)) throw error;
+  }
+  try {
+    return assertOk(
+      await client().rpc('apply_seasonal_import_remote', { p_payload: payload }),
+      'apply seasonal import remote'
+    ) as SeasonalImportRpc | null;
+  } catch (error) {
+    if (!isMissingRpcSignatureError(error)) throw error;
+  }
+  try {
+    return assertOk(
+      await client().rpc('apply_seasonal_import_remote', { payload }),
+      'apply seasonal import remote'
+    ) as SeasonalImportRpc | null;
+  } catch (error) {
+    if (!isMissingRpcSignatureError(error)) throw error;
+    return callSeasonalImportRpcRawPayload(payload);
+  }
+}
+
+async function callSeasonalImportRpcRawPayload(payload: JsonRecord): Promise<SeasonalImportRpc | null> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !anonKey) throw new Error('Supabase is not configured for seasonal import RPC.');
+  const { data } = await client().auth.getSession();
+  const token = data.session?.access_token ?? anonKey;
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc/apply_seasonal_import_remote`, {
+    method: 'POST',
+    headers: {
+      apikey: anonKey,
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  const contentType = response.headers.get('content-type') ?? '';
+  const responsePayload = contentType.includes('application/json')
+    ? await response.json().catch(() => null)
+    : await response.text().catch(() => '');
+  if (!response.ok) {
+    const message = responsePayload && typeof responsePayload === 'object' && 'message' in responsePayload
+      ? String((responsePayload as { message?: unknown }).message ?? response.statusText)
+      : String(responsePayload || response.statusText);
+    throw new Error(`apply seasonal import remote: ${message}`);
+  }
+  return responsePayload as SeasonalImportRpc | null;
+}
+
 function snapshotArray<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
 }
@@ -330,6 +501,88 @@ function mapWorkspaceSnapshot(snapshot: SeasonWorkspaceSnapshotRpc): RemoteSeaso
     modHistory,
     cursor: { serverHighWater },
     entityVersions: toEntityVersionMap(snapshotArray(snapshot.entityVersions)),
+  };
+}
+
+function toServerWorkspaceWindowSyncMeta(
+  seasonId: string,
+  serverHighWater: number
+): RemoteSeasonWorkspaceWindowResult['syncMeta'] {
+  return {
+    seasonId,
+    baseServerVersion: serverHighWater,
+    lastServerSeq: serverHighWater,
+    localRevision: serverHighWater,
+    pendingCount: 0,
+    lastLocalChangeAt: null,
+    conflicts: [],
+    syncStatus: 'synced',
+  };
+}
+
+function mapWorkspaceWindow(
+  input: RemoteSeasonWorkspaceWindowInput,
+  payload: SeasonWorkspaceWindowRpc
+): RemoteSeasonWorkspaceWindowResult {
+  const snapshot = mapWorkspaceSnapshot({
+    ...payload,
+    season: {
+      id: input.seasonId,
+      season_code: '',
+      name: '',
+      file_name: '',
+      uploaded_at: 0,
+      effective_start: '',
+      effective_end: '',
+      total_legs: 0,
+      total_source_rows: 0,
+      data_version: 0,
+      last_synced_at: null,
+    },
+    sourceRows: [],
+    sourceRowDays: [],
+    modHistoryEntries: [],
+    modHistoryChanges: [],
+    modHistoryRecordChanges: [],
+  });
+  const serverHighWater = numberFromRpc(payload.cursor?.serverHighWater ?? payload.cursor?.server_high_water);
+  return {
+    sourceRows: [],
+    records: snapshot?.records ?? [],
+    modifications: snapshot?.modifications ?? new Map(),
+    cursor: { serverHighWater },
+    syncMeta: toServerWorkspaceWindowSyncMeta(input.seasonId, serverHighWater),
+  };
+}
+
+async function loadSeasonWorkspaceWindowPaged(
+  input: RemoteSeasonWorkspaceWindowInput
+): Promise<RemoteSeasonWorkspaceWindowResult | null> {
+  const filters: SelectFilter[] = [
+    { type: 'eq', column: 'season_id', value: input.seasonId },
+    { type: 'order', column: 'date', ascending: true },
+  ];
+  if (input.dateFrom) filters.push({ type: 'gte', column: 'date', value: input.dateFrom });
+  if (input.dateTo) filters.push({ type: 'lte', column: 'date', value: input.dateTo });
+
+  const flightRows = (await selectAllRows<FlightRecordRelationalRow>(
+    'season_flight_records',
+    filters,
+    'load server workspace window'
+  )).slice(0, input.limit ?? Number.MAX_SAFE_INTEGER);
+  const [records, modifications, cursorState] = await Promise.all([
+    hydrateFlightRecordRows(flightRows),
+    readModificationsForDashboardSeason(input.seasonId, flightRows.map((row) => row.record_id)),
+    supabaseStore.getSeasonSyncCursorState
+      ? supabaseStore.getSeasonSyncCursorState(input.seasonId)
+      : Promise.resolve({ serverHighWater: 0, entityVersions: {} }),
+  ]);
+  return {
+    sourceRows: [],
+    records,
+    modifications,
+    cursor: { serverHighWater: cursorState.serverHighWater },
+    syncMeta: toServerWorkspaceWindowSyncMeta(input.seasonId, cursorState.serverHighWater),
   };
 }
 
@@ -452,6 +705,50 @@ async function readFlightRecordsForDashboardSeason(seasonId: string): Promise<{
   return { ...data, records };
 }
 
+function toOperationalSettingsBaseRow(settings: OperationalSettings): Pick<OperationalSettingsRow, 'id' | 'updated_at' | 'ai_enabled' | 'ai_active_model_id' | 'ai_updated_at'> {
+  const row = toOperationalSettingsRow(settings);
+  return {
+    id: row.id,
+    updated_at: row.updated_at,
+    ai_enabled: row.ai_enabled,
+    ai_active_model_id: row.ai_active_model_id,
+    ai_updated_at: row.ai_updated_at,
+  };
+}
+
+async function readOperationalSettingsRowWithDashboardAlertFallback(): Promise<SupabaseResult<OperationalSettingsRow>> {
+  const fullResult = await client()
+    .from('operational_settings')
+    .select(OPERATIONAL_SETTINGS_SELECT)
+    .eq('id', 'operational')
+    .maybeSingle();
+  if (!isMissingDashboardAlertColumnError(fullResult.error)) {
+    return fullResult as unknown as SupabaseResult<OperationalSettingsRow>;
+  }
+  return await client()
+    .from('operational_settings')
+    .select(OPERATIONAL_SETTINGS_BASE_SELECT)
+    .eq('id', 'operational')
+    .maybeSingle() as unknown as SupabaseResult<OperationalSettingsRow>;
+}
+
+async function upsertOperationalSettingsRowWithDashboardAlertFallback(settings: OperationalSettings): Promise<void> {
+  const normalized = validateOperationalSettings(settings);
+  const fullResult = await client()
+    .from('operational_settings')
+    .upsert(toOperationalSettingsRow(normalized), { onConflict: 'id' });
+  if (!isMissingDashboardAlertColumnError(fullResult.error)) {
+    assertOk(fullResult, 'save operational settings');
+    return;
+  }
+  assertOk(
+    await client()
+      .from('operational_settings')
+      .upsert(toOperationalSettingsBaseRow(normalized), { onConflict: 'id' }),
+    'save operational settings'
+  );
+}
+
 async function readOperationalSettingsRelational(): Promise<OperationalSettings> {
   const [
     settingsRow,
@@ -474,7 +771,7 @@ async function readOperationalSettingsRelational(): Promise<OperationalSettings>
     aiModelRows,
     aiContextDocumentRows,
   ] = await Promise.all([
-    client().from('operational_settings').select('*').eq('id', 'operational').maybeSingle(),
+    readOperationalSettingsRowWithDashboardAlertFallback(),
     client().from('operational_route_countries').select('*').order('route', { ascending: true }),
     client().from('operational_airline_colors').select('*').order('airline_code', { ascending: true }),
     client().from('operational_aircraft_groups').select('*').order('name', { ascending: true }),
@@ -495,7 +792,7 @@ async function readOperationalSettingsRelational(): Promise<OperationalSettings>
     client().from('operational_ai_context_documents').select('*').order('sort_order', { ascending: true }),
   ]);
   return fromSettingsTableRows({
-    settingsRow: assertOk(settingsRow, 'load operational settings') as OperationalSettingsRow | null,
+    settingsRow: assertOk(settingsRow as unknown as SupabaseResult<OperationalSettingsRow>, 'load operational settings') as OperationalSettingsRow | null,
     routeCountryRows: assertOk(routeCountryRows, 'load route countries') as Parameters<typeof fromSettingsTableRows>[0]['routeCountryRows'],
     airlineColorRows: assertOk(airlineColorRows, 'load airline colors') as Parameters<typeof fromSettingsTableRows>[0]['airlineColorRows'],
     aircraftGroupRows: assertOk(aircraftGroupRows, 'load aircraft groups') as Parameters<typeof fromSettingsTableRows>[0]['aircraftGroupRows'],
@@ -532,10 +829,7 @@ async function replaceTableRows(table: string, rows: JsonRecord[], onConflict: s
 
 async function writeOperationalSettingsRelational(settings: OperationalSettings): Promise<void> {
   const normalized = validateOperationalSettings(settings);
-  assertOk(
-    await client().from('operational_settings').upsert(toOperationalSettingsRow(normalized), { onConflict: 'id' }),
-    'save operational settings'
-  );
+  await upsertOperationalSettingsRowWithDashboardAlertFallback(normalized);
   await clearTableRows('operational_aircraft_group_types', 'group_id');
   await clearTableRows('operational_checkin_counter_group_members', 'group_id');
   await clearTableRows('operational_checkin_counter_lock_members', 'lock_id');
@@ -875,6 +1169,41 @@ export const supabaseStore: RemoteStore = {
     }
   },
 
+  async applySeasonalImportRemote(input: RemoteSeasonalImportInput): Promise<RemoteSeasonalImportResult> {
+    const seasonId = input.seasonId ?? ('id' in input.season ? input.season.id : undefined);
+    const payload = stripUndefinedDeep({
+      seasonId,
+      season_id: seasonId,
+      seasonCode: input.seasonCode,
+      season_code: input.seasonCode,
+      season: input.season,
+      sourceRows: input.sourceRows,
+      source_rows: input.sourceRows,
+      flightRecords: input.flightRecords,
+      flight_records: input.flightRecords,
+      modificationDeleteRecordIds: input.modificationDeleteRecordIds,
+      modification_delete_record_ids: input.modificationDeleteRecordIds,
+      actor: input.actor ?? null,
+    });
+    const result = await callSeasonalImportRpc(payload);
+    input.onProgress?.('Committing seasonal import', input.flightRecords.length, input.flightRecords.length);
+    return normalizeSeasonalImportResult(result, {
+      seasonId,
+      sourceRows: input.sourceRows.length,
+      flightRecords: input.flightRecords.length,
+    });
+  },
+
+  async applySeasonServerMutationV1(payload: ServerSeasonMutationPayload): Promise<ServerSeasonMutationResult> {
+    const result = assertOk(
+      await client().rpc('apply_season_server_mutation_v1', {
+        p_mutation: stripUndefinedDeep(payload),
+      }),
+      'apply season server mutation'
+    ) as ServerSeasonMutationRpc | null;
+    return normalizeServerSeasonMutationResult(result);
+  },
+
   async getFlightRecords(seasonId: string): Promise<FlightRecord[]> {
     return (await readFlightRecordsForDashboardSeason(seasonId)).records;
   },
@@ -904,6 +1233,29 @@ export const supabaseStore: RemoteStore = {
       records: flightData.records,
       modifications,
     };
+  },
+
+  async getSeasonWorkspaceWindow(
+    input: RemoteSeasonWorkspaceWindowInput
+  ): Promise<RemoteSeasonWorkspaceWindowResult | null> {
+    try {
+      const payload = assertOk(
+        await client().rpc('get_season_schedule_allocation_window_v1', {
+          p_season_id: input.seasonId,
+          p_start_date: input.dateFrom ?? null,
+          p_end_date: input.dateTo ?? null,
+          p_resource_type: input.resourceType ?? 'all',
+          p_limit: input.limit ?? null,
+        }),
+        'load server workspace window'
+      ) as SeasonWorkspaceWindowRpc | null;
+      return payload ? mapWorkspaceWindow(input, payload) : null;
+    } catch (error) {
+      if (isMissingRpcSignatureError(error) || isStatementTimeoutError(error)) {
+        return loadSeasonWorkspaceWindowPaged(input);
+      }
+      throw error;
+    }
   },
 
   async getSeasonWorkspaceSnapshot(
@@ -1166,6 +1518,8 @@ export const supabaseStore: RemoteStore = {
     let nextServerVersion = input.baseServerSeq;
     const appliedEvents: SeasonChangeEvent[] = [];
     const conflictEvents: SeasonChangeEvent[] = [];
+    const changedTargets = new Set<string>();
+    const acknowledgedOps = new Set<string>();
     for (let start = 0; start < input.pendingEvents.length; start += SYNC_V2_EVENT_CHUNK_SIZE) {
       const chunk = input.pendingEvents.slice(start, start + SYNC_V2_EVENT_CHUNK_SIZE);
       const result = assertOk(
@@ -1181,6 +1535,10 @@ export const supabaseStore: RemoteStore = {
         appliedEvents?: SeasonChangeEvent[];
         conflict_events?: SeasonChangeEvent[];
         conflictEvents?: SeasonChangeEvent[];
+        changed_targets?: string[];
+        changedTargets?: string[];
+        acknowledged_ops?: string[];
+        acknowledgedOps?: string[];
         next_server_seq?: number;
         nextServerSeq?: number;
         server_high_water?: number;
@@ -1190,6 +1548,8 @@ export const supabaseStore: RemoteStore = {
       };
       appliedEvents.push(...(result.applied_events ?? result.appliedEvents ?? []).map(normalizeRpcSeasonEvent));
       conflictEvents.push(...(result.conflict_events ?? result.conflictEvents ?? []).map(normalizeRpcSeasonEvent));
+      for (const target of result.changed_targets ?? result.changedTargets ?? []) changedTargets.add(target);
+      for (const opId of result.acknowledged_ops ?? result.acknowledgedOps ?? []) acknowledgedOps.add(opId);
       nextServerSeq = result.next_server_seq ?? result.nextServerSeq ?? baseServerSeq;
       serverHighWater = Math.max(serverHighWater, result.server_high_water ?? result.serverHighWater ?? nextServerSeq);
       nextServerVersion = result.next_server_version ?? result.nextServerVersion ?? nextServerVersion;
@@ -1199,6 +1559,8 @@ export const supabaseStore: RemoteStore = {
     return {
       appliedEvents,
       conflictEvents,
+      changedTargets: Array.from(changedTargets),
+      acknowledgedOps: Array.from(acknowledgedOps),
       nextServerSeq,
       serverHighWater,
       nextServerVersion,

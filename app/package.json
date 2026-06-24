@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "test:dashboard-contract": "node --test src/lib/dashboardReportingContract.source.test.ts",
     "test:rules": "node scripts/rule-regression-tests.cjs",
     "test:updater": "node --experimental-strip-types --test src/lib/appUpdater.test.ts",
     "release:repo": "node scripts/configure-release-repo.cjs",

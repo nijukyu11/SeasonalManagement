@@ -1,12 +1,16 @@
 'use client';
 
+import { LEGACY_NATIVE_SYNC_ENABLED } from '@/lib/legacyNativeSyncAdapter';
+import SeasonConflictReviewControl from '../../components/SeasonConflictReviewControl';
+
 type SeasonRepairTabProps = {
   running: boolean;
   status: string | null;
+  selectedSeasonId: string | null;
   onImport: (file: File | null) => void;
 };
 
-export default function SeasonRepairTab({ running, status, onImport }: SeasonRepairTabProps) {
+export default function SeasonRepairTab({ running, status, selectedSeasonId, onImport }: SeasonRepairTabProps) {
   return (
     <section className="space-y-4">
       <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-950">
@@ -55,6 +59,31 @@ export default function SeasonRepairTab({ running, status, onImport }: SeasonRep
           </label>
         </div>
         {status && <p className="mt-3 text-sm text-on-surface-variant">{status}</p>}
+      </div>
+
+      <div className="rounded-lg border border-outline-variant bg-surface-container-low p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-on-surface">Legacy native sync repair</h3>
+            {LEGACY_NATIVE_SYNC_ENABLED ? (
+              <p className="mt-1 text-sm text-on-surface-variant">
+                Review legacy native sync conflicts for the current active season.
+              </p>
+            ) : (
+              <p className="mt-1 text-sm text-on-surface-variant">
+                Legacy native sync repair is disabled in online-first mode.
+              </p>
+            )}
+          </div>
+          {LEGACY_NATIVE_SYNC_ENABLED && selectedSeasonId && (
+            <SeasonConflictReviewControl seasonId={selectedSeasonId} />
+          )}
+        </div>
+        {LEGACY_NATIVE_SYNC_ENABLED && !selectedSeasonId && (
+          <p className="mt-3 text-sm text-on-surface-variant">
+            Open a season from a primary route before reviewing legacy native sync conflicts.
+          </p>
+        )}
       </div>
     </section>
   );
