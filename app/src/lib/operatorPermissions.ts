@@ -172,7 +172,13 @@ export function hasOperatorPermission(
   permissions: ReadonlySet<OperatorPermissionKey> | readonly OperatorPermissionKey[],
   permission: OperatorPermissionKey
 ): boolean {
-  return permissions instanceof Set ? permissions.has(permission) : permissions.includes(permission);
+  return isReadonlyPermissionSet(permissions) ? permissions.has(permission) : permissions.includes(permission);
+}
+
+function isReadonlyPermissionSet(
+  value: ReadonlySet<OperatorPermissionKey> | readonly OperatorPermissionKey[]
+): value is ReadonlySet<OperatorPermissionKey> {
+  return typeof (value as ReadonlySet<OperatorPermissionKey>).has === 'function';
 }
 
 export function canAssignOperatorRole(

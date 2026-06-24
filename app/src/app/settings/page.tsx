@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { getDashboardAiOperatorAccess, syncDashboardAiProviderKey } from '@/lib/dashboardAiAdmin';
+import { syncDashboardAiProviderKey } from '@/lib/dashboardAiAdmin';
+import { getCurrentOperatorAccess } from '@/lib/operatorUserManagement';
 import {
   batchWriteFlightRecords,
   clearSeasonBaseline,
@@ -84,8 +85,9 @@ import AiAnalysisTab from './components/AiAnalysisTab';
 import DashboardAlertsTab from './components/DashboardAlertsTab';
 import SeasonRepairTab from './components/SeasonRepairTab';
 import UpdatesTab from './components/UpdatesTab';
+import UsersRolesTab from './components/UsersRolesTab';
 
-type SettingsTab = 'checkinCounters' | 'gateAllocation' | 'locksAndOutages' | 'groups' | 'rules' | 'routeCountries' | 'airlineColors' | 'dashboardAlerts' | 'aiAnalysis' | 'seasonRepair' | 'updates';
+type SettingsTab = 'checkinCounters' | 'gateAllocation' | 'locksAndOutages' | 'groups' | 'rules' | 'routeCountries' | 'airlineColors' | 'dashboardAlerts' | 'aiAnalysis' | 'usersRoles' | 'seasonRepair' | 'updates';
 
 const emptySettings = (): OperationalSettings => hydrateOperationalSettings(null);
 
@@ -273,6 +275,8 @@ export default function SettingsPage() {
   const [aiKeyRotating, setAiKeyRotating] = useState(false);
   const [canManageAi, setCanManageAi] = useState(false);
   const [canUseAi, setCanUseAi] = useState(false);
+  const [canManageUsers, setCanManageUsers] = useState(false);
+  const [canManageRoles, setCanManageRoles] = useState(false);
   const [routeCountryRoute, setRouteCountryRoute] = useState('');
   const [routeCountryCountry, setRouteCountryCountry] = useState('');
   const [routeCountrySearch, setRouteCountrySearch] = useState('');
@@ -317,15 +321,19 @@ export default function SettingsPage() {
     let cancelled = false;
     (async () => {
       try {
-        const access = await getDashboardAiOperatorAccess();
+        const access = await getCurrentOperatorAccess();
         if (!cancelled) {
           setCanManageAi(access.canManageAi);
           setCanUseAi(access.canUseAi);
+          setCanManageUsers(access.canManageUsers);
+          setCanManageRoles(access.permissions.has('roles.manage'));
         }
       } catch {
         if (!cancelled) {
           setCanManageAi(false);
           setCanUseAi(false);
+          setCanManageUsers(false);
+          setCanManageRoles(false);
         }
       }
     })();
@@ -333,6 +341,25 @@ export default function SettingsPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'usersRoles' && !canManageUsers) setActiveTab('checkinCounters');
+  }, [activeTab, canManageUsers, setActiveTab]);
+
+  const visibleTabs = useMemo(() => [
+    { id: 'checkinCounters' as const, label: 'Counters' },
+    { id: 'gateAllocation' as const, label: 'Gates & Stands' },
+    { id: 'locksAndOutages' as const, label: 'Locks / Outages' },
+    { id: 'groups' as const, label: 'A/C Groups' },
+    { id: 'rules' as const, label: 'Allocation Rules' },
+    { id: 'routeCountries' as const, label: 'Route-Country' },
+    { id: 'airlineColors' as const, label: 'Airline Colors' },
+    { id: 'dashboardAlerts' as const, label: 'Dashboard Alerts' },
+    { id: 'aiAnalysis' as const, label: 'AI Analysis' },
+    ...(canManageUsers ? [{ id: 'usersRoles' as const, label: 'Users & Roles' }] : []),
+    { id: 'seasonRepair' as const, label: 'Season Repair' },
+    { id: 'updates' as const, label: 'Updates' },
+  ], [canManageUsers]);
 
   const isDirty = useMemo(() => JSON.stringify(settings) !== JSON.stringify(savedSettings), [savedSettings, settings]);
   const checkInCounters = useMemo(() => orderedCounters(settings.checkInCounters), [settings.checkInCounters]);
@@ -1423,19 +1450,7 @@ export default function SettingsPage() {
 
         <main ref={settingsScrollRef} className="flex-1 overflow-y-auto p-6">
           <div className="mb-5 flex gap-2 overflow-x-auto whitespace-nowrap border-b border-surface-variant [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {[
-              { id: 'checkinCounters' as const, label: 'Counters' },
-              { id: 'gateAllocation' as const, label: 'Gates & Stands' },
-              { id: 'locksAndOutages' as const, label: 'Locks / Outages' },
-              { id: 'groups' as const, label: 'A/C Groups' },
-              { id: 'rules' as const, label: 'Allocation Rules' },
-              { id: 'routeCountries' as const, label: 'Route-Country' },
-              { id: 'airlineColors' as const, label: 'Airline Colors' },
-              { id: 'dashboardAlerts' as const, label: 'Dashboard Alerts' },
-              { id: 'aiAnalysis' as const, label: 'AI Analysis' },
-              { id: 'seasonRepair' as const, label: 'Season Repair' },
-              { id: 'updates' as const, label: 'Updates' },
-            ].map((tab) => (
+            {visibleTabs.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
@@ -1653,6 +1668,14 @@ export default function SettingsPage() {
               updateAiModel={updateAiModel}
               deleteAiModel={deleteAiModel}
               rotateAiProviderKey={rotateAiProviderKey}
+            />
+          )}
+
+          {activeTab === 'usersRoles' && canManageUsers && (
+            <UsersRolesTab
+              canManageRoles={canManageRoles}
+              setStatus={setStatus}
+              showAlert={showAlert}
             />
           )}
 

@@ -26,3 +26,14 @@ test('operator user management edge function owns auth admin and assignment chec
   assert.match(source, /app_operator_roles/);
   assert.match(source, /app_operator_permission_overrides/);
 });
+
+test('Settings exposes Users & Roles only behind users.manage access', () => {
+  const settingsSource = readFileSync(join(root, 'app', 'settings', 'page.tsx'), 'utf8');
+  const tabSource = readFileSync(join(root, 'app', 'settings', 'components', 'UsersRolesTab.tsx'), 'utf8');
+  assert.match(settingsSource, /getCurrentOperatorAccess/);
+  assert.match(settingsSource, /canManageUsers \? \[\{ id: 'usersRoles'/);
+  assert.match(settingsSource, /activeTab === 'usersRoles' && canManageUsers/);
+  assert.match(tabSource, /createOperatorUser/);
+  assert.match(tabSource, /listOperatorUsers/);
+  assert.match(tabSource, /role\.id !== 'super_admin'/);
+});
