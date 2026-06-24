@@ -70,6 +70,7 @@ test('app operator schema includes role permissions with server-side write bound
   assert.match(schemaSource, /grant execute on function public\.app_operator_has_permission_for\(uuid, text\) to authenticated/);
   assert.match(schemaSource, /drop policy if exists "app operators can write" on public\.app_operator_roles/);
   assert.doesNotMatch(schemaSource, /create policy "app operators can write" on public\.app_operator_roles/);
+  assert.match(migrationSource, /grant select on public\.app_operator_roles to authenticated/);
   assert.match(migrationSource, /username, ''\)\) = 'admin'/);
   assert.match(migrationSource, /'users.manage'/);
 });

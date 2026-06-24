@@ -251,6 +251,10 @@ create policy "app operators can read" on public.app_operator_permission_overrid
   for select to authenticated
   using (public.is_app_operator());
 
+grant select on public.app_roles to authenticated;
+grant select on public.app_role_permissions to authenticated;
+grant select on public.app_operator_roles to authenticated;
+grant select on public.app_operator_permission_overrides to authenticated;
 grant execute on function public.app_operator_known_permission_keys() to authenticated;
 grant execute on function public.app_operator_has_permission_for(uuid, text) to authenticated;
 grant execute on function public.app_operator_has_permission(text) to authenticated;
