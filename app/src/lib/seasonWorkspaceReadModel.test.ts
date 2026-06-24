@@ -4,6 +4,7 @@ import {
   WORKSPACE_WINDOW_CACHE_TTL_MS,
   buildWorkspaceWindowCacheKey,
   readCachedWorkspaceWindow,
+  readWorkspaceWindowSnapshot,
   shouldRefreshWorkspaceWindow,
 } from './seasonWorkspaceReadModel.ts';
 import { useSeasonWorkspaceStore } from './seasonWorkspaceStore.ts';
@@ -160,4 +161,39 @@ test('readCachedWorkspaceWindow rejects incomplete cached window records', () =>
     readCachedWorkspaceWindow(store.getState().workspaces['season-1'], windowKey),
     null
   );
+});
+
+test('workspace window snapshot remains readable when cache is stale from a cross-route mutation', () => {
+  const store = useSeasonWorkspaceStore;
+  store.getState().resetSeasonWorkspaceStore();
+  const windowKey = buildWorkspaceWindowCacheKey({
+    route: 'daily',
+    seasonId: 'season-1',
+    dateFrom: '2026-06-22',
+    dateTo: '2026-06-23',
+  });
+  const record = makeRecord({ id: 'LEG_D_2026-06-22_UO553', flightNumber: 'UO553' });
+  store.getState().replaceSeasonWindow({
+    seasonId: 'season-1',
+    records: [record],
+    modifications: [],
+    windowKey,
+  });
+  store.getState().patchSeasonWorkspace({
+    seasonId: 'season-1',
+    affectedIds: [record.id],
+    modifications: [{
+      legId: record.id,
+      action: 'modified',
+      counter: ['C01', 'C02'],
+    }],
+  });
+
+  assert.equal(
+    readCachedWorkspaceWindow(store.getState().workspaces['season-1'], windowKey),
+    null
+  );
+  const snapshot = readWorkspaceWindowSnapshot(store.getState().workspaces['season-1'], windowKey);
+  assert.deepEqual(snapshot?.records.map((item) => item.id), [record.id]);
+  assert.deepEqual(snapshot?.modifications.get(record.id)?.counter, ['C01', 'C02']);
 });

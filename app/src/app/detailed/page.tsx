@@ -85,7 +85,7 @@ import { queryNativeScheduleWindow, runNativeScheduleMutation } from '@/lib/nati
 import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
 import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
-import { readCachedWorkspaceWindow } from '@/lib/seasonWorkspaceReadModel';
+import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import type { LocalSyncMeta } from '@/lib/localSeasonStore';
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -300,36 +300,26 @@ function DetailedScheduleContent() {
       targetArrFlight,
       targetDepFlight,
     });
-    const result = await queryNativeScheduleWindow({
-      seasonId: season.id,
-      dateFrom: queryWindow.dateFrom,
-      dateTo: queryWindow.dateTo,
-      flightNumberFilter: queryWindow.flightNumberFilter,
-      limit: 100000,
-    });
-    if (!result) throw new Error('Native detailed schedule query is unavailable.');
-    const nextMods = new Map(result.modifications.map((mod) => [mod.legId, mod]));
-    setFlightRecords(result.records);
-    setCurrentMods(nextMods);
+    const windowKey = buildDetailedWindowKey(queryWindow);
+    const snapshot = readWorkspaceWindowSnapshot(
+      useSeasonWorkspaceStore.getState().workspaces[season.id],
+      windowKey
+    );
+    if (!snapshot?.syncMeta) return null;
+    loadedWindowKeyRef.current = windowKey;
+    setFlightRecords(snapshot.records);
+    setCurrentMods(snapshot.modifications);
     setDraftState(null);
     setSyncSummary({
-      pendingCount: result.syncMeta.pendingCount,
-      lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
+      pendingCount: snapshot.syncMeta.pendingCount,
+      lastLocalChangeAt: snapshot.syncMeta.lastLocalChangeAt,
     });
     patchCachedSeasonData(season.id, {
-      records: result.records,
-      modifications: nextMods,
+      records: snapshot.records,
+      modifications: snapshot.modifications,
     });
-    useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-      seasonId: season.id,
-      season,
-      records: result.records,
-      modifications: nextMods,
-      syncMeta: result.syncMeta,
-      windowKey: buildDetailedWindowKey(queryWindow),
-    });
-    refreshDetailedState(result.records, nextMods, { preserveSelection: options.preserveSelection ?? true });
-    return result;
+    refreshDetailedState(snapshot.records, snapshot.modifications, { preserveSelection: options.preserveSelection ?? true });
+    return snapshot;
   }, [fromDate, hasDraftChanges, refreshDetailedState, season, targetArrFlight, targetDateFrom, targetDateTo, targetDepFlight, toDate]);
 
   const captureDetailedOptimisticRollbackState = useCallback(() => ({
@@ -1266,6 +1256,9 @@ function DetailedScheduleContent() {
             return new Map();
           });
           return;
+        }
+        if (SERVER_AUTHORITATIVE_MODE) {
+          throw new Error('Server detailed schedule window is unavailable.');
         }
 
         setLoadProgress(buildLoadProgress('Checking local season baseline', 40, found.seasonCode));

@@ -38,7 +38,7 @@ import { queryNativeAllocationWindow, runNativeLocalModificationBatchDeltaResult
 import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
 import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
-import { readCachedWorkspaceWindow } from '@/lib/seasonWorkspaceReadModel';
+import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import {
   buildGatePdfPreviewPlan,
   exportGateAllocationPdf,
@@ -595,30 +595,18 @@ function GateAllocationContent() {
 
   const refreshGateWindow = useCallback(async () => {
     if (!season) return;
-    const result = await queryNativeAllocationWindow({
-      seasonId: season.id,
-      dateFrom: fromDateTime.slice(0, 10),
-      dateTo: toDateTime.slice(0, 10),
-      resourceType: 'gate',
-      limit: 10000,
-    });
-    if (!result) throw new Error('Native gate allocation query is unavailable.');
-    const nextModifications = new Map(result.modifications.map((mod) => [mod.legId, mod]));
+    const windowKey = buildGateWindowKey(fromDateTime, toDateTime);
+    const snapshot = readWorkspaceWindowSnapshot(useSeasonWorkspaceStore.getState().workspaces[season.id], windowKey);
+    if (!snapshot) return null;
     clearOptimisticGateAllocationView();
-    setFlightRecords(result.records);
-    replaceGateModifications(nextModifications);
+    setFlightRecords(snapshot.records);
+    replaceGateModifications(snapshot.modifications);
     patchCachedSeasonData(season.id, {
-      records: result.records,
-      modifications: nextModifications,
+      records: snapshot.records,
+      modifications: snapshot.modifications,
     });
-    useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-      seasonId: season.id,
-      season,
-      records: result.records,
-      modifications: nextModifications,
-      syncMeta: result.syncMeta,
-      windowKey: buildGateWindowKey(fromDateTime, toDateTime),
-    });
+    loadedWindowKeyRef.current = windowKey;
+    return snapshot;
   }, [clearOptimisticGateAllocationView, fromDateTime, replaceGateModifications, season, toDateTime]);
 
   const tryApplyCachedGateRouteWindow = useCallback((): boolean => {

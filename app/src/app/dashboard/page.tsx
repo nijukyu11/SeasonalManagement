@@ -76,7 +76,7 @@ import { queryNativeScheduleWindow } from '@/lib/nativeSeasonRepository';
 import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
 import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
-import { readCachedWorkspaceWindow } from '@/lib/seasonWorkspaceReadModel';
+import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
 import { resolveCountryForRoute } from '@/lib/routeCountry';
 import type { AiAnalysisModelSetting, DashboardAlertSettings, FlightModification, FlightRecord, OperationalSettings, RouteCountryMapping, Season } from '@/lib/types';
@@ -916,32 +916,21 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
 
   const refreshDashboardWindow = useCallback(async () => {
     if (!season?.id) return null;
-    const result = await queryNativeScheduleWindow({
-      seasonId: season.id,
-      limit: 100000,
-    });
-    if (!result) throw new Error('Native dashboard query is unavailable.');
-    const nextModifications = new Map(result.modifications.map((mod) => [mod.legId, mod]));
-    setRecords(result.records);
-    setModifications(nextModifications);
-    setDataSource('local');
-    setSyncMeta(result.syncMeta);
+    const windowKey = buildDashboardWindowKey('operations');
+    const snapshot = readWorkspaceWindowSnapshot(useSeasonWorkspaceStore.getState().workspaces[season.id], windowKey);
+    if (!snapshot) return null;
+    setRecords(snapshot.records);
+    setModifications(snapshot.modifications);
+    setDataSource('cache');
+    setSyncMeta(snapshot.syncMeta);
     setCachedSeasonData(season.id, {
       rows: [],
-      records: result.records,
-      modifications: nextModifications,
+      records: snapshot.records,
+      modifications: snapshot.modifications,
       seasonDataVersion: season.dataVersion,
     });
-    useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-      seasonId: season.id,
-      season,
-      rows: [],
-      records: result.records,
-      modifications: nextModifications,
-      syncMeta: result.syncMeta,
-      windowKey: buildDashboardWindowKey('operations'),
-    });
-    return result;
+    loadedWindowKeyRef.current = windowKey;
+    return snapshot;
   }, [season]);
 
   useSeasonWorkspaceRefresh({

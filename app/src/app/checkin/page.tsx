@@ -66,7 +66,7 @@ import { queryNativeAllocationWindow, runNativeLocalModificationBatchDeltaResult
 import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
 import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
-import { readCachedWorkspaceWindow } from '@/lib/seasonWorkspaceReadModel';
+import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import { trimUiUndoStack } from '@/lib/uiUndoMemory';
 import {
   buildCheckInPdfPreviewPlan,
@@ -1014,37 +1014,24 @@ function CheckInAllocationContent() {
 
   const refreshCheckInWindow = useCallback(async () => {
     if (!season) return;
-    const result = await queryNativeAllocationWindow({
-      seasonId: season.id,
-      dateFrom: fromDateTime.slice(0, 10),
-      dateTo: toDateTime.slice(0, 10),
-      resourceType: 'checkin',
-      limit: 10000,
-    });
-    if (!result) throw new Error('Native allocation query is unavailable.');
-    const nextModifications = new Map(result.modifications.map((mod) => [mod.legId, mod]));
+    const windowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
+    const snapshot = readWorkspaceWindowSnapshot(useSeasonWorkspaceStore.getState().workspaces[season.id], windowKey);
+    if (!snapshot?.syncMeta) return null;
     clearOptimisticAllocationView();
-    setFlightRecords(result.records);
-    replaceCheckInModifications(nextModifications);
+    setFlightRecords(snapshot.records);
+    replaceCheckInModifications(snapshot.modifications);
     setSyncSummary({
-      pendingCount: result.syncMeta.pendingCount,
-      lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
+      pendingCount: snapshot.syncMeta.pendingCount,
+      lastLocalChangeAt: snapshot.syncMeta.lastLocalChangeAt,
     });
     setCachedSeasonData(season.id, {
       rows: [],
-      records: result.records,
-      modifications: nextModifications,
+      records: snapshot.records,
+      modifications: snapshot.modifications,
       seasonDataVersion: season.dataVersion,
     });
-    useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-      seasonId: season.id,
-      season,
-      rows: [],
-      records: result.records,
-      modifications: nextModifications,
-      syncMeta: result.syncMeta,
-      windowKey: buildCheckInWindowKey(fromDateTime, toDateTime),
-    });
+    loadedWindowKeyRef.current = windowKey;
+    return snapshot;
   }, [clearOptimisticAllocationView, fromDateTime, replaceCheckInModifications, season, toDateTime]);
 
   const tryApplyCachedCheckInRouteWindow = useCallback((): boolean => {

@@ -76,3 +76,24 @@ export function readCachedWorkspaceWindow(
     windowKey,
   };
 }
+
+export function readWorkspaceWindowSnapshot(
+  workspace: SeasonWorkspaceSlice | undefined,
+  windowKey: string
+): CachedWorkspaceWindow | null {
+  if (!workspace) return null;
+  const cachedWindowIds = workspace.windowIds.get(windowKey);
+  if (!cachedWindowIds) return null;
+  const records = cachedWindowIds
+    .map((id) => workspace.recordsById.get(id))
+    .filter((record): record is FlightRecord => Boolean(record));
+  if (records.length !== cachedWindowIds.length) return null;
+  return {
+    season: workspace.season,
+    rows: workspace.rows,
+    records,
+    modifications: new Map(workspace.modificationsByLegId),
+    syncMeta: workspace.syncMeta,
+    windowKey,
+  };
+}

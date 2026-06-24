@@ -61,7 +61,7 @@ import { ensureNativeLocalSeason, queryNativeScheduleWindow, runNativeScheduleMu
 import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
 import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
-import { readCachedWorkspaceWindow } from '@/lib/seasonWorkspaceReadModel';
+import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import type { LocalSyncMeta } from '@/lib/localSeasonStore';
 import type { FlightCounter, FlightModification, FlightRecord, ModHistoryEntry, OperationalSettings, Season } from '@/lib/types';
 import NewFlightModal from '../components/NewFlightModal';
@@ -579,20 +579,22 @@ function DailyScheduleContent() {
 
   const refreshDailyWindow = useCallback(async () => {
     if (!season?.id) return null;
-    const result = await queryNativeScheduleWindow({
-      seasonId: season.id,
-      dateFrom: fromDateTime.slice(0, 10),
-      dateTo: toDateTime.slice(0, 10),
-      limit: 10000,
+    const windowKey = buildDailyWindowKey(fromDateTime, toDateTime);
+    const snapshot = readWorkspaceWindowSnapshot(useSeasonWorkspaceStore.getState().workspaces[season.id], windowKey);
+    if (!snapshot?.syncMeta) return null;
+    setFlightRecords(snapshot.records);
+    setModifications(new Map(snapshot.modifications));
+    setSyncSummary({
+      pendingCount: snapshot.syncMeta.pendingCount,
+      lastLocalChangeAt: snapshot.syncMeta.lastLocalChangeAt,
     });
-    if (!result) throw new Error('Native daily schedule query is unavailable.');
-    const nextModifications = new Map(result.modifications.map((mod) => [mod.legId, mod]));
-    applyDailyNativeState(season.id, result.records, nextModifications, result.syncMeta, {
-      replaceWindow: true,
-      season,
+    patchCachedSeasonData(season.id, {
+      records: snapshot.records,
+      modifications: snapshot.modifications,
     });
-    return result;
-  }, [applyDailyNativeState, fromDateTime, season, toDateTime]);
+    loadedWindowKeyRef.current = windowKey;
+    return snapshot;
+  }, [fromDateTime, season, toDateTime]);
 
   useSeasonWorkspaceRefresh({
     seasonId: season?.id ?? targetSeasonId,

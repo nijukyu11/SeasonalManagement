@@ -61,7 +61,7 @@ import {
 } from '@/lib/localSeasonStore';
 import { appendAuditLogEntry, createFlightActionAuditFromHistory } from '@/lib/auditLog';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
-import { readCachedWorkspaceWindow } from '@/lib/seasonWorkspaceReadModel';
+import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import type { Season, DisplayRow, FlightRecord, FlightLeg, FlightModification, ParsedRow, ModHistoryEntry } from '@/lib/types';
 import { withScheduleNotificationPayload } from '@/lib/scheduleNotifications';
 import { resolveLinkedDeletionTargets } from '@/lib/pairDeletion';
@@ -420,6 +420,9 @@ export default function HomePage() {
       });
       return;
     }
+    if (SERVER_AUTHORITATIVE_MODE) {
+      throw new Error('Server seasonal schedule window is unavailable.');
+    }
 
     setLoadProgress(buildLoadProgress('Checking local season baseline', 30, season.seasonCode));
     await ensureNativeSeasonBaseline(season);
@@ -464,11 +467,42 @@ export default function HomePage() {
     });
   }, [applySeasonData, debouncedFilters.dateFrom, debouncedFilters.dateTo, debouncedFilters.flight, debouncedFilters.route]);
 
+  const refreshSeasonalWindow = useCallback(() => {
+    if (!activeSeason) return null;
+    if (hasDraftChanges) return null;
+    const snapshot = readWorkspaceWindowSnapshot(
+      useSeasonWorkspaceStore.getState().workspaces[activeSeason.id],
+      currentSeasonalWindowKey
+    );
+    if (!snapshot) return null;
+    const rows = snapshot.rows.length > 0
+      ? snapshot.rows
+      : buildPatternRowsFromRecords(snapshot.records, snapshot.modifications);
+    loadedWindowKeyRef.current = currentSeasonalWindowKey;
+    setActiveSeason(activeSeason);
+    applySeasonData(rows, snapshot.records, snapshot.modifications);
+    setModHistory([]);
+    setDraftState(null);
+    setSyncSummary({
+      pendingCount: snapshot.syncMeta?.pendingCount ?? 0,
+      lastLocalChangeAt: snapshot.syncMeta?.lastLocalChangeAt ?? null,
+    });
+    setCachedSeasonData(activeSeason.id, {
+      rows,
+      records: snapshot.records,
+      modifications: snapshot.modifications,
+      seasonDataVersion: activeSeason.dataVersion,
+    });
+    return snapshot;
+  }, [activeSeason, applySeasonData, currentSeasonalWindowKey, hasDraftChanges]);
+
   useSeasonWorkspaceRefresh({
     seasonId: activeSeason?.id,
     policy: 'on-activation',
     source: 'seasonal',
-    onRefresh: () => activeSeason ? loadSeasonRows(activeSeason, true) : undefined,
+    onRefresh: () => {
+      refreshSeasonalWindow();
+    },
   });
 
   // Load seasons on mount
@@ -750,17 +784,16 @@ export default function HomePage() {
         return;
       }
       setIsExporting(true);
-      const exportWindow = await queryNativeScheduleWindow({
+      const exportWindow = await loadSeasonWorkspaceWindow({
         seasonId: activeSeason.id,
         dateFrom: null,
         dateTo: null,
-        flightNumberFilter: null,
-        routeFilter: null,
+        resourceType: 'schedule',
         limit: FULL_SEASON_EXPORT_LIMIT,
       });
-      if (!exportWindow) throw new Error('Native seasonal schedule query is unavailable.');
+      if (!exportWindow) throw new Error('Server seasonal schedule export window is unavailable.');
       const exportRecords = exportWindow.records;
-      const exportModifications = new Map(exportWindow.modifications.map((mod) => [mod.legId, mod]));
+      const exportModifications = exportWindow.modifications;
       const selectedIds = Array.from(selectedRecordIds);
       const canonicalExport = buildCanonicalSeasonalRows({
         records: exportRecords,
@@ -1351,7 +1384,6 @@ export default function HomePage() {
         }
       }
 
-      let seasonId: string;
       const uploadedAt = Date.now();
       let seasonRecords = importedRecords;
       let seasonMods = new Map<string, FlightModification>();
@@ -1401,8 +1433,6 @@ export default function HomePage() {
         dataVersion: (existing?.dataVersion ?? 0) + 1,
         lastSyncedAt: uploadedAt,
       };
-      let nextSeason: Season;
-
       const actor = await getCurrentRemoteActor();
       const commitLabel = existing ? `Patching season ${seasonCode}` : `Creating season ${seasonCode}`;
       setUploadProgress(buildImportProgress(commitLabel, existing ? 32 : 28, existing ? `${affectedRecordIds.length} affected records` : undefined));
@@ -1419,8 +1449,8 @@ export default function HomePage() {
           setUploadProgress(buildImportBatchProgress('Committing seasonal import', written, total, 35, 90));
         },
       });
-      seasonId = remoteImport.seasonId;
-      nextSeason = existing
+      const seasonId = remoteImport.seasonId;
+      const nextSeason = existing
         ? { ...existing, ...seasonFields, id: seasonId }
         : { ...seasonFields, id: seasonId } as Season;
       const verifiedCounts = {
@@ -1571,6 +1601,7 @@ export default function HomePage() {
     showChoice,
     syncAnySeasonNow,
     fetchingServerData,
+    syncPendingCount,
     syncInProgress,
     uploading,
   ]);
