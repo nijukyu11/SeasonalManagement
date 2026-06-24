@@ -53,6 +53,27 @@ test('app operator schema supports username login metadata without changing auth
   assert.match(schemaSource, /where user_id = auth\.uid\(\)/);
 });
 
+test('app operator schema includes role permissions with server-side write boundary', () => {
+  const schemaSource = readFileSync(join(root, '..', 'supabase', 'schema.sql'), 'utf8');
+  const migrationSource = readFileSync(join(root, '..', 'supabase', 'migrations', '20260624090000_operator_roles_user_management.sql'), 'utf8');
+  assert.match(schemaSource, /create table if not exists public\.app_roles/);
+  assert.match(schemaSource, /create table if not exists public\.app_role_permissions/);
+  assert.match(schemaSource, /create table if not exists public\.app_operator_roles/);
+  assert.match(schemaSource, /create table if not exists public\.app_operator_permission_overrides/);
+  assert.match(schemaSource, /public\.app_operator_has_permission_for\(p_user_id uuid, p_permission_key text\)/);
+  assert.match(schemaSource, /public\.app_operator_has_permission\(p_permission_key text\)/);
+  assert.match(schemaSource, /'super_admin'/);
+  assert.match(schemaSource, /'ops_admin'/);
+  assert.match(schemaSource, /'schedule_planner'/);
+  assert.match(schemaSource, /'resource_coordinator'/);
+  assert.match(schemaSource, /'viewer'/);
+  assert.match(schemaSource, /grant execute on function public\.app_operator_has_permission_for\(uuid, text\) to authenticated/);
+  assert.match(schemaSource, /drop policy if exists "app operators can write" on public\.app_operator_roles/);
+  assert.doesNotMatch(schemaSource, /create policy "app operators can write" on public\.app_operator_roles/);
+  assert.match(migrationSource, /username, ''\)\) = 'admin'/);
+  assert.match(migrationSource, /'users.manage'/);
+});
+
 test('operator display uses app profile username and display name when available', () => {
   const sidebarSource = readFileSync(join(root, 'app', 'components', 'AppSidebar.tsx'), 'utf8');
   const supabaseStoreSource = readFileSync(join(root, 'lib', 'supabaseStore.ts'), 'utf8');
