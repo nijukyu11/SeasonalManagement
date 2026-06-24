@@ -1678,10 +1678,23 @@ export const supabaseStore: RemoteStore = {
     const { data } = await getSupabaseClient().auth.getUser();
     const user = data.user;
     if (!user) return null;
+
+    const { data: operator } = await getSupabaseClient()
+      .from('app_operators')
+      .select('email,username,display_name')
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    const email = typeof operator?.email === 'string' ? operator.email : user.email ?? null;
+    const username = typeof operator?.username === 'string' ? operator.username : null;
+    const displayName = typeof operator?.display_name === 'string'
+      ? operator.display_name
+      : user.user_metadata?.name ?? user.user_metadata?.full_name ?? username;
+
     return {
       uid: user.id,
-      email: user.email ?? null,
-      displayName: user.user_metadata?.name ?? user.user_metadata?.full_name ?? null,
+      email,
+      displayName,
       isAnonymous: user.is_anonymous ?? false,
     };
   },
