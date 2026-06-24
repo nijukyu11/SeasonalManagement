@@ -56,10 +56,12 @@ test('app operator schema supports username login metadata without changing auth
 test('operator display uses app profile username and display name when available', () => {
   const sidebarSource = readFileSync(join(root, 'app', 'components', 'AppSidebar.tsx'), 'utf8');
   const supabaseStoreSource = readFileSync(join(root, 'lib', 'supabaseStore.ts'), 'utf8');
+  const auditSource = readFileSync(join(root, 'app', 'audit', 'page.tsx'), 'utf8');
   assert.match(sidebarSource, /operatorAuth\.operatorLabel/);
   assert.match(supabaseStoreSource, /username,display_name/);
   assert.match(supabaseStoreSource, /operator\?\.display_name/);
   assert.match(supabaseStoreSource, /user_metadata\?\.full_name \?\? username/);
+  assert.match(auditSource, /session\.actor\.displayName \?\? session\.actor\.email \?\? 'Anonymous'/);
 });
 
 test('Settings keeps the explicit full-season repair import path', () => {
