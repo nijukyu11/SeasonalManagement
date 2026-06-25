@@ -31,6 +31,16 @@ test('remote store exposes server-side seasonal import transaction contract', ()
   assert.match(supabaseStoreSource, /\/rest\/v1\/rpc\/apply_seasonal_import_remote/);
 });
 
+test('server workspace window uses paged server fallback for transient RPC fetch failures', () => {
+  const supabaseStoreSource = readFileSync(join(root, 'lib', 'supabaseStore.ts'), 'utf8');
+  assert.match(supabaseStoreSource, /function isTransientFetchFailureError\(error: unknown\): boolean/);
+  assert.match(
+    supabaseStoreSource,
+    /isMissingRpcSignatureError\(error\) \|\| isStatementTimeoutError\(error\) \|\| isTransientFetchFailureError\(error\)/
+  );
+  assert.match(supabaseStoreSource, /return loadSeasonWorkspaceWindowPaged\(input\)/);
+});
+
 test('Supabase auth survives self-hosted cutover storage and JWT refresh', () => {
   const supabaseSource = readFileSync(join(root, 'lib', 'supabase.ts'), 'utf8');
   const authGateSource = readFileSync(join(root, 'app', 'components', 'OperatorAuthGate.tsx'), 'utf8');

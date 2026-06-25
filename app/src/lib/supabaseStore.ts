@@ -234,6 +234,13 @@ function isStatementTimeoutError(error: unknown): boolean {
   return /statement timeout|canceling statement due to statement timeout/i.test(message);
 }
 
+function isTransientFetchFailureError(error: unknown): boolean {
+  const message = error instanceof Error
+    ? `${error.name}: ${error.message} ${String((error as { cause?: unknown }).cause ?? '')}`
+    : String(error ?? '');
+  return /failed to fetch|fetch failed|networkerror|network request failed|load failed|terminated/i.test(message);
+}
+
 function randomId(prefix: string): string {
   const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
@@ -1251,7 +1258,7 @@ export const supabaseStore: RemoteStore = {
       ) as SeasonWorkspaceWindowRpc | null;
       return payload ? mapWorkspaceWindow(input, payload) : null;
     } catch (error) {
-      if (isMissingRpcSignatureError(error) || isStatementTimeoutError(error)) {
+      if (isMissingRpcSignatureError(error) || isStatementTimeoutError(error) || isTransientFetchFailureError(error)) {
         return loadSeasonWorkspaceWindowPaged(input);
       }
       throw error;
