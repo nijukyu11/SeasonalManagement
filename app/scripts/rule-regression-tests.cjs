@@ -4511,7 +4511,7 @@ async function run() {
     selectedSeasonCount: 1,
     exportEnabled: true,
   });
-  const toolsetAvailabilityWithTooManySeasons = resolveDashboardAiAvailableTools({
+  const toolsetAvailabilityWithWideSeasonScope = resolveDashboardAiAvailableTools({
     aiConfigured: true,
     operatorAuthorized: true,
     hasSelectedSeason: true,
@@ -4530,10 +4530,10 @@ async function run() {
   assert(
     DASHBOARD_AI_TOOL_REGISTRY.every((tool) => tool.toolset && Array.isArray(tool.requires) && tool.outputContract) &&
       toolsetAvailabilityWithoutModel.every((tool) => tool.availability === 'disabled' && tool.disabledReason) &&
-      toolsetAvailabilityWithTooManySeasons.find((tool) => tool.name === 'compose_dashboard_ai_board')?.availability === 'disabled' &&
+      toolsetAvailabilityWithWideSeasonScope.find((tool) => tool.name === 'compose_dashboard_ai_board')?.availability === 'enabled' &&
       toolsetAvailabilityReady.find((tool) => tool.name === 'compose_dashboard_ai_board')?.availability === 'enabled' &&
       toolsetAvailabilityReady.find((tool) => tool.name === 'suggest_custom_workbook')?.toolset === 'dashboard-export',
-    `Dashboard AI toolset gating should annotate tools with toolsets, requirements, and runtime availability, got ${JSON.stringify({ toolsetAvailabilityWithoutModel, toolsetAvailabilityWithTooManySeasons, toolsetAvailabilityReady })}`
+    `Dashboard AI toolset gating should annotate tools with toolsets, requirements, and runtime availability, got ${JSON.stringify({ toolsetAvailabilityWithoutModel, toolsetAvailabilityWithWideSeasonScope, toolsetAvailabilityReady })}`
   );
   const monthDriverSkill = resolveDashboardAiSkillForPrompt('táº¡o báº£ng so sÃ¡nh cÃ¡c Ä‘iá»ƒm khÃ¡c biá»‡t ná»•i báº­t cá»§a thÃ¡ng 6 vá»›i thÃ¡ng 5 theo hÃ£ng bay vÃ  Ä‘Æ°á»ng bay'); 
   const peakHourSkill = resolveDashboardAiSkillForPrompt('váº½ biá»ƒu Ä‘á»“ peak hour cho mÃ¹a Ä‘ang chá»n'); 
@@ -4710,7 +4710,7 @@ async function run() {
     arbitraryWrite: { path: 'C:/unsafe.xlsx' },
   });
   const initialAiBoard = buildDashboardAiWorkspaceBoard({
-    seasonIds: ['season-c', 'season-a', 'season-a', 'season-b'],
+    seasonIds: ['season-c', 'season-a', 'season-a', 'season-b', 'season-d'],
     title: 'Current AI Board',
     now: new Date('2026-05-19T00:00:00.000Z'),
   });
@@ -4718,7 +4718,7 @@ async function run() {
     now: new Date('2026-05-19T00:10:00.000Z'),
   });
   assert(
-    JSON.stringify(normalizeDashboardAiWorkspaceSeasonIds(['season-b', 'season-a', 'season-c', 'season-d', 'season-a'])) === JSON.stringify(['season-b', 'season-a', 'season-c']) &&
+    JSON.stringify(normalizeDashboardAiWorkspaceSeasonIds(['season-b', 'season-a', 'season-c', 'season-d', 'season-a'])) === JSON.stringify(['season-b', 'season-a', 'season-c', 'season-d']) &&
       safeBoardPatch?.title === 'AI Workspace script' &&
       safeBoardPatch.blocks.length === 3 &&
       safeBoardPatch.blocks[0].id === 'chart-block' &&
@@ -4727,12 +4727,12 @@ async function run() {
       safeBoardPatch.blocks[1].table?.limit === 24 &&
       safeBoardPatch.blocks[1].table?.templateId === 'custom-table' &&
       safeBoardPatch.blocks[2].insights?.[0] === "'=unsafe formula note" &&
-      updatedAiBoard.seasonIds.length === 3 &&
+      updatedAiBoard.seasonIds.length === 4 &&
       updatedAiBoard.blocks.length === 3 &&
       !JSON.stringify(safeBoardPatch).includes('html') &&
       !JSON.stringify(safeBoardPatch).includes('<script>') &&
       !JSON.stringify(safeBoardPatch).includes('arbitraryWrite'),
-    `AI Workspace board patch sanitizer should accept whitelisted board blocks, cap multi-season scope, and reject unsafe fields, got ${JSON.stringify({ safeBoardPatch, updatedAiBoard })}`
+    `AI Workspace board patch sanitizer should accept whitelisted board blocks, preserve unique season metadata, and reject unsafe fields, got ${JSON.stringify({ safeBoardPatch, updatedAiBoard })}`
   );
   assert(
     resolveDashboardAiBoardPatch({ title: 'Unsafe', blocks: [{ type: 'iframe', title: 'x', source: 'overview' }] }) == null &&
@@ -11650,7 +11650,9 @@ async function run() {
       !aiNotebookBlockRenderersSource.includes('allow-popups-to-escape-sandbox') && 
       aiNotebookBlockRenderersSource.includes('htmlPreview?.html') && 
       packageJsonSource.includes('"recharts"') &&
-      dashboardPageSource.includes('selectedAiSeasonIds') &&
+      dashboardPageSource.includes('activeAiSeasonIds') &&
+      aiWorkspacePanelSource.includes('Mùa chung toàn app') &&
+      dashboardPageSource.includes('currentQueryScope') &&
       dashboardPageSource.includes('deleteAiNotebookCell') &&
       dashboardPageSource.includes('duplicateAiNotebookPrompt') &&
       aiNotebookBlockRenderersSource.includes('Xuất Excel block') &&

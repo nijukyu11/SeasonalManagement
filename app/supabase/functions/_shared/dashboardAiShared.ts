@@ -54,6 +54,27 @@ export interface DashboardAiDataQuery {
   limit: number;
 }
 
+export type DashboardAiQueryScopeSourcePreset = 'selected-season' | 'user-date-range' | 'user-filter' | 'follow-up';
+
+export interface DashboardAiQueryScope {
+  dateFrom?: string;
+  dateTo?: string;
+  presetSeasonIds?: string[];
+  iataSeasonCodes?: string[];
+  flightNumbers?: string[];
+  airports?: string[];
+  routes?: string[];
+  statuses?: string[];
+  allocations?: string[];
+  airlines?: string[];
+  countries?: string[];
+  aircraft?: string[];
+  paxStatuses?: DashboardAiPaxStatus[];
+  localHourFrom?: number;
+  localHourTo?: number;
+  sourcePreset: 'selected-season' | 'user-date-range' | 'user-filter' | 'follow-up';
+}
+
 export interface DashboardAiQueryResult {
   queryId: string;
   view: DashboardAiReportingView;
@@ -87,6 +108,7 @@ export const DASHBOARD_AI_REPORTING_VIEWS: DashboardAiReportingView[] = [
 
 export const DASHBOARD_AI_QUERY_METRICS: DashboardAiQueryMetric[] = ['flights', 'pax', 'arrivals', 'departures'];
 export const DASHBOARD_AI_QUERY_LIMIT_CAP = 500;
+export const DASHBOARD_AI_QUERY_SCOPE_MAX_DAYS = 370;
 export const DASHBOARD_AI_QUERY_GROUP_BY_COLUMNS = [
   'airline',
   'route',
@@ -116,8 +138,62 @@ export const DASHBOARD_AI_QUERY_GROUP_BY_COLUMNS = [
 ];
 export const DASHBOARD_AI_QUERY_ORDER_COLUMNS = ['flights', 'pax', 'arrivals', 'departures'];
 
+export function applyDashboardAiQueryScopeToDataQuery(
+  query: DashboardAiDataQuery,
+  scope?: DashboardAiQueryScope | null
+): DashboardAiDataQuery {
+  if (!scope) return query;
+  const filters = { ...query.filters };
+  const queryHasExplicitPeriod = Boolean(filters.dateFrom || filters.dateTo || filters.months?.length || filters.weeks?.length || filters.isoweeks?.length || filters.weeknums?.length);
+  const queryHasExplicitSeason = Boolean(filters.seasonIds?.length || filters.iataSeasonCodes?.length);
+  if (!queryHasExplicitPeriod) {
+    if (!filters.dateFrom && scope.dateFrom) filters.dateFrom = scope.dateFrom;
+    if (!filters.dateTo && scope.dateTo) filters.dateTo = scope.dateTo;
+  }
+  const shouldApplySelectedSeasonPreset = scope.sourcePreset === 'selected-season' && !queryHasExplicitPeriod && !queryHasExplicitSeason;
+  if (shouldApplySelectedSeasonPreset && !filters.seasonIds?.length && scope.presetSeasonIds?.length) filters.seasonIds = uniqueDashboardAiScopeValues(scope.presetSeasonIds, false);
+  if (shouldApplySelectedSeasonPreset && !filters.iataSeasonCodes?.length && scope.iataSeasonCodes?.length) filters.iataSeasonCodes = uniqueDashboardAiScopeValues(scope.iataSeasonCodes, true);
+  if (!filters.routes?.length && scope.routes?.length) filters.routes = uniqueDashboardAiScopeValues(scope.routes, true);
+  if (!filters.airlines?.length && scope.airlines?.length) filters.airlines = uniqueDashboardAiScopeValues(scope.airlines, true);
+  if (!filters.countries?.length && scope.countries?.length) filters.countries = uniqueDashboardAiScopeValues(scope.countries, false);
+  if (!filters.aircraft?.length && scope.aircraft?.length) filters.aircraft = uniqueDashboardAiScopeValues(scope.aircraft, true);
+  if (!filters.paxStatuses?.length && scope.paxStatuses?.length) filters.paxStatuses = scope.paxStatuses.filter((value, index, values) => DASHBOARD_AI_PAX_STATUSES.includes(value) && values.indexOf(value) === index);
+  if (filters.localHourFrom == null && scope.localHourFrom != null && scope.localHourFrom >= 0 && scope.localHourFrom <= 23) filters.localHourFrom = scope.localHourFrom;
+  if (filters.localHourTo == null && scope.localHourTo != null && scope.localHourTo >= 1 && scope.localHourTo <= 24) filters.localHourTo = scope.localHourTo;
+  return { ...query, filters };
+}
+
+export function dashboardAiQueryScopeNeedsConfirmation(scope?: DashboardAiQueryScope | null): boolean {
+  if (!scope?.dateFrom || !scope.dateTo) return false;
+  const days = dashboardAiScopeDateSpanDays(scope.dateFrom, scope.dateTo);
+  return days != null && days > DASHBOARD_AI_QUERY_SCOPE_MAX_DAYS;
+}
+
+function dashboardAiScopeDateSpanDays(dateFrom: string, dateTo: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) return null;
+  const fromMs = Date.parse(`${dateFrom}T00:00:00Z`);
+  const toMs = Date.parse(`${dateTo}T00:00:00Z`);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs < fromMs) return null;
+  return Math.floor((toMs - fromMs) / 86400000) + 1;
+}
+
+function uniqueDashboardAiScopeValues(values: string[], uppercase: boolean): string[] {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of values) {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) continue;
+    const next = uppercase ? normalized.toUpperCase() : normalized;
+    if (seen.has(next)) continue;
+    seen.add(next);
+    output.push(next);
+    if (output.length >= 24) break;
+  }
+  return output;
+}
+
 function repairDashboardAiMojibakePrompt(prompt: string): string {
-  if (!/[ÃÂ]/.test(prompt) || typeof TextDecoder === 'undefined') return prompt;
+  if (!/[\u00c3\u00c2]/.test(prompt) || typeof TextDecoder === 'undefined') return prompt;
   try {
     const bytes = Uint8Array.from(Array.from(prompt, (char) => char.charCodeAt(0) & 0xff));
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
@@ -146,7 +222,7 @@ export function normalizeDashboardAiPromptForToolRouting(prompt: unknown): strin
 
 export function isDashboardAiQueryIntentPrompt(prompt: unknown): boolean {
   const normalized = normalizeDashboardAiPromptForToolRouting(prompt);
-  return /\b(top|trend|thong ke|pax|khach|tan suat|frequency|cross-season|mua lien tiep|selected seasons|s\d{2}|w\d{2}|thang|month|tuan|week|route|duong bay|airline|hang bay|country|quoc gia|aircraft|may bay|arr\/dep|arr dep|gate|peak hour|heatmap|waterfall|khoang ngay|tu ngay|so sanh|compare|comparison|tong|total|nhieu nhat|cao nhat|thap nhat|lon nhat)\b/.test(normalized) ||
+  return /\b(top|trend|thong ke|pax|khach|tan suat|frequency|cross-season|multi-season|all data|full data|whole db|whole database|entire db|entire database|toan bo du lieu|toan bo db|toan bo database|toan bo co so du lieu|tat ca du lieu|tat ca db|tat ca database|tat ca co so du lieu|mua lien tiep|selected seasons|s\d{2}|w\d{2}|thang|month|tuan|week|route|duong bay|airline|hang bay|country|quoc gia|aircraft|may bay|arr\/dep|arr dep|gate|peak hour|heatmap|waterfall|khoang ngay|tu ngay|so sanh|compare|comparison|tong|total|nhieu nhat|cao nhat|thap nhat|lon nhat)\b/.test(normalized) ||
     /\b\d{4}-\d{2}-\d{2}\b/.test(normalized) ||
     /\b\d{1,2}\/\d{1,2}\/\d{4}\b/.test(normalized);
 }
@@ -262,8 +338,7 @@ function selectedDashboardAiSeasonSetFromContext(context: unknown, options: { ex
   const seasonIds = Array.isArray(catalog.seasonIds) ? catalog.seasonIds : Array.isArray(root.seasonIds) ? root.seasonIds : [];
   const selected = seasonIds
     .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-    .map((entry) => entry.trim())
-    .slice(0, 3);
+    .map((entry) => entry.trim());
   if (!options.expandAdjacent || selected.length !== 1) return selected;
   const available = Array.isArray(root.availableSeasonCatalog)
     ? root.availableSeasonCatalog
@@ -280,7 +355,7 @@ function selectedDashboardAiSeasonSetFromContext(context: unknown, options: { ex
   if (index < 0) return selected;
   const previous = available[index - 1]?.seasonId;
   const next = available[index + 1]?.seasonId;
-  return (previous ? [previous, selected[0]] : next ? [selected[0], next] : selected).slice(0, 3);
+  return previous ? [previous, selected[0]] : next ? [selected[0], next] : selected;
 }
 
 function toDashboardAiIsoDate(day: number, month: number, year: string): string | null {

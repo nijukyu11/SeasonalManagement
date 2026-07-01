@@ -5,6 +5,7 @@ import type {
   DashboardAiNotebook,
   DashboardAiToolName,
 } from '@/lib/dashboardAiAnalysis';
+import type { DashboardAiQueryScope } from '@/lib/dashboardAiShared';
 import type { DashboardReportTemplateId } from '@/lib/dashboardReportExport';
 import { AiNotebookCanvas, type AiNotebookActionHandlers, type AiNotebookLoadingStep } from './AiNotebookCanvas';
 import type { AiNotebookRendererData, AiWorkspaceTableRow } from './AiNotebookBlockRenderers';
@@ -19,11 +20,6 @@ export interface AiWorkspacePreset {
 export interface AiWorkspaceModelOption {
   id: string;
   label: string;
-}
-
-export interface AiWorkspaceSeasonOption {
-  id: string;
-  seasonCode: string;
 }
 
 export const AI_PRESET_GROUPS = [
@@ -46,9 +42,14 @@ export interface AiWorkspacePanelProps {
   models: AiWorkspaceModelOption[];
   onModelChange: (modelId: string) => void;
   canTryDifferentModel: boolean;
-  seasons: AiWorkspaceSeasonOption[];
-  selectedSeasonIds: string[];
-  onToggleSeason: (seasonId: string) => void;
+  activeSeasonLabel: string;
+  activeSeasonDateRangeLabel: string;
+  hasActiveSeason: boolean;
+  queryScope: DashboardAiQueryScope;
+  queryScopeLabel: string;
+  onQueryScopeDateFromChange: (value: string) => void;
+  onQueryScopeDateToChange: (value: string) => void;
+  onResetQueryScopeToSeason: () => void;
   seasonSummaryRows: AiWorkspaceTableRow[];
   dataError: string | null;
   presets: AiWorkspacePreset[];
@@ -75,9 +76,14 @@ export function AiWorkspacePanel({
   models,
   onModelChange,
   canTryDifferentModel,
-  seasons,
-  selectedSeasonIds,
-  onToggleSeason,
+  activeSeasonLabel,
+  activeSeasonDateRangeLabel,
+  hasActiveSeason,
+  queryScope,
+  queryScopeLabel,
+  onQueryScopeDateFromChange,
+  onQueryScopeDateToChange,
+  onResetQueryScopeToSeason,
   seasonSummaryRows,
   dataError,
   presets,
@@ -115,32 +121,56 @@ export function AiWorkspacePanel({
 
         <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(260px,360px)]">
           <div>
-            <div className="mb-2 text-xs font-bold uppercase tracking-wide text-on-surface-variant">Mùa đã chọn, tối đa 3</div>
-            <div className="flex flex-wrap gap-2">
-              {seasons.map((item) => {
-                const checked = selectedSeasonIds.includes(item.id);
-                const disabled = !checked && selectedSeasonIds.length >= 3;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => onToggleSeason(item.id)}
-                    disabled={disabled || aiLoading}
-                    className={`inline-flex min-h-10 items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-40 ${
-                      checked
-                        ? 'border-primary bg-primary text-on-primary'
-                        : 'border-outline-variant bg-surface text-on-surface-variant hover:bg-surface-container'
-                    }`}
-                  >
-                    <span className="material-symbols-outlined text-[15px]">{checked ? 'check_circle' : 'radio_button_unchecked'}</span>
-                    {item.seasonCode}
-                  </button>
-                );
-              })}
+            <div className="mb-2 text-xs font-bold uppercase text-on-surface-variant">Mùa chung toàn app</div>
+            <div className="rounded-lg border border-outline-variant bg-surface px-3 py-2">
+              <div className="inline-flex min-h-8 items-center gap-2 text-sm font-semibold text-on-surface">
+                <span className="material-symbols-outlined text-[16px] text-primary">event_available</span>
+                {activeSeasonLabel}
+              </div>
+              <div className="mt-1 text-xs text-on-surface-variant">{activeSeasonDateRangeLabel}</div>
             </div>
             {dataError && (
               <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-100">{dataError}</div>
             )}
+            <div className="mt-3 rounded-lg border border-outline-variant bg-surface p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-bold uppercase tracking-wide text-on-surface-variant">Phạm vi</div>
+                  <div className="mt-1 text-sm font-semibold text-on-surface">{queryScopeLabel}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={onResetQueryScopeToSeason}
+                  disabled={aiLoading || !hasActiveSeason}
+                  className="inline-flex min-h-9 items-center gap-1 rounded-md border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <span className="material-symbols-outlined text-[15px]">restart_alt</span>
+                  Đặt theo mùa đang chọn
+                </button>
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <label className="text-xs font-bold uppercase tracking-wide text-on-surface-variant">
+                  Từ ngày
+                  <input
+                    type="date"
+                    value={queryScope.dateFrom ?? ''}
+                    onChange={(event) => onQueryScopeDateFromChange(event.target.value)}
+                    disabled={aiLoading}
+                    className="mt-1 min-h-10 w-full rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 text-sm font-semibold normal-case text-on-surface focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                  />
+                </label>
+                <label className="text-xs font-bold uppercase tracking-wide text-on-surface-variant">
+                  Đến ngày
+                  <input
+                    type="date"
+                    value={queryScope.dateTo ?? ''}
+                    onChange={(event) => onQueryScopeDateToChange(event.target.value)}
+                    disabled={aiLoading}
+                    className="mt-1 min-h-10 w-full rounded-md border border-outline-variant bg-surface-container-lowest px-3 py-2 text-sm font-semibold normal-case text-on-surface focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                  />
+                </label>
+              </div>
+            </div>
           </div>
           <div className="grid gap-2 text-xs text-on-surface-variant">
             {seasonSummaryRows.map((row) => (
@@ -223,7 +253,7 @@ export function AiWorkspacePanel({
         lastAiPrompt={lastAiPrompt}
         aiConfigured={aiConfigured}
         canTryDifferentModel={canTryDifferentModel}
-        selectedSeasonCount={selectedSeasonIds.length}
+        selectedSeasonCount={hasActiveSeason ? 1 : 0}
         rendererData={rendererData}
         actions={actions}
         onCancel={onCancel}

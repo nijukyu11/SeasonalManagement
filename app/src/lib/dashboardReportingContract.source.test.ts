@@ -163,6 +163,7 @@ test('dashboard replacement UI labels are the active visible contract', () => {
 
 test('AI Workspace is decoupled from dashboard rows and local SQLite analytical context', () => {
   const dashboardPage = readWorkspaceFile('src/app/dashboard/page.tsx');
+  const aiWorkspacePanel = readWorkspaceFile('src/app/dashboard/components/AiWorkspacePanel.tsx');
   const submitAiPrompt = readSourceBlock(dashboardPage, 'const submitAiPrompt', 'const aiWorkspaceSeasonSummaryRows', 'dashboard submitAiPrompt');
   const materializeTableRows = readSourceBlock(dashboardPage, 'const materializeAiWorkspaceTableRows', 'const materializeAiWorkspaceChartRows', 'AI Workspace table materializer');
   const materializeChartRows = readSourceBlock(dashboardPage, 'const materializeAiWorkspaceChartRows', 'const moveAiNotebookBlock', 'AI Workspace chart materializer');
@@ -178,6 +179,13 @@ test('AI Workspace is decoupled from dashboard rows and local SQLite analytical 
   assert.match(materializeChartRows, /block\.chart\?\.rows/, 'AI Workspace chart blocks must prefer explicit rows');
   assert.match(materializeTableRows, /block\.source\s*===\s*'multiSeason'/, 'AI Workspace may materialize multiSeason summary rows');
   assert.match(materializeTableRows, /Ghi chú dữ liệu|sourceQueryId/, 'legacy AI Workspace table fallbacks must expose a data-quality/source note instead of dashboard rows');
+  assert.match(dashboardPage, /currentQueryScope/, 'AI Workspace request context must send a visible currentQueryScope to the Edge Function');
+  assert.match(aiWorkspacePanel, /Phạm vi/, 'AI Workspace panel must show the active query scope');
+  assert.match(aiWorkspacePanel, /Từ ngày/, 'AI Workspace panel must expose a dateFrom control');
+  assert.match(aiWorkspacePanel, /Đến ngày/, 'AI Workspace panel must expose a dateTo control');
+  assert.match(aiWorkspacePanel, /Mùa chung toàn app/, 'AI Workspace panel must show the app-wide active season as read-only context');
+  assert.doesNotMatch(aiWorkspacePanel, /Mùa đã chọn|tối đa 3|onToggleSeason|selectedSeasonIds\.length\s*>=\s*3/, 'AI Workspace must not keep a separate max-3 season picker');
+  assert.doesNotMatch(dashboardPage, /selectedAiSeasonIds|toggleAiWorkspaceSeason/, 'AI Workspace must not manage a separate AI season selection state');
 });
 
 test('dashboard comparison scope, ranking, and legacy season state stay isolated', () => {
@@ -316,11 +324,14 @@ test('AI query contracts name reporting.flight_operations and safe RPC entry poi
 
 test('AI Workspace Edge prompt and fallbacks require Supabase reporting query evidence', () => {
   const edgeFunction = readWorkspaceFile('supabase/functions/dashboard-ai-analysis/index.ts');
+  const aiLib = readWorkspaceFile('src/lib/dashboardAiAnalysis.ts');
   const promptBuilder = readSourceBlock(edgeFunction, 'function buildDashboardAiPrompt', 'function inferExportAction', 'AI prompt builder');
+  const frontendPromptBuilder = readSourceBlock(aiLib, 'export function buildDashboardAiPrompt', 'export async function analyzeDashboardWithAi', 'frontend AI stable prompt builder');
   const fallbackBuilder = readSourceBlock(edgeFunction, 'function defaultBoardPatchForPrompt', 'function workspaceKpiBlock', 'AI board fallback builder');
   const workspaceSources = readSourceBlock(edgeFunction, 'const WORKSPACE_BLOCK_SOURCES', 'const WORKSPACE_CHART_TYPES', 'AI workspace source allowlist');
 
   assert.doesNotMatch(promptBuilder, /local-sqlite|SQLite local|sqlQueryPlans|dashboard_ai_flight_operations|filter dashboard đang chọn/i, 'Edge prompt must not advertise local SQLite/sqlQueryPlans/dashboard-current context');
+  assert.doesNotMatch(frontendPromptBuilder, /SQLite local|sqlQueryPlans SELECT\/CTE|local-sqlite|gateway validate/i, 'frontend stable prompt must not advertise local SQLite/sqlQueryPlans');
   assert.match(promptBuilder, /dataQueries[\s\S]{0,220}queryResults|queryResults[\s\S]{0,220}dataQueries/i, 'Edge prompt must require dataQueries/queryResults from Supabase reporting');
   assert.doesNotMatch(workspaceSources, /'overview'/, 'AI Workspace board source allowlist must not expose overview dashboard context');
   assert.doesNotMatch(fallbackBuilder, /workspace(?:Kpi|Chart|Table)Block\([^)]*'overview'|filter dashboard đang chọn|dashboard local/i, 'fallback board blocks must not use overview/dashboard-current context');
@@ -361,4 +372,32 @@ test('AI reporting fields survive allowlist, sanitizer, and tool declaration pat
     /groupBy:\s*\{[\s\S]{0,180}enum:\s*QUERY_GROUP_BY_COLUMNS/,
     'AI tool declaration must expose QUERY_GROUP_BY_COLUMNS for groupBy'
   );
+});
+
+test('AI Workspace query scope contract is date-range first and not MCP based', () => {
+  const sharedContract = readWorkspaceFile('supabase/functions/_shared/dashboardAiShared.ts');
+  const edgeFunction = readWorkspaceFile('supabase/functions/dashboard-ai-analysis/index.ts');
+  const dashboardPage = readWorkspaceFile('src/app/dashboard/page.tsx');
+
+  assertContainsAll(
+    sharedContract,
+    [
+      'DashboardAiQueryScope',
+      'DASHBOARD_AI_QUERY_SCOPE_MAX_DAYS',
+      'applyDashboardAiQueryScopeToDataQuery',
+      'dashboardAiQueryScopeNeedsConfirmation',
+      'sourcePreset',
+    ],
+    'AI Workspace query scope shared contract'
+  );
+  assert.match(sharedContract, /sourcePreset:\s*'selected-season'\s*\|\s*'user-date-range'\s*\|\s*'user-filter'\s*\|\s*'follow-up'/, 'query scope sourcePreset union must name selected season, user date range, user filter, and follow-up');
+  assert.match(sharedContract, /scope\.sourcePreset\s*===\s*'selected-season'[\s\S]{0,260}presetSeasonIds/, 'selected season preset must only apply seasonIds when scope sourcePreset is selected-season');
+  assert.match(sharedContract, /const queryHasExplicitSeason = Boolean/, 'query scope helper must detect explicit season or season-code filters');
+  assert.match(sharedContract, /shouldApplySelectedSeasonPreset = scope\.sourcePreset === 'selected-season' && !queryHasExplicitPeriod && !queryHasExplicitSeason/, 'selected season preset must not constrain explicit date range or explicit season-code queries');
+  assert.match(sharedContract, /whole db[\s\S]{0,160}toan bo db/, 'query intent helper must recognize all-DB prompts as data query intents');
+  assert.match(dashboardPage, /requestDataScope\.scope === 'all-seasons-aggregate'[\s\S]{0,220}sourcePreset:\s*'user-filter'/, 'all-DB prompt scope must remove the selected-season preset before calling the Edge Function');
+  assert.match(dashboardPage, /shouldLoadRequestSeasonData = requestDataScope\.scope !== 'all-seasons-aggregate'[\s\S]{0,140}requestSeasonIds\.length <= 6/, 'all-DB prompts must not fan out local/native season loads before Supabase reporting query');
+  assert.doesNotMatch(`${sharedContract}\n${edgeFunction}\n${dashboardPage}`, /\bMCP\b|mcp server|mcp tool/i, 'AI Workspace V1 runtime must not add MCP as a data path');
+  assert.match(edgeFunction, /applyDashboardAiQueryScopeToDataQuery/, 'Edge Function must apply currentQueryScope to dataQueries before execution');
+  assert.match(edgeFunction, /dashboardAiQueryScopeNeedsConfirmation/, 'Edge Function must guard overly broad date ranges');
 });

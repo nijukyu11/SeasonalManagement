@@ -156,18 +156,18 @@ This pass used GitNexus plus direct live-file inspection. GitNexus is installed 
 - The active local database is `sqlite:seasonal-management-local.db`, preloaded by Tauri SQL and mirrored by Rust `rusqlite` command handlers. Current/base rows, pending ops, sync metadata, and entity versions all stay in shared season-scoped tables.
 - Current Supabase migrations after the first sync review include reliable sync cursor handling, catch-up event pages, exact `season_id` enforcement, public dashboard AI row/aggregate query RPCs, DeepSeek provider support, schedule Telegram delivery, and AI context documents.
 - Dashboard AI custom Rules/Skills are stored in `operational_ai_context_documents`, edited in Settings, capped at 20 markdown documents and 64KB per document, and injected as prompt context by `dashboard-ai-analysis`.
-- Dashboard AI can use either Supabase reporting RPCs or local native SQLite SQL plans. Local SQL is constrained to read-only `SELECT`/CTE queries over the temporary `dashboard_ai_flight_operations` view.
+- AI Workspace uses Supabase reporting RPCs as its canonical analytical data source. Python/SQLite local agent paths are not part of the AI Workspace query boundary.
 - Do not treat `season_code`, upload filename, or import batch as selected-season ownership for operational data. Exact `season_id` is the normal user-facing boundary.
 
 ---
 
-## Dashboard AI Query-Only Context - 2026-06-01
+## Dashboard AI Query-Only Context - 2026-06-25
 
 This section supersedes older AI Notebook wording that described AI as coupled to the Dashboard MoM/WoW panel.
 
 - AI Workspace is a rich chat surface, not a board tied to the MoM/WoW analysis panel. The normal dashboard still has Overview and MoM/WoW tabs, but AI Workspace does not receive `comparison`, `waterfallRows`, selected driver rows, `comparisonMode`, or `comparison-drivers` fallback blocks.
-- The AI analysis source of truth in desktop/local mode is SQLite via the Tauri command `query_native_dashboard_ai_sql`. SQL remains validated read-only: one `SELECT` or `WITH ... SELECT`, allowlisted tables/views/columns, bounded by `LIMIT`, no DML/DDL/PRAGMA/ATTACH/transactions/extensions/filesystem/script execution.
-- The local AI SQL view is `dashboard_ai_flight_operations`. It exposes analysis columns such as season, `ops_date`, month, ISO week, weekday, local hour, ARR/DEP type, flight, airline, route, country, aircraft, PAX, gate, stand, and status.
+- The AI analysis source of truth is Supabase reporting through allowlisted RPCs such as `public.dashboard_ai_query_rows` and `public.dashboard_ai_query_aggregated`. AI Workspace must not use Python sidecars, local SQLite, current dashboard rows, or raw SQL as analytical context.
+- Date range is the primary query scope. The selected season is only the default context preset when the user has not supplied an explicit date range or broader scope.
 - Query planning is workflow/semantic driven. Current deterministic workflows include `peak-day-anomaly`, `day-vs-baseline-drivers`, `month-comparison-drivers`, `route-pax-ranking`, `flight-detail-investigation`, and `season-to-season-frequency`.
 - Vietnamese intent mapping is explicit: examples include “ngày cao điểm” -> group by `ops_date`, “điểm bất thường/driver” -> compare selected day against the rest-of-period baseline, “top route PAX” -> group by route and order by `pax`, and “chuyến bay ngày...” -> detail query.
 - A single prompt can create multiple query plans: primary aggregate, baseline, drilldown, driver decomposition, and validation query. For “tìm ngày cao điểm tháng 6 và điểm bất thường”, the expected result is daily distribution plus peak-day drilldown and baseline driver blocks, not a follow-up request for data.
@@ -176,7 +176,7 @@ This section supersedes older AI Notebook wording that described AI as coupled t
 - Rich chat renders query-backed `custom-table`, chart, KPI, insight, data-quality, markdown, and sandboxed static `html-preview` blocks. Provider `boardPatch` blocks are ignored for query intents unless they reference a matching `sourceQueryId`.
 - Routine successful tool traces are hidden by default. Warnings, rejected tools, data-quality issues, provider retries, unsafe render rejection, and unsynced-local-source notes stay visible.
 - Session memory keeps bounded active context: recent cells, active artifact, capped query rows, result profiles, and pinned context. Follow-up prompts like “phân tích driver”, “ngày đó”, “bảng trên”, or “vẽ thêm chart” must resolve from the active artifact before any dashboard-default fallback.
-- Supabase reporting RPCs remain for remote-safe mode and Edge Function compatibility, but local SQLite is authoritative whenever desktop data is loaded or has pending changes.
+- If a query cannot be served by existing Supabase reporting views/RPC filters, AI Workspace must say so clearly instead of inferring from unavailable data.
 
 ---
 
@@ -259,7 +259,7 @@ Key functions:
 | `query_sync_summary` | Lightweight pending/conflict/cursor/localRevision/freshness summary for sync UI and catch-up cursor selection |
 | `resolve_season_conflict` | Native conflict resolution using structural pending-op cleanup |
 | `check_season_integrity` | Native startup/fetch/sync guard for local SQLite health |
-| `query_dashboard_summary` / `query_native_dashboard_ai_sql` | Native dashboard summaries and read-only local AI SQL |
+| `query_dashboard_summary` | Native dashboard summaries; AI Workspace analytics use Supabase reporting RPCs |
 
 Supabase relational tables and local SQLite tables are unified datasets with `season_id` as a row attribute. Do not create per-season local databases or per-season physical tables.
 
@@ -365,9 +365,9 @@ Import/re-import remains server-first because it establishes a new baseline. A s
 - The dashboard data seam is `flightRecords + modifications -> buildEffectiveDashboardRecords() -> buildDashboardOverview()` / `buildDashboardComparison()`.
 - Dashboard views are read-only against operational records. Analysis, AI, exports, and visual blocks must not mutate flight records, modifications, sync state, or database schema.
 - The overview view focuses on season/month management and operational summaries. The MoM/WoW view owns fixed comparison controls, waterfall/driver analysis, and detailed drilldown links.
-- Dashboard AI context is built from active comparison filters, compact season catalog, selected driver rows, waterfall rows, and optional multi-season summaries. Deleted records are excluded.
-- Normal Dashboard UI remains local/cache/server first and computes summaries from `effectiveRecords`. AI Workspace is query-first for ad-hoc analysis and uses Supabase reporting views as the source of truth unless it explicitly falls back to local unsynced data.
-- If AI needs data outside the current active comparison, the preferred path is `query_dashboard_data`, resolved read-only inside the Supabase Edge Function against `reporting.flight_operations` or `reporting.summary_*`. The legacy `dashboard-data-request` / `request_dashboard_data_slice` path is compatibility fallback for local-only slices.
+- AI Workspace context is built from the compact season catalog, current query scope, recent chat context, and query results. It must not use active comparison filters, selected driver rows, waterfall rows, or dashboard UI tables as analytical data.
+- Normal Dashboard UI remains local/cache/server first and computes summaries from `effectiveRecords`. AI Workspace is query-first for ad-hoc analysis and uses Supabase reporting views/RPCs as the canonical source of truth.
+- If AI needs operational data, the path is `query_dashboard_data`, resolved read-only inside the Supabase Edge Function against `reporting.flight_operations` or `reporting.summary_*` through allowlisted reporting RPCs.
 - Dashboard report exports are local Excel generation only. Fixed templates are `mom-wow-analysis` and `sanluong-summary`; custom workbook suggestions are sanitized before download.
 
 ### Dashboard AI Notebook Canvas
@@ -385,7 +385,7 @@ Import/re-import remains server-first because it establishes a new baseline. A s
 - `query_dashboard_data` accepts allowlisted filters: `seasonIds`, `iataSeasonCodes`, `dateFrom`, `dateTo`, `months`, `weeks`, `typeFilter`, `airlines`, `routes`, `countries`, `aircraft`, `localHourFrom`, and `localHourTo`.
 - Query intent also covers country/quoc gia, aircraft/may bay, ARR/DEP mix, comparison, totals, and ranking/superlative prompts. Client and Edge share the same pure intent/query helper through `dashboardAiShared`.
 - Date-range inference supports ISO dates, `dd/mm/yyyy`, and Vietnamese prompts like `từ ngày ... đến ngày ... tháng ...`. When a date range is explicit, AI must not answer with whole-season totals.
-- Consecutive-season prompts use the selected AI season set, capped at 3 seasons. `season_id` filters take precedence when the selected season ids are known; IATA season codes are used when the user asks by code such as `S25` / `S26`.
+- Consecutive-season prompts start from the app-wide active season and may expand to adjacent or explicitly named seasons. `season_id` filters take precedence when the prompt resolves season ids; IATA season codes are used when the user asks by code such as `S25` / `S26`.
 - The Edge Function resolves query rows before or during provider analysis, then returns `queryResults`. Notebook rendering prefers `queryResults` for query-intent prompts. Provider `boardPatch` is ignored when it looks stale and its blocks do not carry a matching `sourceQueryId`.
 - Aggregated `query_dashboard_data` requests with `groupBy` are resolved through `public.dashboard_ai_query_aggregated`, a Data API exposed `security invoker` wrapper that delegates to `reporting.query_aggregated`. The private reporting RPC still aggregates in Postgres from `reporting.flight_operations`, avoiding the old 500-row Edge-side aggregation cap; detail queries without `groupBy` still use bounded row reads.
 - Query results materialize as `custom-table` and chart blocks with `sourceQueryId`, so the user sees the exact queried range/season set rather than context-wide fallback blocks.
@@ -399,20 +399,16 @@ Import/re-import remains server-first because it establishes a new baseline. A s
 - Notebook cell actions can duplicate the prompt, delete the cell, move/delete blocks inside a cell, and export table blocks to Excel.
 - Excel export is available for table blocks and sanitized AI export actions only. PDF/image export is not part of V1.
 - No AI output may execute JavaScript, SQL, formulas, file paths, write actions, external BI runtime code, or raw HTML in the app DOM. HTML is allowed only as sanitized sandbox preview content.
-- Presets such as `Tạo báo cáo trực quan`, `Vẽ biểu đồ peak hour`, `Tạo bảng tác nhân`, and `So sánh mùa đã chọn` must route to `compose_dashboard_ai_board` and materialize blocks inline.
-- Multi-season AI selection is capped at 3 seasons. Normal local summaries should use native/local SQLite or bounded cached season data before server fallback; modifications are applied through `buildEffectiveDashboardRecords()`. Desktop query-first AI analysis now prioritizes local SQLite through the Python Agent and labels any web/Supabase fallback explicitly.
+- Presets such as `Tạo báo cáo trực quan`, `Vẽ biểu đồ peak hour`, `Tạo bảng tác nhân`, and `So sánh mùa theo query` must route to `compose_dashboard_ai_board` and materialize blocks inline.
+- AI Workspace does not own a separate season picker. The default scope is the app-wide active season, but user prompts, date ranges, and allowlisted filters may expand the query across the whole reporting database. Query guardrails must cap ranges, row limits, and result sizes before execution.
 
 ### Dashboard AI Agent Boundary
 
 - Dashboard AI is a read-only, dashboard-only agent workflow owned by `dashboard-report-analysis`.
-- Desktop provider calls go through the local Python Agent sidecar. Gemini, Qwen/OpenAI-compatible, and DeepSeek keys are synced from Supabase DB/RLS into local execution and the provider call happens directly from the machine. Frontend payloads must not include service-role keys; provider key material is fetched only for the local agent request and cleared from UI state after sync/use.
-- For desktop runtime, React no longer fetches the raw provider key. `call_dashboard_ai_agent` receives Supabase URL, anon key, and the current operator access token, then Rust calls `fetch_ai_provider_key`, injects `model.providerKey` only into the localhost Python request, and never returns the key to the UI.
-- The bundled sidecar is managed Skawld-style as a local runtime process: Rust starts it on first health/analyze call, drains sidecar output, stores the child handle, and retries health until it is ready.
-- The Supabase Edge Function `dashboard-ai-analysis` remains a legacy/web fallback model gateway. It still keeps provider secrets server-side for web fallback, but desktop AI should try `analyzeDashboardWithLocalAgent()` first.
-- The current legacy Edge runtime request carries `maxRounds: 4`. The Edge Function clamps execution to 1-6 rounds, can infer/query data, call the provider, execute provider-requested read-only query tools, and produce structured notebook output without asking the user to approve read-only dashboard queries.
-- Provider key sync uses `operational_ai_provider_keys` guarded by `app_operators.can_manage_ai` for writes and `app_operators.can_use_ai`/`can_manage_ai` for reads. Settings labels this as “Save & Sync Local Provider Key”; `rotate-dashboard-ai-key` is deprecated for desktop Dashboard AI.
-- The Python Agent sidecar lives under `app/ai-agent`, exposes `/health` and `/v1/analyze`, calls providers directly, validates read-only SQL, mirrors the `dashboard_ai_flight_operations` projection, and returns the existing `DashboardAiAnalysisResponse` shape.
-- Runtime gates are AI configured, operator authorization, selected season, local records, max 3 selected seasons, export eligibility, context-size cap, and allowed tool list.
+- Provider/model calls for AI Workspace go through the Supabase Edge Function `dashboard-ai-analysis`; provider secrets remain server-side.
+- The Edge runtime request carries `maxRounds: 4`. The Edge Function clamps execution to 1-6 rounds, infers query scope, executes read-only Supabase reporting tools, profiles results, and returns structured notebook output without asking the user to approve normal read-only dashboard queries.
+- Python Agent and local SQLite paths are deprecated for AI Workspace and must not be advertised as available analysis sources.
+- Runtime gates are AI configured, operator authorization, selected season or explicit scope, query range/limit guardrails, export eligibility, context-size cap, and allowed tool list.
 - Hermes-inspired toolset gating annotates each tool with `toolset`, `requires`, `availability`, and optional `disabledReason`; only currently enabled tools are sent as allowed tools.
 - Skawld-inspired permission/scheduler helpers live in `dashboardAiAnalysis.ts`: `evaluateDashboardAiToolPermission()` gates tools by `allowedTools`, read-only status, and confirmation needs; `scheduleDashboardAiRun()` batches parallel-safe read-only calls and records rejected calls with Vietnamese reasons.
 - Allowed tools are:
@@ -517,9 +513,8 @@ flightRecords -> apply modifications -> groupFlightLegs -> downloadSeasonalExcel
 npm run native:build
 ```
 
-- `native:build` runs `python:agent:bundle` first, then `next build`, compiles the Tauri Rust app, and emits a release executable plus NSIS installer.
-- `python:agent:bundle` uses PyInstaller to build `app/src-tauri/binaries/dashboard-ai-agent-x86_64-pc-windows-msvc.exe`; Tauri includes it through `bundle.externalBin`.
-- A newly installed desktop app should not require system Python or `uvicorn`. Rust starts the bundled sidecar on demand, health-checks `127.0.0.1:8765`, and injects the session token plus SQLite path.
+- AI Workspace no longer depends on a bundled Python sidecar or local SQLite query path. If native packaging scripts still contain the old `python:agent:bundle` step, treat that as cleanup debt for the AI Workspace decommission slice.
+- A newly installed desktop app should not require system Python or `uvicorn` for AI Workspace.
 - Current verified package artifacts:
   - `app/src-tauri/target/release/seasonal-management.exe`
   - `app/src-tauri/target/release/bundle/nsis/SeasonalManagement_0.1.0_x64-setup.exe`
@@ -571,18 +566,18 @@ app/src/
     sourceRowPatterns.ts        Legacy granular source-row planner
     types.ts                    Domain types
 app/src-tauri/
-  src/lib.rs                    Tauri command registration, export save/open/reveal commands, Python AI Agent sidecar supervisor/proxy
-  src/native_catchup.rs         Rust SQLite source of truth, catch-up, sync, conflicts, local AI SQL
+  src/lib.rs                    Tauri command registration, export save/open/reveal commands, legacy sidecar code pending cleanup
+  src/native_catchup.rs         Rust SQLite source of truth, catch-up, sync, conflicts, native dashboard summaries
   tests/native_catchup.rs       Native persistence/catch-up regression tests
 app/ai-agent/
-  agent_sidecar.py              PyInstaller entrypoint for the bundled FastAPI sidecar
-  agent/main.py                 FastAPI local Dashboard AI Agent
-  agent/provider_clients.py     Local Gemini/Qwen/DeepSeek provider clients
-  agent/sql_validator.py        Mirrored read-only SQL validator
+  agent_sidecar.py              Deprecated AI Workspace sidecar entrypoint pending cleanup
+  agent/main.py                 Deprecated local Dashboard AI Agent pending cleanup
+  agent/provider_clients.py     Deprecated local provider clients pending cleanup
+  agent/sql_validator.py        Deprecated mirrored SQL validator pending cleanup
 app/supabase/
   schema.sql                    Clean-start database state
   migrations/                   Ordered Supabase upgrades; do not edit historical migrations
-  functions/dashboard-ai-analysis/index.ts Legacy/web Dashboard AI Edge Function fallback
+  functions/dashboard-ai-analysis/index.ts Canonical AI Workspace Edge Function and Supabase reporting query gateway
   functions/schedule-telegram-notify/index.ts Telegram delivery flusher
   functions/rotate-dashboard-ai-key/index.ts Deprecated Edge-secret rotation fallback
 ```

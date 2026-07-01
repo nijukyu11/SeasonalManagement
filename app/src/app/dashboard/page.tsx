@@ -72,6 +72,7 @@ import {
   setCachedSeasons,
 } from '@/lib/seasonDataCache';
 import type { LocalSyncMeta } from '@/lib/localSeasonStore';
+import type { DashboardAiQueryScope, DashboardAiQueryScopeSourcePreset } from '@/lib/dashboardAiShared';
 import { queryNativeScheduleWindow } from '@/lib/nativeSeasonRepository';
 import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
 import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
@@ -133,8 +134,8 @@ const AI_WORKSPACE_PRESETS: AiWorkspacePreset[] = [
     preferredTool: 'compose_dashboard_ai_board',
   },
   {
-    label: 'So sánh mùa đã chọn',
-    prompt: 'So sánh các mùa đã chọn trên AI Workspace bằng bảng tổng hợp multi-season và biểu đồ.',
+    label: 'So sánh mùa theo query',
+    prompt: 'So sánh các mùa phù hợp với câu hỏi hoặc phạm vi ngày hiện tại bằng bảng tổng hợp multi-season và biểu đồ.',
     mode: 'board',
     preferredTool: 'compose_dashboard_ai_board',
   },
@@ -286,9 +287,11 @@ function buildDashboardAiQueryOnlyContext(input: {
   availableSeasonCatalog: Array<{ seasonId: string; seasonCode: string; name: string; dateRange: { from: string; to: string } }>;
   dataScope: ReturnType<typeof resolveDashboardAiDataScopeForPrompt>;
   semanticIntent: ReturnType<typeof inferDashboardAiSemanticIntent>;
+  currentQueryScope: DashboardAiQueryScope;
 }): DashboardAiContext & {
   sourcePolicy: 'supabase-reporting-query-only';
   selectedSeasonCatalog: Array<{ seasonId: string; seasonCode: string; name: string; dateRange: { from: string; to: string } }>;
+  currentQueryScope: DashboardAiQueryScope;
 } {
   const selected = input.availableSeasonCatalog.filter((item) => input.seasonIds.includes(item.seasonId));
   return {
@@ -298,6 +301,7 @@ function buildDashboardAiQueryOnlyContext(input: {
     availableSeasonCatalog: input.availableSeasonCatalog,
     selectedSeasonCatalog: selected,
     dataScope: input.dataScope,
+    currentQueryScope: input.currentQueryScope,
     semanticIntent: input.semanticIntent,
     dataSourcePolicy: 'supabase-reporting',
     sourcePolicy: 'supabase-reporting-query-only',
@@ -448,6 +452,27 @@ function resolveConsecutiveAiSeasonIds(selectedIds: string[], seasons: Season[])
   const previous = ordered[index - 1]?.id;
   const next = ordered[index + 1]?.id;
   return normalizeDashboardAiWorkspaceSeasonIds(previous ? [previous, selectedId] : next ? [selectedId, next] : [selectedId]);
+}
+
+function resolveAiWorkspaceSeasonDateRange(seasonIds: string[], seasons: Season[], fallbackSeason: Season | null): { from: string; to: string } {
+  const selected = seasons.filter((item) => seasonIds.includes(item.id));
+  const source = selected.length > 0 ? selected : fallbackSeason ? [fallbackSeason] : [];
+  const starts = source.map((item) => item.effectiveStart).filter(Boolean).sort();
+  const ends = source.map((item) => item.effectiveEnd).filter(Boolean).sort();
+  return {
+    from: starts[0] ?? '',
+    to: ends[ends.length - 1] ?? '',
+  };
+}
+
+function normalizeAiWorkspaceDateRange(dateFrom: string, dateTo: string): { dateFrom?: string; dateTo?: string } {
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(dateFrom) ? dateFrom : '';
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(dateTo) ? dateTo : '';
+  if (from && to && from > to) return { dateFrom: to, dateTo: from };
+  return {
+    ...(from ? { dateFrom: from } : {}),
+    ...(to ? { dateTo: to } : {}),
+  };
 }
 
 function seasonOverlapsCalendarYear(season: Season, year: number): boolean {
@@ -863,7 +888,9 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   const [aiLoadingStep, setAiLoadingStep] = useState<AiNotebookLoadingStep>('context');
   const [aiLoadingStartedAt, setAiLoadingStartedAt] = useState<number | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
-  const [selectedAiSeasonIds, setSelectedAiSeasonIds] = useState<string[]>([]);
+  const [aiQueryScopeDateFrom, setAiQueryScopeDateFrom] = useState('');
+  const [aiQueryScopeDateTo, setAiQueryScopeDateTo] = useState('');
+  const [aiQueryScopeSourcePreset, setAiQueryScopeSourcePreset] = useState<DashboardAiQueryScopeSourcePreset>('selected-season');
   const [aiWorkspaceSeasonData, setAiWorkspaceSeasonData] = useState<Record<string, DashboardAiWorkspaceSeasonData>>({});
   const [aiWorkspaceDataError, setAiWorkspaceDataError] = useState<string | null>(null);
   const [lastAiPrompt, setLastAiPrompt] = useState('');
@@ -1208,20 +1235,12 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           truncated: false,
         },
       }));
-      setSelectedAiSeasonIds((current) => {
-        const valid = new Set(seasons.map((item) => item.id));
-        const normalized = normalizeDashboardAiWorkspaceSeasonIds([
-          season.id,
-          ...current.filter((id) => id !== season.id && valid.has(id)),
-        ]);
-        return normalized.length > 0 ? normalized : [season.id];
-      });
     });
     return () => {
       cancelled = true;
       cancelAnimationFrame(frame);
     };
-  }, [effectiveRecords, modifications, records, season, seasons, syncMeta]);
+  }, [effectiveRecords, modifications, records, season, syncMeta]);
 
   const loadAiWorkspaceSeason = useCallback(async (targetSeason: Season): Promise<DashboardAiWorkspaceSeasonData> => {
     const result = await queryNativeScheduleWindow({
@@ -1255,12 +1274,16 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     comparisonMode === 'yoy' ? resolveYoySeasonIds(seasons, effectiveRecords, season) : []
   ), [comparisonMode, effectiveRecords, season, seasons]);
 
+  const activeAiSeasonIds = useMemo(() => (
+    season?.id ? [season.id] : []
+  ), [season]);
+
   const requestedSeasonDataIds = useMemo(() => (
     normalizeDashboardAiWorkspaceSeasonIds([
-      ...selectedAiSeasonIds,
+      ...activeAiSeasonIds,
       ...yoySeasonIds,
     ])
-  ), [selectedAiSeasonIds, yoySeasonIds]);
+  ), [activeAiSeasonIds, yoySeasonIds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1648,10 +1671,10 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   const maxMixShare = Math.max(0.01, ...topMixRows.flatMap((driver) => [driver.currentShare, driver.previousShare]));
 
   const selectedAiWorkspaceSeasonData = useMemo(() => (
-    selectedAiSeasonIds
+    activeAiSeasonIds
       .map((seasonId) => aiWorkspaceSeasonData[seasonId])
       .filter((item): item is DashboardAiWorkspaceSeasonData => Boolean(item))
-  ), [aiWorkspaceSeasonData, selectedAiSeasonIds]);
+  ), [activeAiSeasonIds, aiWorkspaceSeasonData]);
 
   const aiAvailableSeasonCatalog = useMemo(() => seasons.map((item) => ({
     seasonId: item.id,
@@ -1660,15 +1683,61 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     dateRange: { from: item.effectiveStart, to: item.effectiveEnd },
   })), [seasons]);
 
+  const aiScopeSeasonIds = activeAiSeasonIds;
+  const aiSelectedSeasonDateRange = useMemo(() => (
+    resolveAiWorkspaceSeasonDateRange(aiScopeSeasonIds, seasons, season)
+  ), [aiScopeSeasonIds, season, seasons]);
+  const activeAiSeasonLabel = season
+    ? `${season.seasonCode}${season.name ? ` - ${season.name}` : ''}`
+    : 'Chưa chọn mùa';
+  const activeAiSeasonDateRangeLabel = aiSelectedSeasonDateRange.from || aiSelectedSeasonDateRange.to
+    ? `${aiSelectedSeasonDateRange.from || '?'} - ${aiSelectedSeasonDateRange.to || '?'}`
+    : 'Chưa có date range cho mùa chung';
+
+  const currentQueryScope = useMemo<DashboardAiQueryScope>(() => {
+    const effectiveDateFrom = aiQueryScopeSourcePreset === 'selected-season' ? aiSelectedSeasonDateRange.from : aiQueryScopeDateFrom;
+    const effectiveDateTo = aiQueryScopeSourcePreset === 'selected-season' ? aiSelectedSeasonDateRange.to : aiQueryScopeDateTo;
+    const normalizedRange = normalizeAiWorkspaceDateRange(effectiveDateFrom, effectiveDateTo);
+    const selectedSeasonPreset = aiQueryScopeSourcePreset === 'selected-season';
+    const iataSeasonCodes = selectedSeasonPreset
+      ? seasons
+        .filter((item) => aiScopeSeasonIds.includes(item.id))
+        .map((item) => item.seasonCode)
+        .filter(Boolean)
+      : [];
+    return {
+      ...normalizedRange,
+      ...(selectedSeasonPreset && aiScopeSeasonIds.length ? { presetSeasonIds: aiScopeSeasonIds } : {}),
+      ...(selectedSeasonPreset && iataSeasonCodes.length ? { iataSeasonCodes } : {}),
+      sourcePreset: aiQueryScopeSourcePreset,
+    };
+  }, [aiQueryScopeDateFrom, aiQueryScopeDateTo, aiQueryScopeSourcePreset, aiScopeSeasonIds, aiSelectedSeasonDateRange.from, aiSelectedSeasonDateRange.to, seasons]);
+  const currentQueryScopeLabel = useMemo(() => {
+    const seasonLabel = season?.seasonCode || 'Chưa chọn mùa';
+    const rangeLabel = currentQueryScope.dateFrom || currentQueryScope.dateTo
+      ? `${currentQueryScope.dateFrom ?? '?'} - ${currentQueryScope.dateTo ?? '?'}`
+      : 'Chưa có date range';
+    const sourceLabel = currentQueryScope.sourcePreset === 'selected-season'
+      ? 'mùa chung toàn app'
+      : 'date range/filter tự do';
+    return `${seasonLabel} | ${rangeLabel} | ${sourceLabel}`;
+  }, [currentQueryScope.dateFrom, currentQueryScope.dateTo, currentQueryScope.sourcePreset, season?.seasonCode]);
+
+  const resetAiQueryScopeToSeason = useCallback(() => {
+    setAiQueryScopeSourcePreset('selected-season');
+    setAiQueryScopeDateFrom('');
+    setAiQueryScopeDateTo('');
+  }, []);
+
   const dashboardAiQueryOnlyContext = useMemo(() => {
     const prompt = 'Xuất báo cáo bằng Supabase reporting/query.';
     const dataScope = resolveDashboardAiDataScopeForPrompt({
       prompt,
       activeSeasonId: season?.id,
-      selectedSeasonIds: selectedAiSeasonIds,
+      selectedSeasonIds: activeAiSeasonIds,
       availableSeasonCatalog: aiAvailableSeasonCatalog,
     });
-    const seasonIds = dataScope.seasonIds.length > 0 ? dataScope.seasonIds : selectedAiSeasonIds;
+    const seasonIds = dataScope.seasonIds.length > 0 ? dataScope.seasonIds : activeAiSeasonIds;
     return buildDashboardAiQueryOnlyContext({
       seasonIds,
       availableSeasonCatalog: aiAvailableSeasonCatalog,
@@ -1677,12 +1746,14 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         userPrompt: prompt,
         context: {
           dataScope,
+          currentQueryScope,
           availableSeasonCatalog: aiAvailableSeasonCatalog,
           sourcePolicy: 'supabase-reporting-query-only',
         },
       }),
+      currentQueryScope,
     });
-  }, [aiAvailableSeasonCatalog, season?.id, selectedAiSeasonIds]);
+  }, [activeAiSeasonIds, aiAvailableSeasonCatalog, currentQueryScope, season?.id]);
 
   const aiSettings = operationalSettings?.aiAnalysis;
   const enabledAiModels = useMemo(() => listEnabledDashboardAiModels(aiSettings), [aiSettings]);
@@ -1695,10 +1766,10 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     operatorAuthorized: true,
     hasSelectedSeason: Boolean(season),
     hasLocalRecords: Boolean(season),
-    selectedSeasonCount: selectedAiSeasonIds.length,
+    selectedSeasonCount: activeAiSeasonIds.length,
     exportEnabled: effectiveRecords.length > 0,
-  }), [aiConfigured, effectiveRecords.length, season, selectedAiSeasonIds.length]);
-  const aiNotebookStorageKey = `dashboard:aiNotebook:${selectedAiSeasonIds.join('|') || season?.id || targetSeasonId || 'global'}`;
+  }), [activeAiSeasonIds.length, aiConfigured, effectiveRecords.length, season]);
+  const aiNotebookStorageKey = `dashboard:aiNotebook:${season?.id || targetSeasonId || 'global'}`;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1706,7 +1777,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     const frame = requestAnimationFrame(() => {
       if (cancelled) return;
       const fallbackNotebook = buildDashboardAiNotebook({
-        seasonIds: selectedAiSeasonIds.length > 0 ? selectedAiSeasonIds : season?.id ? [season.id] : [],
+        seasonIds: activeAiSeasonIds,
         title: 'Rich Chat AI',
       });
       const raw = window.localStorage.getItem(aiNotebookStorageKey);
@@ -1726,7 +1797,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       cancelled = true;
       cancelAnimationFrame(frame);
     };
-  }, [aiNotebookStorageKey, season, selectedAiSeasonIds]);
+  }, [activeAiSeasonIds, aiNotebookStorageKey, season]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !aiNotebook) return;
@@ -1882,7 +1953,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         };
         setAiNotebook((current) => {
           const base = current ?? buildDashboardAiNotebook({
-            seasonIds: selectedAiSeasonIds.length > 0 ? selectedAiSeasonIds : season?.id ? [season.id] : [],
+            seasonIds: activeAiSeasonIds,
             title: sessionFollowUp.boardPatch?.title ?? 'Rich Chat AI',
           });
           return {
@@ -1931,7 +2002,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         }; 
         setAiNotebook((current) => { 
           const base = current ?? buildDashboardAiNotebook({ 
-            seasonIds: selectedAiSeasonIds.length > 0 ? selectedAiSeasonIds : season?.id ? [season.id] : [], 
+            seasonIds: activeAiSeasonIds, 
             title: followUpBoardPatch.title, 
           }); 
           return { 
@@ -1946,13 +2017,12 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       let requestDataScope = resolveDashboardAiDataScopeForPrompt({ 
         prompt,
         activeSeasonId: season?.id,
-        selectedSeasonIds: selectedAiSeasonIds,
+        selectedSeasonIds: activeAiSeasonIds,
         availableSeasonCatalog: aiAvailableSeasonCatalog,
       });
-      let requestSeasonIds = requestDataScope.seasonIds.length > 0 ? requestDataScope.seasonIds : selectedAiSeasonIds;
-      let shouldUpdateSelectedAiSeasons = false;
-      if (isConsecutiveSeasonPrompt(prompt) && selectedAiSeasonIds.length === 1) {
-        requestSeasonIds = resolveConsecutiveAiSeasonIds(selectedAiSeasonIds, seasons);
+      let requestSeasonIds = requestDataScope.seasonIds.length > 0 ? requestDataScope.seasonIds : activeAiSeasonIds;
+      if (isConsecutiveSeasonPrompt(prompt) && activeAiSeasonIds.length === 1) {
+        requestSeasonIds = resolveConsecutiveAiSeasonIds(activeAiSeasonIds, seasons);
         requestDataScope = {
           ...requestDataScope,
           scope: 'selected-seasons',
@@ -1960,14 +2030,16 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           explicitSeasonFilter: false,
           reason: 'consecutive-seasons',
         };
-        shouldUpdateSelectedAiSeasons = true;
       }
-      const loadedEntries = await Promise.all(requestSeasonIds.map(async (seasonId) => {
-        const existing = aiWorkspaceSeasonData[seasonId];
-        if (existing) return existing;
-        const target = seasons.find((item) => item.id === seasonId);
-        return target ? loadAiWorkspaceSeason(target) : null;
-      }));
+      const shouldLoadRequestSeasonData = requestDataScope.scope !== 'all-seasons-aggregate' && requestSeasonIds.length <= 6;
+      const loadedEntries = shouldLoadRequestSeasonData
+        ? await Promise.all(requestSeasonIds.map(async (seasonId) => {
+          const existing = aiWorkspaceSeasonData[seasonId];
+          if (existing) return existing;
+          const target = seasons.find((item) => item.id === seasonId);
+          return target ? loadAiWorkspaceSeason(target) : null;
+        }))
+        : [];
       const requestSeasonData = loadedEntries.filter((item): item is DashboardAiWorkspaceSeasonData => Boolean(item));
       if (requestSeasonData.some((item) => !aiWorkspaceSeasonData[item.season.id])) {
         setAiWorkspaceSeasonData((current) => {
@@ -1976,13 +2048,19 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           return next;
         });
       }
-      if (shouldUpdateSelectedAiSeasons && requestSeasonData.length > selectedAiWorkspaceSeasonData.length) {
-        setSelectedAiSeasonIds(requestSeasonIds);
-      }
+      const requestQueryScope: DashboardAiQueryScope = requestDataScope.scope === 'all-seasons-aggregate'
+        ? {
+          ...currentQueryScope,
+          sourcePreset: 'user-filter',
+          presetSeasonIds: undefined,
+          iataSeasonCodes: undefined,
+        }
+        : currentQueryScope;
       const semanticIntent = inferDashboardAiSemanticIntent({
         userPrompt: prompt,
         context: {
           dataScope: requestDataScope,
+          currentQueryScope: requestQueryScope,
           availableSeasonCatalog: aiAvailableSeasonCatalog,
           sourcePolicy: 'supabase-reporting-query-only',
         },
@@ -1992,6 +2070,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         availableSeasonCatalog: aiAvailableSeasonCatalog,
         dataScope: requestDataScope,
         semanticIntent,
+        currentQueryScope: requestQueryScope,
       });
       setAiLoadingStep('provider');
       setAiLoadingMessage('AI đang gọi Supabase reporting/query...');
@@ -2078,18 +2157,18 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       const nextCell: DashboardAiNotebookCell = {
         ...nextCellBase,
         activeArtifact: buildDashboardAiActiveArtifactFromCell(nextCellBase, {
-          seasonIds: requestSeasonIds.length > 0 ? requestSeasonIds : selectedAiSeasonIds,
+          seasonIds: requestSeasonIds.length > 0 ? requestSeasonIds : activeAiSeasonIds,
         }),
       };
       setAiNotebook((current) => {
         const base = current ?? buildDashboardAiNotebook({
-            seasonIds: requestSeasonIds.length > 0 ? requestSeasonIds : selectedAiSeasonIds.length > 0 ? selectedAiSeasonIds : season?.id ? [season.id] : [],
+            seasonIds: requestSeasonIds.length > 0 ? requestSeasonIds : activeAiSeasonIds,
             title: boardPatch?.title ?? 'Rich Chat AI',
           });
         return {
           ...base,
           title: boardPatch?.title ?? base.title,
-          seasonIds: normalizeDashboardAiWorkspaceSeasonIds(requestSeasonIds.length > 0 ? requestSeasonIds : selectedAiSeasonIds.length > 0 ? selectedAiSeasonIds : base.seasonIds),
+          seasonIds: normalizeDashboardAiWorkspaceSeasonIds(requestSeasonIds.length > 0 ? requestSeasonIds : activeAiSeasonIds.length > 0 ? activeAiSeasonIds : base.seasonIds),
           cells: [...base.cells, nextCell].slice(-DASHBOARD_AI_NOTEBOOK_MAX_CELLS),
           updatedAt: cellCreatedAt,
         };
@@ -2107,7 +2186,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         setAiLoadingMessage('AI đang phân tích dữ liệu...');
       }
     }
-  }, [aiAvailableSeasonCatalog, aiConfigured, aiLoading, aiNotebook, aiPrompt, aiWorkspaceSeasonData, dashboardAiAvailableTools, loadAiWorkspaceSeason, pinnedAiContextCellId, season, seasons, selectedAiModel, selectedAiSeasonIds, selectedAiWorkspaceSeasonData.length]);
+  }, [activeAiSeasonIds, aiAvailableSeasonCatalog, aiConfigured, aiLoading, aiNotebook, aiPrompt, aiWorkspaceSeasonData, currentQueryScope, dashboardAiAvailableTools, loadAiWorkspaceSeason, pinnedAiContextCellId, season, seasons, selectedAiModel]);
 
   const aiWorkspaceSeasonSummaryRows = useMemo<AiWorkspaceTableRow[]>(() => (
     selectedAiWorkspaceSeasonData.map((item) => {
@@ -2215,18 +2294,6 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     setLastAiPrompt(cell.prompt);
   }, []);
 
-  const toggleAiWorkspaceSeason = useCallback((seasonId: string) => {
-    setSelectedAiSeasonIds((current) => {
-      const hasSeason = current.includes(seasonId);
-      const next = hasSeason
-        ? current.filter((id) => id !== seasonId)
-        : [...current, seasonId];
-      const normalized = normalizeDashboardAiWorkspaceSeasonIds(next);
-      if (normalized.length === 0 && season?.id) return [season.id];
-      return normalized;
-    });
-  }, [season]);
-
   const exportAiWorkspaceBlockExcel = useCallback(async (block: DashboardAiWorkspaceBlock) => {
     if (block.type !== 'table') return;
     const rows = materializeAiWorkspaceTableRows(block);
@@ -2265,8 +2332,8 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
 
   const clearAiNotebook = useCallback(() => {
     setPinnedAiContextCellId(null);
-    setAiNotebook(buildDashboardAiNotebook({ seasonIds: selectedAiSeasonIds, title: 'Rich Chat AI' }));
-  }, [selectedAiSeasonIds]);
+    setAiNotebook(buildDashboardAiNotebook({ seasonIds: activeAiSeasonIds, title: 'Rich Chat AI' }));
+  }, [activeAiSeasonIds]);
 
   const aiWorkspaceFallbackKpis = useMemo(() => {
     const activeRows = selectedAiWorkspaceSeasonData.flatMap((item) => (
@@ -2277,9 +2344,9 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       totalFlights: activeRows.length,
       totalPax: activeRows.reduce((sum, record) => sum + operationalRecordPax(record), 0),
       avgFlightsPerDay: operatingDays > 0 ? activeRows.length / operatingDays : 0,
-      selectedSeasonCount: selectedAiSeasonIds.length,
+      selectedSeasonCount: activeAiSeasonIds.length,
     };
-  }, [selectedAiSeasonIds.length, selectedAiWorkspaceSeasonData]);
+  }, [activeAiSeasonIds.length, selectedAiWorkspaceSeasonData]);
 
   const aiNotebookRendererData = useMemo<AiNotebookRendererData>(() => ({
     formatValue,
@@ -2316,11 +2383,6 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     id: model.id,
     label: model.label,
   })), [enabledAiModels]);
-
-  const aiSeasonOptions = useMemo(() => seasons.map((item) => ({
-    id: item.id,
-    seasonCode: item.seasonCode,
-  })), [seasons]);
 
   function handleDailyTrendDoubleClick(date: string) {
     if (!season || !date) return;
@@ -3129,9 +3191,20 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
               models={aiModelOptions}
               onModelChange={setSelectedAiModelId}
               canTryDifferentModel={enabledAiModels.length > 1}
-              seasons={aiSeasonOptions}
-              selectedSeasonIds={selectedAiSeasonIds}
-              onToggleSeason={toggleAiWorkspaceSeason}
+              activeSeasonLabel={activeAiSeasonLabel}
+              activeSeasonDateRangeLabel={activeAiSeasonDateRangeLabel}
+              hasActiveSeason={Boolean(season)}
+              queryScope={currentQueryScope}
+              queryScopeLabel={currentQueryScopeLabel}
+              onQueryScopeDateFromChange={(value) => {
+                setAiQueryScopeSourcePreset('user-date-range');
+                setAiQueryScopeDateFrom(value);
+              }}
+              onQueryScopeDateToChange={(value) => {
+                setAiQueryScopeSourcePreset('user-date-range');
+                setAiQueryScopeDateTo(value);
+              }}
+              onResetQueryScopeToSeason={resetAiQueryScopeToSeason}
               seasonSummaryRows={aiWorkspaceSeasonSummaryRows}
               dataError={aiWorkspaceDataError}
               presets={AI_WORKSPACE_PRESETS}

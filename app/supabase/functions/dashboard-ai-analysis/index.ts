@@ -8,11 +8,14 @@ import {
   DASHBOARD_AI_QUERY_ORDER_COLUMNS,
   DASHBOARD_AI_PAX_STATUSES,
   DASHBOARD_AI_REPORTING_VIEWS,
+  applyDashboardAiQueryScopeToDataQuery,
+  dashboardAiQueryScopeNeedsConfirmation,
   isDashboardAiQueryIntentPrompt,
   type DashboardAiDataQuery,
   type DashboardAiQueryCell,
   type DashboardAiQueryMetric,
   type DashboardAiQueryResult,
+  type DashboardAiQueryScope,
   type DashboardAiReportingView,
   type DashboardAiToolName,
 } from '../_shared/dashboardAiShared.ts';
@@ -493,12 +496,13 @@ async function runTextPromptAnalysis(
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
   initialDataQueries: AiDataQuery[]
 ): Promise<AiAgentAnalysisResult> {
-  const initialQueryResults = await resolveDashboardDataQueries(supabase, initialDataQueries);
+  const currentQueryScope = currentQueryScopeFromContext(body.context);
+  const initialQueryResults = await resolveDashboardDataQueries(supabase, initialDataQueries, currentQueryScope);
   const prompt = buildDashboardAiPrompt(body.userPrompt, mergeContextWithQueryResults(body.context, initialQueryResults), body);
   let providerText = await callOpenAiCompatible(model, prompt, history);
   let structured = parseStructuredAssistantPayload(providerText);
   const providerDataQueries = sanitizeDataQueries(structured?.dataQueries ?? structured?.dataQuery);
-  const providerQueryResults = providerDataQueries.length > 0 ? await resolveDashboardDataQueries(supabase, providerDataQueries) : [];
+  const providerQueryResults = providerDataQueries.length > 0 ? await resolveDashboardDataQueries(supabase, providerDataQueries, currentQueryScope) : [];
   const queryResults = mergeQueryResults(initialQueryResults, providerQueryResults);
   if (queryResults.length > 0 && !structured?.boardPatch) {
     const followUpPrompt = buildDashboardAiPrompt(body.userPrompt, mergeContextWithQueryResults(body.context, queryResults), {
@@ -523,7 +527,8 @@ async function runGeminiAgentAnalysis(
   initialDataQueries: AiDataQuery[]
 ): Promise<AiAgentAnalysisResult> {
   const maxRounds = resolveAgentMaxRounds(body.maxRounds);
-  let queryResults = await resolveDashboardDataQueries(supabase, initialDataQueries);
+  const currentQueryScope = currentQueryScopeFromContext(body.context);
+  let queryResults = await resolveDashboardDataQueries(supabase, initialDataQueries, currentQueryScope);
   const prompt = buildDashboardAiPrompt(body.userPrompt, mergeContextWithQueryResults(body.context, queryResults), body);
   const toolDeclarations = buildToolDeclarations(body);
   const toolContents: GeminiContent[] = [];
@@ -536,7 +541,7 @@ async function runGeminiAgentAnalysis(
       providerText = result.text;
       structured = parseStructuredAssistantPayload(providerText);
       const providerDataQueries = sanitizeDataQueries(structured?.dataQueries ?? structured?.dataQuery);
-      const providerQueryResults = providerDataQueries.length > 0 ? await resolveDashboardDataQueries(supabase, providerDataQueries) : [];
+      const providerQueryResults = providerDataQueries.length > 0 ? await resolveDashboardDataQueries(supabase, providerDataQueries, currentQueryScope) : [];
       queryResults = mergeQueryResults(queryResults, providerQueryResults);
       if (providerDataQueries.length > 0 && queryResults.length > 0 && !structured?.boardPatch && round < maxRounds) {
         const followUpPrompt = buildDashboardAiPrompt(body.userPrompt, mergeContextWithQueryResults(body.context, queryResults), {
@@ -941,6 +946,58 @@ function sanitizeDataQueries(value: unknown): AiDataQuery[] {
   return queries;
 }
 
+function currentQueryScopeFromContext(context: unknown): DashboardAiQueryScope | null {
+  const root = context && typeof context === 'object' && !Array.isArray(context) ? context as Record<string, unknown> : {};
+  const raw = root.currentQueryScope && typeof root.currentQueryScope === 'object' && !Array.isArray(root.currentQueryScope)
+    ? root.currentQueryScope as Record<string, unknown>
+    : null;
+  if (!raw) return null;
+  const sourcePreset = optionalEnum(raw.sourcePreset, ['selected-season', 'user-date-range', 'user-filter', 'follow-up'] as const);
+  if (!sourcePreset) return null;
+  const dateFrom = optionalIsoDate(raw.dateFrom);
+  const dateTo = optionalIsoDate(raw.dateTo);
+  const presetSeasonIds = optionalTextList(raw.presetSeasonIds, false);
+  const iataSeasonCodes = optionalTextList(raw.iataSeasonCodes, true);
+  const routes = optionalTextList(raw.routes, true);
+  const airlines = optionalTextList(raw.airlines, true);
+  const countries = optionalTextList(raw.countries, false);
+  const aircraft = optionalTextList(raw.aircraft, true);
+  const paxStatuses = optionalEnumList(raw.paxStatuses, DASHBOARD_AI_PAX_STATUSES);
+  const localHourFrom = optionalHour(raw.localHourFrom);
+  const localHourTo = optionalHour(raw.localHourTo);
+  const invalid = [dateFrom, dateTo, presetSeasonIds, iataSeasonCodes, routes, airlines, countries, aircraft, paxStatuses]
+    .some((entry) => entry === false);
+  if (invalid) return null;
+  return {
+    sourcePreset,
+    ...(dateFrom ? { dateFrom } : {}),
+    ...(dateTo ? { dateTo } : {}),
+    ...(presetSeasonIds ? { presetSeasonIds } : {}),
+    ...(iataSeasonCodes ? { iataSeasonCodes } : {}),
+    ...(routes ? { routes } : {}),
+    ...(airlines ? { airlines } : {}),
+    ...(countries ? { countries } : {}),
+    ...(aircraft ? { aircraft } : {}),
+    ...(paxStatuses ? { paxStatuses } : {}),
+    ...(localHourFrom != null ? { localHourFrom } : {}),
+    ...(localHourTo != null ? { localHourTo } : {}),
+  };
+}
+
+function buildDashboardAiScopeGuardrailResult(query: AiDataQuery, scope: DashboardAiQueryScope): AiQueryResult {
+  const range = `${scope.dateFrom ?? '?'} - ${scope.dateTo ?? '?'}`;
+  const note = `Query bị chặn vì date range ${range} vượt guardrail. Hãy thu hẹp phạm vi hoặc xác nhận một truy vấn rộng hơn.`;
+  return {
+    queryId: query.queryId,
+    view: query.view,
+    columns: ['Ghi chú'],
+    rows: [{ 'Ghi chú': note }],
+    rowCount: 0,
+    truncated: false,
+    dataQualityNotes: [note],
+  };
+}
+
 function sanitizeSqlQueryPlans(value: unknown, body: AiRequestBody): AiSqlQueryPlan[] {
   const values = Array.isArray(value) ? value : value ? [value] : [];
   const context = body.context && typeof body.context === 'object' && !Array.isArray(body.context)
@@ -1124,11 +1181,17 @@ function shouldPreferQueryResults(userPrompt: string | undefined, queryResults: 
 
 async function resolveDashboardDataQueries(
   supabase: DashboardSupabaseClient,
-  queries: AiDataQuery[]
+  queries: AiDataQuery[],
+  currentQueryScope: DashboardAiQueryScope | null = null
 ): Promise<AiQueryResult[]> {
   const results: AiQueryResult[] = [];
   for (const query of queries.slice(0, 4)) {
-    const result = await resolveDashboardDataQuery(supabase, query);
+    const scopedQuery = applyDashboardAiQueryScopeToDataQuery(query, currentQueryScope);
+    if (dashboardAiQueryScopeNeedsConfirmation(currentQueryScope)) {
+      results.push(buildDashboardAiScopeGuardrailResult(scopedQuery, currentQueryScope));
+      continue;
+    }
+    const result = await resolveDashboardDataQuery(supabase, scopedQuery);
     if (result) results.push(result);
   }
   return results;
@@ -1257,7 +1320,7 @@ async function executeGeminiToolCall(
       ...toolCall.args,
     };
     const queries = sanitizeDataQueries(queryArgs);
-    const queryResults = await resolveDashboardDataQueries(supabase, queries);
+    const queryResults = await resolveDashboardDataQueries(supabase, queries, currentQueryScopeFromContext(body.context));
     return {
       queryResults,
       response: {
@@ -1503,11 +1566,11 @@ function defaultBoardPatchForPrompt(userPrompt: string | undefined, body: AiRequ
   }
   if (isCompareSeasonsPrompt(prompt)) {
     return sanitizeBoardPatch({
-      title: 'Bảng so sánh các mùa đã chọn',
+      title: 'Bảng so sánh các mùa theo query',
       blocks: [
-        workspaceTableBlock('multi-season-summary', 'Tổng hợp các mùa đã chọn', 'multiSeason', 'multi-season-summary', 3),
-        workspaceChartBlock('multi-season-chart', 'Flights by Selected Season', 'multiSeason', 'bar-ranking', { dimension: 'season', metric: 'flights' }, 3),
-        workspaceInsightBlock('multi-season-notes', 'Ghi chú so sánh', 'multiSeason', ['Block multi-season giới hạn theo tối đa 3 mùa đã chọn.']),
+        workspaceTableBlock('multi-season-summary', 'Tổng hợp các mùa theo query', 'multiSeason', 'multi-season-summary', 24),
+        workspaceChartBlock('multi-season-chart', 'Flights by Query Season', 'multiSeason', 'bar-ranking', { dimension: 'season', metric: 'flights' }, 24),
+        workspaceInsightBlock('multi-season-notes', 'Ghi chú so sánh', 'multiSeason', ['Block multi-season render từ queryResults/sourceQueryId hoặc scope prompt, không dùng giới hạn mùa cố định.']),
       ],
       append: false,
     }, body);
@@ -2133,7 +2196,6 @@ function selectedSeasonSetFromContext(context: unknown, options: { expandAdjacen
     if (!normalized || seen.has(normalized)) continue;
     seen.add(normalized);
     selected.push(normalized);
-    if (selected.length >= 3) break;
   }
   if (!options.expandAdjacent || selected.length !== 1) return selected;
   const available = Array.isArray(root.availableSeasonCatalog)
@@ -2151,7 +2213,7 @@ function selectedSeasonSetFromContext(context: unknown, options: { expandAdjacen
   if (index < 0) return selected;
   const previous = available[index - 1]?.seasonId;
   const next = available[index + 1]?.seasonId;
-  return (previous ? [previous, selected[0]] : next ? [selected[0], next] : selected).slice(0, 3);
+  return previous ? [previous, selected[0]] : next ? [selected[0], next] : selected;
 }
 
 function inferPromptDateRange(prompt: string, fallbackYear: string): { dateFrom: string; dateTo: string } | null {

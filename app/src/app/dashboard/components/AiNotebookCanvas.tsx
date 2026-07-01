@@ -397,7 +397,9 @@ export function AiNotebookCanvas({
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-bold text-on-surface">{notebook?.title ?? 'Rich Chat AI'}</h2>
-          <p className="mt-1 text-xs text-on-surface-variant">{selectedSeasonCount} mùa đã chọn, lưu lịch sử chat local</p>
+          <p className="mt-1 text-xs text-on-surface-variant">
+            {selectedSeasonCount > 0 ? 'Mùa chung toàn app, lưu lịch sử chat local' : 'Chưa có mùa chung toàn app, lưu lịch sử chat local'}
+          </p>
         </div>
         <button
           type="button"
