@@ -8,7 +8,7 @@ import type {
 } from './types';
 import type { AuditDeltaChunk, AuditLogEntry, AuditSession } from './auditLog';
 import type { SourceRowOperationPlan } from './sourceRowPatterns';
-import type { LocalEntityVersionMap, LocalPendingOp } from './localSeasonStore';
+import type { LocalEntityVersionMap, LocalPendingOp, LocalSyncMeta } from './localSeasonStore';
 import type { SeasonChangeEvent } from './seasonChangeEvents';
 import { isSupabaseConfigured } from './supabase';
 import { getCachedOperationalSettings, setCachedOperationalSettings } from './seasonDataCache';
@@ -43,9 +43,30 @@ export interface RemoteSyncWorkspaceV2Input {
 export interface RemoteSyncWorkspaceV2Result {
   appliedEvents: SeasonChangeEvent[];
   conflictEvents: SeasonChangeEvent[];
+  changedTargets: string[];
+  acknowledgedOps: string[];
   nextServerSeq: number;
   serverHighWater: number;
   nextServerVersion: number;
+}
+
+export interface ServerSeasonMutationPayload {
+  seasonId: string;
+  clientId: string;
+  clientMutationId: string;
+  source: string;
+  baseServerSeq?: number | null;
+  operations: unknown[];
+}
+
+export interface ServerSeasonMutationResult {
+  seasonId: string;
+  serverHighWater: number;
+  nextServerSeq: number;
+  changedTargets: string[];
+  affectedIds: string[];
+  appliedEvents: unknown[];
+  rejectedEvents: unknown[];
 }
 
 export interface RemoteScheduleNotificationFlushInput {
@@ -65,10 +86,44 @@ export interface RemoteSeasonImportCounts {
   flightRecords: number;
 }
 
+export interface RemoteSeasonalImportInput {
+  seasonId?: string | null;
+  seasonCode: string;
+  season: Omit<Season, 'id'> | Season;
+  sourceRows: ParsedRow[];
+  flightRecords: FlightRecord[];
+  modificationDeleteRecordIds: string[];
+  actor?: RemoteActor | null;
+  onProgress?: (label: string, written: number, total: number) => void;
+}
+
+export interface RemoteSeasonalImportResult {
+  seasonId: string;
+  serverHighWater: number;
+  sourceRows: number;
+  flightRecords: number;
+  status: string;
+}
+
 export interface RemoteDashboardSeasonData {
   sourceRows: ParsedRow[];
   records: FlightRecord[];
   modifications: Map<string, FlightModification>;
+}
+
+export interface RemoteSeasonWorkspaceWindowInput {
+  seasonId: string;
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  resourceType?: 'gate' | 'checkin' | 'schedule' | string | null;
+  limit?: number;
+}
+
+export interface RemoteSeasonWorkspaceWindowResult extends RemoteDashboardSeasonData {
+  syncMeta: LocalSyncMeta;
+  cursor: {
+    serverHighWater: number;
+  };
 }
 
 export interface RemoteSeasonSyncCursorState {
@@ -113,9 +168,11 @@ export interface RemoteStore {
   batchWriteSourceRows(seasonId: string, rows: ParsedRow[], onProgress?: (written: number, total: number) => void): Promise<void>;
   getSourceRows(seasonId: string): Promise<ParsedRow[]>;
   batchWriteFlightRecords(seasonId: string, records: FlightRecord[], onProgress?: (written: number, total: number) => void): Promise<void>;
+  applySeasonalImportRemote?(input: RemoteSeasonalImportInput): Promise<RemoteSeasonalImportResult>;
   verifySeasonImportCounts?(seasonId: string, expected: RemoteSeasonImportCounts): Promise<RemoteSeasonImportCounts>;
   getFlightRecords(seasonId: string): Promise<FlightRecord[]>;
   getDashboardSeasonData?(seasonId: string): Promise<RemoteDashboardSeasonData>;
+  getSeasonWorkspaceWindow?(input: RemoteSeasonWorkspaceWindowInput): Promise<RemoteSeasonWorkspaceWindowResult | null>;
   getSeasonWorkspaceSnapshot?(
     seasonId: string,
     options?: { modHistoryLimit?: number; transport?: 'auto' | 'rpc' | 'paged' }
@@ -143,6 +200,7 @@ export interface RemoteStore {
   undoModHistoryEntries(seasonId: string, entries: ModHistoryEntry[]): Promise<void>;
   syncSeasonWorkspaceRemote(input: RemoteSyncWorkspaceInput): Promise<RemoteSyncWorkspaceResult>;
   syncSeasonWorkspaceRemoteV2?(input: RemoteSyncWorkspaceV2Input): Promise<RemoteSyncWorkspaceV2Result>;
+  applySeasonServerMutationV1?(payload: ServerSeasonMutationPayload): Promise<ServerSeasonMutationResult>;
   flushScheduleNotifications?(input?: RemoteScheduleNotificationFlushInput): Promise<RemoteScheduleNotificationFlushResult>;
   getSeasonEventHighWater?(seasonId: string): Promise<number>;
   getSeasonEntityVersions?(seasonId: string): Promise<LocalEntityVersionMap>;
@@ -273,6 +331,22 @@ export async function getSourceRows(_seasonId: string): Promise<ParsedRow[]> {
 export async function batchWriteFlightRecords(seasonId: string, records: FlightRecord[], onProgress?: (written: number, total: number) => void): Promise<void> {
   return (await getRemoteStore()).batchWriteFlightRecords(seasonId, records, onProgress);
 }
+export async function applySeasonalImportRemote(input: RemoteSeasonalImportInput): Promise<RemoteSeasonalImportResult> {
+  const store = await getRemoteStore();
+  if (!store.applySeasonalImportRemote) {
+    throw new Error('Server-side seasonal import RPC is unavailable for the configured backend.');
+  }
+  return store.applySeasonalImportRemote(input);
+}
+export async function applySeasonServerMutationV1(
+  payload: ServerSeasonMutationPayload
+): Promise<ServerSeasonMutationResult> {
+  const store = await getRemoteStore();
+  if (!store.applySeasonServerMutationV1) {
+    throw new Error('Server-authoritative mutation RPC is not available.');
+  }
+  return store.applySeasonServerMutationV1(payload);
+}
 export async function verifySeasonImportCounts(seasonId: string, expected: RemoteSeasonImportCounts): Promise<RemoteSeasonImportCounts> {
   const store = await getRemoteStore();
   if (!store.verifySeasonImportCounts) return expected;
@@ -338,6 +412,42 @@ export async function getDashboardSeasonData(seasonId: string): Promise<RemoteDa
     store.getModifications(seasonId),
   ]);
   return { sourceRows: [], records, modifications };
+}
+
+function recordMatchesWorkspaceWindow(record: FlightRecord, input: RemoteSeasonWorkspaceWindowInput): boolean {
+  if (input.dateFrom && record.date < input.dateFrom) return false;
+  if (input.dateTo && record.date > input.dateTo) return false;
+  return true;
+}
+
+export async function loadSeasonWorkspaceWindow(
+  input: RemoteSeasonWorkspaceWindowInput
+): Promise<RemoteSeasonWorkspaceWindowResult | null> {
+  const store = await getRemoteStore();
+  if (store.getSeasonWorkspaceWindow) return store.getSeasonWorkspaceWindow(input);
+
+  const snapshot = await getSeasonWorkspaceSnapshot(input.seasonId, { modHistoryLimit: 0 });
+  if (!snapshot) return null;
+  const records = snapshot.records
+    .filter((record) => recordMatchesWorkspaceWindow(record, input))
+    .slice(0, input.limit ?? snapshot.records.length);
+  const serverHighWater = snapshot.cursor.serverHighWater;
+  return {
+    sourceRows: snapshot.sourceRows,
+    records,
+    modifications: snapshot.modifications,
+    cursor: { serverHighWater },
+    syncMeta: {
+      seasonId: input.seasonId,
+      baseServerVersion: serverHighWater,
+      lastServerSeq: serverHighWater,
+      localRevision: serverHighWater,
+      pendingCount: 0,
+      lastLocalChangeAt: null,
+      conflicts: [],
+      syncStatus: 'synced',
+    },
+  };
 }
 function sourceRowWritesDisabled(): Error {
   return new Error('Source row writes are disabled. Seasonal data is stored as atomic flight records.');

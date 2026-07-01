@@ -1,11 +1,11 @@
 'use client';
 
-import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getOperationalSettings, getSeasons } from '@/lib/remoteStore';
+import { getOperationalSettings, getSeasons, loadSeasonWorkspaceWindow } from '@/lib/remoteStore';
+import { publishSeasonWorkspaceChanged } from '@/lib/seasonDataCache';
 import { buildSeasonDisplayLabel } from '@/lib/importSeasonRules';
 import {
-  buildPeakHourAxisTicks,
   buildDashboardOverview,
   buildDashboardComparison,
   buildEffectiveDashboardRecords,
@@ -15,32 +15,32 @@ import {
   type DashboardComparisonMode,
   type DashboardDimension,
   type DashboardMetric,
-  type DashboardOverviewDailyRow,
   type DashboardTimeBasis,
   type DashboardTypeFilter,
 } from '@/lib/dashboardAnalysis';
 import {
-  analyzeDashboardWithLocalAgent,
+  buildOperationalDashboard,
+  buildPeakDayHeatmap,
+  buildPeakHourHeatmap,
+  computePaxCoverage,
+  type OperationalDashboardBucketSize,
+  type OperationalDashboardRecord,
+  type OperationalPeakDayHeatmapCell,
+  type OperationalTimelineBucket,
+} from '@/lib/operationalDashboardAnalysis';
+import {
   analyzeDashboardWithAi, 
   appendDashboardAiRunEvent,
-  applyDashboardAiResultProfileAndVerification, 
-  buildDashboardAiBoardPatchFromQueryResults, 
-  buildDashboardAiContext,
   buildDashboardAiFallbackBoardPatch, 
   buildDashboardAiActiveArtifactFromCell,
   buildDashboardAiFollowUpBoardPatchFromCells,
   buildDashboardAiNotebookContext, 
   capDashboardAiNotebookQueryResults,
   capDashboardAiLocalHistory,
-  dashboardAiSqlResultToQueryResult,
-  inferDashboardAiDataQueryForPrompt,
   inferDashboardAiSemanticIntent,
   isDashboardAiConfigured,
   listEnabledDashboardAiModels,
   normalizeDashboardAiWorkspaceSeasonIds,
-  planDashboardAiSqlDrilldownQueries,
-  planDashboardAiSqlQueries,
-  resolveDashboardAiLocalQueryResults,
   resolveDashboardAiAvailableTools,
   resolveDashboardAiDataScopeForPrompt,
   resolveDashboardAiQueryResults,
@@ -49,15 +49,14 @@ import {
   resolveDashboardAiSkillForPrompt,
   resolveDashboardAiModel,
   type DashboardAiExportAction,
+  type DashboardAiContext,
+  type DashboardAiSeasonCatalog,
   type DashboardAiNotebook,
   type DashboardAiNotebookCell,
-  type DashboardAiQueryResult,
   type DashboardAiRunEvent,
-  type DashboardAiSqlQueryPlan,
   type DashboardAiToolTraceSummary,
   type DashboardAiToolName,
   type DashboardAiWorkspaceBlock,
-  type DashboardAiWaterfallContextRow,
 } from '@/lib/dashboardAiAnalysis';
 import {
   buildDashboardReportFileName,
@@ -73,24 +72,30 @@ import {
   setCachedSeasons,
 } from '@/lib/seasonDataCache';
 import type { LocalSyncMeta } from '@/lib/localSeasonStore';
-import { callNativeDashboardAiAgent, isTauriRuntime, queryNativeDashboardAiSql, queryNativeScheduleWindow } from '@/lib/nativeSeasonRepository';
+import type { DashboardAiQueryScope, DashboardAiQueryScopeSourcePreset } from '@/lib/dashboardAiShared';
+import { queryNativeScheduleWindow } from '@/lib/nativeSeasonRepository';
 import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
+import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
+import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
 import { resolveCountryForRoute } from '@/lib/routeCountry';
-import type { AiAnalysisModelSetting, FlightModification, FlightRecord, OperationalSettings, RouteCountryMapping, Season } from '@/lib/types';
+import type { AiAnalysisModelSetting, DashboardAlertSettings, FlightModification, FlightRecord, OperationalSettings, RouteCountryMapping, Season } from '@/lib/types';
 import FetchServerUpdatesButton from '../components/FetchServerUpdatesButton';
 import { useCachedRouteSearchParams } from '../components/RouteCacheContext';
 import { useExportNotifications } from '../components/ExportNotificationProvider';
 import LoadingStatusPanel from '../components/LoadingStatusPanel';
-import { useSeasonSync } from '../components/SeasonSyncProvider';
+import SyncActionButton from '../components/SyncActionButton';
+import {
+  getSeasonSyncPendingCount,
+  useSeasonSync,
+} from '../components/SeasonSyncProvider';
 import { useSessionScrollRestoration } from '../hooks/useSessionScrollRestoration';
 import { useSessionState } from '../hooks/useSessionState';
 import { useSeasonWorkspaceRefresh } from '../hooks/useSeasonWorkspaceRefresh';
 import { AiWorkspacePanel, type AiWorkspacePreset } from './components/AiWorkspacePanel';
 import type { AiNotebookLoadingStep } from './components/AiNotebookCanvas';
 import type { AiNotebookRendererData } from './components/AiNotebookBlockRenderers';
-import DateRangeFilter from './components/DateRangeFilter';
 
 const METRICS: Array<{ value: DashboardMetric; label: string }> = [
   { value: 'flights', label: 'Chuyến bay' },
@@ -105,19 +110,18 @@ const TYPE_FILTERS: Array<{ value: DashboardTypeFilter; label: string }> = [
 
 const DRIVER_TABS: Array<{ value: DashboardDimension; label: string; icon: string }> = [
   { value: 'airline', label: 'Hãng bay', icon: 'airlines' },
-  { value: 'route', label: 'Đường bay', icon: 'route' },
   { value: 'country', label: 'Quốc gia', icon: 'public' },
-  { value: 'aircraft', label: 'Tàu bay', icon: 'flight' },
-  { value: 'hourBucket', label: 'Thời gian', icon: 'schedule' },
-  { value: 'flightNumber', label: 'Số chuyến', icon: 'confirmation_number' },
+  { value: 'route', label: 'Đường bay', icon: 'route' },
+  { value: 'aircraft', label: 'A/C Type', icon: 'flight' },
+  { value: 'dayOfWeek', label: 'Thứ', icon: 'calendar_month' },
+  { value: 'hourBucket', label: 'Giờ', icon: 'schedule' },
 ];
 
 const WATERFALL_DIMENSIONS: Array<{ value: DashboardDimension; label: string }> = [
   { value: 'airline', label: 'Hãng bay' },
   { value: 'country', label: 'Quốc gia' },
   { value: 'route', label: 'Đường bay' },
-  { value: 'aircraft', label: 'Loại tàu bay' },
-  { value: 'type', label: 'ARR/DEP' },
+  { value: 'aircraft', label: 'A/C Type' },
   { value: 'dayOfWeek', label: 'Thứ' },
   { value: 'hourBucket', label: 'Giờ' },
 ];
@@ -130,8 +134,8 @@ const AI_WORKSPACE_PRESETS: AiWorkspacePreset[] = [
     preferredTool: 'compose_dashboard_ai_board',
   },
   {
-    label: 'So sánh mùa đã chọn',
-    prompt: 'So sánh các mùa đã chọn trên AI Workspace bằng bảng tổng hợp multi-season và biểu đồ.',
+    label: 'So sánh mùa theo query',
+    prompt: 'So sánh các mùa phù hợp với câu hỏi hoặc phạm vi ngày hiện tại bằng bảng tổng hợp multi-season và biểu đồ.',
     mode: 'board',
     preferredTool: 'compose_dashboard_ai_board',
   },
@@ -153,9 +157,9 @@ const AI_WORKSPACE_PRESETS: AiWorkspacePreset[] = [
     mode: 'board',
     preferredTool: 'compose_dashboard_ai_board',
   },
-  { label: 'Giải thích tác nhân chính', prompt: 'Giải thích các tác nhân chính trong so sánh dashboard hiện tại bằng tiếng Việt.', mode: 'chat' },
-  { label: 'Tìm bất thường', prompt: 'Tìm các điểm bất thường trong dữ liệu dashboard hiện tại và trả lời bằng tiếng Việt.', mode: 'chat' },
-  { label: 'Vì sao chỉ số giảm?', prompt: 'Vì sao chỉ số này giảm trong so sánh hiện tại? Trả lời bằng tiếng Việt và nêu số liệu.', mode: 'chat' },
+  { label: 'Giải thích tác nhân chính', prompt: 'Giải thích các tác nhân chính bằng Supabase reporting/query và trả lời bằng tiếng Việt.', mode: 'chat' },
+  { label: 'Tìm bất thường', prompt: 'Tìm các điểm bất thường bằng Supabase reporting/query và trả lời bằng tiếng Việt.', mode: 'chat' },
+  { label: 'Vì sao chỉ số giảm?', prompt: 'Vì sao chỉ số này giảm theo Supabase reporting/query? Trả lời bằng tiếng Việt và nêu số liệu.', mode: 'chat' },
 ];
 
 const WEEKDAY_COLUMNS = [
@@ -168,7 +172,15 @@ const WEEKDAY_COLUMNS = [
   { key: 'Sat', label: 'T7' },
 ];
 const WEEKDAY_KEYS = WEEKDAY_COLUMNS.map((weekday) => weekday.key);
-const WEEKDAY_LABEL_BY_KEY = new Map(WEEKDAY_COLUMNS.map((weekday) => [weekday.key, weekday.label]));
+const MONDAY_FIRST_WEEKDAY_COLUMNS = [
+  { key: 'Mon', label: 'T2' },
+  { key: 'Tue', label: 'T3' },
+  { key: 'Wed', label: 'T4' },
+  { key: 'Thu', label: 'T5' },
+  { key: 'Fri', label: 'T6' },
+  { key: 'Sat', label: 'T7' },
+  { key: 'Sun', label: 'CN' },
+];
 const HEATMAP_CELL_TONES = [
   'bg-cyan-100 text-cyan-950 ring-cyan-200 dark:bg-cyan-950/60 dark:text-cyan-100 dark:ring-cyan-800',
   'bg-sky-200 text-sky-950 ring-sky-300 dark:bg-sky-900 dark:text-sky-50 dark:ring-sky-700',
@@ -179,7 +191,24 @@ const HEATMAP_CELL_TONES = [
 ];
 const MONTH_LABELS = ['Thg 1', 'Thg 2', 'Thg 3', 'Thg 4', 'Thg 5', 'Thg 6', 'Thg 7', 'Thg 8', 'Thg 9', 'Thg 10', 'Thg 11', 'Thg 12'];
 const numberFormat = new Intl.NumberFormat('en-US');
-type DashboardView = 'overview' | 'analysis' | 'ai-workspace';
+type DashboardView = 'operations' | 'comparison' | 'ai-workspace';
+type LegacyDashboardView = 'overview' | 'analysis';
+type PeakDayCalendarCell = {
+  key: string;
+  date: string;
+  cell: OperationalPeakDayHeatmapCell | null;
+  weekMinFlights: number;
+  weekMaxFlights: number;
+  isMonthHigh: boolean;
+};
+
+const DEFAULT_DASHBOARD_ALERT_SETTINGS: DashboardAlertSettings = {
+  arrivalBucketFlights: null,
+  departureBucketFlights: null,
+  adGapFlights: null,
+  ctgAbsPct: null,
+  paxCoverageMinPct: null,
+};
 
 interface DashboardAiWorkspaceSeasonData {
   season: Season;
@@ -192,8 +221,220 @@ interface DashboardAiWorkspaceSeasonData {
   truncated?: boolean;
 }
 
-function buildDashboardWindowKey(scope: 'overview' | 'ai-workspace' = 'overview'): string {
+interface DashboardRouteState {
+  seasons: Season[];
+  season: Season;
+  records: FlightRecord[];
+  modifications: Map<string, FlightModification>;
+  operationalSettings: OperationalSettings | null;
+  syncMeta: LocalSyncMeta | null;
+  dataSource: 'cache';
+  windowKey: string;
+}
+
+function buildDashboardWindowKey(scope: 'operations' | 'ai-workspace' = 'operations'): string {
   return `dashboard:${scope}:full`;
+}
+
+function readInitialDashboardRouteState(targetSeasonId: string | null): DashboardRouteState | null {
+  const storeState = useSeasonWorkspaceStore.getState();
+  const cachedSeasons = getCachedSeasons() ?? storeState.seasons;
+  if (!cachedSeasons || cachedSeasons.length === 0) return null;
+
+  const targetSeason = cachedSeasons.find((item) => item.id === targetSeasonId) ?? cachedSeasons[0];
+  if (!targetSeasonId || targetSeasonId !== targetSeason.id) return null;
+
+  const windowKey = buildDashboardWindowKey('operations');
+  const cachedWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+  if (!cachedWindow) return null;
+
+  return {
+    seasons: cachedSeasons,
+    season: targetSeason,
+    records: cachedWindow.records,
+    modifications: cachedWindow.modifications,
+    operationalSettings: storeState.operationalSettings,
+    syncMeta: cachedWindow.syncMeta,
+    dataSource: 'cache',
+    windowKey,
+  };
+}
+
+function normalizeDashboardView(value: DashboardView | LegacyDashboardView | unknown): DashboardView {
+  if (value === 'analysis') return 'comparison';
+  if (value === 'overview') return 'operations';
+  if (value === 'comparison' || value === 'ai-workspace' || value === 'operations') return value;
+  return 'operations';
+}
+
+function emptyDashboardAiSeasonCatalog(): DashboardAiSeasonCatalog {
+  return {
+    totalRecords: 0,
+    dateRange: { from: '', to: '' },
+    months: [],
+    weeks: [],
+    typeTotals: [],
+    topAirlines: [],
+    topRoutes: [],
+    topCountries: [],
+    topAircraft: [],
+    truncated: { topRows: false },
+  };
+}
+
+function buildDashboardAiQueryOnlyContext(input: {
+  seasonIds: string[];
+  availableSeasonCatalog: Array<{ seasonId: string; seasonCode: string; name: string; dateRange: { from: string; to: string } }>;
+  dataScope: ReturnType<typeof resolveDashboardAiDataScopeForPrompt>;
+  semanticIntent: ReturnType<typeof inferDashboardAiSemanticIntent>;
+  currentQueryScope: DashboardAiQueryScope;
+}): DashboardAiContext & {
+  sourcePolicy: 'supabase-reporting-query-only';
+  selectedSeasonCatalog: Array<{ seasonId: string; seasonCode: string; name: string; dateRange: { from: string; to: string } }>;
+  currentQueryScope: DashboardAiQueryScope;
+} {
+  const selected = input.availableSeasonCatalog.filter((item) => input.seasonIds.includes(item.seasonId));
+  return {
+    contextVersion: 2,
+    generatedAt: new Date().toISOString(),
+    seasonCatalog: emptyDashboardAiSeasonCatalog(),
+    availableSeasonCatalog: input.availableSeasonCatalog,
+    selectedSeasonCatalog: selected,
+    dataScope: input.dataScope,
+    currentQueryScope: input.currentQueryScope,
+    semanticIntent: input.semanticIntent,
+    dataSourcePolicy: 'supabase-reporting',
+    sourcePolicy: 'supabase-reporting-query-only',
+    resolvedDataRequest: null,
+  };
+}
+
+function monthBounds(month: string): { from: string; to: string } {
+  const dates = monthDateKeys(month);
+  return { from: dates[0] ?? '', to: dates[dates.length - 1] ?? '' };
+}
+
+function todayLocalIso(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function mondayFirstOffset(date: string): number {
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return 0;
+  return (parsed.getDay() + 6) % 7;
+}
+
+function operationalRecordPax(record: { pax?: number | null }): number {
+  return Number.isFinite(record.pax) ? Number(record.pax) : 0;
+}
+
+function summarizeOperationalRecords(
+  records: OperationalDashboardRecord[],
+  keyForRecord: (record: OperationalDashboardRecord) => string
+): Array<{ key: string; label: string; flights: number; arrivals: number; departures: number; pax: number; share: number }> {
+  const total = Math.max(1, records.length);
+  const groups = new Map<string, { key: string; label: string; flights: number; arrivals: number; departures: number; pax: number; share: number }>();
+  for (const record of records) {
+    const key = keyForRecord(record) || 'Không rõ';
+    const current = groups.get(key) ?? { key, label: key, flights: 0, arrivals: 0, departures: 0, pax: 0, share: 0 };
+    current.flights += 1;
+    current.pax += operationalRecordPax(record);
+    if (record.type === 'A') current.arrivals += 1;
+    if (record.type === 'D') current.departures += 1;
+    groups.set(key, current);
+  }
+  return [...groups.values()]
+    .map((row) => ({ ...row, share: row.flights / total }))
+    .sort((left, right) => right.flights - left.flights || left.label.localeCompare(right.label));
+}
+
+function summarizeFlightRecordsByOperationalDate(records: FlightRecord[]): Array<{ date: string; flights: number; arrivals: number; departures: number; pax: number }> {
+  const groups = new Map<string, { date: string; flights: number; arrivals: number; departures: number; pax: number }>();
+  for (const record of records) {
+    if (record.status === 'deleted') continue;
+    const date = getDashboardOperationalDate(record);
+    const current = groups.get(date) ?? { date, flights: 0, arrivals: 0, departures: 0, pax: 0 };
+    current.flights += 1;
+    current.pax += operationalRecordPax(record);
+    if (record.type === 'A') current.arrivals += 1;
+    if (record.type === 'D') current.departures += 1;
+    groups.set(date, current);
+  }
+  return [...groups.values()].sort((left, right) => left.date.localeCompare(right.date));
+}
+
+type DashboardComparisonTrendRow = {
+  key: string;
+  label: string;
+  value: number;
+  flights: number;
+  arrivals: number;
+  departures: number;
+  pax: number;
+  day?: string;
+};
+
+function metricValueForRecord(record: FlightRecord, metric: DashboardMetric): number {
+  return metric === 'pax' ? operationalRecordPax(record) : 1;
+}
+
+function summarizeComparisonRecordsByMonth(records: FlightRecord[], metric: DashboardMetric): DashboardComparisonTrendRow[] {
+  const groups = new Map<string, DashboardComparisonTrendRow>();
+  for (const record of records) {
+    const key = getDashboardOperationalDate(record).slice(0, 7);
+    if (!key) continue;
+    const current = groups.get(key) ?? {
+      key,
+      label: periodLabel(key, 'mom'),
+      value: 0,
+      flights: 0,
+      arrivals: 0,
+      departures: 0,
+      pax: 0,
+    };
+    current.value += metricValueForRecord(record, metric);
+    current.flights += 1;
+    current.pax += operationalRecordPax(record);
+    if (record.type === 'A') current.arrivals += 1;
+    if (record.type === 'D') current.departures += 1;
+    groups.set(key, current);
+  }
+  return [...groups.values()].sort((left, right) => left.key.localeCompare(right.key));
+}
+
+function summarizeComparisonRecordsByDate(records: FlightRecord[], metric: DashboardMetric): DashboardComparisonTrendRow[] {
+  const groups = new Map<string, DashboardComparisonTrendRow>();
+  for (const record of records) {
+    const key = getDashboardOperationalDate(record);
+    if (!key) continue;
+    const current = groups.get(key) ?? {
+      key,
+      label: key,
+      day: key.slice(8, 10),
+      value: 0,
+      flights: 0,
+      arrivals: 0,
+      departures: 0,
+      pax: 0,
+    };
+    current.value += metricValueForRecord(record, metric);
+    current.flights += 1;
+    current.pax += operationalRecordPax(record);
+    if (record.type === 'A') current.arrivals += 1;
+    if (record.type === 'D') current.departures += 1;
+    groups.set(key, current);
+  }
+  return [...groups.values()].sort((left, right) => left.key.localeCompare(right.key));
+}
+
+function resolveAircraftGroupLabel(record: { aircraft?: string | null }, operationalSettings: OperationalSettings | null): string {
+  const aircraft = record.aircraft || 'Không rõ';
+  const group = operationalSettings?.aircraftGroups.find((item) => item.aircraftTypes.includes(aircraft));
+  return group?.name || aircraft;
 }
 
 function isConsecutiveSeasonPrompt(prompt: string): boolean {
@@ -211,6 +452,27 @@ function resolveConsecutiveAiSeasonIds(selectedIds: string[], seasons: Season[])
   const previous = ordered[index - 1]?.id;
   const next = ordered[index + 1]?.id;
   return normalizeDashboardAiWorkspaceSeasonIds(previous ? [previous, selectedId] : next ? [selectedId, next] : [selectedId]);
+}
+
+function resolveAiWorkspaceSeasonDateRange(seasonIds: string[], seasons: Season[], fallbackSeason: Season | null): { from: string; to: string } {
+  const selected = seasons.filter((item) => seasonIds.includes(item.id));
+  const source = selected.length > 0 ? selected : fallbackSeason ? [fallbackSeason] : [];
+  const starts = source.map((item) => item.effectiveStart).filter(Boolean).sort();
+  const ends = source.map((item) => item.effectiveEnd).filter(Boolean).sort();
+  return {
+    from: starts[0] ?? '',
+    to: ends[ends.length - 1] ?? '',
+  };
+}
+
+function normalizeAiWorkspaceDateRange(dateFrom: string, dateTo: string): { dateFrom?: string; dateTo?: string } {
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(dateFrom) ? dateFrom : '';
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(dateTo) ? dateTo : '';
+  if (from && to && from > to) return { dateFrom: to, dateTo: from };
+  return {
+    ...(from ? { dateFrom: from } : {}),
+    ...(to ? { dateTo: to } : {}),
+  };
 }
 
 function seasonOverlapsCalendarYear(season: Season, year: number): boolean {
@@ -235,37 +497,6 @@ function resolveYoySeasonIds(seasons: Season[], records: FlightRecord[], activeS
   return normalizeDashboardAiWorkspaceSeasonIds(seasons
     .filter((item) => targetYears.some((year) => seasonOverlapsCalendarYear(item, year)))
     .map((item) => item.id));
-}
-
-function buildAiWorkspaceMultiSeasonCatalogFromData(
-  seasonIds: string[],
-  seasonData: DashboardAiWorkspaceSeasonData[]
-) {
-  if (seasonData.length === 0) return null;
-  return {
-    seasonIds,
-    seasons: seasonData.map((item) => {
-      const activeRows = item.effectiveRecords.filter((record) => record.status !== 'deleted');
-      const dates = activeRows.map((record) => getDashboardOperationalDate(record)).filter(Boolean).sort();
-      return {
-        seasonId: item.season.id,
-        seasonCode: item.season.seasonCode,
-        name: item.season.name,
-        totalRecords: activeRows.length,
-        totalPax: activeRows.reduce((sum, record) => sum + (Number.isFinite(record.pax ?? NaN) ? Number(record.pax) : 0), 0),
-        dateRange: { from: dates[0] ?? '', to: dates[dates.length - 1] ?? '' },
-        months: new Set(dates.map((date) => date.slice(0, 7))).size,
-      };
-    }),
-  };
-}
-
-function resolveAiDataSourcePolicyFromSeasonData(seasonData: DashboardAiWorkspaceSeasonData[]) {
-  if (seasonData.length === 0) return 'local-sqlite' as const;
-  const localCount = seasonData.filter((item) => item.dataSource === 'active' || item.dataSource === 'local').length;
-  if (localCount === seasonData.length) return 'local-sqlite' as const;
-  if (localCount === 0) return 'supabase-reporting' as const;
-  return 'mixed' as const;
 }
 
 type AiWorkspaceTableRow = Record<string, string | number | boolean | null>;
@@ -494,40 +725,8 @@ function monthDateKeys(month: string): string[] {
   return Array.from({ length: daysInMonth }, (_, index) => `${month}-${String(index + 1).padStart(2, '0')}`);
 }
 
-function emptyDailyTrendRow(date: string): DashboardOverviewDailyRow {
-  const parsed = parseIsoDate(date);
-  const month = date.slice(0, 7);
-  const day = date.slice(8, 10);
-  return {
-    date,
-    month,
-    day,
-    label: parsed ? `${MONTH_LABELS[parsed.getUTCMonth()] ?? month} ${day}` : date,
-    weekday: parsed ? WEEKDAY_KEYS[parsed.getUTCDay()] ?? 'Không rõ' : 'Không rõ',
-    arrivals: 0,
-    departures: 0,
-    total: 0,
-    pax: 0,
-  };
-}
-
 function listPeriods(records: FlightRecord[], mode: DashboardComparisonMode, granularity: DashboardComparisonGranularity = 'month'): Array<{ key: string; label: string }> {
   return listDashboardPeriods(records, mode, granularity);
-}
-
-function resolveWorkspacePeriodKey(
-  periods: Array<{ key: string }>,
-  explicitPeriod?: string,
-  monthNumber?: string
-): string {
-  if (explicitPeriod && periods.some((period) => period.key === explicitPeriod)) return explicitPeriod;
-  if (monthNumber) {
-    const suffix = `-${monthNumber.padStart(2, '0')}`;
-    for (let index = periods.length - 1; index >= 0; index -= 1) {
-      if (periods[index].key.endsWith(suffix)) return periods[index].key;
-    }
-  }
-  return '';
 }
 
 function resolveDefaultPreviousPeriod(
@@ -559,10 +758,6 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
 }
 
-function weekdayDisplayLabel(weekday: string): string {
-  return WEEKDAY_LABEL_BY_KEY.get(weekday) ?? weekday;
-}
-
 function heatmapCellTone(flights: number | undefined, maxFlights: number): string {
   if (!flights || flights <= 0 || maxFlights <= 0) {
     return 'bg-surface-container-low text-on-surface-variant ring-outline-variant';
@@ -570,6 +765,19 @@ function heatmapCellTone(flights: number | undefined, maxFlights: number): strin
   const ratio = Math.min(1, flights / maxFlights);
   const toneIndex = Math.min(HEATMAP_CELL_TONES.length - 1, Math.max(0, Math.ceil(ratio * HEATMAP_CELL_TONES.length) - 1));
   return HEATMAP_CELL_TONES[toneIndex];
+}
+
+function peakDayWeekTone(flights: number, weekMinFlights: number, weekMaxFlights: number): string {
+  if (flights <= 0) return 'bg-surface-container-low text-on-surface-variant ring-outline-variant';
+  if (weekMaxFlights <= weekMinFlights) return heatmapCellTone(flights, weekMaxFlights || flights);
+  const ratio = Math.min(1, Math.max(0, (flights - weekMinFlights) / (weekMaxFlights - weekMinFlights)));
+  const toneIndex = Math.min(HEATMAP_CELL_TONES.length - 1, Math.round(ratio * (HEATMAP_CELL_TONES.length - 1)));
+  return HEATMAP_CELL_TONES[toneIndex];
+}
+
+function trendBarHeight(value: number, maxValue: number): string {
+  if (value <= 0 || maxValue <= 0) return '0%';
+  return `${Math.max(4, value / maxValue * 100)}%`;
 }
 
 function formatDelta(value: number): string {
@@ -628,42 +836,50 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   const searchParams = useCachedRouteSearchParams();
   const { notifyExportCompleted } = useExportNotifications();
   const targetSeasonId = searchParams.get('season');
+  const initialDashboardRouteState = readInitialDashboardRouteState(targetSeasonId);
 
-  const [seasons, setSeasons] = useState<Season[]>([]);
-  const [season, setSeason] = useState<Season | null>(null);
-  const [records, setRecords] = useState<FlightRecord[]>([]);
-  const [modifications, setModifications] = useState<Map<string, FlightModification>>(new Map());
-  const [operationalSettings, setOperationalSettings] = useState<OperationalSettings | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [seasons, setSeasons] = useState<Season[]>(() => initialDashboardRouteState?.seasons ?? []);
+  const [season, setSeason] = useState<Season | null>(() => initialDashboardRouteState?.season ?? null);
+  const [records, setRecords] = useState<FlightRecord[]>(() => initialDashboardRouteState?.records ?? []);
+  const [modifications, setModifications] = useState<Map<string, FlightModification>>(
+    () => initialDashboardRouteState?.modifications ?? new Map()
+  );
+  const [operationalSettings, setOperationalSettings] = useState<OperationalSettings | null>(
+    () => initialDashboardRouteState?.operationalSettings ?? null
+  );
+  const [loading, setLoading] = useState(() => !initialDashboardRouteState);
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
     buildLoadProgress('Loading dashboard...', 10, 'Preparing analysis')
   );
   const [error, setError] = useState<string | null>(null);
   const [fetchUpdateNotice, setFetchUpdateNotice] = useState<{ title: string; message: string; tone: 'warning' | 'error' } | null>(null);
-  const [dataSource, setDataSource] = useState<'local' | 'cache' | 'server' | null>(null);
-  const [syncMeta, setSyncMeta] = useState<LocalSyncMeta | null>(null);
+  const [dataSource, setDataSource] = useState<'local' | 'cache' | 'server' | null>(
+    () => initialDashboardRouteState?.dataSource ?? null
+  );
+  const [syncMeta, setSyncMeta] = useState<LocalSyncMeta | null>(() => initialDashboardRouteState?.syncMeta ?? null);
 
-  const [dashboardView, setDashboardView] = useSessionState<DashboardView>('dashboard:view', 'overview');
+  const [dashboardViewState, setDashboardView] = useSessionState<DashboardView>('dashboard:view', 'operations');
+  const dashboardView = normalizeDashboardView(dashboardViewState);
   const [metric, setMetric] = useSessionState<DashboardMetric>('dashboard:metric', 'flights');
   const [comparisonMode, setComparisonMode] = useSessionState<DashboardComparisonMode>('dashboard:comparisonMode', 'mom');
   const [comparisonGranularity, setComparisonGranularity] = useSessionState<DashboardComparisonGranularity>('dashboard:comparisonGranularity', 'month');
   const [typeFilter, setTypeFilter] = useSessionState<DashboardTypeFilter>('dashboard:typeFilter', 'all');
   const [timeBasis, setTimeBasis] = useSessionState<DashboardTimeBasis>('dashboard:timeBasis', 'local');
+  const [operationalDate, setOperationalDate] = useSessionState('dashboard:operationalDate', '');
+  const [operationalBucketSize, setOperationalBucketSize] = useSessionState<OperationalDashboardBucketSize>('dashboard:operationalBucketSize', 60);
+  const [operationalPeakDayMonth, setOperationalPeakDayMonth] = useSessionState('dashboard:operationalPeakDayMonth', '');
+  const [operationalPeakHourTypeFilter, setOperationalPeakHourTypeFilter] = useSessionState<DashboardTypeFilter>('dashboard:operationalPeakHourTypeFilter', 'all');
   const [dimension, setDimension] = useSessionState<DashboardDimension>('dashboard:dimension', 'airline');
   const [currentPeriod, setCurrentPeriod] = useSessionState('dashboard:currentPeriod', '');
   const [previousPeriod, setPreviousPeriod] = useSessionState('dashboard:previousPeriod', '');
-  const [overviewMonthFrom, setOverviewMonthFrom] = useSessionState('dashboard:overviewMonthFrom', '');
-  const [overviewMonthTo, setOverviewMonthTo] = useSessionState('dashboard:overviewMonthTo', '');
-  const [overviewAirline, setOverviewAirline] = useSessionState('dashboard:overviewAirline', 'all');
-  const [overviewCountry, setOverviewCountry] = useSessionState('dashboard:overviewCountry', 'all');
-  const [overviewRoute, setOverviewRoute] = useSessionState('dashboard:overviewRoute', 'all');
-  const [overviewDailyMonth, setOverviewDailyMonth] = useSessionState('dashboard:overviewDailyMonth', '');
-  const [overviewPeakHourMonth, setOverviewPeakHourMonth] = useSessionState('dashboard:overviewPeakHourMonth', 'all');
-  const [dashboardSeasonIds, setDashboardSeasonIds] = useSessionState<string[]>('dashboard:seasonIds', []);
-  const [expandedOverviewCountries, setExpandedOverviewCountries] = useState<Set<string>>(new Set());
-  const [overviewCountryExpansionTouched, setOverviewCountryExpansionTouched] = useState(false);
+  const [comparisonTrendMonth, setComparisonTrendMonth] = useSessionState('dashboard:comparisonTrendMonth', '');
+  const [overviewMonthFrom] = useSessionState('dashboard:overviewMonthFrom', '');
+  const [overviewMonthTo] = useSessionState('dashboard:overviewMonthTo', '');
+  const [overviewAirline] = useSessionState('dashboard:overviewAirline', 'all');
+  const [overviewCountry] = useSessionState('dashboard:overviewCountry', 'all');
+  const [overviewRoute] = useSessionState('dashboard:overviewRoute', 'all');
+  const [overviewPeakHourMonth] = useSessionState('dashboard:overviewPeakHourMonth', 'all');
   const [selectedDriverKey, setSelectedDriverKey] = useSessionState<string | null>('dashboard:selectedDriverKey', null);
-  const [selectedDriverRecordLimit, setSelectedDriverRecordLimit] = useSessionState('dashboard:selectedDriverRecordLimit', 25);
   const [selectedAiModelId, setSelectedAiModelId] = useSessionState('dashboard:selectedAiModelId', '');
   const [aiNotebook, setAiNotebook] = useState<DashboardAiNotebook | null>(null);
   const [aiPrompt, setAiPrompt] = useState('');
@@ -672,87 +888,167 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   const [aiLoadingStep, setAiLoadingStep] = useState<AiNotebookLoadingStep>('context');
   const [aiLoadingStartedAt, setAiLoadingStartedAt] = useState<number | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
-  const [selectedAiSeasonIds, setSelectedAiSeasonIds] = useState<string[]>([]);
+  const [aiQueryScopeDateFrom, setAiQueryScopeDateFrom] = useState('');
+  const [aiQueryScopeDateTo, setAiQueryScopeDateTo] = useState('');
+  const [aiQueryScopeSourcePreset, setAiQueryScopeSourcePreset] = useState<DashboardAiQueryScopeSourcePreset>('selected-season');
   const [aiWorkspaceSeasonData, setAiWorkspaceSeasonData] = useState<Record<string, DashboardAiWorkspaceSeasonData>>({});
   const [aiWorkspaceDataError, setAiWorkspaceDataError] = useState<string | null>(null);
   const [lastAiPrompt, setLastAiPrompt] = useState('');
   const [pinnedAiContextCellId, setPinnedAiContextCellId] = useState<string | null>(null);
   const aiAbortControllerRef = useRef<AbortController | null>(null);
   const dashboardScrollRef = useRef<HTMLElement | null>(null);
+  const loadedWindowKeyRef = useRef<string | null>(initialDashboardRouteState?.windowKey ?? null);
+  const fetchServerDataRequestRef = useRef(0);
+  const latestRouteWindowRef = useRef<{ seasonId: string | null; windowKey: string }>({
+    seasonId: initialDashboardRouteState?.season.id ?? null,
+    windowKey: initialDashboardRouteState?.windowKey ?? '',
+  });
   useSessionScrollRestoration('dashboard:scroll', dashboardScrollRef);
   const routeCountries = operationalSettings?.routeCountries;
   const syncSeasonId = season?.id ?? targetSeasonId;
-  const { status: syncStatus, fetchUpdatesNow } = useSeasonSync(syncSeasonId, 'dashboard');
+  const { status: syncStatus, syncNow } = useSeasonSync(syncSeasonId, 'dashboard');
+  const [fetchingServerData, setFetchingServerData] = useState(false);
   const syncInProgress = syncStatus.status === 'syncing';
-  const fetchingUpdates = syncStatus.status === 'catching_up';
-  const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
+  const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' ? syncStatus.message : null);
+  const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncMeta?.pendingCount ?? 0);
+  const fetchProgress = fetchingServerData ? 'Fetching server data' : syncStatus.message;
+
+  useEffect(() => {
+    latestRouteWindowRef.current = {
+      seasonId: season?.id ?? null,
+      windowKey: buildDashboardWindowKey('operations'),
+    };
+  }, [season?.id]);
+
+  useEffect(() => {
+    if (dashboardViewState !== dashboardView) setDashboardView(dashboardView);
+  }, [dashboardView, dashboardViewState, setDashboardView]);
+
+  const tryApplyCachedDashboardRouteWindow = useCallback((): boolean => {
+    const cachedState = readInitialDashboardRouteState(targetSeasonId);
+    if (!cachedState) return false;
+
+    setError(null);
+    setSeasons(cachedState.seasons);
+    setSeason(cachedState.season);
+    setRecords(cachedState.records);
+    setModifications(cachedState.modifications);
+    if (cachedState.operationalSettings) setOperationalSettings(cachedState.operationalSettings);
+    setDataSource(cachedState.dataSource);
+    setSyncMeta(cachedState.syncMeta);
+    loadedWindowKeyRef.current = cachedState.windowKey;
+    setLoading(false);
+    return true;
+  }, [targetSeasonId]);
 
   const refreshDashboardWindow = useCallback(async () => {
     if (!season?.id) return null;
-    const result = await queryNativeScheduleWindow({
-      seasonId: season.id,
-      limit: 100000,
-    });
-    if (!result) throw new Error('Native dashboard query is unavailable.');
-    const nextModifications = new Map(result.modifications.map((mod) => [mod.legId, mod]));
-    setRecords(result.records);
-    setModifications(nextModifications);
-    setDataSource('local');
-    setSyncMeta(result.syncMeta);
+    const windowKey = buildDashboardWindowKey('operations');
+    const snapshot = readWorkspaceWindowSnapshot(useSeasonWorkspaceStore.getState().workspaces[season.id], windowKey);
+    if (!snapshot) return null;
+    setRecords(snapshot.records);
+    setModifications(snapshot.modifications);
+    setDataSource('cache');
+    setSyncMeta(snapshot.syncMeta);
     setCachedSeasonData(season.id, {
       rows: [],
-      records: result.records,
-      modifications: nextModifications,
+      records: snapshot.records,
+      modifications: snapshot.modifications,
       seasonDataVersion: season.dataVersion,
     });
-    useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-      seasonId: season.id,
-      season,
-      rows: [],
-      records: result.records,
-      modifications: nextModifications,
-      syncMeta: result.syncMeta,
-      windowKey: buildDashboardWindowKey('overview'),
-    });
-    return result;
+    loadedWindowKeyRef.current = windowKey;
+    return snapshot;
   }, [season]);
 
   useSeasonWorkspaceRefresh({
     seasonId: season?.id ?? targetSeasonId,
     policy: 'on-activation',
     source: 'dashboard',
-    onNativeRefresh: async () => {
+    onRefresh: async () => {
       await refreshDashboardWindow();
     },
   });
 
-  const handleFetchUpdates = useCallback(async () => {
-    if (!syncSeasonId || fetchingUpdates || syncInProgress) return;
+  const handleSync = useCallback(async () => {
+    if (!syncSeasonId || syncInProgress) return;
     setFetchUpdateNotice(null);
     try {
-      const result = await fetchUpdatesNow();
-      if (result.status === 'busy') return;
-      if (result.status === 'conflict') {
+      const result = await syncNow();
+      if (result.status !== 'synced') {
         setFetchUpdateNotice({
-          title: 'Fetch Updates Need Review',
-          message: result.message,
-          tone: 'warning',
-        });
-      } else if (result.status !== 'synced') {
-        setFetchUpdateNotice({
-          title: 'Fetch Updates Failed',
-          message: result.message,
+          title: 'Save Failed',
+          message: result.message ?? 'Save failed.',
           tone: 'error',
         });
       }
     } catch (err) {
       setFetchUpdateNotice({
-        title: 'Fetch Updates Failed',
+        title: 'Save Failed',
         message: (err as Error).message,
         tone: 'error',
       });
     }
-  }, [fetchUpdatesNow, fetchingUpdates, syncInProgress, syncSeasonId]);
+  }, [syncInProgress, syncNow, syncSeasonId]);
+
+  const fetchServerData = useCallback(async () => {
+    if (!season || fetchingServerData || syncInProgress) return;
+    const overviewWindowKey = buildDashboardWindowKey('operations');
+    const requestId = ++fetchServerDataRequestRef.current;
+    const requestedSeasonId = season.id;
+    const hasRouteDataLoaded = loadedWindowKeyRef.current === overviewWindowKey;
+    setFetchingServerData(true);
+    if (!hasRouteDataLoaded) setError(null);
+    setFetchUpdateNotice(null);
+    setLoadProgress(buildLoadProgress('Loading server workspace', 35, season.seasonCode));
+    try {
+      const serverWindow = await loadSeasonWorkspaceWindow({
+        seasonId: season.id,
+        resourceType: 'schedule',
+        limit: 100000,
+      });
+      if (!serverWindow) throw new Error('Server dashboard window is unavailable.');
+      if (
+        fetchServerDataRequestRef.current !== requestId ||
+        latestRouteWindowRef.current.seasonId !== requestedSeasonId ||
+        latestRouteWindowRef.current.windowKey !== overviewWindowKey
+      ) {
+        return;
+      }
+      loadedWindowKeyRef.current = overviewWindowKey;
+      setLoadProgress(buildLoadProgress('Preparing dashboard', 80, `${serverWindow.records.length} records`));
+      setRecords(serverWindow.records);
+      setModifications(serverWindow.modifications);
+      setDataSource('server');
+      setSyncMeta(serverWindow.syncMeta);
+      setCachedSeasonData(season.id, {
+        rows: [],
+        records: serverWindow.records,
+        modifications: serverWindow.modifications,
+        seasonDataVersion: season.dataVersion,
+      });
+      useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+        seasonId: season.id,
+        season,
+        rows: [],
+        records: serverWindow.records,
+        modifications: serverWindow.modifications,
+        syncMeta: serverWindow.syncMeta,
+        windowKey: overviewWindowKey,
+      });
+      publishSeasonWorkspaceChanged({
+        seasonId: season.id,
+        localRevision: serverWindow.syncMeta.localRevision,
+        source: 'server-window',
+        syncMeta: serverWindow.syncMeta,
+      });
+    } catch (err) {
+      const message = err instanceof Error && err.message ? err.message : 'Could not fetch dashboard data from the server.';
+      if (!hasRouteDataLoaded) setError(message);
+      setFetchUpdateNotice({ title: 'Fetch data failed', message, tone: 'error' });
+    } finally {
+      setFetchingServerData(false);
+    }
+  }, [fetchingServerData, season, syncInProgress]);
 
   useEffect(() => {
     let cancelled = false;
@@ -776,6 +1072,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     let cancelled = false;
 
     async function loadDashboardData() {
+      if (tryApplyCachedDashboardRouteWindow()) return;
       setLoading(true);
       setError(null);
       setLoadProgress(buildLoadProgress('Loading seasons', 15, 'Preparing dashboard'));
@@ -788,6 +1085,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
 
         if (nextSeasons.length === 0) {
+          loadedWindowKeyRef.current = null;
           setSeason(null);
           setRecords([]);
           setModifications(new Map());
@@ -801,10 +1099,73 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           router.replace(`${dashboardRoute}?season=${targetSeason.id}`);
         }
 
-        setLoadProgress(buildLoadProgress('Checking local season baseline', 30, targetSeason.seasonCode));
+        setSeason(targetSeason);
+        const overviewWindowKey = buildDashboardWindowKey('operations');
+        const cachedWindow = readCachedWorkspaceWindow(
+          useSeasonWorkspaceStore.getState().workspaces[targetSeason.id],
+          overviewWindowKey
+        );
+        if (cachedWindow) {
+          loadedWindowKeyRef.current = overviewWindowKey;
+          setRecords(cachedWindow.records);
+          setModifications(cachedWindow.modifications);
+          setDataSource('local');
+          setSyncMeta(cachedWindow.syncMeta);
+          return;
+        }
+
+        setLoadProgress(buildLoadProgress('Loading server workspace', 35, targetSeason.seasonCode));
+        const serverWindow = await loadSeasonWorkspaceWindow({
+          seasonId: targetSeason.id,
+          resourceType: 'schedule',
+          limit: 100000,
+        }).catch((error) => {
+          if (SERVER_AUTHORITATIVE_MODE) throw error;
+          console.warn('Server dashboard window unavailable, falling back to native SQLite', error);
+          return null;
+        });
+        if (cancelled) return;
+        if (serverWindow) {
+          loadedWindowKeyRef.current = overviewWindowKey;
+          setLoadProgress(buildLoadProgress(
+            'Preparing dashboard',
+            80,
+            `${serverWindow.records.length} records`
+          ));
+          setSeason(targetSeason);
+          setRecords(serverWindow.records);
+          setModifications(serverWindow.modifications);
+          setDataSource('server');
+          setSyncMeta(serverWindow.syncMeta);
+          setCachedSeasonData(targetSeason.id, {
+            rows: [],
+            records: serverWindow.records,
+            modifications: serverWindow.modifications,
+            seasonDataVersion: targetSeason.dataVersion,
+          });
+          useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+            seasonId: targetSeason.id,
+            season: targetSeason,
+            rows: [],
+            records: serverWindow.records,
+            modifications: serverWindow.modifications,
+            syncMeta: serverWindow.syncMeta,
+            windowKey: overviewWindowKey,
+          });
+          publishSeasonWorkspaceChanged({
+            seasonId: targetSeason.id,
+            localRevision: serverWindow.syncMeta.localRevision,
+            source: 'server-window',
+            syncMeta: serverWindow.syncMeta,
+          });
+          setFetchUpdateNotice(null);
+          return;
+        }
+
+        setLoadProgress(buildLoadProgress('Checking local season baseline', 40, targetSeason.seasonCode));
         await ensureNativeSeasonBaseline(targetSeason);
         if (cancelled) return;
-        setLoadProgress(buildLoadProgress('Querying native SQLite', 45, targetSeason.seasonCode));
+        setLoadProgress(buildLoadProgress('Querying native SQLite fallback', 50, targetSeason.seasonCode));
         const result = await queryNativeScheduleWindow({
           seasonId: targetSeason.id,
           limit: 100000,
@@ -835,8 +1196,9 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           records: result.records,
           modifications: nextModifications,
           syncMeta: result.syncMeta,
-          windowKey: buildDashboardWindowKey('overview'),
+          windowKey: overviewWindowKey,
         });
+        loadedWindowKeyRef.current = overviewWindowKey;
         setFetchUpdateNotice(null);
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
@@ -849,7 +1211,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     return () => {
       cancelled = true;
     };
-  }, [dashboardRoute, router, targetSeasonId]);
+  }, [dashboardRoute, router, targetSeasonId, tryApplyCachedDashboardRouteWindow]);
 
   const effectiveRecords = useMemo(() => (
     buildEffectiveDashboardRecords(records, modifications)
@@ -873,25 +1235,12 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           truncated: false,
         },
       }));
-      setSelectedAiSeasonIds((current) => {
-        const valid = new Set(seasons.map((item) => item.id));
-        const normalized = normalizeDashboardAiWorkspaceSeasonIds([
-          season.id,
-          ...current.filter((id) => id !== season.id && valid.has(id)),
-        ]);
-        return normalized.length > 0 ? normalized : [season.id];
-      });
-      setDashboardSeasonIds((current) => {
-        const valid = new Set(seasons.map((item) => item.id));
-        const normalized = normalizeDashboardAiWorkspaceSeasonIds(current.filter((id) => valid.has(id)));
-        return normalized.length > 0 ? normalized : [season.id];
-      });
     });
     return () => {
       cancelled = true;
       cancelAnimationFrame(frame);
     };
-  }, [effectiveRecords, modifications, records, season, seasons, setDashboardSeasonIds, syncMeta]);
+  }, [effectiveRecords, modifications, records, season, syncMeta]);
 
   const loadAiWorkspaceSeason = useCallback(async (targetSeason: Season): Promise<DashboardAiWorkspaceSeasonData> => {
     const result = await queryNativeScheduleWindow({
@@ -921,23 +1270,20 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     };
   }, []);
 
-  const activeDashboardSeasonIds = useMemo(() => {
-    const valid = new Set(seasons.map((item) => item.id));
-    const normalized = normalizeDashboardAiWorkspaceSeasonIds(dashboardSeasonIds.filter((id) => valid.has(id)));
-    return normalized.length > 0 ? normalized : season?.id ? [season.id] : [];
-  }, [dashboardSeasonIds, season, seasons]);
-
   const yoySeasonIds = useMemo(() => (
     comparisonMode === 'yoy' ? resolveYoySeasonIds(seasons, effectiveRecords, season) : []
   ), [comparisonMode, effectiveRecords, season, seasons]);
 
+  const activeAiSeasonIds = useMemo(() => (
+    season?.id ? [season.id] : []
+  ), [season]);
+
   const requestedSeasonDataIds = useMemo(() => (
     normalizeDashboardAiWorkspaceSeasonIds([
-      ...selectedAiSeasonIds,
-      ...activeDashboardSeasonIds,
+      ...activeAiSeasonIds,
       ...yoySeasonIds,
     ])
-  ), [activeDashboardSeasonIds, selectedAiSeasonIds, yoySeasonIds]);
+  ), [activeAiSeasonIds, yoySeasonIds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -964,20 +1310,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     };
   }, [aiWorkspaceSeasonData, loadAiWorkspaceSeason, requestedSeasonDataIds, seasons]);
 
-  const dashboardSeasonData = useMemo(() => (
-    activeDashboardSeasonIds
-      .map((seasonId) => aiWorkspaceSeasonData[seasonId])
-      .filter((item): item is DashboardAiWorkspaceSeasonData => Boolean(item))
-  ), [activeDashboardSeasonIds, aiWorkspaceSeasonData]);
-
-  const dashboardRecords = useMemo(() => {
-    const recordsById = new Map<string, FlightRecord>();
-    const sourceRecords = dashboardSeasonData.length > 0
-      ? dashboardSeasonData.flatMap((item) => item.effectiveRecords)
-      : effectiveRecords;
-    for (const record of sourceRecords) recordsById.set(record.id, record);
-    return [...recordsById.values()];
-  }, [dashboardSeasonData, effectiveRecords]);
+  const dashboardRecords = useMemo(() => effectiveRecords, [effectiveRecords]);
 
   const analysisSeasonData = useMemo(() => (
     yoySeasonIds
@@ -1039,95 +1372,152 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     })
   ), [dashboardRecords, overviewAirline, overviewCountry, overviewMonthEnd, overviewMonthStart, overviewPeakHourMonthForBuild, overviewRoute, routeCountries, timeBasis, typeFilter]);
 
-  const overviewMaxMonthlyFlights = Math.max(1, ...overview.monthlyTrend.map((row) => row.total));
-  const overviewDailyMonthOptions = overview.monthlyTrend.map((row) => ({ key: row.key, label: row.label }));
-  const defaultOverviewDailyMonth = overviewDailyMonthOptions.some((month) => month.key === overview.kpis.peakMonth.key)
-    ? overview.kpis.peakMonth.key
-    : overviewDailyMonthOptions.at(-1)?.key ?? '';
-  const activeOverviewDailyMonth = overviewDailyMonthOptions.some((month) => month.key === overviewDailyMonth)
-    ? overviewDailyMonth
-    : defaultOverviewDailyMonth;
-  const overviewDailyCalendarRows = (() => {
-    const dailyMap = new Map(overview.dailyTrend.map((row) => [row.date, row]));
-    return monthDateKeys(activeOverviewDailyMonth).map((date) => dailyMap.get(date) ?? emptyDailyTrendRow(date));
-  })();
-  const overviewMaxDailyFlights = Math.max(1, ...overviewDailyCalendarRows.map((row) => row.total));
-  const overviewDailyTotalFlights = overviewDailyCalendarRows.reduce((sum, row) => sum + row.total, 0);
-  const overviewDailyPeakDay = overviewDailyCalendarRows.reduce<DashboardOverviewDailyRow | null>(
-    (best, row) => (!best || row.total > best.total ? row : best),
-    null
-  );
-  const overviewDailyWeekdayPeak = (() => {
-    const weekdayTotals = new Map<string, number>();
-    for (const row of overviewDailyCalendarRows) {
-      weekdayTotals.set(row.weekday, (weekdayTotals.get(row.weekday) ?? 0) + row.total);
-    }
-    return [...weekdayTotals.entries()]
-      .sort((a, b) => b[1] - a[1] || WEEKDAY_KEYS.indexOf(a[0]) - WEEKDAY_KEYS.indexOf(b[0]))[0] ?? ['-', 0];
-  })();
-  const overviewDailyWeekendFlights = overviewDailyCalendarRows
-    .filter((row) => row.weekday === 'Sat' || row.weekday === 'Sun')
-    .reduce((sum, row) => sum + row.total, 0);
-  const overviewMaxAirlineFlights = Math.max(1, ...overview.airlineRanking.slice(0, 8).map((row) => row.flights));
-  const overviewMaxCountryRouteFlights = Math.max(1, ...overview.countryRouteContribution.slice(0, 8).map((row) => row.flights));
-  const overviewCountryGroups = (() => {
-    const groups = new Map<string, {
-      country: string;
-      flights: number;
-      pax: number;
-      share: number;
-      routes: Array<(typeof overview.countryRouteContribution)[number]>;
-    }>();
-    for (const row of overview.countryRouteContribution) {
-      const current = groups.get(row.country) ?? {
-        country: row.country,
-        flights: 0,
-        pax: 0,
-        share: 0,
-        routes: [],
-      };
-      current.flights += row.flights;
-      current.pax += row.pax;
-      current.share += row.share;
-      current.routes.push(row);
-      groups.set(row.country, current);
-    }
-    return [...groups.values()].sort((a, b) => b.flights - a.flights || a.country.localeCompare(b.country));
-  })();
-  const effectiveExpandedOverviewCountries = (() => {
-    const next = new Set(expandedOverviewCountries);
-    if (!overviewCountryExpansionTouched && overviewCountryGroups[0]?.country) {
-      next.add(overviewCountryGroups[0].country);
-    }
-    return next;
-  })();
-  const overviewPeakHourMonthOptions = [{ key: 'all', label: 'Toàn bộ khoảng lọc' }, ...overview.monthlyTrend.map((row) => ({ key: row.key, label: row.label }))];
-  const activeOverviewPeakHourMonth = overviewPeakHourMonthOptions.some((month) => month.key === overviewPeakHourMonthForBuild)
-    ? overviewPeakHourMonthForBuild
-    : 'all';
-  const overviewMaxPeakHourAverage = Math.max(1, ...overview.peakHourAverage.map((row) => row.avgFlightsPerDay));
-  const overviewPeakHourPeak = overview.peakHourAverage.reduce(
-    (best, row) => (row.avgFlightsPerDay > best.avgFlightsPerDay ? row : best),
-    overview.peakHourAverage[0] ?? { bucket: '-', flights: 0, arrivals: 0, departures: 0, operatingDays: 0, avgFlightsPerDay: 0, avgArrivalsPerDay: 0, avgDeparturesPerDay: 0 }
-  );
-  const overviewPeakHourQuietest = overview.peakHourAverage.reduce(
-    (best, row) => (row.avgFlightsPerDay < best.avgFlightsPerDay ? row : best),
-    overview.peakHourAverage[0] ?? { bucket: '-', flights: 0, arrivals: 0, departures: 0, operatingDays: 0, avgFlightsPerDay: 0, avgArrivalsPerDay: 0, avgDeparturesPerDay: 0 }
-  );
-  const overviewPeakHourAxisTicks = useMemo(() => buildPeakHourAxisTicks(timeBasis), [timeBasis]);
-  const overviewHeatmapRows = useMemo(() => {
-    const cellMap = new Map(overview.weekdayHeatmap.map((cell) => [`${cell.month}|${cell.weekday}`, cell]));
-    return overview.monthlyTrend.map((month) => ({
-      key: month.key,
-      label: month.label,
-      cells: WEEKDAY_COLUMNS.map((weekday) => cellMap.get(`${month.key}|${weekday.key}`) ?? null),
+  const dashboardAlertSettings = operationalSettings?.dashboardAlerts ?? DEFAULT_DASHBOARD_ALERT_SETTINGS;
+  const todayOperationalDate = todayLocalIso();
+  const operationalDateOptions = useMemo(() => (
+    Array.from(new Set(
+      [
+        ...dashboardRecords
+        .filter((record) => record.status !== 'deleted')
+        .map((record) => getDashboardOperationalDate(record))
+          .filter(Boolean),
+        todayOperationalDate,
+      ]
+    ))
+      .sort()
+      .map((date) => ({ key: date, label: date }))
+  ), [dashboardRecords, todayOperationalDate]);
+  const operationalMonthOptions = useMemo(() => (
+    Array.from(new Set(
+      dashboardRecords
+        .filter((record) => record.status !== 'deleted')
+        .map((record) => getDashboardOperationalDate(record).slice(0, 7))
+        .filter(Boolean)
+    ))
+      .sort()
+      .map((month) => ({ key: month, label: periodLabel(month, 'mom') }))
+  ), [dashboardRecords]);
+  const defaultOperationalDate = todayOperationalDate;
+  const activeOperationalDate = operationalDateOptions.some((item) => item.key === operationalDate)
+    ? operationalDate
+    : defaultOperationalDate;
+  const activeOperationalMonth = activeOperationalDate.slice(0, 7);
+  const activePeakDayMonth = operationalMonthOptions.some((item) => item.key === operationalPeakDayMonth)
+    ? operationalPeakDayMonth
+    : operationalMonthOptions.some((item) => item.key === activeOperationalMonth)
+      ? activeOperationalMonth
+      : operationalMonthOptions.at(-1)?.key ?? activeOperationalMonth;
+  const peakDayMonthBounds = monthBounds(activePeakDayMonth);
+  const operationalDashboard = useMemo(() => (
+    buildOperationalDashboard({
+      records: dashboardRecords,
+      operationalDate: activeOperationalDate,
+      bucketSizeMinutes: operationalBucketSize,
+      timeBasis,
+      settings: dashboardAlertSettings,
+    })
+  ), [activeOperationalDate, dashboardAlertSettings, dashboardRecords, operationalBucketSize, timeBasis]);
+  const peakDayHeatmap = useMemo(() => (
+    buildPeakDayHeatmap({
+      records: dashboardRecords,
+      dateFrom: peakDayMonthBounds.from,
+      dateTo: peakDayMonthBounds.to,
+      settings: dashboardAlertSettings,
+    })
+  ), [dashboardAlertSettings, dashboardRecords, peakDayMonthBounds.from, peakDayMonthBounds.to]);
+  const peakDayCellByDate = useMemo(() => new Map(
+    peakDayHeatmap.map((cell) => [cell.operationalDate, cell])
+  ), [peakDayHeatmap]);
+  const peakDayCalendarCells = useMemo(() => {
+    const dates = monthDateKeys(activePeakDayMonth);
+    const leadingBlankCount = dates[0] ? mondayFirstOffset(dates[0]) : 0;
+    const monthMaxFlights = Math.max(0, ...dates.map((date) => peakDayCellByDate.get(date)?.totalFlights ?? 0));
+    const leadingBlanks: PeakDayCalendarCell[] = Array.from({ length: leadingBlankCount }, (_, index) => ({
+      key: `blank-start-${index}`,
+      date: '',
+      cell: null,
+      weekMinFlights: 0,
+      weekMaxFlights: 0,
+      isMonthHigh: false,
     }));
-  }, [overview.monthlyTrend, overview.weekdayHeatmap]);
-  const overviewMaxHeatmapFlights = Math.max(
-    1,
-    ...overviewHeatmapRows.flatMap((row) => row.cells.map((cell) => cell?.flights ?? 0))
-  );
-
+    const dateCells: PeakDayCalendarCell[] = dates.map((date) => {
+      const cell = peakDayCellByDate.get(date) ?? null;
+      return {
+        key: date,
+        date,
+        cell,
+        weekMinFlights: 0,
+        weekMaxFlights: 0,
+        isMonthHigh: Boolean(cell && monthMaxFlights > 0 && cell.totalFlights === monthMaxFlights),
+      };
+    });
+    const trailingBlankCount = (7 - ((leadingBlanks.length + dateCells.length) % 7)) % 7;
+    const trailingBlanks: PeakDayCalendarCell[] = Array.from({ length: trailingBlankCount }, (_, index) => ({
+      key: `blank-end-${index}`,
+      date: '',
+      cell: null,
+      weekMinFlights: 0,
+      weekMaxFlights: 0,
+      isMonthHigh: false,
+    }));
+    const calendarCells = [...leadingBlanks, ...dateCells, ...trailingBlanks];
+    for (let index = 0; index < calendarCells.length; index += 7) {
+      const week = calendarCells.slice(index, index + 7).filter((item) => item.cell);
+      if (week.length <= 1) continue;
+      const totals = week.map((item) => item.cell?.totalFlights ?? 0);
+      const weekMax = Math.max(...totals);
+      const weekMin = Math.min(...totals);
+      for (const item of week) {
+        item.weekMinFlights = weekMin;
+        item.weekMaxFlights = weekMax;
+      }
+    }
+    return calendarCells;
+  }, [activePeakDayMonth, peakDayCellByDate]);
+  const peakHourHeatmapMonths = useMemo(() => (
+    operationalMonthOptions.map((month) => {
+      const bounds = monthBounds(month.key);
+      const heatmap = buildPeakHourHeatmap({
+        records: dashboardRecords,
+        bucketSizeMinutes: operationalBucketSize,
+        timeBasis,
+        typeFilter: operationalPeakHourTypeFilter,
+        dateFrom: bounds.from,
+        dateTo: bounds.to,
+      });
+      const cellMap = new Map(heatmap.cells.map((cell) => [`${cell.operationalDate}|${cell.bucketIndex}`, cell]));
+      const totalFlights = heatmap.cells.reduce((sum, cell) => sum + cell.totalFlights, 0);
+      return { ...month, heatmap, cellMap, totalFlights };
+    })
+  ), [dashboardRecords, operationalBucketSize, operationalMonthOptions, operationalPeakHourTypeFilter, timeBasis]);
+  const operationalDailyRows = useMemo(() => {
+    const sourceRows = summarizeFlightRecordsByOperationalDate(dashboardRecords);
+    const byDate = new Map(sourceRows.map((row) => [row.date, row]));
+    return monthDateKeys(activeOperationalDate.slice(0, 7)).map((date) => (
+      byDate.get(date) ?? { date, flights: 0, arrivals: 0, departures: 0, pax: 0 }
+    ));
+  }, [activeOperationalDate, dashboardRecords]);
+  const operationalDailyMaxFlights = Math.max(1, ...operationalDailyRows.map((row) => row.flights));
+  const peakHourMaxFlights = Math.max(1, ...peakHourHeatmapMonths.flatMap((month) => month.heatmap.cells.map((cell) => cell.totalFlights)));
+  const operationalBucketDrilldownCards = useMemo(() => {
+    const makeCard = (label: string, bucket: OperationalTimelineBucket | null) => {
+      const records = bucket?.records ?? [];
+      return {
+        label,
+        bucketLabel: bucket?.label ?? '-',
+        flights: bucket?.flights ?? 0,
+        dimensions: [
+          { label: 'Hãng bay', rows: summarizeOperationalRecords(records, (record) => record.airline || 'Không rõ').slice(0, 5) },
+          { label: 'Đường bay', rows: summarizeOperationalRecords(records, (record) => record.route || 'Không rõ').slice(0, 5) },
+          { label: 'A/C Type', rows: summarizeOperationalRecords(records, (record) => resolveAircraftGroupLabel(record, operationalSettings)).slice(0, 5) },
+        ],
+      };
+    };
+    return [
+      makeCard('Peak ARR bucket', operationalDashboard.kpis.peakArrivalBucket),
+      makeCard('Peak DEP bucket', operationalDashboard.kpis.peakDepartureBucket),
+    ];
+  }, [operationalDashboard, operationalSettings]);
   const periodOptions = useMemo(() => (
     listPeriods(analysisRecords, comparisonMode, comparisonMode === 'yoy' ? comparisonGranularity : 'month')
   ), [analysisRecords, comparisonGranularity, comparisonMode]);
@@ -1145,13 +1535,61 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   const activePreviousPeriod = periodOptions.some((period) => period.key === previousPeriod) && previousPeriod !== activeCurrentPeriod
     ? previousPeriod
     : defaultPreviousPeriod;
+  const comparisonGranularityForBuild = comparisonMode === 'yoy' ? comparisonGranularity : 'month';
+  const comparisonScopedRecords = useMemo(() => {
+    if (!activeCurrentPeriod) return [];
+    const periodKeys = new Set([activeCurrentPeriod, activePreviousPeriod].filter(Boolean));
+    return analysisRecords.filter((record) => (
+      record.status !== 'deleted' &&
+      (typeFilter === 'all' || record.type === typeFilter) &&
+      periodKeys.has(periodKey(record, comparisonMode, comparisonGranularityForBuild))
+    ));
+  }, [activeCurrentPeriod, activePreviousPeriod, analysisRecords, comparisonGranularityForBuild, comparisonMode, typeFilter]);
+  const comparisonPaxCoverage = useMemo(() => computePaxCoverage(comparisonScopedRecords), [comparisonScopedRecords]);
+  const comparisonTrendRecords = useMemo(() => (
+    dashboardRecords.filter((record) => (
+      record.status !== 'deleted' &&
+      (typeFilter === 'all' || record.type === typeFilter)
+    ))
+  ), [dashboardRecords, typeFilter]);
+  const comparisonMonthlyTrendRows = useMemo(() => (
+    summarizeComparisonRecordsByMonth(comparisonTrendRecords, metric)
+  ), [comparisonTrendRecords, metric]);
+  const defaultComparisonTrendMonth = /^\d{4}-\d{2}$/.test(activeCurrentPeriod) && comparisonMonthlyTrendRows.some((row) => row.key === activeCurrentPeriod)
+    ? activeCurrentPeriod
+    : comparisonMonthlyTrendRows.at(-1)?.key ?? '';
+  const activeComparisonTrendMonth = comparisonMonthlyTrendRows.some((row) => row.key === comparisonTrendMonth)
+    ? comparisonTrendMonth
+    : defaultComparisonTrendMonth;
+  const comparisonDailyTrendRows = useMemo(() => {
+    const sourceRows = summarizeComparisonRecordsByDate(
+      comparisonTrendRecords.filter((record) => getDashboardOperationalDate(record).slice(0, 7) === activeComparisonTrendMonth),
+      metric
+    );
+    const byDate = new Map(sourceRows.map((row) => [row.key, row]));
+    return monthDateKeys(activeComparisonTrendMonth).map((date) => (
+      byDate.get(date) ?? {
+        key: date,
+        label: date,
+        day: date.slice(8, 10),
+        value: 0,
+        flights: 0,
+        arrivals: 0,
+        departures: 0,
+        pax: 0,
+      }
+    ));
+  }, [activeComparisonTrendMonth, comparisonTrendRecords, metric]);
+  const comparisonMaxMonthlyTrend = Math.max(1, ...comparisonMonthlyTrendRows.map((row) => row.value));
+  const comparisonMaxDailyTrend = Math.max(1, ...comparisonDailyTrendRows.map((row) => row.value));
+  const comparisonTrendMetricLabel = metric === 'pax' ? 'Pax' : 'Flights';
 
   const comparison = useMemo(() => {
     if (!activeCurrentPeriod) return null;
     return buildDashboardComparison({
       records: analysisRecords,
       mode: comparisonMode,
-      granularity: comparisonMode === 'yoy' ? comparisonGranularity : 'month',
+      granularity: comparisonGranularityForBuild,
       metric,
       currentPeriod: activeCurrentPeriod,
       previousPeriod: activePreviousPeriod,
@@ -1160,7 +1598,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       dimension,
       routeCountries,
     });
-  }, [activeCurrentPeriod, activePreviousPeriod, analysisRecords, comparisonGranularity, comparisonMode, dimension, metric, routeCountries, timeBasis, typeFilter]);
+  }, [activeCurrentPeriod, activePreviousPeriod, analysisRecords, comparisonGranularityForBuild, comparisonMode, dimension, metric, routeCountries, timeBasis, typeFilter]);
 
   const dimensionLabel = DRIVER_TABS.find((tab) => tab.value === dimension)?.label ?? 'Tác nhân';
 
@@ -1170,7 +1608,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       const result = buildDashboardComparison({
         records: analysisRecords,
         mode: comparisonMode,
-        granularity: comparisonMode === 'yoy' ? comparisonGranularity : 'month',
+        granularity: comparisonGranularityForBuild,
         metric,
         currentPeriod: activeCurrentPeriod,
         previousPeriod: activePreviousPeriod,
@@ -1183,16 +1621,22 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       const reconciledDelta = result.drivers.reduce((sum, driver) => sum + driver.delta, 0);
       return { ...item, result, topDriver, reconciledDelta };
     });
-  }, [activeCurrentPeriod, activePreviousPeriod, analysisRecords, comparisonGranularity, comparisonMode, metric, routeCountries, timeBasis, typeFilter]);
+  }, [activeCurrentPeriod, activePreviousPeriod, analysisRecords, comparisonGranularityForBuild, comparisonMode, metric, routeCountries, timeBasis, typeFilter]);
 
   const maxWaterfallDelta = Math.max(
     1,
     ...waterfallRows.map((row) => Math.abs(row.topDriver?.delta ?? 0))
   );
 
+  const ctgRankedDrivers = useMemo(() => (
+    [...(comparison?.drivers ?? [])]
+      .filter((driver) => driver.ctgPct != null)
+      .sort((left, right) => Math.abs(right.ctgPct ?? 0) - Math.abs(left.ctgPct ?? 0) || Math.abs(right.delta) - Math.abs(left.delta))
+  ), [comparison]);
+
   const selectedDriver = useMemo(() => (
-    comparison?.drivers.find((driver) => driver.key === selectedDriverKey) ?? comparison?.drivers[0] ?? null
-  ), [comparison, selectedDriverKey]);
+    comparison?.drivers.find((driver) => driver.key === selectedDriverKey) ?? ctgRankedDrivers[0] ?? comparison?.drivers[0] ?? null
+  ), [comparison, ctgRankedDrivers, selectedDriverKey]);
 
   const selectedDriverRecords = useMemo(() => {
     if (!selectedDriver) return [];
@@ -1200,80 +1644,37 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       .filter((record) => (
         record.status !== 'deleted' &&
         (typeFilter === 'all' || record.type === typeFilter) &&
-        (periodKey(record, comparisonMode, comparisonMode === 'yoy' ? comparisonGranularity : 'month') === activeCurrentPeriod || periodKey(record, comparisonMode, comparisonMode === 'yoy' ? comparisonGranularity : 'month') === activePreviousPeriod) &&
-        dimensionValue(record, dimension, timeBasis, routeCountries) === selectedDriver.key
-      ))
-      .sort((left, right) => left.date.localeCompare(right.date) || left.schedule.localeCompare(right.schedule))
-      .slice(0, selectedDriverRecordLimit);
-  }, [activeCurrentPeriod, activePreviousPeriod, analysisRecords, comparisonGranularity, comparisonMode, dimension, routeCountries, selectedDriver, selectedDriverRecordLimit, timeBasis, typeFilter]);
-
-  const selectedDriverRecordsForAi = useMemo(() => {
-    if (!selectedDriver) return [];
-    return analysisRecords
-      .filter((record) => (
-        record.status !== 'deleted' &&
-        (typeFilter === 'all' || record.type === typeFilter) &&
-        (periodKey(record, comparisonMode, comparisonMode === 'yoy' ? comparisonGranularity : 'month') === activeCurrentPeriod || periodKey(record, comparisonMode, comparisonMode === 'yoy' ? comparisonGranularity : 'month') === activePreviousPeriod) &&
+        (periodKey(record, comparisonMode, comparisonGranularityForBuild) === activeCurrentPeriod || periodKey(record, comparisonMode, comparisonGranularityForBuild) === activePreviousPeriod) &&
         dimensionValue(record, dimension, timeBasis, routeCountries) === selectedDriver.key
       ))
       .sort((left, right) => left.date.localeCompare(right.date) || left.schedule.localeCompare(right.schedule));
-  }, [activeCurrentPeriod, activePreviousPeriod, analysisRecords, comparisonGranularity, comparisonMode, dimension, routeCountries, selectedDriver, timeBasis, typeFilter]);
+  }, [activeCurrentPeriod, activePreviousPeriod, analysisRecords, comparisonGranularityForBuild, comparisonMode, dimension, routeCountries, selectedDriver, timeBasis, typeFilter]);
+
+  const selectedDriverDrilldownRows = useMemo(() => {
+    const groups = new Map<string, { date: string; flights: number; arrivals: number; departures: number; pax: number }>();
+    for (const record of selectedDriverRecords) {
+      const date = getDashboardOperationalDate(record);
+      const current = groups.get(date) ?? { date, flights: 0, arrivals: 0, departures: 0, pax: 0 };
+      current.flights += 1;
+      current.pax += operationalRecordPax(record);
+      if (record.type === 'A') current.arrivals += 1;
+      if (record.type === 'D') current.departures += 1;
+      groups.set(date, current);
+    }
+    return [...groups.values()].sort((left, right) => right.flights - left.flights || left.date.localeCompare(right.date));
+  }, [selectedDriverRecords]);
 
   const topGain = comparison?.drivers.find((driver) => driver.delta > 0) ?? null;
   const topDrag = comparison?.drivers.find((driver) => driver.delta < 0) ?? null;
+  const topCtg = ctgRankedDrivers[0] ?? null;
   const topMixRows = comparison?.drivers.slice(0, 6) ?? [];
   const maxMixShare = Math.max(0.01, ...topMixRows.flatMap((driver) => [driver.currentShare, driver.previousShare]));
-  const driverTotalMovement = comparison?.drivers.reduce((sum, driver) => sum + Math.abs(driver.delta), 0) ?? 0;
-  const topDriverConcentration = driverTotalMovement === 0 || !comparison?.drivers[0]
-    ? null
-    : Math.abs(comparison.drivers[0].delta) / driverTotalMovement;
-
-  useEffect(() => {
-    setSelectedDriverRecordLimit(25);
-  }, [activeCurrentPeriod, activePreviousPeriod, dimension, selectedDriver?.key, setSelectedDriverRecordLimit]);
-
-  const aiWaterfallRows = useMemo<DashboardAiWaterfallContextRow[]>(() => waterfallRows.map((row) => ({
-    dimension: row.value,
-    label: row.label,
-    result: row.result,
-    topDriver: row.topDriver,
-    reconciledDelta: row.reconciledDelta,
-  })), [waterfallRows]);
 
   const selectedAiWorkspaceSeasonData = useMemo(() => (
-    selectedAiSeasonIds
+    activeAiSeasonIds
       .map((seasonId) => aiWorkspaceSeasonData[seasonId])
       .filter((item): item is DashboardAiWorkspaceSeasonData => Boolean(item))
-  ), [aiWorkspaceSeasonData, selectedAiSeasonIds]);
-
-  const dashboardAiDataSourcePolicy = useMemo(() => {
-    if (selectedAiWorkspaceSeasonData.length === 0) return 'local-sqlite' as const;
-    const localCount = selectedAiWorkspaceSeasonData.filter((item) => item.dataSource === 'active' || item.dataSource === 'local').length;
-    if (localCount === selectedAiWorkspaceSeasonData.length) return 'local-sqlite' as const;
-    if (localCount === 0) return 'supabase-reporting' as const;
-    return 'mixed' as const;
-  }, [selectedAiWorkspaceSeasonData]);
-
-  const aiWorkspaceMultiSeasonCatalog = useMemo(() => {
-    if (selectedAiWorkspaceSeasonData.length === 0) return null;
-    return {
-      seasonIds: selectedAiSeasonIds,
-      seasons: selectedAiWorkspaceSeasonData.map((item) => {
-        const activeRows = item.effectiveRecords.filter((record) => record.status !== 'deleted');
-        const dates = activeRows.map((record) => getDashboardOperationalDate(record)).filter(Boolean).sort();
-        const monthCount = new Set(dates.map((date) => date.slice(0, 7))).size;
-        return {
-          seasonId: item.season.id,
-          seasonCode: item.season.seasonCode,
-          name: item.season.name,
-          totalRecords: activeRows.length,
-          totalPax: activeRows.reduce((sum, record) => sum + (Number.isFinite(record.pax ?? NaN) ? Number(record.pax) : 0), 0),
-          dateRange: { from: dates[0] ?? '', to: dates[dates.length - 1] ?? '' },
-          months: monthCount,
-        };
-      }),
-    };
-  }, [selectedAiSeasonIds, selectedAiWorkspaceSeasonData]);
+  ), [activeAiSeasonIds, aiWorkspaceSeasonData]);
 
   const aiAvailableSeasonCatalog = useMemo(() => seasons.map((item) => ({
     seasonId: item.id,
@@ -1282,26 +1683,77 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     dateRange: { from: item.effectiveStart, to: item.effectiveEnd },
   })), [seasons]);
 
-  const dashboardAiContext = useMemo(() => ({
-    ...buildDashboardAiContext({
-      comparison,
-      filters: {
-        comparisonMode,
-        metric,
-        typeFilter,
-        dimension,
-        timeBasis,
-      },
-      waterfallRows: aiWaterfallRows,
-      selectedDriver,
-      selectedDriverRecords: selectedDriverRecordsForAi,
-      seasonRecords: effectiveRecords,
-      routeCountries,
-    }),
-    multiSeasonCatalog: aiWorkspaceMultiSeasonCatalog,
-    availableSeasonCatalog: aiAvailableSeasonCatalog,
-    dataSourcePolicy: dashboardAiDataSourcePolicy,
-  }), [aiAvailableSeasonCatalog, aiWaterfallRows, aiWorkspaceMultiSeasonCatalog, comparison, comparisonMode, dashboardAiDataSourcePolicy, dimension, effectiveRecords, metric, routeCountries, selectedDriver, selectedDriverRecordsForAi, timeBasis, typeFilter]);
+  const aiScopeSeasonIds = activeAiSeasonIds;
+  const aiSelectedSeasonDateRange = useMemo(() => (
+    resolveAiWorkspaceSeasonDateRange(aiScopeSeasonIds, seasons, season)
+  ), [aiScopeSeasonIds, season, seasons]);
+  const activeAiSeasonLabel = season
+    ? `${season.seasonCode}${season.name ? ` - ${season.name}` : ''}`
+    : 'Chưa chọn mùa';
+  const activeAiSeasonDateRangeLabel = aiSelectedSeasonDateRange.from || aiSelectedSeasonDateRange.to
+    ? `${aiSelectedSeasonDateRange.from || '?'} - ${aiSelectedSeasonDateRange.to || '?'}`
+    : 'Chưa có date range cho mùa chung';
+
+  const currentQueryScope = useMemo<DashboardAiQueryScope>(() => {
+    const effectiveDateFrom = aiQueryScopeSourcePreset === 'selected-season' ? aiSelectedSeasonDateRange.from : aiQueryScopeDateFrom;
+    const effectiveDateTo = aiQueryScopeSourcePreset === 'selected-season' ? aiSelectedSeasonDateRange.to : aiQueryScopeDateTo;
+    const normalizedRange = normalizeAiWorkspaceDateRange(effectiveDateFrom, effectiveDateTo);
+    const selectedSeasonPreset = aiQueryScopeSourcePreset === 'selected-season';
+    const iataSeasonCodes = selectedSeasonPreset
+      ? seasons
+        .filter((item) => aiScopeSeasonIds.includes(item.id))
+        .map((item) => item.seasonCode)
+        .filter(Boolean)
+      : [];
+    return {
+      ...normalizedRange,
+      ...(selectedSeasonPreset && aiScopeSeasonIds.length ? { presetSeasonIds: aiScopeSeasonIds } : {}),
+      ...(selectedSeasonPreset && iataSeasonCodes.length ? { iataSeasonCodes } : {}),
+      sourcePreset: aiQueryScopeSourcePreset,
+    };
+  }, [aiQueryScopeDateFrom, aiQueryScopeDateTo, aiQueryScopeSourcePreset, aiScopeSeasonIds, aiSelectedSeasonDateRange.from, aiSelectedSeasonDateRange.to, seasons]);
+  const currentQueryScopeLabel = useMemo(() => {
+    const seasonLabel = season?.seasonCode || 'Chưa chọn mùa';
+    const rangeLabel = currentQueryScope.dateFrom || currentQueryScope.dateTo
+      ? `${currentQueryScope.dateFrom ?? '?'} - ${currentQueryScope.dateTo ?? '?'}`
+      : 'Chưa có date range';
+    const sourceLabel = currentQueryScope.sourcePreset === 'selected-season'
+      ? 'mùa chung toàn app'
+      : 'date range/filter tự do';
+    return `${seasonLabel} | ${rangeLabel} | ${sourceLabel}`;
+  }, [currentQueryScope.dateFrom, currentQueryScope.dateTo, currentQueryScope.sourcePreset, season?.seasonCode]);
+
+  const resetAiQueryScopeToSeason = useCallback(() => {
+    setAiQueryScopeSourcePreset('selected-season');
+    setAiQueryScopeDateFrom('');
+    setAiQueryScopeDateTo('');
+  }, []);
+
+  const dashboardAiQueryOnlyContext = useMemo(() => {
+    const prompt = 'Xuất báo cáo bằng Supabase reporting/query.';
+    const dataScope = resolveDashboardAiDataScopeForPrompt({
+      prompt,
+      activeSeasonId: season?.id,
+      selectedSeasonIds: activeAiSeasonIds,
+      availableSeasonCatalog: aiAvailableSeasonCatalog,
+    });
+    const seasonIds = dataScope.seasonIds.length > 0 ? dataScope.seasonIds : activeAiSeasonIds;
+    return buildDashboardAiQueryOnlyContext({
+      seasonIds,
+      availableSeasonCatalog: aiAvailableSeasonCatalog,
+      dataScope,
+      semanticIntent: inferDashboardAiSemanticIntent({
+        userPrompt: prompt,
+        context: {
+          dataScope,
+          currentQueryScope,
+          availableSeasonCatalog: aiAvailableSeasonCatalog,
+          sourcePolicy: 'supabase-reporting-query-only',
+        },
+      }),
+      currentQueryScope,
+    });
+  }, [activeAiSeasonIds, aiAvailableSeasonCatalog, currentQueryScope, season?.id]);
 
   const aiSettings = operationalSettings?.aiAnalysis;
   const enabledAiModels = useMemo(() => listEnabledDashboardAiModels(aiSettings), [aiSettings]);
@@ -1313,11 +1765,11 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     aiConfigured,
     operatorAuthorized: true,
     hasSelectedSeason: Boolean(season),
-    hasLocalRecords: effectiveRecords.length > 0,
-    selectedSeasonCount: selectedAiSeasonIds.length,
+    hasLocalRecords: Boolean(season),
+    selectedSeasonCount: activeAiSeasonIds.length,
     exportEnabled: effectiveRecords.length > 0,
-  }), [aiConfigured, effectiveRecords.length, season, selectedAiSeasonIds.length]);
-  const aiNotebookStorageKey = `dashboard:aiNotebook:${selectedAiSeasonIds.join('|') || season?.id || targetSeasonId || 'global'}`;
+  }), [activeAiSeasonIds.length, aiConfigured, effectiveRecords.length, season]);
+  const aiNotebookStorageKey = `dashboard:aiNotebook:${season?.id || targetSeasonId || 'global'}`;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1325,7 +1777,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     const frame = requestAnimationFrame(() => {
       if (cancelled) return;
       const fallbackNotebook = buildDashboardAiNotebook({
-        seasonIds: selectedAiSeasonIds.length > 0 ? selectedAiSeasonIds : season?.id ? [season.id] : [],
+        seasonIds: activeAiSeasonIds,
         title: 'Rich Chat AI',
       });
       const raw = window.localStorage.getItem(aiNotebookStorageKey);
@@ -1345,7 +1797,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       cancelled = true;
       cancelAnimationFrame(frame);
     };
-  }, [aiNotebookStorageKey, season, selectedAiSeasonIds]);
+  }, [activeAiSeasonIds, aiNotebookStorageKey, season]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !aiNotebook) return;
@@ -1367,7 +1819,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       null;
     const workbook = templateId === 'mom-wow-analysis'
       ? buildMomWowAnalysisWorkbook({
-        context: dashboardAiContext,
+        context: dashboardAiQueryOnlyContext,
         aiNotes: latestAiAnswer,
         seasonCode: season?.seasonCode,
       })
@@ -1379,7 +1831,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     });
     const result = await downloadDashboardWorkbook(workbook, buildDashboardReportFileName(templateId, season?.seasonCode));
     notifyExportCompleted(result);
-  }, [aiNotebook, dashboardAiContext, effectiveRecords, notifyExportCompleted, routeCountries, season?.seasonCode, timeBasis]);
+  }, [aiNotebook, dashboardAiQueryOnlyContext, effectiveRecords, notifyExportCompleted, routeCountries, season?.seasonCode, timeBasis]);
 
   const downloadAiNotebookExport = useCallback(async (exportAction: DashboardAiExportAction) => {
     if (exportAction.type === 'dashboard-template-export') {
@@ -1501,7 +1953,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         };
         setAiNotebook((current) => {
           const base = current ?? buildDashboardAiNotebook({
-            seasonIds: selectedAiSeasonIds.length > 0 ? selectedAiSeasonIds : season?.id ? [season.id] : [],
+            seasonIds: activeAiSeasonIds,
             title: sessionFollowUp.boardPatch?.title ?? 'Rich Chat AI',
           });
           return {
@@ -1512,94 +1964,6 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           };
         });
         return;
-      }
-      if (sessionFollowUp?.sqlQueryPlans?.length) {
-        setAiLoadingStep('query');
-        setAiLoadingMessage('Đang truy vấn SQLite local theo ngữ cảnh cell trước...');
-        const followUpQueryResults: DashboardAiQueryResult[] = [];
-        for (const plan of sessionFollowUp.sqlQueryPlans.slice(0, 4)) {
-          throwIfAborted();
-          const nativeResult = await queryNativeDashboardAiSql({
-            sql: plan.sql,
-            params: plan.params,
-            limit: 500,
-          });
-          if (nativeResult) followUpQueryResults.push(dashboardAiSqlResultToQueryResult(plan, nativeResult));
-        }
-        if (followUpQueryResults.length > 0) {
-          setAiLoadingStep('render');
-          const boardPatch = buildDashboardAiBoardPatchFromQueryResults(followUpQueryResults, sessionFollowUp.rewrittenPrompt) ?? buildDashboardAiFallbackBoardPatch({
-            userPrompt: sessionFollowUp.rewrittenPrompt,
-            preferredTool: 'compose_dashboard_ai_board',
-          });
-          const response = applyDashboardAiResultProfileAndVerification({
-            assistantText: sessionFollowUp.assistantText,
-            dataRequest: null,
-            exportAction: null,
-            visualReport: null,
-            boardPatch,
-            queryResults: followUpQueryResults,
-            sqlQueryPlans: [],
-            toolTraceSummary: [{
-              tool: 'query_dashboard_data',
-              status: 'executed',
-              reason: 'executed_local_sql: Đã chạy follow-up SQL từ active context của phiên chat.',
-              phase: 'executed_local_sql',
-              toolset: 'dashboard-readonly',
-              ...(selectedSkill ? { skill: selectedSkill.id, contextProfile: selectedSkill.contextProfile } : {}),
-            }],
-          }, {
-            userPrompt: sessionFollowUp.rewrittenPrompt,
-            selectedSkillId: selectedSkill?.id,
-            contextProfile: selectedSkill?.contextProfile,
-          });
-          const cellCreatedAt = Date.now();
-          const runId = `ai-run-${cellCreatedAt}`;
-          const runEvents = appendDashboardAiRunEvent([], {
-            id: `${runId}-result`,
-            runId,
-            type: 'result',
-            createdAt: cellCreatedAt,
-            prompt,
-            status: 'completed',
-            message: response.assistantText,
-          });
-          const nextCellBase: DashboardAiNotebookCell = {
-            id: `ai-cell-${cellCreatedAt}`,
-            prompt,
-            assistantText: response.assistantText,
-            blocks: response.boardPatch?.blocks ?? [],
-            toolTraceSummary: response.toolTraceSummary,
-            exportAction: response.exportAction,
-            createdAt: cellCreatedAt,
-            modelId: modelForRequest.id,
-            runEvents,
-            queryResults: response.queryResults,
-            resultProfiles: response.resultProfiles,
-            answerVerification: response.answerVerification,
-          };
-          const nextCell: DashboardAiNotebookCell = {
-            ...nextCellBase,
-            activeArtifact: {
-              ...sessionFollowUp.activeArtifact,
-              queryIds: response.queryResults.map((result) => result.queryId),
-              blockIds: nextCellBase.blocks.map((block) => block.id),
-            },
-          };
-          setAiNotebook((current) => {
-            const base = current ?? buildDashboardAiNotebook({
-              seasonIds: selectedAiSeasonIds.length > 0 ? selectedAiSeasonIds : season?.id ? [season.id] : [],
-              title: response.boardPatch?.title ?? 'Rich Chat AI',
-            });
-            return {
-              ...base,
-              title: response.boardPatch?.title ?? base.title,
-              cells: [...base.cells, nextCell].slice(-DASHBOARD_AI_NOTEBOOK_MAX_CELLS),
-              updatedAt: cellCreatedAt,
-            };
-          });
-          return;
-        }
       }
       const followUpBoardPatch = buildDashboardAiFollowUpBoardPatchFromCells({ 
         userPrompt: prompt, 
@@ -1626,7 +1990,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           toolTraceSummary: [{ 
             tool: 'compose_dashboard_ai_board', 
             status: 'executed', 
-            reason: 'rendered_rich_chat: Dùng lại bảng/drilldown SQLite local từ cell trước cho prompt follow-up ngắn.', 
+            reason: 'rendered_rich_chat: Dùng lại artifact/queryResults từ cell trước cho prompt follow-up ngắn.',
             phase: 'rendered_rich_chat', 
             toolset: 'dashboard-visual', 
             ...(selectedSkill ? { skill: selectedSkill.id, contextProfile: selectedSkill.contextProfile } : {}), 
@@ -1638,7 +2002,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         }; 
         setAiNotebook((current) => { 
           const base = current ?? buildDashboardAiNotebook({ 
-            seasonIds: selectedAiSeasonIds.length > 0 ? selectedAiSeasonIds : season?.id ? [season.id] : [], 
+            seasonIds: activeAiSeasonIds, 
             title: followUpBoardPatch.title, 
           }); 
           return { 
@@ -1653,13 +2017,12 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       let requestDataScope = resolveDashboardAiDataScopeForPrompt({ 
         prompt,
         activeSeasonId: season?.id,
-        selectedSeasonIds: selectedAiSeasonIds,
+        selectedSeasonIds: activeAiSeasonIds,
         availableSeasonCatalog: aiAvailableSeasonCatalog,
       });
-      let requestSeasonIds = requestDataScope.seasonIds.length > 0 ? requestDataScope.seasonIds : selectedAiSeasonIds;
-      let shouldUpdateSelectedAiSeasons = false;
-      if (isConsecutiveSeasonPrompt(prompt) && selectedAiSeasonIds.length === 1) {
-        requestSeasonIds = resolveConsecutiveAiSeasonIds(selectedAiSeasonIds, seasons);
+      let requestSeasonIds = requestDataScope.seasonIds.length > 0 ? requestDataScope.seasonIds : activeAiSeasonIds;
+      if (isConsecutiveSeasonPrompt(prompt) && activeAiSeasonIds.length === 1) {
+        requestSeasonIds = resolveConsecutiveAiSeasonIds(activeAiSeasonIds, seasons);
         requestDataScope = {
           ...requestDataScope,
           scope: 'selected-seasons',
@@ -1667,14 +2030,16 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           explicitSeasonFilter: false,
           reason: 'consecutive-seasons',
         };
-        shouldUpdateSelectedAiSeasons = true;
       }
-      const loadedEntries = await Promise.all(requestSeasonIds.map(async (seasonId) => {
-        const existing = aiWorkspaceSeasonData[seasonId];
-        if (existing) return existing;
-        const target = seasons.find((item) => item.id === seasonId);
-        return target ? loadAiWorkspaceSeason(target) : null;
-      }));
+      const shouldLoadRequestSeasonData = requestDataScope.scope !== 'all-seasons-aggregate' && requestSeasonIds.length <= 6;
+      const loadedEntries = shouldLoadRequestSeasonData
+        ? await Promise.all(requestSeasonIds.map(async (seasonId) => {
+          const existing = aiWorkspaceSeasonData[seasonId];
+          if (existing) return existing;
+          const target = seasons.find((item) => item.id === seasonId);
+          return target ? loadAiWorkspaceSeason(target) : null;
+        }))
+        : [];
       const requestSeasonData = loadedEntries.filter((item): item is DashboardAiWorkspaceSeasonData => Boolean(item));
       if (requestSeasonData.some((item) => !aiWorkspaceSeasonData[item.season.id])) {
         setAiWorkspaceSeasonData((current) => {
@@ -1683,272 +2048,86 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           return next;
         });
       }
-      if (shouldUpdateSelectedAiSeasons && requestSeasonData.length > selectedAiWorkspaceSeasonData.length) {
-        setSelectedAiSeasonIds(requestSeasonIds);
-      }
-      const requestScopedRecords = requestSeasonData.length > 0
-        ? requestSeasonData.flatMap((item) => item.effectiveRecords)
-        : effectiveRecords;
-      const localAiSeasonRows = requestSeasonData.length > 0
-        ? requestSeasonData.map((item) => ({
-            seasonId: item.season.id,
-            seasonCode: item.season.seasonCode,
-            records: item.effectiveRecords,
-            dataSource: item.dataSource,
-            pendingCount: item.syncMeta?.pendingCount ?? 0,
-            total: item.total,
-            truncated: item.truncated,
-          }))
-        : requestScopedRecords.length > 0 && season
-          ? [{
-              seasonId: season.id,
-              seasonCode: season.seasonCode,
-              records: requestScopedRecords,
-              dataSource: 'active' as const,
-              pendingCount: syncMeta?.pendingCount ?? 0,
-              total: requestScopedRecords.length,
-              truncated: false,
-            }]
-          : [];
+      const requestQueryScope: DashboardAiQueryScope = requestDataScope.scope === 'all-seasons-aggregate'
+        ? {
+          ...currentQueryScope,
+          sourcePreset: 'user-filter',
+          presetSeasonIds: undefined,
+          iataSeasonCodes: undefined,
+        }
+        : currentQueryScope;
       const semanticIntent = inferDashboardAiSemanticIntent({
         userPrompt: prompt,
         context: {
           dataScope: requestDataScope,
+          currentQueryScope: requestQueryScope,
           availableSeasonCatalog: aiAvailableSeasonCatalog,
+          sourcePolicy: 'supabase-reporting-query-only',
         },
       });
-      const requestContext = {
-        ...buildDashboardAiContext({
-          seasonRecords: requestScopedRecords,
-          routeCountries,
-          semanticIntent,
-        }),
-        multiSeasonCatalog: buildAiWorkspaceMultiSeasonCatalogFromData(requestSeasonIds, requestSeasonData),
+      const requestContext = buildDashboardAiQueryOnlyContext({
+        seasonIds: requestSeasonIds,
         availableSeasonCatalog: aiAvailableSeasonCatalog,
         dataScope: requestDataScope,
-        dataSourcePolicy: resolveAiDataSourcePolicyFromSeasonData(requestSeasonData),
-      };
-      const sqlQueryResults: DashboardAiQueryResult[] = [];
-      const localSqlTraceWarnings: DashboardAiToolTraceSummary[] = [];
-      const runLocalSqlPlan = async (plan: DashboardAiSqlQueryPlan): Promise<DashboardAiQueryResult | null> => {
-        try {
-          const nativeResult = await queryNativeDashboardAiSql({
-            sql: plan.sql,
-            params: plan.params,
-            limit: 500,
-          });
-          return nativeResult ? dashboardAiSqlResultToQueryResult(plan, nativeResult) : null;
-        } catch (error) {
-          localSqlTraceWarnings.push({
-            tool: 'query_dashboard_data',
-            status: 'rejected',
-            reason: `validated_sql: Không chạy được SQLite local cho ${plan.queryId}; app sẽ dùng fallback từ dữ liệu dashboard đang hiển thị nếu có. Lỗi: ${(error as Error).message}`,
-            phase: 'validated_sql',
-            toolset: 'dashboard-readonly',
-          });
-          return null;
-        }
-      };
-      if (requestContext.dataSourcePolicy !== 'supabase-reporting') {
-        const sqlPlans = planDashboardAiSqlQueries({
-          userPrompt: prompt,
-          context: requestContext,
-          source: 'local-sqlite',
-        });
-        if (sqlPlans.length > 0) {
-          setAiLoadingStep('query');
-          setAiLoadingMessage('Đang chạy truy vấn SQL local đã kiểm tra...');
-          for (const plan of sqlPlans) {
-            throwIfAborted();
-            const result = await runLocalSqlPlan(plan);
-            if (result) sqlQueryResults.push(result);
-          }
-          const drilldownPlans = planDashboardAiSqlDrilldownQueries({
-            userPrompt: prompt,
-            queryResults: sqlQueryResults,
-            source: 'local-sqlite',
-          });
-          for (const plan of drilldownPlans) {
-            throwIfAborted();
-            const result = await runLocalSqlPlan(plan);
-            if (result) sqlQueryResults.push(result);
-          }
-        }
-      }
-      const inferredLocalQuery = inferDashboardAiDataQueryForPrompt({
+        semanticIntent,
+        currentQueryScope: requestQueryScope,
+      });
+      setAiLoadingStep('provider');
+      setAiLoadingMessage('AI đang gọi Supabase reporting/query...');
+      const response = await analyzeDashboardWithAi({
         userPrompt: prompt,
         context: requestContext,
+        history,
+        model: modelForRequest,
+        preferredTool,
+        availableTools: dashboardAiAvailableTools,
+        selectedSkillId: selectedSkill?.id,
+        contextProfile: selectedSkill?.contextProfile,
+        notebookContext,
+        workflowId: selectedWorkflow?.id ?? semanticIntent.workflowId,
+        language: 'vi',
+        providerFallback: true,
+        allowDataRequest: false,
+        signal,
       });
-      const localQueryResults = sqlQueryResults.length > 0
-        ? sqlQueryResults
-        : inferredLocalQuery && localAiSeasonRows.length > 0 && requestContext.dataSourcePolicy !== 'supabase-reporting'
-        ? resolveDashboardAiLocalQueryResults([inferredLocalQuery], {
-            seasonRows: localAiSeasonRows,
-            routeCountries,
-          })
-        : [];
-      const analysisContext = localQueryResults.length > 0
-        ? { ...requestContext, queryResults: localQueryResults }
-        : requestContext;
-      setAiLoadingStep('provider');
-      setAiLoadingMessage(isTauriRuntime() ? 'Python Agent đang gọi provider local...' : 'AI đang gọi provider...');
-      let response: Awaited<ReturnType<typeof analyzeDashboardWithAi>> | undefined;
-      let localAgentError: Error | null = null;
-      if (isTauriRuntime()) {
-        try {
-          const localAgentResponse = await analyzeDashboardWithLocalAgent({
-            userPrompt: prompt,
-            model: modelForRequest,
-            seasonIds: requestSeasonIds,
-            workflowId: selectedWorkflow?.id ?? semanticIntent.workflowId,
-            semanticIntent,
-            requiredGates: selectedWorkflow?.requiredGates ?? [],
-            sessionArtifact: notebookContext.activeArtifact ?? null,
-            notebookContext,
-            signal,
-            localAgentClient: callNativeDashboardAiAgent,
-          });
-          if (localAgentResponse) {
-            response = applyDashboardAiResultProfileAndVerification(localAgentResponse, {
-              userPrompt: prompt,
-              selectedSkillId: selectedSkill?.id,
-              contextProfile: selectedSkill?.contextProfile,
-            });
-          }
-        } catch (error) {
-          localAgentError = error as Error;
-        }
-      }
-      if (isTauriRuntime() && localAgentError && !response) {
-        if (localQueryResults.length === 0 || signal?.aborted) throw localAgentError;
-        const localAgentFallbackTrace: DashboardAiToolTraceSummary = {
+      let aiResponse = response;
+      if (!aiResponse) throw new Error('AI provider returned no response.');
+      throwIfAborted();
+      if (aiResponse.sqlQueryPlans.length > 0) {
+        const rejectedSqlTrace: DashboardAiToolTraceSummary = {
           tool: 'query_dashboard_data',
-          status: 'executed',
-          reason: `executed_local_sql: Đã dùng kết quả SQLite local. Provider local chưa sẵn sàng: ${localAgentError.message}`,
-          phase: 'executed_local_sql',
+          status: 'rejected',
+          reason: 'AI Workspace query-only không chạy SQL local trong page; hãy dùng dataQueries để Edge Function trả queryResults từ Supabase reporting.',
           toolset: 'dashboard-readonly',
         };
-        response = {
-          assistantText: 'Đã truy vấn SQLite local và dựng kết quả trực tiếp. Provider local chưa sẵn sàng; hãy đồng bộ API key trong Settings > AI Analysis và kiểm tra quyền can_use_ai.',
-          dataRequest: null,
-          exportAction: null,
-          visualReport: null,
-          boardPatch: buildDashboardAiBoardPatchFromQueryResults(localQueryResults, prompt),
-          queryResults: localQueryResults,
+        aiResponse = {
+          ...aiResponse,
           sqlQueryPlans: [],
-          toolTraceSummary: [localAgentFallbackTrace],
-        };
-      } else {
-        try {
-          response = response ?? await analyzeDashboardWithAi({
-            userPrompt: prompt,
-            context: analysisContext,
-            history,
-            model: modelForRequest,
-            preferredTool,
-            availableTools: dashboardAiAvailableTools,
-            selectedSkillId: selectedSkill?.id,
-            contextProfile: selectedSkill?.contextProfile,
-            notebookContext,
-            workflowId: selectedWorkflow?.id ?? semanticIntent.workflowId,
-            language: 'vi',
-            providerFallback: true,
-            allowDataRequest: localQueryResults.length > 0 ? false : undefined,
-            localQueryResults,
-            signal,
-          });
-        } catch (error) {
-          if (localQueryResults.length === 0 || signal?.aborted) throw error;
-          const providerFallbackTrace: DashboardAiToolTraceSummary = {
-            tool: 'query_dashboard_data',
-            status: 'executed',
-            reason: `executed_local_sql: Đã dùng kết quả SQLite local thay cho provider. Lỗi provider: ${(error as Error).message}`,
-            phase: 'executed_local_sql',
-            toolset: 'dashboard-readonly',
-          };
-          response = {
-            assistantText: 'Đã truy vấn SQLite local và dựng kết quả trực tiếp vì provider AI chưa trả lời ổn định.',
-            dataRequest: null,
-            exportAction: null,
-            visualReport: null,
-            boardPatch: buildDashboardAiBoardPatchFromQueryResults(localQueryResults, prompt),
-            queryResults: localQueryResults,
-            sqlQueryPlans: [],
-            toolTraceSummary: [providerFallbackTrace],
-          };
-        }
-      }
-      if (!response) throw new Error('AI provider returned no response.');
-      if (localSqlTraceWarnings.length > 0) {
-        response = {
-          ...response,
-          toolTraceSummary: [...localSqlTraceWarnings, ...response.toolTraceSummary].slice(0, 8),
+          toolTraceSummary: [rejectedSqlTrace, ...aiResponse.toolTraceSummary].slice(0, 8),
         };
       }
-      throwIfAborted();
-      if (requestContext.dataSourcePolicy !== 'supabase-reporting' && response.sqlQueryPlans.length > 0) {
-        setAiLoadingStep('query');
-        setAiLoadingMessage('Đang chạy SQL local read-only do AI đề xuất...');
-        const providerSqlQueryResults: DashboardAiQueryResult[] = [];
-        for (const plan of response.sqlQueryPlans.filter((item) => item.source !== 'supabase-reporting').slice(0, 4)) {
-          const result = await runLocalSqlPlan(plan);
-          if (result) providerSqlQueryResults.push(result);
-        }
-        throwIfAborted();
-        if (providerSqlQueryResults.length > 0) {
-          const mergedById = new Map<string, DashboardAiQueryResult>();
-          for (const result of response.queryResults) mergedById.set(result.queryId, result);
-          for (const result of providerSqlQueryResults) mergedById.set(result.queryId, result);
-          const mergedQueryResults = Array.from(mergedById.values());
-          const queryBoardPatch = buildDashboardAiBoardPatchFromQueryResults(mergedQueryResults, prompt);
-          const responseTextLooksPending = /^(đang|dang|cần|can|hệ thống sẽ|he thong se)\b/i.test(response.assistantText.trim());
-          const sqlTrace: DashboardAiToolTraceSummary = {
-            tool: 'query_dashboard_data',
-            status: 'executed',
-            reason: 'generated_sql → validated_sql → executed_local_sql: Đã chạy SELECT/CTE local do AI đề xuất qua Tauri gateway read-only.',
-            phase: 'executed_local_sql',
-            toolset: 'dashboard-readonly',
-            ...(selectedSkill ? { skill: selectedSkill.id } : {}),
-            ...(selectedSkill ? { contextProfile: selectedSkill.contextProfile } : {}),
-          };
-          response = { 
-            ...response, 
-            assistantText: responseTextLooksPending 
-              ? `Đã chạy ${providerSqlQueryResults.length} truy vấn SQLite local read-only và render kết quả trực tiếp bên dưới.` 
-              : response.assistantText, 
-            queryResults: mergedQueryResults, 
-            boardPatch: queryBoardPatch ?? response.boardPatch, 
-            toolTraceSummary: [sqlTrace, ...response.toolTraceSummary].slice(0, 8), 
-          }; 
-          response = applyDashboardAiResultProfileAndVerification(response, { 
-            userPrompt: prompt, 
-            selectedSkillId: selectedSkill?.id, 
-            contextProfile: selectedSkill?.contextProfile, 
-          }); 
-        } 
-      } 
-      if (response.dataRequest && response.queryResults.length === 0) {
+      if (aiResponse.dataRequest && aiResponse.queryResults.length === 0) {
         const legacyDataRequestTrace: DashboardAiToolTraceSummary = {
           tool: 'query_dashboard_data',
           status: 'rejected',
-          reason: 'AI Workspace query-only không dùng dataRequest/MoM-WoW payload; hãy dùng sqlQueryPlans hoặc queryResults.',
+          reason: 'AI Workspace query-only không dùng dataRequest/MoM-WoW payload; hãy dùng dataQueries hoặc queryResults.',
           toolset: 'dashboard-readonly',
           fallbackReason: 'Bỏ qua dataRequest legacy để tránh quay về bảng MoM/WoW.',
         };
-        response = {
-          ...response,
+        aiResponse = {
+          ...aiResponse,
           dataRequest: null,
           toolTraceSummary: [
             legacyDataRequestTrace,
-            ...response.toolTraceSummary,
+            ...aiResponse.toolTraceSummary,
           ].slice(0, 8),
         };
       }
       setAiLoadingStep('render');
-      const boardPatch = response.boardPatch ?? buildDashboardAiFallbackBoardPatch({
+      const boardPatch = aiResponse.boardPatch ?? buildDashboardAiFallbackBoardPatch({
         userPrompt: prompt,
         preferredTool,
-        visualReport: response.visualReport,
+        visualReport: aiResponse.visualReport,
       });
       const cellCreatedAt = Date.now();
       const runId = `ai-run-${cellCreatedAt}`;
@@ -1959,37 +2138,37 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         createdAt: cellCreatedAt,
         prompt,
         status: 'completed',
-        message: response.assistantText,
+        message: aiResponse.assistantText,
       });
       const nextCellBase: DashboardAiNotebookCell = {
         id: `ai-cell-${cellCreatedAt}`,
         prompt,
-        assistantText: response.assistantText,
+        assistantText: aiResponse.assistantText,
         blocks: boardPatch?.blocks ?? [],
-        toolTraceSummary: response.toolTraceSummary,
-        exportAction: response.exportAction,
+        toolTraceSummary: aiResponse.toolTraceSummary,
+        exportAction: aiResponse.exportAction,
         createdAt: cellCreatedAt,
         modelId: modelForRequest.id,
         runEvents,
-        queryResults: response.queryResults,
-        resultProfiles: response.resultProfiles,
-        answerVerification: response.answerVerification,
+        queryResults: aiResponse.queryResults,
+        resultProfiles: aiResponse.resultProfiles,
+        answerVerification: aiResponse.answerVerification,
       };
       const nextCell: DashboardAiNotebookCell = {
         ...nextCellBase,
         activeArtifact: buildDashboardAiActiveArtifactFromCell(nextCellBase, {
-          seasonIds: requestSeasonIds.length > 0 ? requestSeasonIds : selectedAiSeasonIds,
+          seasonIds: requestSeasonIds.length > 0 ? requestSeasonIds : activeAiSeasonIds,
         }),
       };
       setAiNotebook((current) => {
         const base = current ?? buildDashboardAiNotebook({
-            seasonIds: requestSeasonIds.length > 0 ? requestSeasonIds : selectedAiSeasonIds.length > 0 ? selectedAiSeasonIds : season?.id ? [season.id] : [],
+            seasonIds: requestSeasonIds.length > 0 ? requestSeasonIds : activeAiSeasonIds,
             title: boardPatch?.title ?? 'Rich Chat AI',
           });
         return {
           ...base,
           title: boardPatch?.title ?? base.title,
-          seasonIds: normalizeDashboardAiWorkspaceSeasonIds(requestSeasonIds.length > 0 ? requestSeasonIds : selectedAiSeasonIds.length > 0 ? selectedAiSeasonIds : base.seasonIds),
+          seasonIds: normalizeDashboardAiWorkspaceSeasonIds(requestSeasonIds.length > 0 ? requestSeasonIds : activeAiSeasonIds.length > 0 ? activeAiSeasonIds : base.seasonIds),
           cells: [...base.cells, nextCell].slice(-DASHBOARD_AI_NOTEBOOK_MAX_CELLS),
           updatedAt: cellCreatedAt,
         };
@@ -2007,7 +2186,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         setAiLoadingMessage('AI đang phân tích dữ liệu...');
       }
     }
-  }, [aiAvailableSeasonCatalog, aiConfigured, aiLoading, aiNotebook, aiPrompt, aiWorkspaceSeasonData, dashboardAiAvailableTools, effectiveRecords, loadAiWorkspaceSeason, pinnedAiContextCellId, routeCountries, season, seasons, selectedAiModel, selectedAiSeasonIds, selectedAiWorkspaceSeasonData.length, syncMeta]);
+  }, [activeAiSeasonIds, aiAvailableSeasonCatalog, aiConfigured, aiLoading, aiNotebook, aiPrompt, aiWorkspaceSeasonData, currentQueryScope, dashboardAiAvailableTools, loadAiWorkspaceSeason, pinnedAiContextCellId, season, seasons, selectedAiModel]);
 
   const aiWorkspaceSeasonSummaryRows = useMemo<AiWorkspaceTableRow[]>(() => (
     selectedAiWorkspaceSeasonData.map((item) => {
@@ -2030,84 +2209,25 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     })
   ), [selectedAiWorkspaceSeasonData]);
 
-  const resolveAiWorkspaceComparison = useCallback((block: DashboardAiWorkspaceBlock) => {
-    const filters = block.table?.filters ?? block.chart?.filters ?? {};
-    const mode = filters.comparisonMode ?? comparisonMode;
-    const granularity = mode === 'yoy' ? comparisonGranularity : 'month';
-    const modePeriods = mode === comparisonMode ? periodOptions : listPeriods(analysisRecords, mode, granularity);
-    const current = resolveWorkspacePeriodKey(modePeriods, filters.currentPeriod, filters.currentMonth) || (mode === comparisonMode ? activeCurrentPeriod : modePeriods.at(-1)?.key ?? '');
-    const fallbackPrevious = resolveDefaultPreviousPeriod(modePeriods, current, mode, granularity);
-    const previous = resolveWorkspacePeriodKey(modePeriods, filters.previousPeriod, filters.previousMonth) || (mode === comparisonMode ? activePreviousPeriod : fallbackPrevious);
-    if (!current) return null;
-    return buildDashboardComparison({
-      records: analysisRecords,
-      mode,
-      granularity,
-      metric: filters.metric ?? metric,
-      currentPeriod: current,
-      previousPeriod: previous === current ? fallbackPrevious : previous,
-      typeFilter: filters.typeFilter ?? typeFilter,
-      timeBasis: filters.timeBasis ?? timeBasis,
-      dimension: filters.dimension ?? dimension,
-      routeCountries,
-    });
-  }, [activeCurrentPeriod, activePreviousPeriod, analysisRecords, comparisonGranularity, comparisonMode, dimension, metric, periodOptions, routeCountries, timeBasis, typeFilter]);
-
   const materializeAiWorkspaceTableRows = useCallback((block: DashboardAiWorkspaceBlock): AiWorkspaceTableRow[] => {
     if (block.table?.rows?.length) {
       return block.table.rows.map((row) => ({ ...row }));
     }
     const limit = block.table?.limit ?? 12;
     const templateId = block.table?.templateId ?? 'season-summary';
-    if (templateId === 'comparison-drivers') {
-      return (resolveAiWorkspaceComparison(block)?.drivers ?? []).slice(0, limit).map((driver) => ({
-        Driver: driver.label,
-        Current: driver.currentValue,
-        Previous: driver.previousValue,
-        Delta: driver.delta,
-        'Delta %': formatPct(driver.deltaPct),
-        CTG: formatPointPct(driver.ctgPct),
-        'Share shift': formatPointPct(driver.shareShift),
-      }));
+    if (block.source === 'multiSeason' || templateId === 'season-summary' || templateId === 'multi-season-summary') {
+      return aiWorkspaceSeasonSummaryRows.slice(0, limit);
     }
-    if (templateId === 'monthly-trend') {
-      return overview.monthlyTrend.slice(0, limit).map((row) => ({
-        Month: row.label,
-        Flights: row.total,
-        ARR: row.arrivals,
-        DEP: row.departures,
-        Pax: row.pax,
-      }));
-    }
-    if (templateId === 'airline-ranking') {
-      return overview.airlineRanking.slice(0, limit).map((row) => ({
-        Airline: row.label,
-        Flights: row.flights,
-        Pax: row.pax,
-        Share: formatPct(row.share),
-      }));
-    }
-    if (templateId === 'route-country-ranking') {
-      return overview.countryRouteContribution.slice(0, limit).map((row) => ({
-        Country: row.country,
-        Route: row.route,
-        Flights: row.flights,
-        Pax: row.pax,
-        Share: formatPct(row.share),
-      }));
-    }
-    if (templateId === 'peak-hour') {
-      return overview.peakHourAverage.slice(0, limit).map((row) => ({
-        Bucket: row.bucket,
-        Flights: row.flights,
-        ARR: row.arrivals,
-        DEP: row.departures,
-        'Ops days': row.operatingDays,
-        'Avg/day': Number(row.avgFlightsPerDay.toFixed(1)),
-      }));
-    }
-    return aiWorkspaceSeasonSummaryRows.slice(0, limit);
-  }, [aiWorkspaceSeasonSummaryRows, overview, resolveAiWorkspaceComparison]);
+    const sourceQueryId = block.table?.sourceQueryId ?? block.chart?.sourceQueryId ?? '';
+    return [{
+      'Ghi chú dữ liệu': sourceQueryId
+        ? `Block gắn sourceQueryId ${sourceQueryId} nhưng boardPatch không nhúng rows. Cần queryResults từ Supabase reporting để render số liệu.`
+        : `Template ${templateId} cần dataQueries/queryResults từ Supabase reporting; AI Workspace không dùng dữ liệu overview dashboard làm fallback.`,
+      Source: block.source,
+      Template: templateId,
+      ...(sourceQueryId ? { sourceQueryId } : {}),
+    }];
+  }, [aiWorkspaceSeasonSummaryRows]);
 
   const materializeAiWorkspaceChartRows = useCallback((block: DashboardAiWorkspaceBlock): Array<Record<string, string | number>> => {
     if (block.chart?.rows?.length) {
@@ -2117,61 +2237,14 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       ));
     }
     const limit = block.chart?.limit ?? 10;
-    if (block.chart?.chartType === 'line-trend') {
-      return overview.monthlyTrend.slice(0, limit).map((row) => ({
-        label: row.label,
-        flights: row.total,
-        arrivals: row.arrivals,
-        departures: row.departures,
-      }));
-    }
-    if (block.chart?.chartType === 'waterfall') {
-      return (resolveAiWorkspaceComparison(block)?.drivers ?? []).slice(0, limit).map((driver) => ({
-        label: driver.label,
-        value: driver.delta,
-      }));
-    }
-    if (block.chart?.chartType === 'heatmap') {
-      return overview.weekdayHeatmap.slice(0, limit).map((cell) => ({
-        label: `${cell.monthLabel} ${weekdayDisplayLabel(cell.weekday)}`,
-        value: Number(cell.avgFlightsPerDay.toFixed(1)),
-      }));
-    }
     if (block.source === 'multiSeason') {
       return aiWorkspaceSeasonSummaryRows.slice(0, limit).map((row) => ({
         label: String(row.Season),
         value: Number(row.Flights) || 0,
       }));
     }
-    if (block.chart?.filters?.dimension === 'hourBucket') {
-      return overview.peakHourAverage.slice(0, limit).map((row) => ({
-        label: row.bucket,
-        value: row.flights,
-      }));
-    }
-    if (block.chart?.filters?.dimension === 'route' || block.chart?.filters?.dimension === 'country') {
-      return overview.countryRouteContribution.slice(0, limit).map((row) => ({
-        label: block.chart?.filters?.dimension === 'country' ? row.country : row.route,
-        value: row.flights,
-      }));
-    }
-    if (block.chart?.filters?.dimension === 'aircraft') {
-      return overview.aircraftMix.slice(0, limit).map((row) => ({
-        label: row.label,
-        value: row.flights,
-      }));
-    }
-    if (block.source === 'comparison') {
-      return (resolveAiWorkspaceComparison(block)?.drivers ?? []).slice(0, limit).map((driver) => ({
-        label: driver.label,
-        value: driver.delta,
-      }));
-    }
-    return overview.airlineRanking.slice(0, limit).map((row) => ({
-      label: row.label,
-      value: row.flights,
-    }));
-  }, [aiWorkspaceSeasonSummaryRows, overview, resolveAiWorkspaceComparison]);
+    return [];
+  }, [aiWorkspaceSeasonSummaryRows]);
 
   const moveAiNotebookBlock = useCallback((cellId: string, blockId: string, direction: -1 | 1) => {
     setAiNotebook((current) => {
@@ -2221,18 +2294,6 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     setLastAiPrompt(cell.prompt);
   }, []);
 
-  const toggleAiWorkspaceSeason = useCallback((seasonId: string) => {
-    setSelectedAiSeasonIds((current) => {
-      const hasSeason = current.includes(seasonId);
-      const next = hasSeason
-        ? current.filter((id) => id !== seasonId)
-        : [...current, seasonId];
-      const normalized = normalizeDashboardAiWorkspaceSeasonIds(next);
-      if (normalized.length === 0 && season?.id) return [season.id];
-      return normalized;
-    });
-  }, [season]);
-
   const exportAiWorkspaceBlockExcel = useCallback(async (block: DashboardAiWorkspaceBlock) => {
     if (block.type !== 'table') return;
     const rows = materializeAiWorkspaceTableRows(block);
@@ -2271,20 +2332,28 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
 
   const clearAiNotebook = useCallback(() => {
     setPinnedAiContextCellId(null);
-    setAiNotebook(buildDashboardAiNotebook({ seasonIds: selectedAiSeasonIds, title: 'Rich Chat AI' }));
-  }, [selectedAiSeasonIds]);
+    setAiNotebook(buildDashboardAiNotebook({ seasonIds: activeAiSeasonIds, title: 'Rich Chat AI' }));
+  }, [activeAiSeasonIds]);
+
+  const aiWorkspaceFallbackKpis = useMemo(() => {
+    const activeRows = selectedAiWorkspaceSeasonData.flatMap((item) => (
+      item.effectiveRecords.filter((record) => record.status !== 'deleted')
+    ));
+    const operatingDays = new Set(activeRows.map((record) => getDashboardOperationalDate(record)).filter(Boolean)).size;
+    return {
+      totalFlights: activeRows.length,
+      totalPax: activeRows.reduce((sum, record) => sum + operationalRecordPax(record), 0),
+      avgFlightsPerDay: operatingDays > 0 ? activeRows.length / operatingDays : 0,
+      selectedSeasonCount: activeAiSeasonIds.length,
+    };
+  }, [activeAiSeasonIds.length, selectedAiWorkspaceSeasonData]);
 
   const aiNotebookRendererData = useMemo<AiNotebookRendererData>(() => ({
     formatValue,
     materializeTableRows: materializeAiWorkspaceTableRows,
     materializeChartRows: materializeAiWorkspaceChartRows,
-    fallbackKpis: {
-      totalFlights: overview.kpis.totalFlights,
-      totalPax: overview.kpis.totalPax,
-      avgFlightsPerDay: overview.kpis.avgFlightsPerDay,
-      selectedSeasonCount: selectedAiSeasonIds.length,
-    },
-  }), [materializeAiWorkspaceChartRows, materializeAiWorkspaceTableRows, overview.kpis.avgFlightsPerDay, overview.kpis.totalFlights, overview.kpis.totalPax, selectedAiSeasonIds.length]);
+    fallbackKpis: aiWorkspaceFallbackKpis,
+  }), [aiWorkspaceFallbackKpis, materializeAiWorkspaceChartRows, materializeAiWorkspaceTableRows]);
 
   const aiNotebookActions = useMemo(() => ({
     submitPrompt: submitAiPrompt,
@@ -2314,47 +2383,6 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     id: model.id,
     label: model.label,
   })), [enabledAiModels]);
-
-  const aiSeasonOptions = useMemo(() => seasons.map((item) => ({
-    id: item.id,
-    seasonCode: item.seasonCode,
-  })), [seasons]);
-
-  const dashboardSeasonOptions = useMemo(() => seasons.map((item) => ({
-    id: item.id,
-    seasonCode: item.seasonCode,
-    name: item.name,
-  })), [seasons]);
-
-  const toggleDashboardSeason = useCallback((seasonId: string) => {
-    setDashboardSeasonIds((current) => {
-      const hasSeason = current.includes(seasonId);
-      const next = hasSeason
-        ? current.filter((id) => id !== seasonId)
-        : [...current, seasonId];
-      const normalized = normalizeDashboardAiWorkspaceSeasonIds(next);
-      if (normalized.length === 0 && season?.id) return [season.id];
-      return normalized;
-    });
-  }, [season, setDashboardSeasonIds]);
-
-  const handleOverviewRangeChange = useCallback((monthFrom: string, monthTo: string) => {
-    setOverviewMonthFrom(monthFrom);
-    setOverviewMonthTo(monthTo);
-  }, [setOverviewMonthFrom, setOverviewMonthTo]);
-
-  const toggleOverviewCountry = (country: string) => {
-    setOverviewCountryExpansionTouched(true);
-    setExpandedOverviewCountries((current) => {
-      const next = new Set(current);
-      if (effectiveExpandedOverviewCountries.has(country)) {
-        next.delete(country);
-      } else {
-        next.add(country);
-      }
-      return next;
-    });
-  };
 
   function handleDailyTrendDoubleClick(date: string) {
     if (!season || !date) return;
@@ -2397,12 +2425,20 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
               {dataSource ?? 'chưa có'}
             </span>
             {season && (
-              <FetchServerUpdatesButton
-                fetching={fetchingUpdates}
-                progress={fetchProgress}
-                disabled={syncInProgress || loading}
-                onFetch={handleFetchUpdates}
-              />
+              <>
+                <FetchServerUpdatesButton
+                  fetching={fetchingServerData}
+                  progress={fetchProgress}
+                  disabled={syncInProgress || loading}
+                  onFetch={fetchServerData}
+                />
+                <SyncActionButton
+                  syncing={syncInProgress}
+                  pendingCount={syncPendingCount}
+                  progress={syncProgress}
+                  onSync={handleSync}
+                />
+              </>
             )}
           </div>
         </header>
@@ -2428,476 +2464,356 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
 
           <section className="rounded-lg border border-surface-variant bg-surface-container-lowest px-4 py-3 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
+              <div className="min-w-0 flex-1">
                 <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Bảng điều khiển</div>
-                <div className="mt-1 grid grid-cols-3 rounded-lg border border-outline-variant bg-surface p-1">
+                <div className="mt-1 grid grid-cols-1 rounded-lg border border-outline-variant bg-surface p-1 sm:grid-cols-3">
                   <button
                     type="button"
-                    onClick={() => setDashboardView('overview')}
-                    className={`inline-flex items-center justify-center gap-2 rounded-md px-4 py-1.5 text-sm font-semibold ${dashboardView === 'overview' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}
+                    onClick={() => setDashboardView('operations')}
+                    className={`inline-flex min-h-11 min-w-0 items-center justify-start gap-2 rounded-md px-3 py-2 text-sm font-semibold sm:justify-center ${dashboardView === 'operations' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}
                   >
-                    <span className="material-symbols-outlined text-[18px]">space_dashboard</span>
-                    Tổng quan
+                    <span className="material-symbols-outlined text-[18px]">monitoring</span>
+                    <span className="min-w-0 truncate">Vận hành ca trực</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDashboardView('comparison')}
+                    className={`inline-flex min-h-11 min-w-0 items-center justify-start gap-2 rounded-md px-3 py-2 text-sm font-semibold sm:justify-center ${dashboardView === 'comparison' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}
+                  >
+                    <span className="material-symbols-outlined text-[18px]">analytics</span>
+                    <span className="min-w-0 truncate">So sánh sản lượng</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setDashboardView('ai-workspace')}
-                    className={`inline-flex items-center justify-center gap-2 rounded-md px-4 py-1.5 text-sm font-semibold ${dashboardView === 'ai-workspace' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}
+                    className={`inline-flex min-h-11 min-w-0 items-center justify-start gap-2 rounded-md px-3 py-2 text-sm font-semibold sm:justify-center ${dashboardView === 'ai-workspace' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}
                   >
                     <span className="material-symbols-outlined text-[18px]">dashboard_customize</span>
-                    AI Workspace
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDashboardView('analysis')}
-                    className={`inline-flex items-center justify-center gap-2 rounded-md px-4 py-1.5 text-sm font-semibold ${dashboardView === 'analysis' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}
-                  >
-                    <span className="material-symbols-outlined text-[18px]">analytics</span>
-                    Phân tích MoM / WoW
+                    <span className="min-w-0 truncate">AI Workspace</span>
                   </button>
                 </div>
               </div>
-              <div className="text-right text-xs font-semibold text-on-surface-variant">
-                <div>{season?.seasonCode ?? 'Mùa bay'} ưu tiên tổng quan</div>
+              <div className="text-left text-xs font-semibold text-on-surface-variant sm:text-right">
+                <div>{season?.seasonCode ?? 'Mùa bay'} ưu tiên vận hành</div>
                 <div>{formatValue(overview.records.length)} chuyến sau lọc từ {formatValue(dashboardRecords.length)} bản ghi Dashboard</div>
               </div>
             </div>
           </section>
 
-          <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-3 shadow-sm">
-            <div className="grid gap-3 sm:grid-cols-2 lg:max-w-2xl">
-            </div>
-          </section>
-
-          <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-3 shadow-sm">
-            <div className="grid gap-3 sm:grid-cols-2 lg:max-w-2xl">
-              <label className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
-                Loại chuyến
-                <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as DashboardTypeFilter)} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case tracking-normal text-on-surface">
-                  {TYPE_FILTERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                </select>
-              </label>
-              <label className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
-                Múi giờ
-                <select value={timeBasis} onChange={(event) => setTimeBasis(event.target.value as DashboardTimeBasis)} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case tracking-normal text-on-surface">
-                  <option value="local">Local +7</option>
-                  <option value="utc">UTC</option>
-                </select>
-              </label>
-            </div>
-          </section>
-
-          {dashboardView === 'overview' && (
+          {dashboardView === 'operations' && (
             <>
-              <DateRangeFilter
-                monthOptions={overviewMonthOptions}
-                monthFrom={activeOverviewMonthFrom}
-                monthTo={activeOverviewMonthTo}
-                seasonOptions={dashboardSeasonOptions}
-                selectedSeasonIds={activeDashboardSeasonIds}
-                onRangeChange={handleOverviewRangeChange}
-                onToggleSeason={toggleDashboardSeason}
-              />
-
               <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-3 shadow-sm">
-                <div className="grid gap-3 md:grid-cols-3">
-                  <label className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
-                    Hãng bay
-                    <select value={overviewAirline} onChange={(event) => setOverviewAirline(event.target.value)} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case tracking-normal text-on-surface">
-                      <option value="all">Tất cả hãng bay</option>
-                      {overview.airlineOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+                <div className="grid gap-3 md:grid-cols-4">
+                  <label className="text-xs font-semibold uppercase text-on-surface-variant">
+                    Ngày vận hành
+                    <select
+                      value={activeOperationalDate}
+                      onChange={(event) => setOperationalDate(event.target.value)}
+                      className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case text-on-surface"
+                    >
+                      {operationalDateOptions.length === 0
+                        ? <option value="">Không có ngày</option>
+                        : operationalDateOptions.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
                     </select>
                   </label>
-                  <label className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
-                    Quốc gia
-                    <select value={overviewCountry} onChange={(event) => setOverviewCountry(event.target.value)} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case tracking-normal text-on-surface">
-                      <option value="all">Tất cả quốc gia</option>
-                      {overview.countryOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+                  <label className="text-xs font-semibold uppercase text-on-surface-variant">
+                    Bucket
+                    <select
+                      value={operationalBucketSize}
+                      onChange={(event) => setOperationalBucketSize(Number(event.target.value) as OperationalDashboardBucketSize)}
+                      className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case text-on-surface"
+                    >
+                      <option value={60}>1h</option>
+                      <option value={30}>30 phút</option>
                     </select>
                   </label>
-                  <label className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
-                    Đường bay
-                    <select value={overviewRoute} onChange={(event) => setOverviewRoute(event.target.value)} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case tracking-normal text-on-surface">
-                      <option value="all">Tất cả đường bay</option>
-                      {overview.routeOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+                  <label className="text-xs font-semibold uppercase text-on-surface-variant">
+                    Time basis
+                    <select
+                      value={timeBasis}
+                      onChange={(event) => setTimeBasis(event.target.value as DashboardTimeBasis)}
+                      className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case text-on-surface"
+                    >
+                      <option value="local">Local STA/STD</option>
+                      <option value="utc">UTC</option>
                     </select>
                   </label>
+                  <div className="rounded-lg border border-outline-variant bg-surface px-3 py-2">
+                    <div className="text-xs font-semibold uppercase text-on-surface-variant">Operational window</div>
+                    <div className="mt-1 text-sm font-bold text-on-surface">05:00 -&gt; 04:59 +1</div>
+                    <div className="mt-1 text-xs text-on-surface-variant">{activeOperationalDate || 'Chưa có ngày vận hành'}</div>
+                  </div>
                 </div>
               </section>
 
-              <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+              <section className="grid gap-3 md:grid-cols-4 xl:grid-cols-8">
                 {[
-                  { label: 'Tổng chuyến bay', value: formatValue(overview.kpis.totalFlights), sub: `${overviewMonthStart || '-'} đến ${overviewMonthEnd || '-'}` },
-                  { label: 'Tổng khách', value: formatValue(overview.kpis.totalPax), sub: 'Bản ghi hiệu lực' },
-                  { label: 'TB chuyến/ngày', value: overview.kpis.avgFlightsPerDay.toFixed(1), sub: `${overview.records.length} dòng sau lọc` },
-                  { label: 'Tháng cao điểm', value: overview.kpis.peakMonth.label, sub: `${formatValue(overview.kpis.peakMonth.flights)} chuyến` },
-                  { label: 'Hãng bay cao nhất', value: overview.kpis.topAirline.label, sub: `${formatValue(overview.kpis.topAirline.flights)} chuyến` },
-                  { label: 'Đường bay cao nhất', value: overview.kpis.topRoute.label, sub: `${formatValue(overview.kpis.topRoute.flights)} chuyến` },
+                  { label: 'ARR flights', value: formatValue(operationalDashboard.kpis.arrivalFlights), sub: operationalDashboard.arrivals.peakBucket?.label ?? '-' },
+                  { label: 'DEP flights', value: formatValue(operationalDashboard.kpis.departureFlights), sub: operationalDashboard.departures.peakBucket?.label ?? '-' },
+                  { label: 'Total flights', value: formatValue(operationalDashboard.kpis.totalFlights), sub: `${formatValue(operationalDashboard.kpis.totalPax)} pax` },
+                  { label: 'A-D gap', value: formatDelta(operationalDashboard.kpis.adGapFlights), sub: 'ARR vs DEP' },
+                  { label: 'Peak ARR bucket', value: operationalDashboard.kpis.peakArrivalBucket?.label ?? '-', sub: `${formatValue(operationalDashboard.kpis.peakArrivalBucket?.flights ?? 0)} flights` },
+                  { label: 'Peak DEP bucket', value: operationalDashboard.kpis.peakDepartureBucket?.label ?? '-', sub: `${formatValue(operationalDashboard.kpis.peakDepartureBucket?.flights ?? 0)} flights` },
+                  { label: 'Pax coverage', value: formatPct(operationalDashboard.paxCoverage.coveragePct), sub: `${formatValue(operationalDashboard.paxCoverage.available)} / ${formatValue(operationalDashboard.paxCoverage.totalFlights)}` },
+                  { label: 'Pax missing > 1 ngày', value: formatValue(operationalDashboard.paxCoverage.missingAfterOneDay), sub: `${formatValue(operationalDashboard.paxCoverage.plannedZero)} planned zero` },
                 ].map((item) => (
                   <div key={item.label} className="rounded-lg border border-surface-variant bg-surface-container-lowest px-4 py-3 shadow-sm">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">{item.label}</div>
-                    <div className="mt-1 truncate text-xl font-bold text-on-surface">{item.value}</div>
+                    <div className="text-xs font-semibold uppercase text-on-surface-variant">{item.label}</div>
+                    <div className="mt-1 truncate text-xl font-bold tabular-nums text-on-surface">{item.value}</div>
                     <div className="mt-1 truncate text-xs text-on-surface-variant">{item.sub}</div>
                   </div>
                 ))}
               </section>
 
-              <section className="grid gap-3 xl:grid-cols-12">
-                <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm xl:col-span-5">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <div>
-                      <h2 className="text-sm font-bold text-on-surface">Xu hướng chuyến bay theo tháng</h2>
-                      <p className="text-xs text-on-surface-variant">Tách ARR và DEP theo tháng</p>
-                    </div>
-                    <span className="text-xs font-semibold text-on-surface-variant">{typeFilter === 'all' ? 'Toàn bộ lưu lượng' : typeFilter === 'A' ? 'Chỉ ARR' : 'Chỉ DEP'}</span>
-                  </div>
-                  <div className="space-y-3">
-                    {overview.monthlyTrend.map((row) => (
-                      <button
-                        key={row.key}
-                        type="button"
-                        onClick={() => setOverviewDailyMonth(row.key)}
-                        className={`grid w-full grid-cols-[68px_minmax(0,1fr)_72px] items-center gap-3 rounded px-1 py-0.5 text-left hover:bg-surface-container ${activeOverviewDailyMonth === row.key ? 'bg-surface-container-low' : ''}`}
-                      >
-                        <span className="text-xs font-semibold text-on-surface-variant">{row.label}</span>
-                        <span className="flex h-3 overflow-hidden rounded-full bg-surface-container-high">
-                          <span className="h-full bg-sky-500" style={{ width: `${row.arrivals / overviewMaxMonthlyFlights * 100}%` }} />
-                          <span className="h-full bg-amber-500" style={{ width: `${row.departures / overviewMaxMonthlyFlights * 100}%` }} />
-                        </span>
-                        <span className="text-right text-sm font-bold text-on-surface">{formatValue(row.total)}</span>
-                      </button>
-                    ))}
-                    {overview.monthlyTrend.length === 0 && (
-                      <div className="rounded-md border border-dashed border-outline-variant px-3 py-8 text-center text-sm text-on-surface-variant">Không có dữ liệu xu hướng tháng.</div>
-                    )}
-                  </div>
-                  <div className="mt-4 flex gap-4 text-xs font-semibold text-on-surface-variant">
-                    <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-sky-500" />ARR</span>
-                    <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" />DEP</span>
-                  </div>
-                </section>
-
-                <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm xl:col-span-4">
-                  <div className="mb-3 flex items-start justify-between gap-3">
-                    <div>
-                      <h2 className="text-sm font-bold text-on-surface">Xu hướng chuyến bay theo ngày</h2>
-                      <p className="text-xs text-on-surface-variant">Tìm ngày cao điểm trong tháng đã chọn</p>
-                    </div>
-                    <select
-                      value={activeOverviewDailyMonth}
-                      onChange={(event) => setOverviewDailyMonth(event.target.value)}
-                      className="w-28 rounded-md border border-outline-variant bg-surface px-2 py-1 text-xs font-semibold text-on-surface"
-                    >
-                      {overviewDailyMonthOptions.length === 0 ? (
-                        <option value="">Không có tháng</option>
-                      ) : overviewDailyMonthOptions.map((month) => (
-                        <option key={month.key} value={month.key}>{month.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="relative h-40 border-b border-surface-variant">
-                    <div className="absolute inset-x-0 top-0 h-px bg-surface-variant/70" />
-                    <div className="absolute inset-x-0 top-1/2 h-px bg-surface-variant/70" />
-                    <div className="relative z-10 flex h-full items-end gap-1 px-1 pt-3">
-                      {overviewDailyCalendarRows.map((row) => {
-                        const isPeak = overviewDailyPeakDay?.date === row.date && row.total > 0;
-                        return (
-                          <button
-                            key={row.date}
-                            type="button"
-                            disabled={!season}
-                            onDoubleClick={() => handleDailyTrendDoubleClick(row.date)}
-                            aria-label={`Mở Lịch ngày cho ${row.date}`}
-                            className="flex h-full min-w-0 flex-1 items-end justify-center rounded-t-sm outline-none transition hover:bg-surface-container-low focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-70"
-                          >
-                            <div
-                              title={`Nhấp đúp để mở Lịch ngày ${row.date}: ${formatValue(row.total)} chuyến (${formatValue(row.arrivals)} ARR / ${formatValue(row.departures)} DEP)`}
-                              className={`flex w-full max-w-3 flex-col-reverse overflow-hidden rounded-t-sm ${isPeak ? 'ring-2 ring-teal-700 ring-offset-1' : ''} ${row.total === 0 ? 'bg-slate-200 dark:bg-slate-800' : 'bg-surface-container-high'}`}
-                              style={{ height: row.total === 0 ? 4 : `${Math.max(8, row.total / overviewMaxDailyFlights * 100)}%` }}
-                            >
-                              {row.total > 0 && (
-                                <>
-                                  <span className="block bg-amber-500" style={{ height: `${row.departures / row.total * 100}%` }} />
-                                  <span className="block bg-sky-500" style={{ height: `${row.arrivals / row.total * 100}%` }} />
-                                </>
-                              )}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div className="mt-2 flex justify-between text-[10px] font-semibold text-on-surface-variant">
-                    {overviewDailyCalendarRows.map((row, index) => (
-                      <span key={`${row.date}-axis`} className={index % 5 === 0 || index === overviewDailyCalendarRows.length - 1 ? 'opacity-100' : 'opacity-0'}>
-                        {row.day}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs xl:grid-cols-4">
-                    <div className="rounded-md bg-surface-container-low px-2 py-2">
-                      <div className="font-bold uppercase text-on-surface-variant">Ngày cao điểm</div>
-                      <div className="mt-1 font-bold text-on-surface">{overviewDailyPeakDay ? `${overviewDailyPeakDay.label}` : '-'}</div>
-                      <div className="text-on-surface-variant">{formatValue(overviewDailyPeakDay?.total ?? 0)} chuyến</div>
-                    </div>
-                    <div className="rounded-md bg-surface-container-low px-2 py-2">
-                      <div className="font-bold uppercase text-on-surface-variant">Avg/day</div>
-                      <div className="mt-1 font-bold text-teal-700">{overviewDailyCalendarRows.length === 0 ? '0.0' : (overviewDailyTotalFlights / overviewDailyCalendarRows.length).toFixed(1)}</div>
-                      <div className="text-on-surface-variant">chuyến</div>
-                    </div>
-                    <div className="rounded-md bg-surface-container-low px-2 py-2">
-                      <div className="font-bold uppercase text-on-surface-variant">Thứ cao điểm</div>
-                      <div className="mt-1 font-bold text-on-surface">{weekdayDisplayLabel(overviewDailyWeekdayPeak[0])}</div>
-                      <div className="text-on-surface-variant">{formatValue(overviewDailyWeekdayPeak[1])} chuyến</div>
-                    </div>
-                    <div className="rounded-md bg-surface-container-low px-2 py-2">
-                      <div className="font-bold uppercase text-on-surface-variant">Weekend</div>
-                      <div className="mt-1 font-bold text-on-surface">{formatPct(overviewDailyTotalFlights === 0 ? null : overviewDailyWeekendFlights / overviewDailyTotalFlights)}</div>
-                      <div className="text-on-surface-variant">tỷ trọng</div>
-                    </div>
-                  </div>
-                  <div className="mt-3 flex gap-4 text-xs font-semibold text-on-surface-variant">
-                    <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-sky-500" />ARR</span>
-                    <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" />DEP</span>
-                  </div>
-                </section>
-
-                <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm xl:col-span-3">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h2 className="text-sm font-bold text-on-surface">Hiệu suất hãng bay</h2>
-                    <span className="text-xs font-semibold text-on-surface-variant">Chuyến + khách</span>
-                  </div>
-                  <div className="space-y-2">
-                    {overview.airlineRanking.slice(0, 8).map((row) => (
-                      <div key={row.key} className="grid grid-cols-[54px_minmax(0,1fr)_70px_80px] items-center gap-2 text-sm">
-                        <span className="truncate font-bold text-on-surface">{row.label}</span>
-                        <span className="h-2 rounded-full bg-surface-container-high">
-                          <span className="block h-2 rounded-full bg-primary" style={{ width: `${row.flights / overviewMaxAirlineFlights * 100}%` }} />
-                        </span>
-                        <span className="text-right font-semibold text-on-surface">{formatValue(row.flights)}</span>
-                        <span className="text-right text-xs text-on-surface-variant">{formatValue(row.pax)} khách</span>
-                      </div>
-                    ))}
-                    {overview.airlineRanking.length === 0 && (
-                      <div className="rounded-md border border-dashed border-outline-variant px-3 py-8 text-center text-sm text-on-surface-variant">Không có dữ liệu hãng bay.</div>
-                    )}
-                  </div>
-                </section>
-
-                <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm xl:col-span-6">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h2 className="text-sm font-bold text-on-surface">Đóng góp theo quốc gia / đường bay</h2>
-                    <span className="text-xs font-semibold text-on-surface-variant">Có thể mở chi tiết đường bay</span>
-                  </div>
-                  <div className="overflow-hidden rounded-lg border border-surface-variant">
-                    <table className="w-full text-sm">
-                      <thead className="bg-surface-container-low text-xs uppercase tracking-wide text-on-surface-variant">
-                        <tr>
-                          <th className="px-3 py-2 text-left">Quốc gia</th>
-                          <th className="px-3 py-2 text-left">Đường bay</th>
-                          <th className="px-3 py-2 text-right">Chuyến</th>
-                          <th className="px-3 py-2 text-right">Khách</th>
-                          <th className="px-3 py-2 text-right">Tỷ trọng</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-surface-variant bg-surface">
-                        {overviewCountryGroups.slice(0, 8).map((group) => {
-                          const expanded = effectiveExpandedOverviewCountries.has(group.country);
-                          return (
-                            <Fragment key={group.country}>
-                              <tr className="bg-surface-container-lowest hover:bg-surface-container">
-                                <td className="px-3 py-2 font-semibold text-on-surface">
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleOverviewCountry(group.country)}
-                                    className="inline-flex min-w-0 items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-surface-container-high"
-                                    aria-expanded={expanded}
-                                  >
-                                    <span className="material-symbols-outlined text-[18px]">{expanded ? 'expand_more' : 'chevron_right'}</span>
-                                    <span className="truncate">{group.country}</span>
-                                  </button>
-                                </td>
-                                <td className="px-3 py-2 text-on-surface-variant">{group.routes.length} đường bay</td>
-                                <td className="px-3 py-2 text-right font-semibold text-on-surface">{formatValue(group.flights)}</td>
-                                <td className="px-3 py-2 text-right text-on-surface-variant">{formatValue(group.pax)}</td>
-                                <td className="px-3 py-2 text-right text-on-surface-variant">{formatPct(group.share)}</td>
-                              </tr>
-                              {expanded && group.routes.map((row) => (
-                                <tr key={`${row.country}-${row.route}`} className="hover:bg-surface-container">
-                                  <td className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Đường bay</td>
-                                  <td className="px-3 py-2 font-semibold text-on-surface">{row.route}</td>
-                                  <td className="px-3 py-2 text-right font-semibold text-on-surface">{formatValue(row.flights)}</td>
-                                  <td className="px-3 py-2 text-right text-on-surface-variant">{formatValue(row.pax)}</td>
-                                  <td className="px-3 py-2 text-right text-on-surface-variant">{formatPct(row.share)}</td>
-                                </tr>
-                              ))}
-                            </Fragment>
-                          );
-                        })}
-                        {overviewCountryGroups.length === 0 && (
-                          <tr>
-                            <td colSpan={5} className="px-3 py-8 text-center text-on-surface-variant">Không có dữ liệu đóng góp đường bay.</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="mt-3 space-y-1">
-                    {overview.countryRouteContribution.slice(0, 8).map((row) => (
-                      <div key={`${row.country}-${row.route}-bar`} className="flex items-center gap-2 text-xs text-on-surface-variant">
-                        <span className="w-16 truncate font-semibold text-on-surface">{row.route}</span>
-                        <span className="h-1.5 flex-1 rounded-full bg-surface-container-high">
-                          <span className="block h-1.5 rounded-full bg-teal-500" style={{ width: `${row.flights / overviewMaxCountryRouteFlights * 100}%` }} />
-                        </span>
-                        <span className="w-12 text-right">{formatValue(row.flights)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-
-                <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm xl:col-span-6">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h2 className="text-sm font-bold text-on-surface">Bản đồ tải</h2>
-                    <span className="text-xs font-semibold text-on-surface-variant">Tháng x thứ trong tuần</span>
-                  </div>
-                  <div className="overflow-hidden rounded-lg border border-surface-variant">
-                    <table className="w-full table-fixed text-xs">
-                      <thead className="bg-surface-container-low uppercase tracking-wide text-on-surface-variant">
-                        <tr>
-                          <th className="px-2 py-2 text-left">Tháng</th>
-                          {WEEKDAY_COLUMNS.map((weekday) => <th key={weekday.key} className="px-1 py-2 text-center">{weekday.label}</th>)}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-surface-variant bg-surface">
-                        {overviewHeatmapRows.map((row) => (
-                          <tr key={row.key}>
-                            <td className="px-2 py-2 font-semibold text-on-surface">{row.label}</td>
-                            {row.cells.map((cell, index) => {
-                              const cellTone = heatmapCellTone(cell?.flights, overviewMaxHeatmapFlights);
-                              return (
-                                <td key={`${row.key}-${WEEKDAY_COLUMNS[index]?.key ?? index}`} className="px-1 py-1 text-center">
-                                  <span
-                                    className={`block rounded px-1 py-1 font-semibold ring-1 ring-inset transition-colors ${cellTone}`}
-                                    title={cell ? `${row.label} ${weekdayDisplayLabel(cell.weekday)}: ${formatValue(cell.flights)} chuyến, TB ${cell.avgFlightsPerDay.toFixed(1)} chuyến/ngày khai thác` : `${row.label} ${WEEKDAY_COLUMNS[index]?.label ?? ''}: không có dữ liệu`}
-                                  >
-                                    {cell?.flights ?? '-'}
-                                  </span>
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        ))}
-                        {overviewHeatmapRows.length === 0 && (
-                          <tr>
-                            <td colSpan={8} className="px-3 py-8 text-center text-on-surface-variant">Không có dữ liệu bản đồ tải.</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-
-                <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm xl:col-span-12">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-surface-variant pb-3">
-                    <div className="flex items-baseline gap-4">
-                      <h2 className="text-xl font-bold text-on-surface">Trung bình theo khung giờ cao điểm</h2>
-                      <span className="text-xs font-bold uppercase tracking-wide text-on-surface-variant">Trung bình chuyến / 30 phút</span>
-                    </div>
-                    <div className="flex flex-wrap items-center justify-end gap-2">
-                    <select
-                      value={activeOverviewPeakHourMonth}
-                      onChange={(event) => setOverviewPeakHourMonth(event.target.value)}
-                      className="rounded-md border border-outline-variant bg-surface px-2 py-1 text-xs font-semibold text-on-surface"
-                    >
-                      {overviewPeakHourMonthOptions.map((month) => (
-                        <option key={month.key} value={month.key}>{month.label}</option>
-                      ))}
-                    </select>
-                    <div className="grid grid-cols-2 rounded-lg border border-outline-variant bg-surface-container-low p-1">
-                      <button
-                        type="button"
-                        onClick={() => setTimeBasis('local')}
-                        className={`rounded-md px-3 py-1 text-xs font-bold uppercase ${timeBasis === 'local' ? 'bg-surface text-on-surface shadow-sm' : 'text-on-surface-variant hover:bg-surface-container'}`}
-                      >
-                        Local +7
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setTimeBasis('utc')}
-                        className={`rounded-md px-3 py-1 text-xs font-bold uppercase ${timeBasis === 'utc' ? 'bg-surface text-on-surface shadow-sm' : 'text-on-surface-variant hover:bg-surface-container'}`}
-                      >
-                        UTC
-                      </button>
-                    </div>
-                    </div>
-                  </div>
-                  <div className="relative h-72 border-b border-surface-variant">
-                    <div className="absolute inset-x-0 top-0 h-px bg-surface-variant" />
-                    <div className="absolute inset-x-0 top-1/4 h-px bg-surface-variant/70" />
-                    <div className="absolute inset-x-0 top-1/2 h-px bg-surface-variant/70" />
-                    <div className="absolute inset-x-0 top-3/4 h-px bg-surface-variant/70" />
-                    <div className="relative z-10 flex h-full items-end gap-1 px-2 pt-3">
-                      {overview.peakHourAverage.map((row) => (
-                        <div key={row.bucket} className="flex h-full min-w-0 flex-1 items-end justify-center">
-                          <div
-                            title={`${row.bucket}: ${row.avgFlightsPerDay.toFixed(1)} chuyến / 30 phút (${row.avgArrivalsPerDay.toFixed(1)} ARR / ${row.avgDeparturesPerDay.toFixed(1)} DEP)`}
-                            className={`flex w-full max-w-8 flex-col-reverse overflow-hidden rounded-t-sm ${row.avgFlightsPerDay === 0 ? 'bg-slate-200 dark:bg-slate-800' : 'bg-surface-container-high'}`}
-                            style={{ height: `${Math.max(4, row.avgFlightsPerDay / overviewMaxPeakHourAverage * 100)}%` }}
-                          >
-                            {row.avgFlightsPerDay > 0 && (
-                              <>
-                                <span className="block bg-amber-500" style={{ height: `${row.avgDeparturesPerDay / row.avgFlightsPerDay * 100}%` }} />
-                                <span className="block bg-sky-500" style={{ height: `${row.avgArrivalsPerDay / row.avgFlightsPerDay * 100}%` }} />
-                              </>
-                            )}
+              <section className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <section className="grid gap-3 lg:grid-cols-2">
+                  {[
+                    { title: 'ARR timeline (Type=A)', timeline: operationalDashboard.arrivals },
+                    { title: 'DEP timeline (Type=D)', timeline: operationalDashboard.departures },
+                  ].map(({ title, timeline }) => {
+                    const maxFlights = Math.max(1, ...timeline.buckets.map((bucket) => Math.max(bucket.flights, bucket.baselineFlights)));
+                    return (
+                      <section key={title} className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <div>
+                            <h2 className="text-sm font-bold text-on-surface">{title}</h2>
+                            <p className="text-xs text-on-surface-variant">Bucket {operationalBucketSize === 60 ? '1h' : '30 phút'} | baseline cùng thứ trong tháng</p>
+                          </div>
+                          <div className="text-right text-xs font-semibold text-on-surface-variant">
+                            {formatValue(timeline.totals.flights)} flights
                           </div>
                         </div>
+                        <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                          {timeline.buckets.map((bucket) => {
+                            const width = `${Math.max(3, bucket.flights / maxFlights * 100)}%`;
+                            const baselineWidth = `${Math.max(3, bucket.baselineFlights / maxFlights * 100)}%`;
+                            return (
+                              <div key={bucket.index} className="grid grid-cols-[52px_minmax(0,1fr)_84px] items-center gap-2 text-xs">
+                                <span className="font-semibold tabular-nums text-on-surface-variant">{bucket.label}</span>
+                                <span className="min-w-0">
+                                  <span className="block h-2 rounded-full bg-surface-container-high">
+                                    <span className="block h-2 rounded-full bg-primary" style={{ width }} />
+                                  </span>
+                                  <span className="mt-1 block h-1 rounded-full bg-surface-container-high">
+                                    <span className="block h-1 rounded-full bg-amber-500" style={{ width: baselineWidth }} />
+                                  </span>
+                                </span>
+                                <span className="text-right tabular-nums text-on-surface">
+                                  <span className="font-bold">{formatValue(bucket.flights)}</span>
+                                  <span className={bucket.deltaFlights >= 0 ? 'ml-1 text-emerald-700' : 'ml-1 text-red-700'}>{formatDelta(bucket.deltaFlights)}</span>
+                                  <span className="block text-[10px] text-on-surface-variant">{formatValue(bucket.pax)} pax</span>
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    );
+                  })}
+                </section>
+
+                <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-sm font-bold text-on-surface">Alert panel</h2>
+                      <p className="text-xs text-on-surface-variant">Theo ngưỡng Dashboard Alerts</p>
+                    </div>
+                    <span className="rounded-full border border-outline-variant px-2 py-1 text-xs font-semibold text-on-surface-variant">{operationalDashboard.alerts.length} alerts</span>
+                  </div>
+                  <div className="space-y-2">
+                    {operationalDashboard.alerts.length === 0 ? (
+                      <div className="rounded-md border border-dashed border-outline-variant px-3 py-8 text-center text-sm text-on-surface-variant">Không có cảnh báo theo ngưỡng hiện tại. Kiểm tra lại ngày vận hành hoặc ngưỡng Dashboard Alerts nếu cần theo dõi chặt hơn.</div>
+                    ) : operationalDashboard.alerts.map((alert) => (
+                      <div key={alert.id} className={`rounded-md border px-3 py-2 text-sm ${alert.severity === 'critical' ? 'border-red-200 bg-red-50 text-red-800' : alert.severity === 'warning' ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-sky-200 bg-sky-50 text-sky-800'}`}>
+                        <div className="font-semibold">{alert.kind}</div>
+                        <div className="mt-1 text-xs">{alert.message}</div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </section>
+
+              <section className="grid gap-3 xl:grid-cols-2">
+                <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm">
+                  <div className="mb-3 flex items-center justify-between">
+                    <h2 className="text-sm font-bold text-on-surface">Xu hướng chuyến bay theo ngày</h2>
+                    <span className="text-xs font-semibold text-on-surface-variant">{activeOperationalDate.slice(0, 7) || '-'}</span>
+                  </div>
+                  <div className="overflow-x-auto pb-1">
+                    <div className="flex h-44 min-w-[720px] items-end gap-1">
+                      {operationalDailyRows.map((row) => (
+                        <button
+                          key={row.date}
+                          type="button"
+                          onDoubleClick={() => handleDailyTrendDoubleClick(row.date)}
+                          className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1 rounded-sm hover:bg-surface-container"
+                          title={`${row.date}: ${row.flights} flights`}
+                        >
+                          <span className="w-full rounded-t bg-primary" style={{ height: trendBarHeight(row.flights, operationalDailyMaxFlights) }} />
+                          <span className="text-[10px] tabular-nums text-on-surface-variant">{row.date.slice(8, 10)}</span>
+                        </button>
                       ))}
                     </div>
                   </div>
-                  <div className="mt-2 grid grid-cols-[repeat(13,minmax(0,1fr))] gap-1 text-xs font-semibold text-on-surface-variant">
-                    {overviewPeakHourAxisTicks.map((tick, index) => (
-                      <span key={`${tick.index}-${tick.label}`} className={index === 0 ? 'text-left' : index === overviewPeakHourAxisTicks.length - 1 ? 'text-right' : 'text-center'}>
-                        {tick.label}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <span className="text-sm font-semibold text-on-surface-variant">Ngày khai thác 05:00-05:00</span>
-                      <div className="mt-1 flex gap-4 text-xs font-semibold text-on-surface-variant">
-                        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-sky-500" />ARR</span>
-                        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" />DEP</span>
-                      </div>
+                </section>
+
+                <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <h2 className="text-sm font-bold text-on-surface">Peak Day Heatmap</h2>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-on-surface-variant">ARR + DEP</span>
+                      <select
+                        value={activePeakDayMonth}
+                        onChange={(event) => setOperationalPeakDayMonth(event.target.value)}
+                        className="h-9 rounded-md border border-outline-variant bg-surface px-2 text-xs font-semibold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
+                      >
+                        {operationalMonthOptions.length === 0
+                          ? <option value={activePeakDayMonth}>{activePeakDayMonth || 'Không có tháng'}</option>
+                          : operationalMonthOptions.map((month) => <option key={month.key} value={month.key}>{month.label}</option>)}
+                      </select>
                     </div>
-                    <div className="grid gap-4 rounded-lg border border-surface-variant bg-surface-container-low px-4 py-3 text-sm sm:grid-cols-4">
-                      <div>
-                        <div className="text-xs font-bold uppercase text-on-surface-variant">Khung cao điểm</div>
-                        <div className="font-bold text-on-surface">{overviewPeakHourPeak.bucket}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold uppercase text-on-surface-variant">TB cao điểm</div>
-                        <div className="font-bold text-teal-700">{overviewPeakHourPeak.avgFlightsPerDay.toFixed(1)} chuyến / 30 phút</div>
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold uppercase text-on-surface-variant">Thấp nhất</div>
-                        <div className="font-bold text-on-surface">{overviewPeakHourQuietest.bucket}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold uppercase text-on-surface-variant">Chế độ UTC</div>
-                        <div className="font-semibold italic text-on-surface-variant">dịch trục -7 giờ</div>
-                      </div>
+                  </div>
+                  <div className="mb-3 flex flex-wrap items-center gap-3 text-[10px] font-semibold text-on-surface-variant">
+                    <span className="inline-flex items-center gap-1"><span className={`size-3 rounded-sm ring-1 ${HEATMAP_CELL_TONES[0]}`} />Thấp trong tuần</span>
+                    <span className="inline-flex items-center gap-1"><span className={`size-3 rounded-sm ring-1 ${HEATMAP_CELL_TONES[HEATMAP_CELL_TONES.length - 1]}`} />Cao trong tuần</span>
+                    <span className="text-red-700 dark:text-red-300">Số đỏ: cao nhất tháng</span>
+                  </div>
+                  <div className="overflow-x-auto pb-1">
+                    <div className="grid min-w-[520px] grid-cols-7 gap-1">
+                      {MONDAY_FIRST_WEEKDAY_COLUMNS.map((weekday) => (
+                        <div key={weekday.key} className="rounded bg-surface-container px-2 py-1 text-center text-[10px] font-bold text-on-surface-variant">
+                          {weekday.label}
+                        </div>
+                      ))}
+                      {peakDayCalendarCells.map(({ key, date, cell, weekMinFlights, weekMaxFlights, isMonthHigh }) => (
+                        cell ? (
+                          <button
+                            key={key}
+                            type="button"
+                            onDoubleClick={() => handleDailyTrendDoubleClick(cell.operationalDate)}
+                            className={`min-h-16 rounded-md p-2 text-left ring-1 ${peakDayWeekTone(cell.totalFlights, weekMinFlights, weekMaxFlights)}`}
+                            title={`${cell.operationalDate}: ${cell.totalFlights} flights`}
+                          >
+                            <span className="block text-[10px] font-semibold">{cell.operationalDate.slice(8, 10)}</span>
+                            <span className={`mt-1 block text-sm font-bold tabular-nums ${isMonthHigh ? 'text-red-700 dark:text-red-300' : ''}`}>{formatValue(cell.totalFlights)}</span>
+                            <span className="block text-[10px]">A {cell.arrivals} / D {cell.departures}</span>
+                          </button>
+                        ) : (
+                          <div
+                            key={key}
+                            className="min-h-16 rounded-md border border-dashed border-outline-variant bg-surface-container-low"
+                            title={date ? `${date}: 0 flights` : 'Ngày ngoài tháng'}
+                          >
+                            {date ? <span className="block p-2 text-[10px] font-semibold text-on-surface-variant">{date.slice(8, 10)}</span> : null}
+                          </div>
+                        )
+                      ))}
                     </div>
                   </div>
                 </section>
               </section>
+
+              <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-bold text-on-surface">Peak Hour Heatmap</h2>
+                    <p className="text-xs text-on-surface-variant">{operationalBucketSize === 60 ? '1h' : '30 phút'} | {timeBasis === 'local' ? 'Local STA/STD' : 'UTC'}</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={operationalPeakHourTypeFilter}
+                      onChange={(event) => setOperationalPeakHourTypeFilter(event.target.value as DashboardTypeFilter)}
+                      className="h-9 rounded-md border border-outline-variant bg-surface px-2 text-xs font-semibold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      <option value="all">Chuyến đến + đi</option>
+                      <option value="A">Chuyến đến</option>
+                      <option value="D">Chuyến đi</option>
+                    </select>
+                    <span className="text-xs font-semibold text-on-surface-variant">05:00 -&gt; 04:59 +1</span>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {peakHourHeatmapMonths.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-outline-variant p-4 text-sm text-on-surface-variant">Không có dữ liệu tháng trong mùa.</div>
+                  ) : peakHourHeatmapMonths.map((month) => (
+                    <details key={month.key} open={month.key === activeOperationalMonth} className="rounded-md border border-surface-variant bg-surface p-3">
+                      <summary className="cursor-pointer select-none rounded-sm focus:outline-none focus:ring-2 focus:ring-primary">
+                        <div className="inline-flex w-[calc(100%-1.25rem)] items-center justify-between gap-3 align-middle">
+                          <span className="text-sm font-bold text-on-surface">{month.label}</span>
+                          <span className="text-xs font-semibold tabular-nums text-on-surface-variant">{formatValue(month.totalFlights)} chuyến</span>
+                        </div>
+                      </summary>
+                      <div className="mt-3 overflow-x-auto">
+                        <div className="min-w-[920px] space-y-1">
+                          <div className="grid gap-1" style={{ gridTemplateColumns: `80px repeat(${month.heatmap.buckets.length}, minmax(28px, 1fr))` }}>
+                            <div />
+                            {month.heatmap.buckets.map((bucket) => (
+                              <div key={bucket.index} className="truncate text-center text-[10px] font-semibold tabular-nums text-on-surface-variant">{bucket.label}</div>
+                            ))}
+                          </div>
+                          {month.heatmap.dates.map((date) => (
+                            <div key={date} className="grid gap-1" style={{ gridTemplateColumns: `80px repeat(${month.heatmap.buckets.length}, minmax(28px, 1fr))` }}>
+                              <button type="button" onDoubleClick={() => handleDailyTrendDoubleClick(date)} className="truncate rounded px-1 text-left text-xs font-semibold tabular-nums text-on-surface-variant hover:bg-surface-container">{date}</button>
+                              {month.heatmap.buckets.map((bucket) => {
+                                const cell = month.cellMap.get(`${date}|${bucket.index}`);
+                                const flights = cell?.totalFlights ?? 0;
+                                return (
+                                  <div
+                                    key={`${date}-${bucket.index}`}
+                                    className={`flex h-8 items-center justify-center rounded text-[10px] font-bold tabular-nums ring-1 ${heatmapCellTone(flights, peakHourMaxFlights)}`}
+                                    title={`${date} ${bucket.label}: ${flights} flights`}
+                                  >
+                                    {flights > 0 ? formatValue(flights) : ''}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </section>
+
+              <section className="grid gap-3 xl:grid-cols-2">
+                {operationalBucketDrilldownCards.map((card) => (
+                  <details key={card.label} open className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm">
+                    <summary className="mb-3 cursor-pointer select-none rounded-md focus:outline-none focus:ring-2 focus:ring-primary">
+                      <div className="inline-flex w-[calc(100%-1.25rem)] items-center justify-between gap-3 align-middle">
+                        <div>
+                          <h2 className="text-sm font-bold text-on-surface">{card.label}</h2>
+                          <p className="text-xs text-on-surface-variant">{card.bucketLabel} | {formatValue(card.flights)} flights</p>
+                        </div>
+                        <span className="text-xs font-semibold text-on-surface-variant">Thu gọn/mở rộng</span>
+                      </div>
+                    </summary>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {card.dimensions.map((dimensionCard) => (
+                        <div key={dimensionCard.label} className="rounded-md border border-surface-variant bg-surface p-3">
+                          <div className="mb-2 text-xs font-semibold uppercase text-on-surface-variant">{dimensionCard.label}</div>
+                          <div className="space-y-2">
+                            {dimensionCard.rows.length === 0 ? (
+                              <div className="text-xs text-on-surface-variant">Không có dữ liệu theo ngày/bucket đang chọn.</div>
+                            ) : dimensionCard.rows.map((row) => (
+                              <div key={row.key} className="grid grid-cols-[minmax(0,1fr)_56px] items-center gap-2 text-xs">
+                                <span className="truncate font-medium text-on-surface">{row.label}</span>
+                                <span className="text-right font-bold tabular-nums text-on-surface">{formatValue(row.flights)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                ))}
+              </section>
             </>
           )}
-
-          {dashboardView === 'analysis' && (
+          {dashboardView === 'comparison' && (
             <>
           <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-3 shadow-sm">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(180px,0.8fr)_minmax(280px,1.2fr)_minmax(150px,0.7fr)_repeat(2,minmax(150px,0.75fr))]">
+            <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(160px,0.9fr)_minmax(260px,1.2fr)_repeat(2,minmax(160px,1fr))]">
               <label className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
                 Chỉ số
                 <select value={metric} onChange={(event) => setMetric(event.target.value as DashboardMetric)} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case tracking-normal text-on-surface">
@@ -2906,14 +2822,14 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
               </label>
               <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
                 So sánh: MoM / WoW
-                <div className="mt-1 grid grid-cols-3 rounded-lg border border-outline-variant bg-surface p-1 normal-case tracking-normal">
-                  <button type="button" onClick={() => setComparisonMode('mom')} className={`rounded-md px-3 py-1.5 text-sm font-semibold ${comparisonMode === 'mom' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}>
+                <div className="mt-1 grid grid-cols-1 rounded-lg border border-outline-variant bg-surface p-1 normal-case tracking-normal sm:grid-cols-3">
+                  <button type="button" onClick={() => setComparisonMode('mom')} className={`min-h-11 rounded-md px-3 py-2 text-sm font-semibold ${comparisonMode === 'mom' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}>
                     MoM
                   </button>
-                  <button type="button" onClick={() => setComparisonMode('wow')} className={`rounded-md px-3 py-1.5 text-sm font-semibold ${comparisonMode === 'wow' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}>
+                  <button type="button" onClick={() => setComparisonMode('wow')} className={`min-h-11 rounded-md px-3 py-2 text-sm font-semibold ${comparisonMode === 'wow' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}>
                     WoW
                   </button>
-                  <button type="button" onClick={() => setComparisonMode('yoy')} className={`rounded-md px-3 py-1.5 text-sm font-semibold ${comparisonMode === 'yoy' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}>
+                  <button type="button" onClick={() => setComparisonMode('yoy')} className={`min-h-11 rounded-md px-3 py-2 text-sm font-semibold ${comparisonMode === 'yoy' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}>
                     YoY
                   </button>
                 </div>
@@ -2923,6 +2839,25 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
                 <select value={comparisonGranularity} onChange={(event) => setComparisonGranularity(event.target.value as DashboardComparisonGranularity)} disabled={comparisonMode !== 'yoy'} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case tracking-normal text-on-surface disabled:opacity-60">
                   <option value="month">Tháng</option>
                   <option value="year">Năm</option>
+                </select>
+              </label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+                Loại chuyến
+                <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as DashboardTypeFilter)} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case tracking-normal text-on-surface">
+                  {TYPE_FILTERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                </select>
+              </label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+                Time basis
+                <select value={timeBasis} onChange={(event) => setTimeBasis(event.target.value as DashboardTimeBasis)} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case tracking-normal text-on-surface">
+                  <option value="local">Local STA/STD</option>
+                  <option value="utc">UTC</option>
+                </select>
+              </label>
+              <label className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+                Dimension
+                <select value={dimension} onChange={(event) => setDimension(event.target.value as DashboardDimension)} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case tracking-normal text-on-surface">
+                  {DRIVER_TABS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                 </select>
               </label>
               <label className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
@@ -2940,15 +2875,21 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
               </label>
             </div>
           </section>
+          {metric === 'pax' && (
+            <section className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+              Pax coverage: {formatPct(comparisonPaxCoverage.coveragePct)}. Pax missing &gt; 1 ngày: {formatValue(comparisonPaxCoverage.missingAfterOneDay)}.
+            </section>
+          )}
 
-          <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-7">
             {[
               { label: 'Hiện tại', value: formatValue(comparison?.current.total ?? 0), sub: comparison?.periodLabels.current ?? '-' },
               { label: 'Kỳ trước', value: formatValue(comparison?.previous.total ?? 0), sub: comparison?.periodLabels.previous ?? '-' },
-              { label: 'Chênh lệch', value: formatDelta(comparison?.delta ?? 0), sub: formatPct(comparison?.deltaPct ?? null) },
-              { label: 'Tập trung top driver', value: formatPct(topDriverConcentration), sub: comparison?.drivers[0]?.label ?? '-' },
+              { label: 'Chênh lệch', value: formatDelta(comparison?.delta ?? 0), sub: comparison?.periodLabels.current ?? '-' },
+              { label: 'Chênh lệch %', value: formatPct(comparison?.deltaPct ?? null), sub: comparison?.periodLabels.previous ?? '-' },
               { label: 'Tăng mạnh nhất', value: topGain ? topGain.label : '-', sub: topGain ? formatDelta(topGain.delta) : '-' },
               { label: 'Kéo giảm nhất', value: topDrag ? topDrag.label : '-', sub: topDrag ? formatDelta(topDrag.delta) : '-' },
+              { label: 'Top CTG', value: topCtg ? topCtg.label : '-', sub: topCtg ? formatPointPct(topCtg.ctgPct) : '-' },
             ].map((item) => (
               <div key={item.label} className="rounded-lg border border-surface-variant bg-surface-container-lowest px-4 py-3 shadow-sm">
                 <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">{item.label}</div>
@@ -2978,7 +2919,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
                       type="button"
                       key={row.value}
                       onClick={() => setDimension(row.value)}
-                      className="grid w-full grid-cols-[92px_minmax(0,1fr)_90px] items-center gap-3 rounded-md px-2 py-1.5 text-left hover:bg-surface-container"
+                      className="grid min-h-11 w-full grid-cols-[92px_minmax(0,1fr)_90px] items-center gap-3 rounded-md px-2 py-2 text-left hover:bg-surface-container"
                     >
                       <span className="text-xs font-semibold text-on-surface-variant">{row.label}</span>
                       <span className="min-w-0">
@@ -3004,9 +2945,9 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
               </div>
               <div className="space-y-3">
                 {topMixRows.length === 0 ? (
-                  <div className="rounded-md border border-dashed border-outline-variant px-3 py-8 text-center text-sm text-on-surface-variant">Không có dữ liệu cơ cấu</div>
+                  <div className="rounded-md border border-dashed border-outline-variant px-3 py-8 text-center text-sm text-on-surface-variant">Không có dữ liệu cơ cấu cho kỳ và bộ lọc hiện tại.</div>
                 ) : topMixRows.map((driver) => (
-                  <button key={driver.key} type="button" onClick={() => setSelectedDriverKey(driver.key)} className="w-full rounded-md px-2 py-1.5 text-left hover:bg-surface-container">
+                  <button key={driver.key} type="button" onClick={() => setSelectedDriverKey(driver.key)} className="min-h-11 w-full rounded-md px-2 py-2 text-left hover:bg-surface-container">
                     <div className="mb-1 flex items-center justify-between gap-3 text-xs">
                       <span className="truncate font-semibold text-on-surface">{driver.label}</span>
                       <span className="text-on-surface-variant">{formatPointPct(driver.shareShift)}</span>
@@ -3042,7 +2983,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
                       key={tab.value}
                       type="button"
                       onClick={() => setDimension(tab.value)}
-                      className={`inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-semibold ${dimension === tab.value ? 'border-primary bg-primary text-on-primary' : 'border-outline-variant bg-surface text-on-surface-variant hover:bg-surface-container'}`}
+                      className={`inline-flex min-h-10 items-center gap-1 rounded-full border px-3 py-2 text-xs font-semibold ${dimension === tab.value ? 'border-primary bg-primary text-on-primary' : 'border-outline-variant bg-surface text-on-surface-variant hover:bg-surface-container'}`}
                     >
                       <span className="material-symbols-outlined text-[15px]">{tab.icon}</span>
                       {tab.label}
@@ -3050,43 +2991,102 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
                   ))}
                 </div>
               </div>
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Nhóm tác nhân</div>
-              <div className="overflow-hidden rounded-lg border border-surface-variant">
-                <table className="w-full border-collapse text-sm">
-                  <thead className="bg-surface-container-low text-xs uppercase tracking-wide text-on-surface-variant">
-                    <tr>
-                      <th className="px-3 py-2 text-left">Tác nhân</th>
-                      <th className="px-3 py-2 text-right">Hiện tại</th>
-                      <th className="px-3 py-2 text-right">Kỳ trước</th>
-                      <th className="px-3 py-2 text-right">Chênh lệch</th>
-                      <th className="px-3 py-2 text-right">Chênh lệch %</th>
-                      <th className="px-3 py-2 text-right">CTG</th>
-                      <th className="px-3 py-2 text-right">Dịch chuyển cơ cấu</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-surface-variant bg-surface">
-                    {(comparison?.drivers ?? []).slice(0, 12).map((driver) => (
-                      <tr key={driver.key} onClick={() => setSelectedDriverKey(driver.key)} className={`cursor-pointer hover:bg-surface-container ${selectedDriver?.key === driver.key ? 'bg-primary/5' : ''}`}>
-                        <td className="max-w-[180px] truncate px-3 py-2 font-semibold text-on-surface">{driver.label}</td>
-                        <td className="px-3 py-2 text-right text-on-surface">{formatValue(driver.currentValue)}</td>
-                        <td className="px-3 py-2 text-right text-on-surface">{formatValue(driver.previousValue)}</td>
-                        <td className={`px-3 py-2 text-right font-bold ${driver.delta >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{formatDelta(driver.delta)}</td>
-                        <td className="px-3 py-2 text-right text-on-surface-variant">{formatPct(driver.deltaPct)}</td>
-                        <td className="px-3 py-2 text-right text-on-surface-variant">{formatPointPct(driver.ctgPct)}</td>
-                        <td className="px-3 py-2 text-right text-on-surface-variant">{formatPointPct(driver.shareShift)}</td>
-                      </tr>
-                    ))}
-                    {(comparison?.drivers.length ?? 0) === 0 && (
+              <details open>
+                <summary className="mb-2 cursor-pointer select-none rounded-md text-xs font-semibold uppercase tracking-wide text-on-surface-variant focus:outline-none focus:ring-2 focus:ring-primary">
+                  Nhóm tác nhân | {formatValue(ctgRankedDrivers.length)} dòng
+                </summary>
+                <div className="max-h-[420px] overflow-auto rounded-lg border border-surface-variant">
+                  <table className="min-w-[860px] w-full border-collapse text-sm">
+                    <thead className="sticky top-0 z-10 bg-surface-container-low text-xs uppercase tracking-wide text-on-surface-variant shadow-sm">
                       <tr>
-                        <td colSpan={7} className="px-3 py-8 text-center text-on-surface-variant">Không có dòng xếp hạng cho kỳ đã chọn.</td>
+                        <th className="px-3 py-2 text-left">Tác nhân</th>
+                        <th className="px-3 py-2 text-right">Hiện tại</th>
+                        <th className="px-3 py-2 text-right">Kỳ trước</th>
+                        <th className="px-3 py-2 text-right">Chênh lệch</th>
+                        <th className="px-3 py-2 text-right">Chênh lệch %</th>
+                        <th className="px-3 py-2 text-right">CTG</th>
+                        <th className="px-3 py-2 text-right">Dịch chuyển cơ cấu</th>
                       </tr>
-                    )}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-surface-variant bg-surface">
+                      {ctgRankedDrivers.slice(0, 12).map((driver) => (
+                        <tr key={driver.key} onClick={() => setSelectedDriverKey(driver.key)} className={`cursor-pointer hover:bg-surface-container ${selectedDriver?.key === driver.key ? 'bg-primary/5' : ''}`}>
+                          <td className="max-w-[180px] truncate px-3 py-2 font-semibold text-on-surface">{driver.label}</td>
+                          <td className="px-3 py-2 text-right text-on-surface">{formatValue(driver.currentValue)}</td>
+                          <td className="px-3 py-2 text-right text-on-surface">{formatValue(driver.previousValue)}</td>
+                          <td className={`px-3 py-2 text-right font-bold ${driver.delta >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{formatDelta(driver.delta)}</td>
+                          <td className="px-3 py-2 text-right text-on-surface-variant">{formatPct(driver.deltaPct)}</td>
+                          <td className="px-3 py-2 text-right text-on-surface-variant">{formatPointPct(driver.ctgPct)}</td>
+                          <td className="px-3 py-2 text-right text-on-surface-variant">{formatPointPct(driver.shareShift)}</td>
+                        </tr>
+                      ))}
+                      {ctgRankedDrivers.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="px-3 py-8 text-center text-on-surface-variant">Không có dòng xếp hạng cho kỳ đã chọn. Đổi kỳ so sánh hoặc nới bộ lọc để có dữ liệu.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            </section>
+
+            <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm xl:col-span-6">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-bold text-on-surface">Xu hướng chuyến bay theo tháng</h2>
+                <span className="text-xs font-semibold text-on-surface-variant">Toàn mùa | {comparisonTrendMetricLabel}</span>
+              </div>
+              <div className="overflow-x-auto pb-1">
+                <div className="flex h-44 min-w-[520px] items-end gap-2">
+                  {comparisonMonthlyTrendRows.map((row) => (
+                    <button
+                      key={row.key}
+                      type="button"
+                      onClick={() => setComparisonTrendMonth(row.key)}
+                      className={`flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1 rounded-sm px-1 pb-1 focus:outline-none focus:ring-2 focus:ring-primary ${row.key === activeComparisonTrendMonth ? 'bg-primary/10' : 'hover:bg-surface-container'}`}
+                      title={`${row.label}: ${formatValue(row.value)} ${comparisonTrendMetricLabel}`}
+                    >
+                      <span className={`w-full rounded-t ${row.key === activeComparisonTrendMonth ? 'bg-primary' : 'bg-primary/70'}`} style={{ height: trendBarHeight(row.value, comparisonMaxMonthlyTrend) }} />
+                      <span className="max-w-full truncate text-[10px] font-semibold text-on-surface-variant">{row.label}</span>
+                    </button>
+                  ))}
+                  {comparisonMonthlyTrendRows.length === 0 && (
+                    <div className="flex flex-1 items-center justify-center rounded-md border border-dashed border-outline-variant px-3 text-center text-sm text-on-surface-variant">Không có dữ liệu xu hướng trong mùa hiện tại.</div>
+                  )}
+                </div>
               </div>
             </section>
 
-            <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm xl:col-span-12">
+            <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm xl:col-span-6">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-bold text-on-surface">Xu hướng chuyến bay theo ngày</h2>
+                <span className="text-xs font-semibold text-on-surface-variant">{periodLabel(activeComparisonTrendMonth, 'mom')} | {comparisonTrendMetricLabel}</span>
+              </div>
+              <div className="overflow-x-auto pb-1">
+                <div className="flex h-44 min-w-[720px] items-end gap-1">
+                  {comparisonDailyTrendRows.map((row) => (
+                    <button
+                      key={row.key}
+                      type="button"
+                      onDoubleClick={() => handleDailyTrendDoubleClick(row.key)}
+                      className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1 rounded-sm hover:bg-surface-container"
+                      title={`${row.key}: ${formatValue(row.value)} ${comparisonTrendMetricLabel}`}
+                    >
+                      <span className="w-full rounded-t bg-primary" style={{ height: trendBarHeight(row.value, comparisonMaxDailyTrend) }} />
+                      <span className="text-[10px] tabular-nums text-on-surface-variant">{row.day ?? row.key.slice(8, 10)}</span>
+                    </button>
+                  ))}
+                  {comparisonDailyTrendRows.length === 0 && (
+                    <div className="flex flex-1 items-center justify-center rounded-md border border-dashed border-outline-variant px-3 text-center text-sm text-on-surface-variant">Không có dữ liệu xu hướng theo tháng đã chọn.</div>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            <details open className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm xl:col-span-12">
+              <summary className="mb-3 cursor-pointer select-none rounded-md text-sm font-bold text-on-surface focus:outline-none focus:ring-2 focus:ring-primary">
+                Drill-down tác nhân đã chọn | {selectedDriver?.label ?? '-'}
+              </summary>
               <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)_260px]">
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Tác nhân đã chọn</div>
@@ -3112,53 +3112,45 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
                 </div>
                 <div>
                   <div className="mb-2 flex items-center justify-between">
-                    <h2 className="text-sm font-bold text-on-surface">Chi tiết tác nhân</h2>
+                    <h2 className="text-sm font-bold text-on-surface">Drill-down theo ngày vận hành</h2>
                     <span className="text-xs font-semibold text-on-surface-variant">{dimensionLabel}</span>
                   </div>
-                  <div className="overflow-hidden rounded-lg border border-surface-variant">
-                    <table className="w-full text-sm">
-                      <thead className="bg-surface-container-low text-xs uppercase tracking-wide text-on-surface-variant">
+                  <div className="max-h-[420px] overflow-auto rounded-lg border border-surface-variant">
+                    <table className="min-w-[720px] w-full text-sm">
+                      <thead className="sticky top-0 z-10 bg-surface-container-low text-xs uppercase tracking-wide text-on-surface-variant shadow-sm">
                         <tr>
-                          <th className="px-3 py-2 text-left">Ngày</th>
-                          <th className="px-3 py-2 text-left">Giờ</th>
-                          <th className="px-3 py-2 text-left">Loại</th>
-                          <th className="px-3 py-2 text-left">Chuyến bay</th>
-                          <th className="px-3 py-2 text-left">Đường bay</th>
-                          <th className="px-3 py-2 text-right">Khách</th>
+                          <th className="px-3 py-2 text-left">Ngày vận hành</th>
+                          <th className="px-3 py-2 text-right">Flights</th>
+                          <th className="px-3 py-2 text-right">ARR</th>
+                          <th className="px-3 py-2 text-right">DEP</th>
+                          <th className="px-3 py-2 text-right">Pax</th>
+                          <th className="px-3 py-2 text-right">Daily Schedule</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-surface-variant bg-surface">
-                        {selectedDriverRecords.map((record) => (
-                          <tr key={record.id}>
-                            <td className="px-3 py-2">{record.date}</td>
-                            <td className="px-3 py-2">{record.schedule}</td>
-                            <td className="px-3 py-2">{record.type}</td>
-                            <td className="px-3 py-2 font-semibold">{record.airline}{record.flightNumber}</td>
-                            <td className="px-3 py-2">{record.route}</td>
-                            <td className="px-3 py-2 text-right">{record.pax == null ? '-' : formatValue(record.pax)}</td>
+                        {selectedDriverDrilldownRows.map((row) => (
+                          <tr key={row.date}>
+                            <td className="px-3 py-2 font-semibold tabular-nums">{row.date}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{formatValue(row.flights)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{formatValue(row.arrivals)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{formatValue(row.departures)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{formatValue(row.pax)}</td>
+                            <td className="px-3 py-2 text-right">
+                              <button type="button" onClick={() => handleDailyTrendDoubleClick(row.date)} className="inline-flex min-h-9 items-center justify-center gap-1 rounded-md border border-outline-variant px-2 py-1 text-xs font-semibold text-on-surface hover:bg-surface-container">
+                                <span className="material-symbols-outlined text-[15px]">open_in_new</span>
+                                Mở
+                              </button>
+                            </td>
                           </tr>
                         ))}
-                        {selectedDriverRecords.length === 0 && (
+                        {selectedDriverDrilldownRows.length === 0 && (
                           <tr>
-                            <td colSpan={6} className="px-3 py-8 text-center text-on-surface-variant">Không có chuyến liên quan trong kỳ đã chọn.</td>
+                            <td colSpan={6} className="px-3 py-8 text-center text-on-surface-variant">Không có dữ liệu tổng hợp cho tác nhân đã chọn. Chọn tác nhân khác hoặc đổi kỳ so sánh.</td>
                           </tr>
                         )}
                       </tbody>
                     </table>
                   </div>
-                  {selectedDriverRecordsForAi.length > selectedDriverRecords.length && (
-                    <div className="mt-3 flex items-center justify-between gap-3 text-xs text-on-surface-variant">
-                      <span>Đang hiển thị {formatValue(selectedDriverRecords.length)} / {formatValue(selectedDriverRecordsForAi.length)} chuyến liên quan.</span>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedDriverRecordLimit((current) => current + 25)}
-                        className="inline-flex items-center gap-1 rounded-lg border border-outline-variant bg-surface px-3 py-1.5 font-semibold text-on-surface hover:bg-surface-container"
-                      >
-                        <span className="material-symbols-outlined text-[16px]">expand_more</span>
-                        Hiển thị thêm
-                      </button>
-                    </div>
-                  )}
                 </div>
                 <div className="flex flex-col justify-between gap-3">
                   <div className="rounded-md border border-surface-variant bg-surface px-3 py-3 text-sm">
@@ -3178,7 +3170,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
                   </div>
                 </div>
               </div>
-            </section>
+            </details>
           </section>
             </>
           )}
@@ -3199,9 +3191,20 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
               models={aiModelOptions}
               onModelChange={setSelectedAiModelId}
               canTryDifferentModel={enabledAiModels.length > 1}
-              seasons={aiSeasonOptions}
-              selectedSeasonIds={selectedAiSeasonIds}
-              onToggleSeason={toggleAiWorkspaceSeason}
+              activeSeasonLabel={activeAiSeasonLabel}
+              activeSeasonDateRangeLabel={activeAiSeasonDateRangeLabel}
+              hasActiveSeason={Boolean(season)}
+              queryScope={currentQueryScope}
+              queryScopeLabel={currentQueryScopeLabel}
+              onQueryScopeDateFromChange={(value) => {
+                setAiQueryScopeSourcePreset('user-date-range');
+                setAiQueryScopeDateFrom(value);
+              }}
+              onQueryScopeDateToChange={(value) => {
+                setAiQueryScopeSourcePreset('user-date-range');
+                setAiQueryScopeDateTo(value);
+              }}
+              onResetQueryScopeToSeason={resetAiQueryScopeToSeason}
               seasonSummaryRows={aiWorkspaceSeasonSummaryRows}
               dataError={aiWorkspaceDataError}
               presets={AI_WORKSPACE_PRESETS}

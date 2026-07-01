@@ -4,7 +4,7 @@
 
 Dashboard AI runs as a Vietnamese-first rich chat inside `/dashboard`. It can answer with text, inline tables, Recharts charts, insights, data-quality notes, sandboxed static HTML preview, and local Excel export actions. It cannot write arbitrary files or mutate operational data.
 
-AI Workspace is now query-only and independent from the fixed MoM/WoW dashboard panel. The normal Dashboard still renders Overview and MoM/WoW analysis, but the AI no longer receives `comparison`, `waterfallRows`, selected driver state, or `comparison-drivers` fallback blocks. For analysis prompts, the AI plans read-only SQL/query steps, runs validated local SQLite queries when desktop data is available, profiles the results, verifies the answer, and renders rich chat artifacts from query results.
+AI Workspace is query-only and independent from the fixed MoM/WoW dashboard panel. The normal Dashboard still renders Overview and MoM/WoW analysis, but the AI no longer receives `comparison`, `waterfallRows`, selected driver state, or `comparison-drivers` fallback blocks. For analysis prompts, the AI plans read-only Supabase reporting queries, profiles the results, verifies the answer, and renders rich chat artifacts from query results.
 
 ## Backup Before AI Agent Changes
 
@@ -16,7 +16,7 @@ V1 runs as a dashboard-only, read-only agent workflow:
 
 - Owner workflow: `dashboard-report-analysis`
 - Max provider rounds: `4` from the frontend request, clamped to `1-6` inside the Edge Function.
-- Required gates: AI model configured, operator auth, selected season, local records, max 3 selected seasons, export eligibility, context-size cap, and allowed tool list.
+- Required gates: AI model configured, operator auth, app-wide active season for the default preset, local records, export eligibility, context-size cap, and allowed tool list.
 - Allowed tools: `query_dashboard_data`, `suggest_custom_workbook`, `suggest_visual_report`, `compose_dashboard_ai_board`
 - Tool definitions include `toolset`, `requires`, runtime `availability`, and optional `disabledReason`.
 - The frontend now carries a Skawld-inspired run ledger. Each assistant cell can persist bounded `DashboardAiRunEvent` entries for user/tool/result/error phases, while `buildDashboardAiSessionLedger()` compacts old events before provider context is assembled.
@@ -24,9 +24,11 @@ V1 runs as a dashboard-only, read-only agent workflow:
 
 Normal dashboard views still resolve summaries from local `effectiveRecords`. AI Workspace is query-first for ad-hoc analysis:
 
-- Desktop/local mode prefers validated SQLite SQL plans over `dashboard_ai_flight_operations` via the Tauri `query_native_dashboard_ai_sql` command.
-- SQL must be one read-only `SELECT` or `WITH ... SELECT`, use allowlisted views/columns, include or receive an enforced `LIMIT`, and is rejected for `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`, `ATTACH`, `DETACH`, `PRAGMA`, transactions, extension loading, scripts, or filesystem operations.
-- Remote-safe mode may use `query_dashboard_data` against Supabase reporting RPCs. Provider/service keys stay server-side in Edge Functions.
+- AI Workspace uses `query_dashboard_data` against Supabase reporting RPCs as the canonical data path.
+- Date range is the primary query scope. The app-wide active season is the default preset only when the prompt does not provide an explicit date range or broader scope.
+- Python sidecars, local SQLite SQL plans, raw SQL, current dashboard rows, and fixed MoM/WoW payloads are not AI Workspace data sources.
+- MCP is not part of the AI Workspace V1 runtime; use the Edge Function and internal read-only tool contract directly.
+- Provider/service keys stay server-side in Edge Functions.
 - Query results are profiled locally for coverage, null/distinct counts, metric stats, top contributors, and outlier candidates.
 - Before rendering, answer verification checks key numbers in the narrative against query results/profile. If they mismatch, the UI shows a Vietnamese warning or uses deterministic fallback text/blocks.
 
@@ -76,7 +78,7 @@ Prompt assembly is layered:
 - `EPHEMERAL_DASHBOARD_CONTEXT`: selected skill, context profile, notebook memory summary, and provider fallback flag.
 - `DASHBOARD_CONTEXT_JSON`: compact dashboard context plus optional `queryResults`, SQL plans, result profiles, and active chat artifact.
 
-Notebook memory lite summarizes the latest cells by prompt, assistant summary, block titles/types, filters, selected seasons, and tool traces. It does not include rendered table rows or raw records.
+Notebook memory lite summarizes the latest cells by prompt, assistant summary, block titles/types, filters, app-wide active season context, and tool traces. It does not include rendered table rows or raw records.
 
 ## Supported Templates
 
@@ -141,9 +143,9 @@ The summary sheets are pivot-style outputs generated in code, so they open consi
 
 ## Query-Only Data Context
 
-The normal rich-chat request includes selected seasons, source policy, compact season catalog, active chat artifact, and recent bounded query samples. It does not include fixed MoM/WoW `comparison` or `waterfallRows`.
+The normal rich-chat request includes the app-wide active season context, source policy, compact season catalog, active chat artifact, and recent bounded query samples. It does not include fixed MoM/WoW `comparison` or `waterfallRows`.
 
-If the user asks about months, weeks, exact date ranges, route, airline, country, aircraft, PAX, peak hour, cross-season, consecutive seasons, one day, or one specific flight, the preferred path is a query-backed workflow. Client helpers infer semantic intent in Vietnamese/English, generate SQL plans for local SQLite when possible, or request `query_dashboard_data` for remote-safe Supabase reporting.
+If the user asks about months, weeks, exact date ranges, route, airline, country, aircraft, PAX, peak hour, cross-season, consecutive seasons, one day, or one specific flight, the preferred path is a query-backed workflow. Client helpers infer semantic intent in Vietnamese/English, resolve an explicit scope, and request `query_dashboard_data` against Supabase reporting.
 
 Grouped/aggregate queries are executed through `public.dashboard_ai_query_aggregated`, a Data API exposed `security invoker` wrapper that delegates to `reporting.query_aggregated` over `reporting.flight_operations`. This performs `GROUP BY`, `count(*)`, `sum(pax)`, ARR counts, and DEP counts in Postgres, avoiding the old Edge-side aggregation over a 500-row cap. Detail queries without `groupBy` remain bounded row reads.
 
@@ -300,11 +302,11 @@ The Edge Function may include `toolTraceSummary` so operators can see why the ag
 
 Trace entries may also include `skill`, `toolset`, `fallbackReason`, `contextProfile`, and `providerAttempt`. Unknown tools, write-file actions, and arbitrary execution requests are dropped.
 
-## Local Provider Runtime
+## Provider Runtime
 
-Desktop Dashboard AI now uses the Python local agent first. Settings saves provider keys through Supabase DB/RLS with `operational_ai_provider_keys`; users need `app_operators.can_use_ai` to fetch keys for local execution, and `can_manage_ai` to create/update/delete them. The local agent calls Gemini, Qwen/OpenAI-compatible, or DeepSeek directly from the machine and returns the same rich response contract used by the notebook/chat renderer.
+AI Workspace provider calls go through the Supabase Edge Function `dashboard-ai-analysis`. The Edge Function keeps provider secrets server-side, infers query scope, executes allowlisted Supabase reporting RPCs, and returns the rich response contract used by the notebook/chat renderer.
 
-The Supabase Edge Function `dashboard-ai-analysis` remains available as a legacy/web fallback. Do not assume deploying the Edge Function updates the desktop provider path. For desktop changes, verify the Python sidecar, Tauri proxy command, and synced-key migration.
+Python local agents and local SQLite query plans are deprecated for AI Workspace and must not be presented as current analytical sources.
 
 ## Provider Retry
 
@@ -312,7 +314,7 @@ The frontend may retry one transient provider failure (`408`, `429`, `500`, `502
 
 ## Deploy Caveat
 
-`npm run test:rules`, lint, and build verify source-side contracts only. `reporting.query_aggregated`, `dashboard_ai_query_aggregated`, and `operational_ai_provider_keys` are database migrations and must be applied separately before live aggregate correctness or synced local provider keys are available. If live web fallback AI behavior must change, deploy the `dashboard-ai-analysis` Edge Function after source verification and migration pass.
+`npm run test:rules`, lint, and build verify source-side contracts only. `reporting.query_aggregated` and `dashboard_ai_query_aggregated` are database migrations and must be applied separately before live aggregate correctness is available. If live AI Workspace behavior changes, deploy the `dashboard-ai-analysis` Edge Function after source verification and migration pass.
 
 ## Future Native Pivot Upgrade
 

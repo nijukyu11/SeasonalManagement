@@ -217,7 +217,7 @@ export default function AuditLogPage() {
                     </div>
                     <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{formatTimestamp(session.lastSeenAt)}</div>
                     <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
-                      {session.actor.email ?? session.actor.displayName ?? 'Anonymous'}
+                      {session.actor.displayName ?? session.actor.email ?? 'Anonymous'}
                     </div>
                   </button>
                 );

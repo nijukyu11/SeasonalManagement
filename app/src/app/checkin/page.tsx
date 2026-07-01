@@ -17,6 +17,7 @@ import { useRouter } from 'next/navigation';
 import {
   getOperationalSettings,
   getSeasons,
+  loadSeasonWorkspaceWindow,
 } from '@/lib/remoteStore';
 import {
   addCheckInCounter,
@@ -59,12 +60,13 @@ import {
 } from '@/lib/seasonDataCache';
 import {
   applyLocalModificationBatchDelta,
-  getLocalSyncConflictCount,
   type LocalSyncMeta,
 } from '@/lib/localSeasonStore';
 import { queryNativeAllocationWindow, runNativeLocalModificationBatchDeltaResult } from '@/lib/nativeSeasonRepository';
 import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
+import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
+import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import { trimUiUndoStack } from '@/lib/uiUndoMemory';
 import {
   buildCheckInPdfPreviewPlan,
@@ -83,7 +85,6 @@ import { useExportNotifications } from '../components/ExportNotificationProvider
 import { useCachedRouteActivity, useCachedRouteSearchParams } from '../components/RouteCacheContext';
 import FetchServerUpdatesButton from '../components/FetchServerUpdatesButton';
 import LoadingStatusPanel from '../components/LoadingStatusPanel';
-import SeasonConflictReviewControl from '../components/SeasonConflictReviewControl';
 import SyncActionButton from '../components/SyncActionButton';
 import {
   getSeasonSyncLabel,
@@ -128,6 +129,46 @@ function getAffectedIdsFromModifications(mods: FlightModification[]): string[] {
 
 function buildCheckInWindowKey(fromDateTime: string, toDateTime: string): string {
   return `checkin:${fromDateTime.slice(0, 10)}:${toDateTime.slice(0, 10)}`;
+}
+
+interface CheckInRouteState {
+  seasons: Season[];
+  season: Season;
+  flightRecords: FlightRecord[];
+  modifications: Map<string, FlightModification>;
+  settings: OperationalSettings | null;
+  syncSummary: { pendingCount: number; lastLocalChangeAt: number | null };
+  windowKey: string;
+}
+
+function readInitialCheckInRouteState(input: {
+  targetSeasonId: string | null;
+  fromDateTime: string;
+  toDateTime: string;
+}): CheckInRouteState | null {
+  const storeState = useSeasonWorkspaceStore.getState();
+  const cachedSeasons = getCachedSeasons() ?? storeState.seasons;
+  if (!cachedSeasons || cachedSeasons.length === 0) return null;
+
+  const targetSeason = cachedSeasons.find((item) => item.id === input.targetSeasonId) ?? cachedSeasons[0];
+  if (!input.targetSeasonId || input.targetSeasonId !== targetSeason.id) return null;
+
+  const windowKey = buildCheckInWindowKey(input.fromDateTime, input.toDateTime);
+  const cachedWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+  if (!cachedWindow?.syncMeta) return null;
+
+  return {
+    seasons: cachedSeasons,
+    season: targetSeason,
+    flightRecords: cachedWindow.records,
+    modifications: cachedWindow.modifications,
+    settings: storeState.operationalSettings,
+    syncSummary: {
+      pendingCount: cachedWindow.syncMeta.pendingCount,
+      lastLocalChangeAt: cachedWindow.syncMeta.lastLocalChangeAt,
+    },
+    windowKey,
+  };
 }
 
 function logCheckInPerformance(label: string, startedAt: number, details: Record<string, unknown> = {}): void {
@@ -788,22 +829,26 @@ function CheckInAllocationContent() {
   const targetSeasonId = searchParams.get('season');
   const requestedRange = readDailyDateRangeQuery(searchParams);
   const defaultRange = requestedRange ?? buildDefaultDailyDateRange(todayIso());
-
-  const [seasons, setSeasons] = useState<Season[]>([]);
-  const [season, setSeason] = useState<Season | null>(null);
-  const [flightRecords, setFlightRecords] = useState<FlightRecord[]>([]);
-  const [modifications, setModifications] = useState<Map<string, FlightModification>>(new Map());
-  const [optimisticAllocationView, setOptimisticAllocationView] = useState<CheckInAllocationView | null>(null);
-  const [settings, setSettings] = useState<OperationalSettings | null>(null);
-  const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; conflictCount: number; lastLocalChangeAt: number | null }>({
-    pendingCount: 0,
-    conflictCount: 0,
-    lastLocalChangeAt: null,
-  });
-  const [checkInLocalCommitPending, setCheckInLocalCommitPending] = useState(false);
   const [fromDateTime, setFromDateTime] = useSessionState('checkin:fromDateTime', defaultRange.from);
   const [toDateTime, setToDateTime] = useSessionState('checkin:toDateTime', defaultRange.to);
-  const [loading, setLoading] = useState(true);
+  const initialCheckInRouteState = readInitialCheckInRouteState({ targetSeasonId, fromDateTime, toDateTime });
+
+  const [seasons, setSeasons] = useState<Season[]>(() => initialCheckInRouteState?.seasons ?? []);
+  const [season, setSeason] = useState<Season | null>(() => initialCheckInRouteState?.season ?? null);
+  const [flightRecords, setFlightRecords] = useState<FlightRecord[]>(() => initialCheckInRouteState?.flightRecords ?? []);
+  const [modifications, setModifications] = useState<Map<string, FlightModification>>(
+    () => initialCheckInRouteState?.modifications ?? new Map()
+  );
+  const [optimisticAllocationView, setOptimisticAllocationView] = useState<CheckInAllocationView | null>(null);
+  const [settings, setSettings] = useState<OperationalSettings | null>(() => initialCheckInRouteState?.settings ?? null);
+  const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; lastLocalChangeAt: number | null }>(
+    () => initialCheckInRouteState?.syncSummary ?? {
+      pendingCount: 0,
+      lastLocalChangeAt: null,
+    }
+  );
+  const [checkInLocalCommitPending, setCheckInLocalCommitPending] = useState(false);
+  const [loading, setLoading] = useState(() => !initialCheckInRouteState);
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
     buildLoadProgress('Loading check-in allocation...', 10, 'Preparing workspace')
   );
@@ -846,24 +891,37 @@ function CheckInAllocationContent() {
   const optimisticAllocationViewRef = useRef<CheckInAllocationView | null>(null);
   const checkInCommitAccumulatorRef = useRef<PendingAccumulatedCheckInCommit | null>(null);
   const checkInCommitFlushTimerRef = useRef<number | null>(null);
-  const pendingCheckInSyncSummaryRef = useRef<Pick<LocalSyncMeta, 'pendingCount' | 'conflicts' | 'lastLocalChangeAt'> | null>(null);
+  const pendingCheckInSyncSummaryRef = useRef<Pick<LocalSyncMeta, 'pendingCount' | 'lastLocalChangeAt'> | null>(null);
   const checkInSyncSummaryTimerRef = useRef<number | null>(null);
   const commitQueueRef = useRef(Promise.resolve());
   const currentMutationRef = useRef<Promise<unknown> | null>(null);
+  const loadedWindowKeyRef = useRef<string | null>(initialCheckInRouteState?.windowKey ?? null);
+  const fetchServerDataRequestRef = useRef(0);
+  const latestRouteWindowRef = useRef<{ seasonId: string | null; windowKey: string }>({
+    seasonId: initialCheckInRouteState?.season.id ?? null,
+    windowKey: initialCheckInRouteState?.windowKey ?? '',
+  });
   const historySeqRef = useRef(0);
   const appliedRangeQueryRef = useRef<string | null>(null);
   useSessionScrollRestoration('checkin:gantt-scroll', ganttScrollRef);
   const syncSeasonId = season?.id ?? targetSeasonId;
-  const { status: syncStatus, syncNow, fetchUpdatesNow } = useSeasonSync(syncSeasonId, 'checkin');
+  const { status: syncStatus, syncNow } = useSeasonSync(syncSeasonId, 'checkin');
+  const [fetchingServerData, setFetchingServerData] = useState(false);
   const syncInProgress = syncStatus.status === 'syncing';
   const syncing = syncInProgress && syncStatus.mode === 'manual';
-  const fetchingUpdates = syncStatus.status === 'catching_up';
-  const syncWriteInProgress = syncInProgress || fetchingUpdates;
-  const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' || syncStatus.status === 'conflict' ? syncStatus.message : null);
-  const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
+  const syncWriteInProgress = syncInProgress || fetchingServerData;
+  const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' ? syncStatus.message : null);
+  const fetchProgress = fetchingServerData ? 'Fetching server data' : syncStatus.message;
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncSummary.pendingCount);
-  const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount);
-  const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount);
+  const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount);
+  const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
+  const currentCheckInWindowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
+  useEffect(() => {
+    latestRouteWindowRef.current = {
+      seasonId: season?.id ?? null,
+      windowKey: currentCheckInWindowKey,
+    };
+  }, [currentCheckInWindowKey, season?.id]);
 
   const updateCheckInLocalCommitPending = useCallback(() => {
     setCheckInLocalCommitPending(Boolean(
@@ -956,39 +1014,54 @@ function CheckInAllocationContent() {
 
   const refreshCheckInWindow = useCallback(async () => {
     if (!season) return;
-    const result = await queryNativeAllocationWindow({
-      seasonId: season.id,
-      dateFrom: fromDateTime.slice(0, 10),
-      dateTo: toDateTime.slice(0, 10),
-      resourceType: 'checkin',
-      limit: 10000,
-    });
-    if (!result) throw new Error('Native allocation query is unavailable.');
-    const nextModifications = new Map(result.modifications.map((mod) => [mod.legId, mod]));
+    const windowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
+    const snapshot = readWorkspaceWindowSnapshot(useSeasonWorkspaceStore.getState().workspaces[season.id], windowKey);
+    if (!snapshot?.syncMeta) return null;
     clearOptimisticAllocationView();
-    setFlightRecords(result.records);
-    replaceCheckInModifications(nextModifications);
+    setFlightRecords(snapshot.records);
+    replaceCheckInModifications(snapshot.modifications);
     setSyncSummary({
-      pendingCount: result.syncMeta.pendingCount,
-      conflictCount: getLocalSyncConflictCount(result.syncMeta),
-      lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
+      pendingCount: snapshot.syncMeta.pendingCount,
+      lastLocalChangeAt: snapshot.syncMeta.lastLocalChangeAt,
     });
     setCachedSeasonData(season.id, {
       rows: [],
-      records: result.records,
-      modifications: nextModifications,
+      records: snapshot.records,
+      modifications: snapshot.modifications,
       seasonDataVersion: season.dataVersion,
     });
-    useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-      seasonId: season.id,
-      season,
-      rows: [],
-      records: result.records,
-      modifications: nextModifications,
-      syncMeta: result.syncMeta,
-      windowKey: buildCheckInWindowKey(fromDateTime, toDateTime),
-    });
+    loadedWindowKeyRef.current = windowKey;
+    return snapshot;
   }, [clearOptimisticAllocationView, fromDateTime, replaceCheckInModifications, season, toDateTime]);
+
+  const tryApplyCachedCheckInRouteWindow = useCallback((): boolean => {
+    const storeState = useSeasonWorkspaceStore.getState();
+    const cachedSeasons = getCachedSeasons() ?? storeState.seasons;
+    const cachedSettings = storeState.operationalSettings;
+    if (!cachedSeasons || !cachedSettings || cachedSeasons.length === 0) return false;
+
+    const targetSeason = cachedSeasons.find((item) => item.id === targetSeasonId) ?? cachedSeasons[0];
+    if (!targetSeasonId || targetSeasonId !== targetSeason.id) return false;
+
+    const windowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
+    const cachedWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+    if (!cachedWindow?.syncMeta) return false;
+
+    setLoadError(null);
+    clearOptimisticAllocationView();
+    setSettings(cachedSettings);
+    setSeasons(cachedSeasons);
+    setSeason(targetSeason);
+    loadedWindowKeyRef.current = windowKey;
+    setFlightRecords(cachedWindow.records);
+    replaceCheckInModifications(cachedWindow.modifications);
+    setSyncSummary({
+      pendingCount: cachedWindow.syncMeta.pendingCount,
+      lastLocalChangeAt: cachedWindow.syncMeta.lastLocalChangeAt,
+    });
+    setLoading(false);
+    return true;
+  }, [clearOptimisticAllocationView, fromDateTime, replaceCheckInModifications, targetSeasonId, toDateTime]);
 
   const enqueueLocalMutation = useCallback(function enqueueLocalMutation<T>(operation: () => Promise<T>): Promise<T> {
     const queuedMutation = commitQueueRef.current.then(operation);
@@ -1049,7 +1122,7 @@ function CheckInAllocationContent() {
         id: `LOCAL_CHECKIN_${timestamp}_${++historySeqRef.current}`,
         timestamp,
         description,
-      });
+      }, 'checkin');
       if (!nativeResult) return null;
       logCheckInPerformance('commitCheckInModifications', performanceStartedAt, {
         modCount: mods.length,
@@ -1184,6 +1257,7 @@ function CheckInAllocationContent() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      if (tryApplyCachedCheckInRouteWindow()) return;
       setLoading(true);
       setLoadError(null);
       setLoadProgress(buildLoadProgress('Loading seasons and settings', 15, 'Preparing check-in allocation'));
@@ -1201,12 +1275,13 @@ function CheckInAllocationContent() {
         useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
 
         if (nextSeasons.length === 0) {
+          loadedWindowKeyRef.current = null;
           clearOptimisticAllocationView();
           clearCheckInUndoStack();
           setSeason(null);
           setFlightRecords([]);
           replaceCheckInModifications(new Map());
-          setSyncSummary({ pendingCount: 0, conflictCount: 0, lastLocalChangeAt: null });
+          setSyncSummary({ pendingCount: 0, lastLocalChangeAt: null });
           return;
         }
 
@@ -1217,10 +1292,76 @@ function CheckInAllocationContent() {
         }
 
         setSeason(targetSeason);
-        setLoadProgress(buildLoadProgress('Checking local season baseline', 30, targetSeason.seasonCode));
+        const windowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
+        const cachedWindow = readCachedWorkspaceWindow(
+          useSeasonWorkspaceStore.getState().workspaces[targetSeason.id],
+          windowKey
+        );
+        if (cachedWindow?.syncMeta) {
+          loadedWindowKeyRef.current = windowKey;
+          setFlightRecords(cachedWindow.records);
+          replaceCheckInModifications(cachedWindow.modifications);
+          setSyncSummary({
+            pendingCount: cachedWindow.syncMeta.pendingCount,
+            lastLocalChangeAt: cachedWindow.syncMeta.lastLocalChangeAt,
+          });
+          return;
+        }
+
+        setLoadProgress(buildLoadProgress('Loading server workspace', 35, targetSeason.seasonCode));
+        const serverWindow = await loadSeasonWorkspaceWindow({
+          seasonId: targetSeason.id,
+          dateFrom: fromDateTime.slice(0, 10),
+          dateTo: toDateTime.slice(0, 10),
+          resourceType: 'checkin',
+          limit: 100000,
+        }).catch((error) => {
+          if (SERVER_AUTHORITATIVE_MODE) throw error;
+          console.warn('Server check-in allocation window unavailable, falling back to native SQLite', error);
+          return null;
+        });
+        if (cancelled) return;
+        if (serverWindow) {
+          loadedWindowKeyRef.current = windowKey;
+          setLoadProgress(buildLoadProgress(
+            'Preparing Check-in Allocation',
+            80,
+            `${serverWindow.records.length} records`
+          ));
+          setFlightRecords(serverWindow.records);
+          replaceCheckInModifications(serverWindow.modifications);
+          setSyncSummary({
+            pendingCount: serverWindow.syncMeta.pendingCount,
+            lastLocalChangeAt: serverWindow.syncMeta.lastLocalChangeAt,
+          });
+          setCachedSeasonData(targetSeason.id, {
+            rows: [],
+            records: serverWindow.records,
+            modifications: serverWindow.modifications,
+            seasonDataVersion: targetSeason.dataVersion,
+          });
+          useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+            seasonId: targetSeason.id,
+            season: targetSeason,
+            rows: [],
+            records: serverWindow.records,
+            modifications: serverWindow.modifications,
+            syncMeta: serverWindow.syncMeta,
+            windowKey,
+          });
+          publishSeasonWorkspaceChanged({
+            seasonId: targetSeason.id,
+            localRevision: serverWindow.syncMeta.localRevision,
+            source: 'server-window',
+            syncMeta: serverWindow.syncMeta,
+          });
+          return;
+        }
+
+        setLoadProgress(buildLoadProgress('Checking local season baseline', 40, targetSeason.seasonCode));
         await ensureNativeSeasonBaseline(targetSeason);
         if (cancelled) return;
-        setLoadProgress(buildLoadProgress('Querying native SQLite', 45, targetSeason.seasonCode));
+        setLoadProgress(buildLoadProgress('Querying native SQLite fallback', 50, targetSeason.seasonCode));
         const result = await queryNativeAllocationWindow({
           seasonId: targetSeason.id,
           dateFrom: fromDateTime.slice(0, 10),
@@ -1240,7 +1381,6 @@ function CheckInAllocationContent() {
         replaceCheckInModifications(nextModifications);
         setSyncSummary({
           pendingCount: result.syncMeta.pendingCount,
-          conflictCount: getLocalSyncConflictCount(result.syncMeta),
           lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
         });
         setCachedSeasonData(targetSeason.id, {
@@ -1256,8 +1396,9 @@ function CheckInAllocationContent() {
           records: result.records,
           modifications: nextModifications,
           syncMeta: result.syncMeta,
-          windowKey: buildCheckInWindowKey(fromDateTime, toDateTime),
+          windowKey,
         });
+        loadedWindowKeyRef.current = windowKey;
       } catch (err) {
         const message = (err as Error).message;
         console.error('Error loading check-in allocation', err);
@@ -1273,7 +1414,7 @@ function CheckInAllocationContent() {
     return () => {
       cancelled = true;
     };
-  }, [clearCheckInUndoStack, clearOptimisticAllocationView, fromDateTime, replaceCheckInModifications, router, showAlert, targetSeasonId, toDateTime]);
+  }, [clearCheckInUndoStack, clearOptimisticAllocationView, fromDateTime, replaceCheckInModifications, router, showAlert, targetSeasonId, toDateTime, tryApplyCachedCheckInRouteWindow]);
 
   const allocationResult = useMemo(() => {
     if (!settings) return { view: null, error: null };
@@ -1546,11 +1687,10 @@ function CheckInAllocationContent() {
   }, [mergeCheckInUndoEntries]);
 
   const scheduleSyncSummaryUpdate = useCallback((
-    syncMeta: Pick<LocalSyncMeta, 'pendingCount' | 'conflicts' | 'lastLocalChangeAt'>
+    syncMeta: Pick<LocalSyncMeta, 'pendingCount' | 'lastLocalChangeAt'>
   ) => {
     pendingCheckInSyncSummaryRef.current = {
       pendingCount: syncMeta.pendingCount,
-      conflicts: syncMeta.conflicts,
       lastLocalChangeAt: syncMeta.lastLocalChangeAt,
     };
     if (checkInSyncSummaryTimerRef.current != null) return;
@@ -1561,13 +1701,11 @@ function CheckInAllocationContent() {
       if (!pendingSummary) return;
       setSyncSummary((current) => (
         current.pendingCount === pendingSummary.pendingCount &&
-        current.conflictCount === getLocalSyncConflictCount(pendingSummary) &&
         current.lastLocalChangeAt === pendingSummary.lastLocalChangeAt
           ? current
           : {
               ...current,
               pendingCount: pendingSummary.pendingCount,
-              conflictCount: getLocalSyncConflictCount(pendingSummary),
               lastLocalChangeAt: pendingSummary.lastLocalChangeAt,
             }
       ));
@@ -1626,7 +1764,6 @@ function CheckInAllocationContent() {
         replaceCheckInModifications(nextModifications);
         setSyncSummary({
           pendingCount: result.syncMeta.pendingCount,
-          conflictCount: getLocalSyncConflictCount(result.syncMeta),
           lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
         });
         useSeasonWorkspaceStore.getState().replaceSeasonWindow({
@@ -1758,7 +1895,7 @@ function CheckInAllocationContent() {
     source: 'checkin',
     shouldDeferRefresh: shouldDeferCheckInRefresh,
     shouldHandleWorkspaceChange: shouldHandleCheckInWorkspaceChange,
-    onNativeRefresh: async () => {
+    onRefresh: async () => {
       await flushPendingCheckInLocalCommit();
       await refreshCheckInWindow();
     },
@@ -1964,31 +2101,87 @@ function CheckInAllocationContent() {
     setResizeState(null);
     try {
       const result = await syncNow();
-      if (result.status === 'conflict' || (result.reviewCount ?? 0) > 0) {
-        void showAlert({ title: 'Save Needs Review', message: result.message ?? 'Saved non-conflicting changes. Review remaining conflicts.', tone: 'warning' });
-      } else if (result.status !== 'synced') {
-        void showAlert({ title: 'Save Failed', message: result.message, tone: 'error' });
+      if (result.status !== 'synced') {
+        void showAlert({ title: 'Save Failed', message: result.message ?? 'Save failed.', tone: 'error' });
       }
     } catch (err) {
       void showAlert({ title: 'Save Failed', message: (err as Error).message, tone: 'error' });
     }
   }, [season, showAlert, syncInProgress, syncNow]);
 
-  const handleFetchUpdates = useCallback(async () => {
-    if (!syncSeasonId || fetchingUpdates || syncInProgress) return;
-    setResizeState(null);
-    try {
-      const result = await fetchUpdatesNow();
-      if (result.status === 'busy') return;
-      if (result.status === 'conflict') {
-        void showAlert({ title: 'Fetch Updates Need Review', message: result.message, tone: 'warning' });
-      } else if (result.status !== 'synced') {
-        void showAlert({ title: 'Fetch Updates Failed', message: result.message, tone: 'error' });
-      }
-    } catch (err) {
-      void showAlert({ title: 'Fetch Updates Failed', message: (err as Error).message, tone: 'error' });
+  const fetchServerData = useCallback(async () => {
+    if (!season || fetchingServerData || syncInProgress) return;
+    const windowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
+    if (checkInCommitAccumulatorRef.current || checkInCommitFlushTimerRef.current != null) {
+      void showAlert({
+        title: 'Fetch data blocked',
+        message: 'Save pending check-in changes before fetching server data.',
+        tone: 'warning',
+      });
+      return;
     }
-  }, [fetchUpdatesNow, fetchingUpdates, showAlert, syncInProgress, syncSeasonId]);
+    const requestId = ++fetchServerDataRequestRef.current;
+    const requestedSeasonId = season.id;
+    const hasRouteDataLoaded = loadedWindowKeyRef.current === windowKey;
+    setResizeState(null);
+    setFetchingServerData(true);
+    if (!hasRouteDataLoaded) setLoadError(null);
+    setLoadProgress(buildLoadProgress('Loading server workspace', 35, season.seasonCode));
+    try {
+      await currentMutationRef.current;
+      await commitQueueRef.current;
+      const serverWindow = await loadSeasonWorkspaceWindow({
+        seasonId: season.id,
+        dateFrom: fromDateTime.slice(0, 10),
+        dateTo: toDateTime.slice(0, 10),
+        resourceType: 'checkin',
+        limit: 100000,
+      });
+      if (!serverWindow) throw new Error('Server check-in allocation window is unavailable.');
+      if (
+        fetchServerDataRequestRef.current !== requestId ||
+        latestRouteWindowRef.current.seasonId !== requestedSeasonId ||
+        latestRouteWindowRef.current.windowKey !== windowKey
+      ) {
+        return;
+      }
+      loadedWindowKeyRef.current = windowKey;
+      setLoadProgress(buildLoadProgress('Preparing Check-in Allocation', 80, `${serverWindow.records.length} records`));
+      setFlightRecords(serverWindow.records);
+      replaceCheckInModifications(serverWindow.modifications);
+      setSyncSummary({
+        pendingCount: serverWindow.syncMeta.pendingCount,
+        lastLocalChangeAt: serverWindow.syncMeta.lastLocalChangeAt,
+      });
+      setCachedSeasonData(season.id, {
+        rows: [],
+        records: serverWindow.records,
+        modifications: serverWindow.modifications,
+        seasonDataVersion: season.dataVersion,
+      });
+      useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+        seasonId: season.id,
+        season,
+        rows: [],
+        records: serverWindow.records,
+        modifications: serverWindow.modifications,
+        syncMeta: serverWindow.syncMeta,
+        windowKey,
+      });
+      publishSeasonWorkspaceChanged({
+        seasonId: season.id,
+        localRevision: serverWindow.syncMeta.localRevision,
+        source: 'server-window',
+        syncMeta: serverWindow.syncMeta,
+      });
+    } catch (err) {
+      const message = err instanceof Error && err.message ? err.message : 'Could not fetch check-in data from the server.';
+      if (!hasRouteDataLoaded) setLoadError(message);
+      void showAlert({ title: 'Fetch data failed', message, tone: 'error' });
+    } finally {
+      setFetchingServerData(false);
+    }
+  }, [fetchingServerData, fromDateTime, replaceCheckInModifications, season, showAlert, syncInProgress, toDateTime]);
 
   const handleOpenExportDialog = useCallback(() => {
     promoteLatestCheckInModificationsForView();
@@ -2676,12 +2869,11 @@ function CheckInAllocationContent() {
                 }`}>
                   {syncLabel}
                 </span>
-                <SeasonConflictReviewControl seasonId={season?.id} />
                 <FetchServerUpdatesButton
-                  fetching={fetchingUpdates}
+                  fetching={fetchingServerData}
                   progress={fetchProgress}
                   disabled={syncInProgress}
-                  onFetch={handleFetchUpdates}
+                  onFetch={fetchServerData}
                 />
                 <SyncActionButton
                   syncing={syncInProgress}
@@ -2855,10 +3047,10 @@ function CheckInAllocationContent() {
                 <div className="max-w-xl text-sm text-on-surface-variant">{loadError}</div>
                 {syncSeasonId && (
                   <FetchServerUpdatesButton
-                    fetching={fetchingUpdates}
+                    fetching={fetchingServerData}
                     progress={fetchProgress}
                     disabled={syncInProgress}
-                    onFetch={handleFetchUpdates}
+                    onFetch={fetchServerData}
                   />
                 )}
               </div>
@@ -2867,10 +3059,10 @@ function CheckInAllocationContent() {
                 <div>No season data.</div>
                 {syncSeasonId && (
                   <FetchServerUpdatesButton
-                    fetching={fetchingUpdates}
+                    fetching={fetchingServerData}
                     progress={fetchProgress}
                     disabled={syncInProgress}
-                    onFetch={handleFetchUpdates}
+                    onFetch={fetchServerData}
                   />
                 )}
               </div>

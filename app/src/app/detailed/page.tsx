@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   getSeasons,
+  loadSeasonWorkspaceWindow,
 } from '@/lib/remoteStore';
 import { buildSeasonDisplayLabel } from '@/lib/importSeasonRules';
 import {
@@ -69,7 +70,6 @@ import { useCachedRouteActivity, useCachedRouteSearchParams } from '../component
 import FetchServerUpdatesButton from '../components/FetchServerUpdatesButton';
 import LoadingStatusPanel from '../components/LoadingStatusPanel';
 import HeaderActionMenu from '../components/HeaderActionMenu';
-import SeasonConflictReviewControl from '../components/SeasonConflictReviewControl';
 import SyncActionButton from '../components/SyncActionButton';
 import WorkspacePageHeader from '../components/WorkspacePageHeader';
 import {
@@ -83,8 +83,10 @@ import { useSessionScrollRestoration } from '../hooks/useSessionScrollRestoratio
 import { useSeasonWorkspaceRefresh } from '../hooks/useSeasonWorkspaceRefresh';
 import { queryNativeScheduleWindow, runNativeScheduleMutation } from '@/lib/nativeSeasonRepository';
 import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
+import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
-import { getLocalSyncConflictCount, type LocalSyncMeta } from '@/lib/localSeasonStore';
+import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
+import type { LocalSyncMeta } from '@/lib/localSeasonStore';
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -171,21 +173,39 @@ function DetailedScheduleContent() {
   const [isNewFlightOpen, setIsNewFlightOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null); // for pre-filling Add Flight date
   const detailedCommitSeqRef = useRef(0);
-  const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; conflictCount: number; lastLocalChangeAt: number | null }>({
+  const loadedWindowKeyRef = useRef<string | null>(null);
+  const fetchServerDataRequestRef = useRef(0);
+  const latestRouteWindowRef = useRef<{ seasonId: string | null; windowKey: string }>({
+    seasonId: null,
+    windowKey: '',
+  });
+  const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; lastLocalChangeAt: number | null }>({
     pendingCount: 0,
-    conflictCount: 0,
     lastLocalChangeAt: null,
   });
   const syncSeasonId = season?.id ?? targetSeasonId;
-  const { status: syncStatus, syncNow, fetchUpdatesNow } = useSeasonSync(syncSeasonId, 'detailed');
+  const { status: syncStatus, syncNow } = useSeasonSync(syncSeasonId, 'detailed');
+  const [fetchingServerData, setFetchingServerData] = useState(false);
   const syncInProgress = syncStatus.status === 'syncing';
-  const fetchingUpdates = syncStatus.status === 'catching_up';
-  const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' || syncStatus.status === 'conflict' ? syncStatus.message : null);
-  const fetchProgress = fetchingUpdates ? syncStatus.progress ?? syncStatus.message : syncStatus.message;
+  const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' ? syncStatus.message : null);
+  const fetchProgress = fetchingServerData ? 'Fetching server data' : syncStatus.message;
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncSummary.pendingCount);
-  const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount);
-  const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount, syncSummary.conflictCount);
+  const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount);
+  const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
   const hasDraftChanges = (draftState?.modifications.length ?? 0) > 0;
+  const currentDetailedWindow = buildDetailedScheduleQueryWindow({
+    dateFrom: targetDateFrom || fromDate || null,
+    dateTo: targetDateTo || toDate || null,
+    targetArrFlight,
+    targetDepFlight,
+  });
+  const currentDetailedWindowKey = buildDetailedWindowKey(currentDetailedWindow);
+  useEffect(() => {
+    latestRouteWindowRef.current = {
+      seasonId: season?.id ?? null,
+      windowKey: currentDetailedWindowKey,
+    };
+  }, [currentDetailedWindowKey, season?.id]);
 
   // Sweep Selection State
   const [isSelecting, setIsSelecting] = useState(false);
@@ -280,37 +300,26 @@ function DetailedScheduleContent() {
       targetArrFlight,
       targetDepFlight,
     });
-    const result = await queryNativeScheduleWindow({
-      seasonId: season.id,
-      dateFrom: queryWindow.dateFrom,
-      dateTo: queryWindow.dateTo,
-      flightNumberFilter: queryWindow.flightNumberFilter,
-      limit: 100000,
-    });
-    if (!result) throw new Error('Native detailed schedule query is unavailable.');
-    const nextMods = new Map(result.modifications.map((mod) => [mod.legId, mod]));
-    setFlightRecords(result.records);
-    setCurrentMods(nextMods);
+    const windowKey = buildDetailedWindowKey(queryWindow);
+    const snapshot = readWorkspaceWindowSnapshot(
+      useSeasonWorkspaceStore.getState().workspaces[season.id],
+      windowKey
+    );
+    if (!snapshot?.syncMeta) return null;
+    loadedWindowKeyRef.current = windowKey;
+    setFlightRecords(snapshot.records);
+    setCurrentMods(snapshot.modifications);
     setDraftState(null);
     setSyncSummary({
-      pendingCount: result.syncMeta.pendingCount,
-      conflictCount: getLocalSyncConflictCount(result.syncMeta),
-      lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
+      pendingCount: snapshot.syncMeta.pendingCount,
+      lastLocalChangeAt: snapshot.syncMeta.lastLocalChangeAt,
     });
     patchCachedSeasonData(season.id, {
-      records: result.records,
-      modifications: nextMods,
+      records: snapshot.records,
+      modifications: snapshot.modifications,
     });
-    useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-      seasonId: season.id,
-      season,
-      records: result.records,
-      modifications: nextMods,
-      syncMeta: result.syncMeta,
-      windowKey: buildDetailedWindowKey(queryWindow),
-    });
-    refreshDetailedState(result.records, nextMods, { preserveSelection: options.preserveSelection ?? true });
-    return result;
+    refreshDetailedState(snapshot.records, snapshot.modifications, { preserveSelection: options.preserveSelection ?? true });
+    return snapshot;
   }, [fromDate, hasDraftChanges, refreshDetailedState, season, targetArrFlight, targetDateFrom, targetDateTo, targetDepFlight, toDate]);
 
   const captureDetailedOptimisticRollbackState = useCallback(() => ({
@@ -345,7 +354,7 @@ function DetailedScheduleContent() {
     seasonId: season?.id ?? targetSeasonId,
     policy: 'on-activation',
     source: 'detailed',
-    onNativeRefresh: async () => {
+    onRefresh: async () => {
       await refreshDetailedWindow({ preserveSelection: true });
     },
   });
@@ -511,7 +520,7 @@ function DetailedScheduleContent() {
         syncMeta: nativeSyncMeta,
       });
       if (historyEntry) setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
-      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, conflictCount: getLocalSyncConflictCount(nativeSyncMeta), lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
+      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
       refreshDetailedState(result.records, currentMods, { preserveSelection: true });
       publishDetailedWorkspaceChange(season.id, nativeSyncMeta.localRevision, result.updatedIds, nativeSyncMeta);
       void appendAuditLogEntry(createFlightActionAuditFromHistory({
@@ -562,7 +571,7 @@ function DetailedScheduleContent() {
         syncMeta: nativeSyncMeta,
       });
       if (historyEntry) setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
-      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, conflictCount: getLocalSyncConflictCount(nativeSyncMeta), lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
+      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
       refreshDetailedState(result.records, currentMods, { preserveSelection: true });
       publishDetailedWorkspaceChange(season.id, nativeSyncMeta.localRevision, result.updatedIds, nativeSyncMeta);
       setIsLinkModalOpen(false);
@@ -791,7 +800,7 @@ function DetailedScheduleContent() {
         return;
       }
       setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
-      setSyncSummary({ pendingCount: syncMeta.pendingCount, conflictCount: getLocalSyncConflictCount(syncMeta), lastLocalChangeAt: syncMeta.lastLocalChangeAt });
+      setSyncSummary({ pendingCount: syncMeta.pendingCount, lastLocalChangeAt: syncMeta.lastLocalChangeAt });
       setDraftState(null);
       useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
         seasonId: season.id,
@@ -916,7 +925,7 @@ function DetailedScheduleContent() {
         ...entry.changes.map((change) => change.legId),
         ...(entry.recordChanges?.map((change) => change.recordId) ?? []),
       ]);
-      setSyncSummary({ pendingCount: syncMeta.pendingCount, conflictCount: getLocalSyncConflictCount(syncMeta), lastLocalChangeAt: syncMeta.lastLocalChangeAt });
+      setSyncSummary({ pendingCount: syncMeta.pendingCount, lastLocalChangeAt: syncMeta.lastLocalChangeAt });
       useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
         seasonId: season.id,
         affectedIds,
@@ -948,31 +957,93 @@ function DetailedScheduleContent() {
     if (!season || syncInProgress) return;
     try {
       const result = await syncNow();
-      const needsReview = result.status === 'conflict' || (result.reviewCount ?? 0) > 0;
       void showAlert({
-        title: needsReview ? 'Save Needs Review' : result.status === 'synced' ? 'Save Complete' : 'Save Failed',
+        title: result.status === 'synced' ? 'Save Complete' : 'Save Failed',
         message: result.message ?? 'No pending local changes to save.',
-        tone: needsReview ? 'warning' : result.status === 'synced' ? 'success' : 'error',
+        tone: result.status === 'synced' ? 'success' : 'error',
       });
     } catch (err) {
       void showAlert({ title: 'Save Failed', message: (err as Error).message, tone: 'error' });
     }
   }, [season, showAlert, syncInProgress, syncNow]);
 
-  const handleFetchUpdates = useCallback(async () => {
-    if (!syncSeasonId || fetchingUpdates || syncInProgress) return;
+  const fetchServerData = useCallback(async () => {
+    if (!season || fetchingServerData || syncInProgress) return;
+    if (hasDraftChanges) return;
+    const queryWindow = buildDetailedScheduleQueryWindow({
+      dateFrom: targetDateFrom || fromDate || null,
+      dateTo: targetDateTo || toDate || null,
+      targetArrFlight,
+      targetDepFlight,
+    });
+    const windowKey = buildDetailedWindowKey(queryWindow);
+    const requestId = ++fetchServerDataRequestRef.current;
+    const requestedSeasonId = season.id;
+    const hasRouteDataLoaded = loadedWindowKeyRef.current === windowKey;
+    setFetchingServerData(true);
+    if (!hasRouteDataLoaded) setLoadError(null);
+    setLoadProgress(buildLoadProgress('Loading server workspace', 35, season.seasonCode));
     try {
-      const result = await fetchUpdatesNow();
-      if (result.status === 'busy') return;
-      if (result.status === 'conflict') {
-        void showAlert({ title: 'Fetch Updates Need Review', message: result.message, tone: 'warning' });
-      } else if (result.status !== 'synced') {
-        void showAlert({ title: 'Fetch Updates Failed', message: result.message, tone: 'error' });
+      const serverWindow = await loadSeasonWorkspaceWindow({
+        seasonId: season.id,
+        dateFrom: queryWindow.dateFrom,
+        dateTo: queryWindow.dateTo,
+        resourceType: 'schedule',
+        limit: 100000,
+      });
+      if (!serverWindow) throw new Error('Server detailed schedule window is unavailable.');
+      if (
+        fetchServerDataRequestRef.current !== requestId ||
+        latestRouteWindowRef.current.seasonId !== requestedSeasonId ||
+        latestRouteWindowRef.current.windowKey !== windowKey
+      ) {
+        return;
       }
+      loadedWindowKeyRef.current = windowKey;
+      setLoadProgress(buildLoadProgress('Rendering calendar', 80, `${serverWindow.records.length} records`));
+      setFlightRecords(serverWindow.records);
+      setCurrentMods(serverWindow.modifications);
+      setDraftState(null);
+      setSyncSummary({
+        pendingCount: serverWindow.syncMeta.pendingCount,
+        lastLocalChangeAt: serverWindow.syncMeta.lastLocalChangeAt,
+      });
+      useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+        seasonId: season.id,
+        season,
+        records: serverWindow.records,
+        modifications: serverWindow.modifications,
+        syncMeta: serverWindow.syncMeta,
+        windowKey,
+      });
+      publishSeasonWorkspaceChanged({
+        seasonId: season.id,
+        localRevision: serverWindow.syncMeta.localRevision,
+        source: 'server-window',
+        syncMeta: serverWindow.syncMeta,
+      });
+      refreshDetailedState(serverWindow.records, serverWindow.modifications, { preserveSelection: true });
     } catch (err) {
-      void showAlert({ title: 'Fetch Updates Failed', message: (err as Error).message, tone: 'error' });
+      const message = err instanceof Error && err.message ? err.message : 'Could not fetch detailed schedule data from the server.';
+      if (!hasRouteDataLoaded) setLoadError(message);
+      void showAlert({ title: 'Fetch data failed', message, tone: 'error' });
+    } finally {
+      setFetchingServerData(false);
     }
-  }, [fetchUpdatesNow, fetchingUpdates, showAlert, syncSeasonId, syncInProgress]);
+  }, [
+    fetchingServerData,
+    fromDate,
+    hasDraftChanges,
+    refreshDetailedState,
+    season,
+    showAlert,
+    syncInProgress,
+    targetArrFlight,
+    targetDateFrom,
+    targetDateTo,
+    targetDepFlight,
+    toDate,
+  ]);
 
   const handleSeasonalNavigation = () => {
     if (season && typeof window !== 'undefined') {
@@ -1069,16 +1140,131 @@ function DetailedScheduleContent() {
         }
         setSeason(found);
 
-        setLoadProgress(buildLoadProgress('Checking local season baseline', 35, found.seasonCode));
-        await ensureNativeSeasonBaseline(found);
-        if (cancelled) return;
-        setLoadProgress(buildLoadProgress('Querying native SQLite', 45, found.seasonCode));
         const queryWindow = buildDetailedScheduleQueryWindow({
           dateFrom: activeFrom || null,
           dateTo: activeTo || null,
           targetArrFlight: activeArr,
           targetDepFlight: activeDep,
         });
+        const windowKey = buildDetailedWindowKey(queryWindow);
+        const cachedWindow = readCachedWorkspaceWindow(
+          useSeasonWorkspaceStore.getState().workspaces[found.id],
+          windowKey
+        );
+        if (cachedWindow?.syncMeta) {
+          loadedWindowKeyRef.current = windowKey;
+          setFlightRecords(cachedWindow.records);
+          setCurrentMods(cachedWindow.modifications);
+          setSyncSummary({
+            pendingCount: cachedWindow.syncMeta.pendingCount,
+            lastLocalChangeAt: cachedWindow.syncMeta.lastLocalChangeAt,
+          });
+          refreshDetailedState(cachedWindow.records, cachedWindow.modifications, { preserveSelection: true });
+          return;
+        }
+
+        setLoadProgress(buildLoadProgress('Loading server workspace', 35, found.seasonCode));
+        const serverWindow = await loadSeasonWorkspaceWindow({
+          seasonId: found.id,
+          dateFrom: queryWindow.dateFrom,
+          dateTo: queryWindow.dateTo,
+          resourceType: 'schedule',
+          limit: 100000,
+        }).catch((error) => {
+          if (SERVER_AUTHORITATIVE_MODE) throw error;
+          console.warn('Server detailed schedule window unavailable, falling back to native SQLite', error);
+          return null;
+        });
+        if (cancelled) return;
+        if (serverWindow) {
+          loadedWindowKeyRef.current = windowKey;
+          const canonicalRecords = serverWindow.records;
+          const mods = serverWindow.modifications;
+          setLoadProgress(buildLoadProgress(
+            'Rendering calendar',
+            80,
+            `${canonicalRecords.length} records`
+          ));
+          setSyncSummary({
+            pendingCount: serverWindow.syncMeta.pendingCount,
+            lastLocalChangeAt: serverWindow.syncMeta.lastLocalChangeAt,
+          });
+          setLoadProgress(buildLoadProgress('Rendering calendar', 95, 'Applying filters'));
+          setFlightRecords(canonicalRecords);
+
+          const allSeasonLegs = flightRecordsToLegs(canonicalRecords);
+          const expanded = filterDetailedLegsForView(allSeasonLegs, activeArr, activeDep, activeFrom, activeTo);
+          if (activeArr || activeDep) {
+            const companionMap = new Map<string, OvernightCompanion>();
+            for (const leg of expanded) {
+              if (!leg.linkId) continue;
+              const linked = leg.linkedRecordId
+                ? allSeasonLegs.find(l => l.id === leg.linkedRecordId)
+                : allSeasonLegs.find(l =>
+                    l.linkId === leg.linkId &&
+                    l.id !== leg.id &&
+                    l.type !== leg.type &&
+                    (l.pairAnchorDate ?? l.date) === (leg.pairAnchorDate ?? leg.date)
+                  );
+              if (!linked) continue;
+              const key = `${leg.date}_${leg.id}`;
+              if (leg.type === 'A') {
+                companionMap.set(key, {
+                  flightNumber: linked.flightNumber,
+                  schedule: leg.linkType === 'overnight' ? `${linked.schedule}+1` : linked.schedule,
+                  route: linked.route,
+                  aircraft: linked.aircraft,
+                  type: 'D',
+                  linkId: leg.linkId,
+                });
+              } else {
+                companionMap.set(key, {
+                  flightNumber: linked.flightNumber,
+                  schedule: leg.linkType === 'overnight' ? `${linked.schedule}-1` : linked.schedule,
+                  route: linked.route,
+                  aircraft: linked.aircraft,
+                  type: 'A',
+                  linkId: leg.linkId,
+                });
+              }
+            }
+            setOvernightCompanions(companionMap);
+          }
+
+          setCurrentMods(mods);
+          useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+            seasonId: found.id,
+            season: found,
+            records: canonicalRecords,
+            modifications: mods,
+            syncMeta: serverWindow.syncMeta,
+            windowKey,
+          });
+          publishSeasonWorkspaceChanged({
+            seasonId: found.id,
+            localRevision: serverWindow.syncMeta.localRevision,
+            source: 'server-window',
+            syncMeta: serverWindow.syncMeta,
+          });
+          const finalAllLegs = applyModificationsToFlightLegs(allSeasonLegs, mods);
+          const finalLegs = filterDetailedLegsForView(finalAllLegs, activeArr, activeDep, activeFrom, activeTo);
+
+          setAllLegs(finalAllLegs);
+          setLegs(finalLegs);
+          setOvernightCompanions(prev => {
+            if (activeArr || activeDep) return prev;
+            return new Map();
+          });
+          return;
+        }
+        if (SERVER_AUTHORITATIVE_MODE) {
+          throw new Error('Server detailed schedule window is unavailable.');
+        }
+
+        setLoadProgress(buildLoadProgress('Checking local season baseline', 40, found.seasonCode));
+        await ensureNativeSeasonBaseline(found);
+        if (cancelled) return;
+        setLoadProgress(buildLoadProgress('Querying native SQLite fallback', 50, found.seasonCode));
         const result = await queryNativeScheduleWindow({
           seasonId: found.id,
           dateFrom: queryWindow.dateFrom,
@@ -1098,7 +1284,6 @@ function DetailedScheduleContent() {
         ));
         setSyncSummary({
           pendingCount: result.syncMeta.pendingCount,
-          conflictCount: getLocalSyncConflictCount(result.syncMeta),
           lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
         });
         setLoadProgress(buildLoadProgress('Rendering calendar', 95, 'Applying filters'));
@@ -1150,6 +1335,7 @@ function DetailedScheduleContent() {
           setOvernightCompanions(companionMap);
         }
 
+        loadedWindowKeyRef.current = windowKey;
         setCurrentMods(mods); // Store for undo history tracking
         useSeasonWorkspaceStore.getState().replaceSeasonWindow({
           seasonId: found.id,
@@ -1157,7 +1343,7 @@ function DetailedScheduleContent() {
           records: canonicalRecords,
           modifications: mods,
           syncMeta: result.syncMeta,
-          windowKey: buildDetailedWindowKey(queryWindow),
+          windowKey,
         });
         const finalAllLegs = applyModificationsToFlightLegs(allSeasonLegs, mods);
         const finalLegs = filterDetailedLegsForView(finalAllLegs, activeArr, activeDep, activeFrom, activeTo);
@@ -1474,10 +1660,10 @@ function DetailedScheduleContent() {
           {syncSeasonId && (
             <div className="mt-4 flex justify-center">
               <FetchServerUpdatesButton
-                fetching={fetchingUpdates}
+                fetching={fetchingServerData}
                 progress={fetchProgress}
                 disabled={syncInProgress}
-                onFetch={handleFetchUpdates}
+                onFetch={fetchServerData}
               />
             </div>
           )}
@@ -1511,12 +1697,11 @@ function DetailedScheduleContent() {
               }`}>
                 {syncLabel}
               </span>
-              <SeasonConflictReviewControl seasonId={season?.id} />
               <FetchServerUpdatesButton
-                fetching={fetchingUpdates}
+                fetching={fetchingServerData}
                 progress={fetchProgress}
                 disabled={syncInProgress}
-                onFetch={handleFetchUpdates}
+                onFetch={fetchServerData}
               />
               <SyncActionButton
                 syncing={syncInProgress}

@@ -205,6 +205,11 @@ export type OperationalSettingsRow = {
   ai_enabled: boolean;
   ai_active_model_id: string | null;
   ai_updated_at: number | null;
+  dashboard_arrival_bucket_flights?: number | null;
+  dashboard_departure_bucket_flights?: number | null;
+  dashboard_ad_gap_flights?: number | null;
+  dashboard_ctg_abs_pct?: number | null;
+  dashboard_pax_coverage_min_pct?: number | null;
 };
 
 export type OperationalAiContextDocumentRow = {
@@ -674,6 +679,11 @@ export function toOperationalSettingsRow(settings: OperationalSettings): Operati
     ai_enabled: normalized.aiAnalysis.enabled,
     ai_active_model_id: normalized.aiAnalysis.activeModelId,
     ai_updated_at: normalized.aiAnalysis.updatedAt,
+    dashboard_arrival_bucket_flights: normalized.dashboardAlerts.arrivalBucketFlights,
+    dashboard_departure_bucket_flights: normalized.dashboardAlerts.departureBucketFlights,
+    dashboard_ad_gap_flights: normalized.dashboardAlerts.adGapFlights,
+    dashboard_ctg_abs_pct: normalized.dashboardAlerts.ctgAbsPct,
+    dashboard_pax_coverage_min_pct: normalized.dashboardAlerts.paxCoverageMinPct,
   };
 }
 
@@ -706,6 +716,13 @@ export function fromOperationalSettingsRows(input: {
     gateGroups: input.gateGroups,
     gateLocks: input.gateLocks,
     standGateMappings: input.standGateMappings,
+    dashboardAlerts: {
+      arrivalBucketFlights: input.settingsRow?.dashboard_arrival_bucket_flights ?? null,
+      departureBucketFlights: input.settingsRow?.dashboard_departure_bucket_flights ?? null,
+      adGapFlights: input.settingsRow?.dashboard_ad_gap_flights ?? null,
+      ctgAbsPct: input.settingsRow?.dashboard_ctg_abs_pct ?? null,
+      paxCoverageMinPct: input.settingsRow?.dashboard_pax_coverage_min_pct ?? null,
+    },
     aiAnalysis: {
       enabled: input.settingsRow?.ai_enabled ?? true,
       activeModelId: input.settingsRow?.ai_active_model_id ?? input.aiModels.find((model) => model.enabled)?.id ?? input.aiModels[0]?.id ?? 'gemini-flash',

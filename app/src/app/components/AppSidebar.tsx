@@ -233,7 +233,7 @@ export default function AppSidebar() {
               type="button"
               onClick={() => void operatorAuth.signOut()}
               className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white"
-              title={operatorAuth.email ? `Sign out ${operatorAuth.email}` : 'Sign out'}
+              title={`Sign out ${operatorAuth.operatorLabel}`}
               aria-label="Sign out"
               disabled={operatorAuth.signingOut}
             >
@@ -244,7 +244,7 @@ export default function AppSidebar() {
               <div className="mb-2 flex min-w-0 items-center gap-2">
                 <span className="material-symbols-outlined text-[18px] text-emerald-600 dark:text-emerald-300">verified_user</span>
                 <span className="min-w-0 truncate text-xs font-medium text-slate-700 dark:text-slate-300">
-                  {operatorAuth.email ?? 'Operator'}
+                  {operatorAuth.operatorLabel}
                 </span>
               </div>
               <button

@@ -12,13 +12,27 @@ import {
   useRef,
   useState,
 } from 'react';
+import {
+  formatOperatorLabel,
+  type OperatorProfile,
+  resolveOperatorLoginIdentity,
+} from '@/lib/operatorAuthIdentity';
 import { getSupabaseClient } from '@/lib/supabase';
 
 type OperatorAuthStatus = 'checking' | 'signedOut' | 'authorized' | 'unauthorized';
 
+const EMPTY_OPERATOR_PROFILE: OperatorProfile = {
+  email: null,
+  username: null,
+  displayName: null,
+};
+
 type OperatorAuthContextValue = {
   enabled: boolean;
   email: string | null;
+  username: string | null;
+  displayName: string | null;
+  operatorLabel: string;
   signingOut: boolean;
   signOut: () => Promise<void>;
 };
@@ -26,6 +40,9 @@ type OperatorAuthContextValue = {
 const OperatorAuthContext = createContext<OperatorAuthContextValue>({
   enabled: false,
   email: null,
+  username: null,
+  displayName: null,
+  operatorLabel: formatOperatorLabel(EMPTY_OPERATOR_PROFILE),
   signingOut: false,
   signOut: async () => {},
 });
@@ -39,6 +56,14 @@ export function useOperatorAuth(): OperatorAuthContextValue {
   return useContext(OperatorAuthContext);
 }
 
+function formatOperatorSignInErrorMessage(message: string): string {
+  const normalized = message.toLowerCase();
+  if (normalized.includes('invalid login credentials') || normalized.includes('email not confirmed')) {
+    return 'Username hoặc password không đúng.';
+  }
+  return message || 'Không đăng nhập được. Vui lòng thử lại.';
+}
+
 function OperatorAuthScreen({
   status,
   errorMessage,
@@ -48,17 +73,17 @@ function OperatorAuthScreen({
 }: {
   status: Exclude<OperatorAuthStatus, 'authorized'>;
   errorMessage: string | null;
-  onSubmit: (email: string, password: string) => Promise<void>;
+  onSubmit: (username: string, password: string) => Promise<void>;
   onSignOut: () => Promise<void>;
   busy: boolean;
 }) {
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
 
   const handleSubmit = useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void onSubmit(email.trim(), password);
-  }, [email, onSubmit, password]);
+    void onSubmit(username.trim(), password);
+  }, [onSubmit, password, username]);
 
   if (status === 'checking') {
     return (
@@ -88,7 +113,7 @@ function OperatorAuthScreen({
             <div>
               <h1 className="text-lg font-semibold tracking-tight">Operator access required</h1>
               <p className="mt-1 text-sm leading-6 text-slate-300">
-                Operator access is not enabled for this account. Add this Auth user to public.app_operators, then sign in again.
+                Operator access is not enabled for this account. Add this Auth user to public.app_operators with a username, then sign in again.
               </p>
             </div>
           </div>
@@ -119,20 +144,20 @@ function OperatorAuthScreen({
             <span className="material-symbols-outlined text-[26px]">flight_takeoff</span>
           </div>
           <h1 className="text-xl font-semibold tracking-tight">Seasonal Management</h1>
-          <p className="mt-1 text-sm text-slate-400">Sign in with your operator account</p>
+          <p className="mt-1 text-sm text-slate-400">Sign in with your operator username</p>
         </div>
 
         <form className="space-y-4" onSubmit={handleSubmit}>
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-slate-200">Email</span>
+            <span className="mb-1.5 block text-sm font-medium text-slate-200">Username</span>
             <input
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              autoComplete="email"
+              type="text"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              autoComplete="username"
               required
               className="operator-auth-control h-11 rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-white outline-none transition-colors placeholder:text-slate-600 focus:border-cyan-300"
-              placeholder="operator@example.com"
+              placeholder="ops01"
             />
           </label>
           <label className="block">
@@ -172,7 +197,7 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
   const enabled = isSupabaseBackendEnabled();
   const refreshIdRef = useRef(0);
   const [status, setStatus] = useState<OperatorAuthStatus>(enabled ? 'checking' : 'authorized');
-  const [email, setEmail] = useState<string | null>(null);
+  const [operatorProfile, setOperatorProfile] = useState<OperatorProfile>(EMPTY_OPERATOR_PROFILE);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
@@ -185,7 +210,7 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
     setErrorMessage(null);
 
     if (!session?.user) {
-      setEmail(null);
+      setOperatorProfile(EMPTY_OPERATOR_PROFILE);
       setStatus('signedOut');
       return;
     }
@@ -194,26 +219,38 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
     const supabase = getSupabaseClient();
     const { data, error } = await supabase
       .from('app_operators')
-      .select('user_id,email')
+      .select('user_id,email,username,display_name')
       .eq('user_id', session.user.id)
       .maybeSingle();
 
     if (refreshId !== refreshIdRef.current) return;
 
     if (error) {
-      setEmail(session.user.email ?? null);
+      setOperatorProfile({
+        email: session.user.email ?? null,
+        username: null,
+        displayName: null,
+      });
       setErrorMessage(error.message);
       setStatus('unauthorized');
       return;
     }
 
     if (!data) {
-      setEmail(session.user.email ?? null);
+      setOperatorProfile({
+        email: session.user.email ?? null,
+        username: null,
+        displayName: null,
+      });
       setStatus('unauthorized');
       return;
     }
 
-    setEmail(data.email ?? session.user.email ?? null);
+    setOperatorProfile({
+      email: data.email ?? session.user.email ?? null,
+      username: data.username ?? null,
+      displayName: data.display_name ?? null,
+    });
     setStatus('authorized');
   }, [enabled]);
 
@@ -223,14 +260,25 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
     const supabase = getSupabaseClient();
     let active = true;
 
-    supabase.auth.getSession().then(({ data, error }) => {
+    supabase.auth.getSession().then(async ({ data, error }) => {
       if (!active) return;
       if (error) {
         setErrorMessage(error.message);
         setStatus('signedOut');
         return;
       }
-      void refreshSession(data.session);
+      if (!data.session) {
+        void refreshSession(null);
+        return;
+      }
+      const refreshed = await supabase.auth.refreshSession(data.session);
+      if (!active) return;
+      if (refreshed.error) {
+        setErrorMessage(refreshed.error.message);
+        setStatus('signedOut');
+        return;
+      }
+      void refreshSession(refreshed.data.session ?? data.session);
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -243,22 +291,26 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
     };
   }, [enabled, refreshSession]);
 
-  const signIn = useCallback(async (nextEmail: string, password: string) => {
+  const signIn = useCallback(async (loginName: string, password: string) => {
     setBusy(true);
     setErrorMessage(null);
 
     try {
+      const identity = resolveOperatorLoginIdentity(loginName);
       const supabase = getSupabaseClient();
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: nextEmail,
+        email: identity.email,
         password,
       });
       if (error) {
-        setErrorMessage(error.message);
+        setErrorMessage(formatOperatorSignInErrorMessage(error.message));
         setStatus('signedOut');
         return;
       }
       await refreshSession(data.session);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Không đăng nhập được. Vui lòng thử lại.');
+      setStatus('signedOut');
     } finally {
       setBusy(false);
     }
@@ -270,7 +322,7 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
     try {
       const supabase = getSupabaseClient();
       await supabase.auth.signOut();
-      setEmail(null);
+      setOperatorProfile(EMPTY_OPERATOR_PROFILE);
       setStatus('signedOut');
     } finally {
       setBusy(false);
@@ -278,12 +330,17 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
     }
   }, []);
 
+  const operatorLabel = formatOperatorLabel(operatorProfile);
+
   const contextValue = useMemo<OperatorAuthContextValue>(() => ({
     enabled,
-    email,
+    email: operatorProfile.email,
+    username: operatorProfile.username,
+    displayName: operatorProfile.displayName,
+    operatorLabel,
     signingOut,
     signOut,
-  }), [email, enabled, signOut, signingOut]);
+  }), [enabled, operatorLabel, operatorProfile, signOut, signingOut]);
 
   if (!enabled) {
     return (

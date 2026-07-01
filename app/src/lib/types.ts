@@ -330,10 +330,19 @@ export interface AiAnalysisSettings {
   updatedAt: number | null;
 }
 
+export interface DashboardAlertSettings {
+  arrivalBucketFlights: number | null;
+  departureBucketFlights: number | null;
+  adGapFlights: number | null;
+  ctgAbsPct: number | null;
+  paxCoverageMinPct: number | null;
+}
+
 export interface OperationalSettings {
   airlineColors: AirlineColorSetting[];
   routeCountries: RouteCountryMapping[];
   aiAnalysis: AiAnalysisSettings;
+  dashboardAlerts: DashboardAlertSettings;
   aircraftGroups: AircraftGroup[];
   counterAllocationRules: CounterAllocationRule[];
   checkInCounters: CheckInCounterResource[];

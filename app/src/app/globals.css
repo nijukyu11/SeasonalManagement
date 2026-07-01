@@ -112,28 +112,6 @@
   font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
 }
 
-.app-route-cache-root {
-  position: relative;
-  height: 100%;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.app-route-cache-panel {
-  height: 100%;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.app-route-cache-panel[data-route-cache-active="false"] {
-  position: absolute;
-  inset: 0;
-  display: none;
-  pointer-events: none;
-  user-select: none;
-  visibility: hidden;
-}
-
 .app-shell-content aside {
   display: none !important;
 }

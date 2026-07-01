@@ -112,8 +112,8 @@ function renderRichMarkdown(content: string) {
       }
       index -= 1;
       nodes.push(
-        <div key={`table-${index}`} className="overflow-x-auto rounded-md border border-surface-variant">
-          <table className="min-w-full border-collapse text-sm">
+        <div key={`table-${index}`} className="max-h-[360px] overflow-auto rounded-md border border-surface-variant">
+          <table className="min-w-[640px] w-full border-collapse text-sm">
             <thead className="sticky top-0 z-10 bg-surface-container-low text-xs uppercase text-on-surface-variant">
               <tr>{header.map((cell) => <th key={cell} className="px-3 py-2 text-left">{cell}</th>)}</tr>
             </thead>
@@ -154,9 +154,9 @@ function AiWorkspaceTable({ block, rendererData }: { block: DashboardAiWorkspace
   const rows = rendererData.materializeTableRows(block);
   const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
   return (
-    <div className="relative overflow-hidden rounded-md border border-surface-variant">
-      <div className="overflow-x-auto">
-        <table className="min-w-full border-collapse text-sm">
+    <div className="relative rounded-md border border-surface-variant">
+      <div className="max-h-[420px] overflow-auto">
+        <table className="min-w-[720px] w-full border-collapse text-sm">
           <thead className="sticky top-0 z-10 bg-surface-container-low text-xs uppercase text-on-surface-variant shadow-sm">
             <tr>{columns.map((column) => <th key={column} className="whitespace-nowrap px-3 py-2 text-left">{COLUMN_LABELS[column] ?? column}</th>)}</tr>
           </thead>
@@ -177,14 +177,13 @@ function AiWorkspaceTable({ block, rendererData }: { block: DashboardAiWorkspace
             {rows.length === 0 && (
               <tr>
                 <td colSpan={Math.max(1, columns.length)} className="px-3 py-6 text-center text-on-surface-variant">
-                  Chưa có dòng dữ liệu cho block này.
+                  Chưa có dòng dữ liệu cho block này. Chạy lại prompt với kỳ, nhóm hoặc chỉ số cụ thể hơn.
                 </td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
-      <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-surface-container-low to-transparent" />
     </div>
   );
 }

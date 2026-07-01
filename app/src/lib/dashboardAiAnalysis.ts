@@ -40,7 +40,7 @@ export type DashboardAiWorkspaceChartType = 'bar-ranking' | 'line-trend' | 'wate
 export type DashboardAiWorkspaceTableTemplateId = 'season-summary' | 'comparison-drivers' | 'monthly-trend' | 'airline-ranking' | 'route-country-ranking' | 'peak-hour' | 'multi-season-summary' | 'custom-table';
 export type DashboardAiToolTraceStatus = 'accepted' | 'rejected' | 'executed' | 'skipped';
 export type DashboardAiToolset = 'dashboard-readonly' | 'dashboard-visual' | 'dashboard-export' | 'dashboard-memory';
-export type DashboardAiToolRequirement = 'ai_configured' | 'operator_auth' | 'selected_season' | 'local_records' | 'max_3_seasons' | 'export_enabled';
+export type DashboardAiToolRequirement = 'ai_configured' | 'operator_auth' | 'selected_season' | 'local_records' | 'export_enabled';
 export type DashboardAiToolAvailability = 'enabled' | 'disabled';
 export type DashboardAiLanguage = 'vi';
 export type DashboardAiContextProfile = 'overview' | 'comparison-drivers' | 'peak-hour' | 'route-country' | 'airline-mix' | 'season-overview' | 'multi-season' | 'validated-sql' | 'eda-profile' | 'data-quality' | 'visualization' | 'answer-verification' | 'safe-rendering';
@@ -619,7 +619,7 @@ export function resolveDashboardAiDataScopeForPrompt(input: {
     };
   }
 
-  if (/\b(all data|full data|cross-season|multi-season|toan bo du lieu|tat ca du lieu|tat ca season|all seasons)\b/.test(normalized)) {
+  if (/\b(all data|full data|whole db|whole database|entire db|entire database|cross-season|multi-season|toan bo du lieu|toan bo db|toan bo database|toan bo co so du lieu|tat ca du lieu|tat ca db|tat ca database|tat ca co so du lieu|tat ca season|all seasons)\b/.test(normalized)) {
     return {
       scope: 'all-seasons-aggregate',
       seasonIds: catalog.length > 0 ? catalog.map((season) => season.seasonId) : selectedSeasonIds,
@@ -1036,7 +1036,7 @@ export const DASHBOARD_AI_TOOL_REGISTRY: DashboardAiToolDefinition[] = [
   {
     name: 'compose_dashboard_ai_board',
     toolset: 'dashboard-visual',
-    requires: ['ai_configured', 'operator_auth', 'selected_season', 'local_records', 'max_3_seasons'],
+    requires: ['ai_configured', 'operator_auth', 'selected_season', 'local_records'],
     description: 'Dùng khi người dùng yêu cầu AI Workspace, bảng trắng, notebook/canvas, multi-block report, multi-season visual analysis.',
     outputContract: 'Return boardPatch with whitelisted board blocks only. Rich markdown is allowed; HTML only through html-preview sandbox block. No scripts, paths, SQL, or writes.',
   },
@@ -1303,7 +1303,7 @@ const DASHBOARD_VISUAL_REPORT_LIMITS = {
   maxBlockLimit: 24,
 };
 export const DASHBOARD_AI_WORKSPACE_LIMITS = {
-  maxSeasons: 3,
+  maxNotebookSeasonIds: 50,
   maxBlocks: 12,
   maxTextChars: 240,
   maxBlockLimit: 24,
@@ -1443,7 +1443,6 @@ function resolveDashboardAiToolDisabledReason(
   if (requirements.includes('operator_auth') && !input.operatorAuthorized) return 'Tài khoản hiện tại chưa được xác thực quyền vận hành.';
   if (requirements.includes('selected_season') && !input.hasSelectedSeason) return 'Chưa chọn mùa dữ liệu.';
   if (requirements.includes('local_records') && !input.hasLocalRecords) return 'Chưa có dữ liệu dashboard local để phân tích.';
-  if (requirements.includes('max_3_seasons') && input.selectedSeasonCount > DASHBOARD_AI_WORKSPACE_LIMITS.maxSeasons) return 'AI Workspace chỉ hỗ trợ tối đa 3 mùa trong V1.';
   if (requirements.includes('export_enabled') && !input.exportEnabled) return 'Chưa có dữ liệu đủ điều kiện để xuất Excel.';
   return null;
 }
@@ -1814,7 +1813,7 @@ export function buildDashboardAiPrompt(input: {
         markdownBlock: 'Có thể trả block type rich-markdown với markdown tiếng Việt đã gọn.',
         htmlPreviewBlock: 'HTML chỉ được trả qua block type html-preview/htmlPreview để app render trong iframe sandbox. Chỉ HTML/CSS tĩnh; không yêu cầu script, Python, form, iframe con, object/embed hoặc external script.',
       },
-      safety: 'Read-only. Có thể sinh sqlQueryPlans SELECT/CTE cho SQLite local qua gateway validate; không sinh đường dẫn file hoặc thao tác ghi dữ liệu. Không chạy raw HTML/script/Python trong DOM chính; HTML chỉ là sandbox preview tĩnh đã sanitize.',
+      safety: 'Read-only. Khi cần dữ liệu, chỉ trả dataQueries để Edge Function truy vấn Supabase reporting RPCs; không sinh SQL local, raw SQL, đường dẫn file hoặc thao tác ghi dữ liệu. Không chạy raw HTML/script/Python trong DOM chính; HTML chỉ là sandbox preview tĩnh đã sanitize.',
     }, null, 2),
     '',
     'LANGUAGE_POLICY:',
@@ -2572,7 +2571,7 @@ export function resolveDashboardAiVisualReport(
 
 export function normalizeDashboardAiWorkspaceSeasonIds(
   seasonIds: unknown,
-  maxSeasons = DASHBOARD_AI_WORKSPACE_LIMITS.maxSeasons
+  limit = DASHBOARD_AI_WORKSPACE_LIMITS.maxNotebookSeasonIds
 ): string[] {
   if (!Array.isArray(seasonIds)) return [];
   const normalized: string[] = [];
@@ -2581,7 +2580,7 @@ export function normalizeDashboardAiWorkspaceSeasonIds(
     const value = entry.trim();
     if (!value || normalized.includes(value)) continue;
     normalized.push(value);
-    if (normalized.length >= maxSeasons) break;
+    if (limit > 0 && normalized.length >= limit) break;
   }
   return normalized;
 }
@@ -5319,11 +5318,11 @@ function defaultDriverBoardPatch(): DashboardAiBoardPatch | null {
 
 function defaultCompareSeasonsBoardPatch(): DashboardAiBoardPatch | null {
   return resolveDashboardAiBoardPatch({
-    title: 'Bảng so sánh các mùa đã chọn',
+    title: 'Bảng so sánh các mùa theo query',
     blocks: [
-      workspaceTableBlock('multi-season-summary', 'Tổng hợp các mùa đã chọn', 'multiSeason', 'multi-season-summary', 3),
-      workspaceChartBlock('multi-season-chart', 'Chuyến bay theo mùa đã chọn', 'multiSeason', 'bar-ranking', { dimension: 'season', metric: 'flights' }, 3),
-      workspaceInsightBlock('multi-season-notes', 'Ghi chú so sánh', 'multiSeason', ['Block multi-season giới hạn theo tối đa 3 mùa đã chọn.']),
+      workspaceTableBlock('multi-season-summary', 'Tổng hợp các mùa theo query', 'multiSeason', 'multi-season-summary', 24),
+      workspaceChartBlock('multi-season-chart', 'Chuyến bay theo mùa trong query', 'multiSeason', 'bar-ranking', { dimension: 'season', metric: 'flights' }, 24),
+      workspaceInsightBlock('multi-season-notes', 'Ghi chú so sánh', 'multiSeason', ['Block multi-season render từ queryResults/sourceQueryId hoặc scope prompt, không dùng giới hạn mùa cố định.']),
     ],
     append: false,
   });
@@ -5333,7 +5332,7 @@ function defaultTableBoardPatch(): DashboardAiBoardPatch | null {
   return resolveDashboardAiBoardPatch({
     title: 'Bảng báo cáo dạng bảng',
     blocks: [
-      workspaceTableBlock('season-summary-table', 'Bảng tổng hợp mùa', 'multiSeason', 'season-summary', 3),
+      workspaceTableBlock('season-summary-table', 'Bảng tổng hợp mùa', 'multiSeason', 'season-summary', 24),
       workspaceTableBlock('airline-ranking-table', 'Bảng xếp hạng hãng bay', 'overview', 'airline-ranking', 12),
       workspaceTableBlock('route-country-table', 'Bảng đường bay / quốc gia', 'overview', 'route-country-ranking', 12),
     ],
@@ -5346,7 +5345,7 @@ function defaultWorkspaceBoardPatch(): DashboardAiBoardPatch | null {
     title: 'Bảng AI Workspace',
     blocks: [
       workspaceKpiBlock('workspace-kpis', 'KPI tá»•ng quan', 'overview'),
-      workspaceTableBlock('workspace-season-summary', 'Tổng hợp mùa đã chọn', 'multiSeason', 'season-summary', 3),
+      workspaceTableBlock('workspace-season-summary', 'Tổng hợp mùa theo query', 'multiSeason', 'season-summary', 24),
       workspaceChartBlock('workspace-monthly-trend', 'Xu hướng chuyến bay theo tháng', 'overview', 'line-trend', { dimension: 'month', metric: 'flights' }, 12),
       workspaceChartBlock('workspace-airline-ranking', 'Top hãng bay', 'overview', 'bar-ranking', { dimension: 'airline', metric: 'flights' }, 12),
     ],
