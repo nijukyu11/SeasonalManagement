@@ -57,3 +57,30 @@ test('allocation mutations keep their module source in server-authoritative RPC'
   assert.match(gatePage, /runNativeLocalModificationBatchDeltaResult\(seasonId,\s*mods,[\s\S]*?,\s*'gate'\s*\)/);
   assert.match(checkInPage, /runNativeLocalModificationBatchDeltaResult\(seasonId,\s*mods,[\s\S]*?,\s*'checkin'\s*\)/);
 });
+
+test('check-in writes try the shared mutation boundary before worker fallback', () => {
+  const checkInPage = readFileSync(join(process.cwd(), 'src/app/checkin/page.tsx'), 'utf8');
+  const persistCheckInStart = checkInPage.indexOf('const persistCheckInModifications = useCallback');
+  const persistCheckInEnd = checkInPage.indexOf(
+    '}, [commitCheckInModificationsInWorker',
+    persistCheckInStart
+  );
+  const persistCheckInSource = checkInPage.slice(persistCheckInStart, persistCheckInEnd);
+  const nativeBoundaryIndex = persistCheckInSource.indexOf(
+    'const nativeResult = await commitCheckInModificationsNative'
+  );
+  const workerFallbackIndex = persistCheckInSource.indexOf('const worker = getCheckInCommitWorker()');
+
+  assert.match(checkInPage, /runNativeLocalModificationBatchDeltaResult\(seasonId,\s*mods,[\s\S]*?,\s*'checkin'\s*\)/);
+  assert.notEqual(nativeBoundaryIndex, -1);
+  assert.notEqual(workerFallbackIndex, -1);
+  assert.ok(nativeBoundaryIndex < workerFallbackIndex);
+});
+
+test('check-in persistence without sync metadata rolls back instead of silently succeeding', () => {
+  const checkInPage = readFileSync(join(process.cwd(), 'src/app/checkin/page.tsx'), 'utf8');
+  assert.match(
+    checkInPage,
+    /if \(!result\.syncMeta\) throw new Error\('Check-in server mutation completed without sync metadata\.'\)/
+  );
+});

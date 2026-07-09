@@ -1788,7 +1788,7 @@ function CheckInAllocationContent() {
     setCheckInLocalCommitPending(true);
     try {
       const result = await persistCheckInModifications(season.id, entry.mods, entry.description);
-      if (!result.syncMeta) return;
+      if (!result.syncMeta) throw new Error('Check-in server mutation completed without sync metadata.');
       scheduleSyncSummaryUpdate(result.syncMeta);
       useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
         seasonId: season.id,
