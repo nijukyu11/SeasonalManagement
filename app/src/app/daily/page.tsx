@@ -910,7 +910,7 @@ function DailyScheduleContent() {
         id: historyEntry.id,
         timestamp: historyEntry.timestamp,
         description: historyEntry.description,
-      });
+      }, [], 'daily');
       if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
       const affectedIds = getAffectedIdsFromDailyModifications(mods);
       applyDailyNativeState(seasonId, flightRecords, nextModifications, nativeSyncMeta, { affectedIds });
@@ -1014,7 +1014,9 @@ function DailyScheduleContent() {
               id: update.historyEntry.id,
               timestamp: update.historyEntry.timestamp,
               description: update.historyEntry.description,
-            }
+            },
+            [],
+            'daily'
           );
           if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
           const affectedIds = [
@@ -1114,7 +1116,9 @@ function DailyScheduleContent() {
             id: historyEntry.id,
             timestamp: historyEntry.timestamp,
             description: historyEntry.description,
-          }
+          },
+          [],
+          'daily'
         );
         if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
         const affectedIds = addedRecords.map((record) => record.id);
@@ -1169,7 +1173,7 @@ function DailyScheduleContent() {
           id: historyEntry.id,
           timestamp: historyEntry.timestamp,
           description: historyEntry.description,
-        });
+        }, [], 'daily');
         if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
         const affectedIds = getAffectedIdsFromDailyModifications(mods);
         applyDailyNativeState(seasonId, flightRecords, nextModifications, nativeSyncMeta, { affectedIds });
@@ -1260,7 +1264,9 @@ function DailyScheduleContent() {
                 timestamp: historyEntry.timestamp,
                 description: historyEntry.description,
               }
-            : undefined
+            : undefined,
+          [],
+          'daily'
         );
         if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
         applyDailyNativeState(seasonId, result.records, modifications, nativeSyncMeta, { affectedIds: result.updatedIds });
@@ -1313,7 +1319,9 @@ function DailyScheduleContent() {
                 timestamp: historyEntry.timestamp,
                 description: historyEntry.description,
               }
-            : undefined
+            : undefined,
+          [],
+          'daily'
         );
         if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
         applyDailyNativeState(seasonId, result.records, modifications, nativeSyncMeta, { affectedIds: result.updatedIds });

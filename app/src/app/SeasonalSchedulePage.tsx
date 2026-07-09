@@ -881,7 +881,9 @@ export default function HomePage() {
           id: `LOCAL_UNDO_${undoTimestamp}`,
           timestamp: undoTimestamp,
           description: `Undid ${targetEntry.description}`,
-        }
+        },
+        [],
+        'seasonal'
       );
       if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
       const nextRows = buildPatternRowsFromRecords(nextRecords, nextMods);
@@ -1004,7 +1006,9 @@ export default function HomePage() {
         addedRecords,
         [],
         regularMods,
-        historyEntry
+        historyEntry,
+        [],
+        'seasonal'
       );
       if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
       setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
@@ -1174,7 +1178,9 @@ export default function HomePage() {
               timestamp: historyEntry.timestamp,
               description: historyEntry.description,
             }
-          : undefined
+          : undefined,
+        [],
+        'seasonal'
       );
       if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
       const nextRows = buildPatternRowsFromRecords(result.records, modifications);
@@ -1240,7 +1246,9 @@ export default function HomePage() {
               timestamp: historyEntry.timestamp,
               description: historyEntry.description,
             }
-          : undefined
+          : undefined,
+        [],
+        'seasonal'
       );
       if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
       const nextRows = buildPatternRowsFromRecords(result.records, modifications);

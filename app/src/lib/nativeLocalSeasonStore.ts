@@ -16,6 +16,7 @@ export interface NativeScheduleMutationResult {
 }
 
 type NativeLocalModificationSource = 'gate' | 'checkin' | 'allocation';
+type NativeScheduleMutationSource = 'daily' | 'detailed' | 'seasonal';
 
 export function isNativeLocalStoreRuntime(): boolean {
   return isTauriRuntime();
@@ -145,7 +146,8 @@ export async function runNativeScheduleMutation(
   deletedIds: string[] = [],
   mods: FlightModification[] = [],
   history?: Pick<ModHistoryEntry, 'id' | 'timestamp' | 'description' | 'scheduleNotification'>,
-  sourceRows: ParsedRow[] = []
+  sourceRows: ParsedRow[] = [],
+  source: NativeScheduleMutationSource = 'seasonal'
 ): Promise<LocalSyncMeta | null> {
   if (SERVER_AUTHORITATIVE_MODE) {
     const operations = [
@@ -155,7 +157,7 @@ export async function runNativeScheduleMutation(
       ...mods.map((mod) => ({ type: 'modification', mod })),
       ...historyOperation(history),
     ];
-    return applyServerAuthoritativeOperations(seasonId, 'schedule', operations);
+    return applyServerAuthoritativeOperations(seasonId, source, operations);
   }
 
   if (!isNativeLocalStoreRuntime()) return null;

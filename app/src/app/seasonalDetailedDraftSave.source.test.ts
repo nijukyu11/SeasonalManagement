@@ -50,3 +50,19 @@ test('Detailed Schedule passes draft changes through the save guard flow', () =>
     /useSeasonSyncGuard\(season\?\.id\s*\?\?\s*targetSeasonId,\s*'detailed',\s*\{[\s\S]*?beforeSync:\s*commitDraftBeforeSave,[\s\S]*?\}\);/
   );
 });
+
+test('Detailed initial route load does not rerun when refreshDetailedState changes', () => {
+  const source = readSource('app/detailed/page.tsx');
+  const effectStart = source.indexOf('const cachedSeasons = getCachedSeasons();');
+  assert.notEqual(effectStart, -1, 'initial detailed load effect body should exist');
+  const effectEnd = source.indexOf('useEffect(() => {', effectStart + 1);
+  assert.notEqual(effectEnd, -1, 'next detailed effect should exist');
+  const effectSource = source.slice(effectStart, effectEnd);
+
+  assert.match(effectSource, /refreshDetailedStateRef\.current\(cachedWindow\.records,\s*cachedWindow\.modifications/);
+  assert.doesNotMatch(
+    effectSource,
+    /\}, \[[^\]]*refreshDetailedState[^\]]*\]\);/,
+    'initial load effect must not depend on refreshDetailedState because that resets editable date filters'
+  );
+});

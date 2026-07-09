@@ -38,6 +38,20 @@ test('native route mutation seams commit through server-authoritative RPC', () =
   assert.match(nativeLocalStore, /toServerAuthoritativeSyncMeta/);
 });
 
+test('schedule route mutations pass server-authoritative module sources', () => {
+  const nativeLocalStore = readFileSync(join(process.cwd(), 'src/lib/nativeLocalSeasonStore.ts'), 'utf8');
+  const seasonalPage = readFileSync(join(process.cwd(), 'src/app/SeasonalSchedulePage.tsx'), 'utf8');
+  const detailedPage = readFileSync(join(process.cwd(), 'src/app/detailed/page.tsx'), 'utf8');
+  const dailyPage = readFileSync(join(process.cwd(), 'src/app/daily/page.tsx'), 'utf8');
+  const localSeasonStore = readFileSync(join(process.cwd(), 'src/lib/localSeasonStore.ts'), 'utf8');
+
+  assert.doesNotMatch(nativeLocalStore, /applyServerAuthoritativeOperations\(seasonId,\s*'schedule'/);
+  assert.match(seasonalPage, /runNativeScheduleMutation\([\s\S]*'seasonal'\s*\)/);
+  assert.match(detailedPage, /runNativeScheduleMutation\([\s\S]*'detailed'\s*\)/);
+  assert.match(dailyPage, /runNativeScheduleMutation\([\s\S]*'daily'\s*\)/);
+  assert.match(localSeasonStore, /runNativeScheduleMutation\([\s\S]*'seasonal'\s*\)/);
+});
+
 test('server-authoritative writes surface catch-up failures instead of reporting stale success', () => {
   const nativeLocalStore = readFileSync(join(process.cwd(), 'src/lib/nativeLocalSeasonStore.ts'), 'utf8');
   assert.doesNotMatch(nativeLocalStore, /runNativeSeasonCatchup\(\{[\s\S]*?\}\)\.catch\(\(\) => null\)/);

@@ -287,6 +287,10 @@ function DetailedScheduleContent() {
     targetDepFlight,
     toDate,
   ]);
+  const refreshDetailedStateRef = useRef(refreshDetailedState);
+  useEffect(() => {
+    refreshDetailedStateRef.current = refreshDetailedState;
+  }, [refreshDetailedState]);
 
   const publishDetailedWorkspaceChange = useCallback((
     seasonId: string,
@@ -542,7 +546,9 @@ function DetailedScheduleContent() {
               timestamp: historyEntry.timestamp,
               description: historyEntry.description,
             }
-          : undefined
+          : undefined,
+        [],
+        'detailed'
       );
       if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
       setFlightRecords(result.records);
@@ -607,7 +613,9 @@ function DetailedScheduleContent() {
               timestamp: historyEntry.timestamp,
               description: historyEntry.description,
             }
-          : undefined
+          : undefined,
+        [],
+        'detailed'
       );
       if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
       setFlightRecords(result.records);
@@ -869,7 +877,7 @@ function DetailedScheduleContent() {
     setIsSaving(true);
     try {
       const commitSeq = ++detailedCommitSeqRef.current;
-      const syncMeta = await runNativeScheduleMutation(season.id, addedRecords, [], regularMods, historyEntry);
+      const syncMeta = await runNativeScheduleMutation(season.id, addedRecords, [], regularMods, historyEntry, [], 'detailed');
       if (!syncMeta) throw new Error('Native schedule mutation is unavailable.');
       if (commitSeq !== detailedCommitSeqRef.current) {
         await refreshDetailedWindow({ preserveSelection: true });
@@ -990,7 +998,9 @@ function DetailedScheduleContent() {
             id: `LOCAL_UNDO_${undoTimestamp}`,
             timestamp: undoTimestamp,
             description: `Undid ${targetEntry.description}`,
-          }
+          },
+          [],
+          'detailed'
         );
         if (!syncMeta) throw new Error('Native schedule mutation is unavailable.');
       } catch (error) {
@@ -1246,7 +1256,7 @@ function DetailedScheduleContent() {
             pendingCount: cachedWindow.syncMeta.pendingCount,
             lastLocalChangeAt: cachedWindow.syncMeta.lastLocalChangeAt,
           });
-          refreshDetailedState(cachedWindow.records, cachedWindow.modifications, { preserveSelection: true });
+          refreshDetailedStateRef.current(cachedWindow.records, cachedWindow.modifications, { preserveSelection: true });
           return;
         }
 
@@ -1487,7 +1497,7 @@ function DetailedScheduleContent() {
     return () => {
       cancelled = true;
     };
-  }, [targetSeasonId, targetArrFlight, targetDepFlight, targetDateFrom, targetDateTo, hasExplicitDetailedFlightSelection, refreshDetailedState, router, showAlert]);
+  }, [targetSeasonId, targetArrFlight, targetDepFlight, targetDateFrom, targetDateTo, hasExplicitDetailedFlightSelection, router, showAlert]);
 
   useEffect(() => {
     if (!isRouteActive) return undefined;

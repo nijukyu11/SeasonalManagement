@@ -726,7 +726,9 @@ export async function applyLocalFlightRecordMutation(
           timestamp: historyEntry.timestamp,
           description: historyEntry.description,
         }
-      : undefined
+      : undefined,
+    [],
+    'seasonal'
   );
   if (nativeSyncMeta) {
     const workspace = await loadLocalSeasonWorkspace(seasonId);
@@ -784,7 +786,6 @@ export async function applyLocalSourceRows(
   records: FlightRecord[],
   historyEntry?: ModHistoryEntry
 ): Promise<LocalSeasonWorkspace> {
-  void rows;
   const nativeSyncMeta = await runNativeScheduleMutation(
     seasonId,
     records,
@@ -796,7 +797,9 @@ export async function applyLocalSourceRows(
           timestamp: historyEntry.timestamp,
           description: historyEntry.description,
         }
-      : undefined
+      : undefined,
+    rows,
+    'seasonal'
   );
   if (nativeSyncMeta) {
     const workspace = await loadLocalSeasonWorkspace(seasonId);

@@ -52,6 +52,26 @@ select
 from public.season_flight_records r
 where false;
 
+create table if not exists maintenance.s26_duplicate_flight_record_counters_backup_20260709 as
+select
+  c.record_id,
+  c.counter_group,
+  c.item_index,
+  c.counter_value,
+  transaction_timestamp()::timestamptz as backed_up_at
+from public.season_flight_record_counters c
+where false;
+
+create table if not exists maintenance.s26_duplicate_flight_record_windows_backup_20260709 as
+select
+  w.record_id,
+  w.counter_key,
+  w.window_start,
+  w.window_end,
+  transaction_timestamp()::timestamptz as backed_up_at
+from public.season_flight_record_checkin_windows w
+where false;
+
 create temporary table s26_duplicate_repair_target_ids (
   record_id text primary key
 ) on commit drop;
@@ -195,6 +215,50 @@ insert into s26_duplicate_repair_counts (metric, row_count)
 select 'backed_up_records', count(*)::integer
 from inserted_backup_rows;
 
+with inserted_backup_counter_rows as (
+  insert into maintenance.s26_duplicate_flight_record_counters_backup_20260709 (
+    record_id,
+    counter_group,
+    item_index,
+    counter_value,
+    backed_up_at
+  )
+  select
+    c.record_id,
+    c.counter_group,
+    c.item_index,
+    c.counter_value,
+    transaction_timestamp()::timestamptz as backed_up_at
+  from public.season_flight_record_counters c
+  join s26_duplicate_repair_target_records t on t.record_id = c.record_id
+  returning record_id
+)
+insert into s26_duplicate_repair_counts (metric, row_count)
+select 'backed_up_counter_rows', count(*)::integer
+from inserted_backup_counter_rows;
+
+with inserted_backup_window_rows as (
+  insert into maintenance.s26_duplicate_flight_record_windows_backup_20260709 (
+    record_id,
+    counter_key,
+    window_start,
+    window_end,
+    backed_up_at
+  )
+  select
+    w.record_id,
+    w.counter_key,
+    w.window_start,
+    w.window_end,
+    transaction_timestamp()::timestamptz as backed_up_at
+  from public.season_flight_record_checkin_windows w
+  join s26_duplicate_repair_target_records t on t.record_id = w.record_id
+  returning record_id
+)
+insert into s26_duplicate_repair_counts (metric, row_count)
+select 'backed_up_window_rows', count(*)::integer
+from inserted_backup_window_rows;
+
 with deleted_counter_rows as (
   delete from public.season_flight_record_counters c
   using s26_duplicate_repair_target_records t
@@ -229,6 +293,8 @@ from deleted_records;
 
 select
   max(row_count) filter (where metric = 'backed_up_records') as backed_up_records,
+  max(row_count) filter (where metric = 'backed_up_counter_rows') as backed_up_counter_rows,
+  max(row_count) filter (where metric = 'backed_up_window_rows') as backed_up_window_rows,
   max(row_count) filter (where metric = 'deleted_counter_rows') as deleted_counter_rows,
   max(row_count) filter (where metric = 'deleted_window_rows') as deleted_window_rows,
   max(row_count) filter (where metric = 'deleted_records') as deleted_records

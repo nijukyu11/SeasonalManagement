@@ -41,3 +41,14 @@ test('server-authoritative schedule writes run before native runtime gating', ()
   assert.notEqual(nativeGate, -1, 'native runtime gate should exist for offline mode');
   assert.ok(serverBranch < nativeGate, 'server-authoritative branch must run before native runtime gating');
 });
+
+test('server-authoritative schedule writes use route module source instead of schedule fallback', () => {
+  const functionStart = source.indexOf('export async function runNativeScheduleMutation');
+  assert.notEqual(functionStart, -1, 'runNativeScheduleMutation should exist');
+  const body = source.slice(functionStart);
+
+  assert.match(source, /type NativeScheduleMutationSource = 'daily' \| 'detailed' \| 'seasonal'/);
+  assert.match(body, /source:\s*NativeScheduleMutationSource = 'seasonal'/);
+  assert.match(body, /applyServerAuthoritativeOperations\(seasonId,\s*source,\s*operations\)/);
+  assert.doesNotMatch(body, /applyServerAuthoritativeOperations\(seasonId,\s*'schedule'/);
+});
