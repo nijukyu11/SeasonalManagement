@@ -53,11 +53,8 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
     canManageRoles ? OPERATOR_ROLE_OPTIONS : OPERATOR_ROLE_OPTIONS.filter((role) => role.id !== 'super_admin')
   ), [canManageRoles]);
 
-  useEffect(() => {
-    if (!canManageRoles && roleId === 'super_admin') setRoleId('viewer');
-  }, [canManageRoles, roleId]);
-
-  const rolePermissionSet = useMemo(() => new Set<OperatorPermissionKey>(ROLE_DEFAULT_PERMISSIONS[roleId]), [roleId]);
+  const effectiveRoleId: OperatorRoleId = !canManageRoles && roleId === 'super_admin' ? 'viewer' : roleId;
+  const rolePermissionSet = useMemo(() => new Set<OperatorPermissionKey>(ROLE_DEFAULT_PERMISSIONS[effectiveRoleId]), [effectiveRoleId]);
   const technicalEmail = useMemo(() => {
     try {
       return username.trim() ? operatorUsernameToTechnicalEmail(username) : '';
@@ -78,7 +75,10 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
   }, [showAlert]);
 
   useEffect(() => {
-    void reloadOperators();
+    const timeoutId = window.setTimeout(() => {
+      void reloadOperators();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [reloadOperators]);
 
   const toggleExtraPermission = (permission: OperatorPermissionKey) => {
@@ -111,7 +111,7 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
         username,
         displayName,
         password,
-        roleId,
+        roleId: effectiveRoleId,
         extraPermissions,
       });
       setOperators((current) => sortOperators([created, ...current.filter((operator) => operator.userId !== created.userId)]));
@@ -178,7 +178,7 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
           <label className="block text-sm font-semibold text-on-surface">
             Role
             <select
-              value={roleId}
+              value={effectiveRoleId}
               onChange={(event) => handleRoleChange(event.target.value as OperatorRoleId)}
               className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
             >

@@ -275,7 +275,18 @@ function DetailedScheduleContent() {
       const visibleIds = new Set(finalLegs.map((leg) => leg.id));
       return new Set(Array.from(prev).filter((id) => visibleIds.has(id)));
     });
-  }, [fromDate, targetArrFlight, targetDateFrom, targetDateTo, targetDepFlight, toDate]);
+  }, [
+    fromDate,
+    setAllLegs,
+    setLegs,
+    setOvernightCompanions,
+    setSelectedLegIds,
+    targetArrFlight,
+    targetDateFrom,
+    targetDateTo,
+    targetDepFlight,
+    toDate,
+  ]);
 
   const publishDetailedWorkspaceChange = useCallback((
     seasonId: string,
@@ -321,7 +332,21 @@ function DetailedScheduleContent() {
     });
     refreshDetailedState(snapshot.records, snapshot.modifications, { preserveSelection: options.preserveSelection ?? true });
     return snapshot;
-  }, [fromDate, hasDraftChanges, refreshDetailedState, season, targetArrFlight, targetDateFrom, targetDateTo, targetDepFlight, toDate]);
+  }, [
+    fromDate,
+    hasDraftChanges,
+    refreshDetailedState,
+    season,
+    setCurrentMods,
+    setDraftState,
+    setFlightRecords,
+    setSyncSummary,
+    targetArrFlight,
+    targetDateFrom,
+    targetDateTo,
+    targetDepFlight,
+    toDate,
+  ]);
 
   const captureDetailedOptimisticRollbackState = useCallback(() => ({
     records: flightRecords,
@@ -349,7 +374,15 @@ function DetailedScheduleContent() {
       });
     }
     refreshDetailedState(rollbackState.records, rollbackState.modifications, { preserveSelection: true });
-  }, [refreshDetailedState, season]);
+  }, [
+    refreshDetailedState,
+    season,
+    setCurrentMods,
+    setFlightRecords,
+    setModHistory,
+    setSelectedLegIds,
+    setSyncSummary,
+  ]);
 
   useSeasonWorkspaceRefresh({
     seasonId: season?.id ?? targetSeasonId,
@@ -535,7 +568,21 @@ function DetailedScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Unlink Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [currentMods, flightRecords, modHistory, publishDetailedWorkspaceChange, refreshDetailedState, season, selectedLegs, showAlert, showConfirm, syncInProgress]);
+  }, [
+    currentMods,
+    flightRecords,
+    modHistory,
+    publishDetailedWorkspaceChange,
+    refreshDetailedState,
+    season,
+    selectedLegs,
+    setFlightRecords,
+    setModHistory,
+    setSyncSummary,
+    showAlert,
+    showConfirm,
+    syncInProgress,
+  ]);
 
   const handleApplyLinkCandidate = useCallback(async (candidate: DetailedLinkCandidate) => {
     if (!season || syncInProgress) return;
@@ -587,7 +634,20 @@ function DetailedScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Link Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [currentMods, flightRecords, modHistory, publishDetailedWorkspaceChange, refreshDetailedState, season, showAlert, syncInProgress]);
+  }, [
+    currentMods,
+    flightRecords,
+    modHistory,
+    publishDetailedWorkspaceChange,
+    refreshDetailedState,
+    season,
+    setFlightRecords,
+    setIsLinkModalOpen,
+    setModHistory,
+    setSyncSummary,
+    showAlert,
+    syncInProgress,
+  ]);
 
   const handleEditNext = useCallback(async (mods: FlightModification[]) => {
     let finalMods = mods;
@@ -620,7 +680,13 @@ function DetailedScheduleContent() {
     setProposedMods(finalMods);
     setIsEditModalOpen(false);
     setIsConfirmModalOpen(true);
-  }, [allLegs, showChoice]);
+  }, [
+    allLegs,
+    setIsConfirmModalOpen,
+    setIsEditModalOpen,
+    setProposedMods,
+    showChoice,
+  ]);
 
   const handleDeleteSelectedLegs = useCallback(() => {
     if (
@@ -734,7 +800,16 @@ function DetailedScheduleContent() {
     setDraftState(null);
     setProposedMods([]);
     setIsConfirmModalOpen(false);
-  }, [draftState, refreshDetailedState, season]);
+  }, [
+    draftState,
+    refreshDetailedState,
+    season,
+    setCurrentMods,
+    setDraftState,
+    setFlightRecords,
+    setIsConfirmModalOpen,
+    setProposedMods,
+  ]);
 
   const commitDraftBeforeSave = useCallback(async () => {
     if (!season || !draftState || isSaving) return;
@@ -838,6 +913,10 @@ function DetailedScheduleContent() {
     publishDetailedWorkspaceChange,
     refreshDetailedWindow,
     season,
+    setDraftState,
+    setIsSaving,
+    setModHistory,
+    setSyncSummary,
   ]);
 
   useSeasonSyncGuard(season?.id ?? targetSeasonId, 'detailed', {
@@ -1037,6 +1116,13 @@ function DetailedScheduleContent() {
     hasDraftChanges,
     refreshDetailedState,
     season,
+    setCurrentMods,
+    setDraftState,
+    setFetchingServerData,
+    setFlightRecords,
+    setLoadError,
+    setLoadProgress,
+    setSyncSummary,
     showAlert,
     syncInProgress,
     targetArrFlight,
@@ -1401,7 +1487,7 @@ function DetailedScheduleContent() {
     return () => {
       cancelled = true;
     };
-  }, [targetSeasonId, targetArrFlight, targetDepFlight, targetDateFrom, targetDateTo, hasExplicitDetailedFlightSelection, router, showAlert]);
+  }, [targetSeasonId, targetArrFlight, targetDepFlight, targetDateFrom, targetDateTo, hasExplicitDetailedFlightSelection, refreshDetailedState, router, showAlert]);
 
   useEffect(() => {
     if (!isRouteActive) return undefined;

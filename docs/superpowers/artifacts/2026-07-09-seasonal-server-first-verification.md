@@ -35,3 +35,34 @@
 - Post-commit audit:
   - `docs/superpowers/artifacts/2026-07-09-s26-duplicate-audit.sql` returned 0 rows
   - `maintenance.s26_duplicate_flight_records_backup_20260709` contains 9 backup rows for S26
+
+## Final Automated Verification
+
+- `node --experimental-strip-types --test src/lib/nativeLocalSeasonStore.source.test.ts`: PASS, 3/3
+- `node --experimental-strip-types --test src/app/components/syncActionButtonState.test.ts`: PASS, 4/4
+- `node --experimental-strip-types --test src/app/seasonalDetailedDraftSave.source.test.ts`: PASS, 2/2
+- `node --experimental-strip-types --test src/app/checkin/checkInCommitErrors.test.ts`: PASS, 6/6
+- `node --experimental-strip-types --test src/lib/parser.test.ts`: PASS, 3/3
+- `node --experimental-strip-types --test src/lib/atomicSchedule.duplicate.test.ts`: PASS, 1/1
+- `node --experimental-strip-types --test src/lib/seasonalImportPatch.test.ts`: PASS, 7/7
+- `node --experimental-strip-types --test src/lib/detailedScheduleState.test.ts`: PASS, 3/3
+- `node --experimental-strip-types --test src/lib/exporter.test.ts`: PASS, 2/2
+- `node --experimental-strip-types --test src/lib/onlineFirstMode.source.test.ts`: PASS, 9/9
+- `node --experimental-strip-types --test src/app/syncFetchBoundary.source.test.ts`: PASS, 3/3
+- `node --experimental-strip-types --test src/app/checkin/workspaceRefreshScope.test.ts`: PASS, 6/6
+- `npx tsc --noEmit --pretty false`: PASS
+- `npm run lint`: PASS with 5 existing warnings and 0 errors
+- `npm run build`: PASS, Next.js production build compiled successfully
+
+## Final Real DB Re-Audit
+
+- `docs/superpowers/artifacts/2026-07-09-s26-duplicate-audit.sql`: 0 rows
+- `maintenance.s26_duplicate_flight_records_backup_20260709`: 9 backup rows for S26
+
+## Manual UI Smoke
+
+- Seasonal Schedule draft save: NOT_RUN in this terminal session
+- Detailed Schedule draft save: NOT_RUN in this terminal session
+- Check-in Gantt allocation save: NOT_RUN in this terminal session
+- W26 TG copy to empty date: NOT_RUN in this terminal session
+- S26 export all: NOT_RUN in this terminal session
