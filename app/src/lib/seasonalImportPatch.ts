@@ -1,4 +1,5 @@
 import { getOperationalDate } from './iataSeason.ts';
+import { cleanFlightNumber } from './parser.ts';
 import type { FlightModification, FlightRecord, ParsedRow } from './types.ts';
 
 const MONTHS: Record<string, number> = {
@@ -94,10 +95,7 @@ function normalizePart(value: string | null | undefined): string {
 function rowFlightNumber(row: ParsedRow, side: 'ARR' | 'DEP'): string | null {
   const rawFlight = side === 'ARR' ? row.arrFlight : row.depFlight;
   if (!rawFlight) return null;
-  const raw = normalizePart(rawFlight);
-  if (!raw) return null;
-  const normalizedFlight = /^\d+$/.test(raw) ? raw.padStart(3, '0') : raw;
-  return `${normalizePart(row.airline)}${normalizedFlight}`;
+  return cleanFlightNumber(row.airline, rawFlight)?.flightNumber ?? null;
 }
 
 function identity(type: FlightRecord['type'], airline: string, flightNumber: string): string {

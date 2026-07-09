@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
-import { cleanFlightNumber } from './parser';
-import { buildOperationalFlightMetadata, getOperationalDate } from './iataSeason';
+import { cleanFlightNumber } from './parser.ts';
+import { buildOperationalFlightMetadata, getOperationalDate } from './iataSeason.ts';
 import type { FlightLeg, FlightModification, FlightRecord, ParsedRow } from './types';
 
 const MONTHS: Record<string, number> = {

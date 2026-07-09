@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import type { ParsedRow, CleanedFlight, FlightLeg, ParseResult, DisplayRow } from './types';
-import { normalizeSeasonSheetName } from './importSeasonRules';
+import { normalizeSeasonSheetName } from './importSeasonRules.ts';
 
 // ─── Excel Column Mapping ──────────────────────────────────────
 // Columns from DAD_SeasonalS26.xlsx:
@@ -77,11 +77,12 @@ function parseTime(raw: string | number | undefined): string | null {
 // ─── Flight Number Cleaning ────────────────────────────────────
 
 /**
- * Clean a raw flight number by preserving every source character as part of
- * the flight number, padding only purely numeric values to 3 digits.
+ * Clean a raw flight number by removing an already-present airline prefix,
+ * then padding purely numeric flight parts to 3 digits.
  *
  * Examples:
- *   ("TW", "8")    -> { flightNumber: "TW008", rawFlightNumber: "8", requestStatusCode: null }
+ *   ("TW", "8")    -> { flightNumber: "TW008", rawFlightNumber: "008", requestStatusCode: null }
+ *   ("TG", "TG559")-> { flightNumber: "TG559", rawFlightNumber: "559", requestStatusCode: null }
  *   ("ZE", "593A") -> { flightNumber: "ZE593A", rawFlightNumber: "593A", requestStatusCode: null }
  *   ("NX", "978")  -> { flightNumber: "NX978", rawFlightNumber: "978", requestStatusCode: null }
  */
@@ -92,11 +93,21 @@ export function cleanFlightNumber(airline: string, raw: string | number | undefi
   const rawStr = String(raw).trim().toUpperCase();
   if (!rawStr) return null;
 
-  const normalizedFlight = /^\d+$/.test(rawStr) ? rawStr.padStart(3, '0') : rawStr;
+  const rawWithoutAirline =
+    normalizedAirline &&
+    rawStr.length > normalizedAirline.length &&
+    rawStr.startsWith(normalizedAirline)
+      ? rawStr.slice(normalizedAirline.length)
+      : rawStr;
+  if (!rawWithoutAirline) return null;
+
+  const normalizedFlight = /^\d+$/.test(rawWithoutAirline)
+    ? rawWithoutAirline.padStart(3, '0')
+    : rawWithoutAirline;
 
   return {
     flightNumber: `${normalizedAirline}${normalizedFlight}`,
-    rawFlightNumber: rawStr,
+    rawFlightNumber: normalizedFlight,
     requestStatusCode: null,
   };
 }

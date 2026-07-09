@@ -185,6 +185,49 @@ test('seasonal patch marks omitted records in the imported identity window as ba
   });
 });
 
+test('seasonal patch normalizes already-prefixed row flight numbers when scoping deletions', () => {
+  const staleCanonicalRecord = record({
+    id: 'old-tg559-nov02',
+    type: 'D',
+    airline: 'TG',
+    flightNumber: 'TG559',
+    rawFlightNumber: '559',
+    date: '2026-11-02',
+    schedule: '10:30',
+    route: 'BKK',
+  });
+  const imported = record({
+    id: 'new-tg559-nov01',
+    type: 'D',
+    airline: 'TG',
+    flightNumber: 'TG559',
+    rawFlightNumber: '559',
+    date: '2026-11-01',
+    schedule: '10:30',
+    route: 'BKK',
+  });
+
+  const result = buildSeasonalImportPatch({
+    existingRecords: [staleCanonicalRecord],
+    existingModifications: new Map(),
+    importedRows: [row({
+      airline: 'TG',
+      effective: '01-Nov-26',
+      discontinue: '02-Nov-26',
+      daysOfWeek: [true, true, true, true, true, true, true],
+      std: '10:30',
+      depFlight: 'TG559',
+      depRoute: 'BKK',
+    })],
+    importedRecords: [imported],
+  });
+
+  const byId = new Map(result.mergedRecords.map((item) => [item.id, item]));
+  assert.equal(byId.get('old-tg559-nov02')?.status, 'deleted');
+  assert.equal(byId.get('old-tg559-nov02')?.action, 'deleted');
+  assert.deepEqual(result.affectedRecordIds.sort(), ['new-tg559-nov01', 'old-tg559-nov02']);
+});
+
 test('seasonal patch appends imported records with no natural-key match', () => {
   const imported = record({
     id: 'new-ak500-jun03',
