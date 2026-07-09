@@ -32,13 +32,18 @@ function extractFunctionBody(source: string, functionName: string): string {
 }
 
 test('SyncActionButton remains submit-pending and never becomes Fetch data', () => {
-  const source = readFileSync(join(process.cwd(), 'src/app/components/SyncActionButton.tsx'), 'utf8');
-  assert.match(source, /pendingCount/);
-  assert.match(source, /Save pending/);
-  assert.match(source, /Submit pending changes to server/);
-  assert.doesNotMatch(source, /Fetch data/);
-  assert.doesNotMatch(source, /onFetch/);
-  assert.doesNotMatch(source, /fetchUpdatesNow/);
+  const buttonSource = readFileSync(join(process.cwd(), 'src/app/components/SyncActionButton.tsx'), 'utf8');
+  const stateSource = readFileSync(join(process.cwd(), 'src/app/components/syncActionButtonState.ts'), 'utf8');
+  const submitUiSource = `${buttonSource}\n${stateSource}`;
+  assert.match(buttonSource, /pendingCount/);
+  assert.match(buttonSource, /getSyncActionButtonState/);
+  assert.match(buttonSource, /state\.label/);
+  assert.match(buttonSource, /state\.title/);
+  assert.match(stateSource, /Save pending/);
+  assert.match(stateSource, /Submit pending changes to server/);
+  assert.doesNotMatch(submitUiSource, /Fetch data/);
+  assert.doesNotMatch(submitUiSource, /onFetch/);
+  assert.doesNotMatch(submitUiSource, /fetchUpdatesNow/);
 });
 
 test('FetchServerUpdatesButton is read-only server refresh UI', () => {

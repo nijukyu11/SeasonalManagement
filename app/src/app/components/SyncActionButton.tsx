@@ -2,9 +2,12 @@
 
 import { useCallback, useRef, useState } from 'react';
 
+import { getSyncActionButtonState } from './syncActionButtonState';
+
 interface SyncActionButtonProps {
   syncing: boolean;
   pendingCount: number;
+  draftCount?: number;
   progress?: string | null;
   onSync: () => Promise<void> | void;
   className?: string;
@@ -13,19 +16,22 @@ interface SyncActionButtonProps {
 export default function SyncActionButton({
   syncing,
   pendingCount,
+  draftCount,
   progress,
   onSync,
   className = '',
 }: SyncActionButtonProps) {
   const [clickLocked, setClickLocked] = useState(false);
   const clickLockedRef = useRef(false);
-  const hasPending = pendingCount > 0;
-  const busy = syncing || clickLocked;
-  const disabledCursorClass = busy ? 'disabled:cursor-wait' : 'disabled:cursor-not-allowed';
-  const label = busy ? 'Submitting...' : hasPending ? 'Save pending' : 'No pending';
+  const state = getSyncActionButtonState({
+    syncing: syncing || clickLocked,
+    pendingCount,
+    draftCount,
+    progress,
+  });
 
   const handleClick = useCallback(async () => {
-    if (busy || !hasPending || clickLockedRef.current) return;
+    if (state.busy || !state.canSubmit || clickLockedRef.current) return;
     clickLockedRef.current = true;
     setClickLocked(true);
     try {
@@ -34,26 +40,20 @@ export default function SyncActionButton({
       clickLockedRef.current = false;
       setClickLocked(false);
     }
-  }, [busy, hasPending, onSync]);
+  }, [state.busy, state.canSubmit, onSync]);
 
   return (
     <button
       type="button"
       onClick={() => void handleClick()}
-      disabled={busy || !hasPending}
-      aria-busy={busy ? 'true' : 'false'}
+      disabled={state.disabled}
+      aria-busy={state.busy ? 'true' : 'false'}
       aria-live="polite"
-      title={
-        busy
-          ? progress ?? 'Submitting pending changes'
-          : hasPending
-            ? progress ?? 'Submit pending changes to server'
-            : 'No pending changes to submit'
-      }
-      className={`flex min-w-[116px] items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 font-label-caps text-label-caps text-on-primary transition-colors hover:bg-primary-container hover:text-on-primary-container ${disabledCursorClass} disabled:opacity-70 ${className}`}
+      title={state.title}
+      className={`flex min-w-[116px] items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 font-label-caps text-label-caps text-on-primary transition-colors hover:bg-primary-container hover:text-on-primary-container ${state.disabledCursorClass} disabled:opacity-70 ${className}`}
     >
-      <span aria-hidden="true" className={`material-symbols-outlined text-[18px] ${busy ? 'animate-spin' : ''}`}>sync</span>
-      <span>{label}</span>
+      <span aria-hidden="true" className={`material-symbols-outlined text-[18px] ${state.busy ? 'animate-spin' : ''}`}>sync</span>
+      <span>{state.label}</span>
     </button>
   );
 }
