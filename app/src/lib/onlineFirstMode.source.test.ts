@@ -81,6 +81,6 @@ test('check-in persistence without sync metadata rolls back instead of silently 
   const checkInPage = readFileSync(join(process.cwd(), 'src/app/checkin/page.tsx'), 'utf8');
   assert.match(
     checkInPage,
-    /if \(!result\.syncMeta\) throw new Error\('Check-in server mutation completed without sync metadata\.'\)/
+    /if \(!result\.syncMeta\) \{[\s\S]*?throw withCheckInCommitFailureSource\([\s\S]*?new Error\('Check-in server mutation completed without sync metadata\.'\),[\s\S]*?result\.source \?\? 'checkin'[\s\S]*?\);[\s\S]*?\}/
   );
 });

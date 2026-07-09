@@ -96,6 +96,12 @@ import {
 import { useSessionScrollRestoration } from '../hooks/useSessionScrollRestoration';
 import { useSessionState } from '../hooks/useSessionState';
 import { useSeasonWorkspaceRefresh } from '../hooks/useSeasonWorkspaceRefresh';
+import {
+  formatCheckInCommitFailure,
+  getCheckInCommitFailureSource,
+  withCheckInCommitFailureSource,
+  type CheckInCommitSource,
+} from './checkInCommitErrors';
 import { shouldRefreshCheckInForWorkspaceChange } from './workspaceRefreshScope';
 
 const DEFAULT_TIMELINE_PIXELS_PER_MINUTE = 1.5;
@@ -595,7 +601,7 @@ interface CheckInCommitOptions {
 type CheckInCommitPersistenceResult = {
   syncMeta?: LocalSyncMeta;
   affectedIds?: string[];
-  source?: 'checkin' | 'checkin-worker' | 'checkin-native';
+  source?: CheckInCommitSource;
 };
 
 interface CheckInUndoEntry {
@@ -1208,13 +1214,21 @@ function CheckInAllocationContent() {
     description: string
   ): Promise<CheckInCommitPersistenceResult> => {
     if (mods.length === 0) return {};
-    const nativeResult = await commitCheckInModificationsNative(seasonId, mods, description);
-    if (nativeResult) return nativeResult;
+    try {
+      const nativeResult = await commitCheckInModificationsNative(seasonId, mods, description);
+      if (nativeResult) return nativeResult;
+    } catch (error) {
+      throw withCheckInCommitFailureSource(error, 'checkin-native');
+    }
     const worker = getCheckInCommitWorker();
     if (!worker) {
-      return commitCheckInModificationsOnMainThread(seasonId, mods, description);
+      try {
+        return await commitCheckInModificationsOnMainThread(seasonId, mods, description);
+      } catch (error) {
+        throw withCheckInCommitFailureSource(error, 'checkin');
+      }
     }
-    return (async () => {
+    try {
       const performanceStartedAt = getCheckInPerformanceNow();
       const response = await commitCheckInModificationsInWorker(worker, seasonId, mods, description);
       logCheckInPerformance('commitCheckInModifications', performanceStartedAt, {
@@ -1227,7 +1241,9 @@ function CheckInAllocationContent() {
         affectedIds: response.affectedIds ?? getAffectedIdsFromModifications(mods),
         source: 'checkin-worker',
       };
-    })();
+    } catch (error) {
+      throw withCheckInCommitFailureSource(error, 'checkin-worker');
+    }
   }, [commitCheckInModificationsInWorker, commitCheckInModificationsNative, commitCheckInModificationsOnMainThread, getCheckInCommitWorker]);
 
   useEffect(() => {
@@ -1778,7 +1794,12 @@ function CheckInAllocationContent() {
     }
     void showAlert({
       title: 'Check-in Update Failed',
-      message: error instanceof Error ? error.message : String(error),
+      message: formatCheckInCommitFailure({
+        error,
+        description: entry.description,
+        legIds: entry.legIds,
+        source: getCheckInCommitFailureSource(error, 'checkin'),
+      }),
       tone: 'error',
     });
   }, [applyOptimisticCheckInModifications, clearOptimisticAllocationView, fromDateTime, replaceCheckInModifications, season, showAlert, toDateTime]);
@@ -1788,7 +1809,12 @@ function CheckInAllocationContent() {
     setCheckInLocalCommitPending(true);
     try {
       const result = await persistCheckInModifications(season.id, entry.mods, entry.description);
-      if (!result.syncMeta) throw new Error('Check-in server mutation completed without sync metadata.');
+      if (!result.syncMeta) {
+        throw withCheckInCommitFailureSource(
+          new Error('Check-in server mutation completed without sync metadata.'),
+          result.source ?? 'checkin'
+        );
+      }
       scheduleSyncSummaryUpdate(result.syncMeta);
       useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
         seasonId: season.id,
