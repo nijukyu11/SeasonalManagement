@@ -264,7 +264,8 @@ export default function HomePage() {
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncSummary.pendingCount);
   const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount);
   const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
-  const hasDraftChanges = (draftState?.records.length ?? 0) + (draftState?.modifications.length ?? 0) > 0;
+  const draftChangeCount = ((draftState?.records.length ?? 0) + (draftState?.modifications.length ?? 0));
+  const hasDraftChanges = draftChangeCount > 0;
 
   // Pagination
   const [page, setPage] = useState(0);
@@ -1666,6 +1667,7 @@ export default function HomePage() {
               <SyncActionButton
                 syncing={syncInProgress}
                 pendingCount={syncPendingCount}
+                draftCount={draftChangeCount}
                 progress={syncProgress}
                 onSync={handleSync}
               />
@@ -1675,7 +1677,7 @@ export default function HomePage() {
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-amber-900">
               <span className="material-symbols-outlined text-[18px]">edit_note</span>
               <span className="text-xs font-semibold">
-                {(draftState?.records.length ?? 0) + (draftState?.modifications.length ?? 0)} draft changes
+                {draftChangeCount} draft changes
               </span>
               <button
                 onClick={handleDiscardSeasonalDraft}

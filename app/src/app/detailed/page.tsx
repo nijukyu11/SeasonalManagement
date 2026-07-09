@@ -192,7 +192,8 @@ function DetailedScheduleContent() {
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncSummary.pendingCount);
   const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount);
   const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
-  const hasDraftChanges = (draftState?.modifications.length ?? 0) > 0;
+  const draftChangeCount = draftState?.modifications.length ?? 0;
+  const hasDraftChanges = draftChangeCount > 0;
   const currentDetailedWindow = buildDetailedScheduleQueryWindow({
     dateFrom: targetDateFrom || fromDate || null,
     dateTo: targetDateTo || toDate || null,
@@ -1706,6 +1707,7 @@ function DetailedScheduleContent() {
               <SyncActionButton
                 syncing={syncInProgress}
                 pendingCount={syncPendingCount}
+                draftCount={draftChangeCount}
                 progress={syncProgress}
                 onSync={handleSync}
               />
@@ -1714,7 +1716,7 @@ function DetailedScheduleContent() {
           draftControls={hasDraftChanges && (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-amber-900">
               <span className="material-symbols-outlined text-[18px]">edit_note</span>
-              <span className="text-xs font-semibold">{draftState?.modifications.length ?? 0} draft changes</span>
+              <span className="text-xs font-semibold">{draftChangeCount} draft changes</span>
               <button
                 onClick={handleDiscardDraft}
                 disabled={isSaving || syncInProgress}
