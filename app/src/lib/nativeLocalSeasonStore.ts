@@ -105,7 +105,6 @@ export async function runNativeLocalModificationBatchDeltaResult(
   history?: Pick<ModHistoryEntry, 'id' | 'timestamp' | 'description' | 'scheduleNotification'>,
   source: NativeLocalModificationSource = 'allocation'
 ): Promise<NativeLocalModificationBatchDeltaResult | null> {
-  if (!isNativeLocalStoreRuntime()) return null;
   if (SERVER_AUTHORITATIVE_MODE) {
     const operations = [
       ...mods.map((mod) => ({ type: 'modification', mod })),
@@ -117,6 +116,8 @@ export async function runNativeLocalModificationBatchDeltaResult(
       affectedIds: mods.map((mod) => mod.legId),
     };
   }
+
+  if (!isNativeLocalStoreRuntime()) return null;
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<NativeLocalModificationBatchDeltaResult>('apply_local_modification_batch_delta', {
     input: {
@@ -146,7 +147,6 @@ export async function runNativeScheduleMutation(
   history?: Pick<ModHistoryEntry, 'id' | 'timestamp' | 'description' | 'scheduleNotification'>,
   sourceRows: ParsedRow[] = []
 ): Promise<LocalSyncMeta | null> {
-  if (!isNativeLocalStoreRuntime()) return null;
   if (SERVER_AUTHORITATIVE_MODE) {
     const operations = [
       ...records.map((record) => ({ type: 'flightRecord', record })),
@@ -157,6 +157,8 @@ export async function runNativeScheduleMutation(
     ];
     return applyServerAuthoritativeOperations(seasonId, 'schedule', operations);
   }
+
+  if (!isNativeLocalStoreRuntime()) return null;
   const { invoke } = await import('@tauri-apps/api/core');
   const result = await invoke<NativeScheduleMutationResult>('apply_schedule_mutation', {
     input: {
