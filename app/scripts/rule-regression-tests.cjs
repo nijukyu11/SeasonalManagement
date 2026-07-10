@@ -20,7 +20,7 @@ function compileFixtureModules() {
   fs.mkdirSync(tempDir, { recursive: true });
   fs.writeFileSync(path.join(tempDir, 'package.json'), '{"type":"commonjs"}\n');
 
-  for (const name of ['types', 'importSeasonRules', 'iataSeason', 'flightPairIntegrity', 'parser', 'exporter', 'canonicalSeasonalRows', 'sourceRowPatterns', 'atomicSchedule', 'firestoreWritePlanner', 'importProgress', 'settingsRules', 'settingsPageActions', 'modHistorySizing', 'auditLog', 'detailedScheduleState', 'dailySchedule', 'dailyScheduleImport', 'dailyScheduleExport', 'checkinAllocation', 'checkInCounterSettings', 'gateAllocation', 'checkinPdfExport', 'gatePdfExport', 'seasonDataCache', 'seasonalLinkActions', 'nativeRuntime', 'serverAuthoritativeMode', 'nativeSeasonCatchup', 'nativeLocalSeasonStore', 'localSeasonStore', 'localSeasonSqlStore', 'seasonWorkspaceBootstrap', 'seasonChangeEvents', 'appSessionCleanup', 'exportSave', 'remoteStore', 'supabase', 'supabaseStore', 'seasonSync', 'seasonAutoSync', 'seasonalDisplayAggregator', 'routeCountry', 'dashboardAnalysis', 'dashboardAiShared', 'dashboardAiAnalysis', 'dashboardReportExport', 'persistenceSchema']) {
+  for (const name of ['types', 'importSeasonRules', 'iataSeason', 'flightPairIntegrity', 'parser', 'exporter', 'canonicalSeasonalRows', 'sourceRowPatterns', 'atomicSchedule', 'firestoreWritePlanner', 'importProgress', 'settingsRules', 'settingsPageActions', 'modHistorySizing', 'auditLog', 'detailedScheduleState', 'dailySchedule', 'dailyScheduleImport', 'dailyScheduleExport', 'checkinAllocation', 'checkInCounterSettings', 'gateAllocation', 'checkinPdfExport', 'gatePdfExport', 'seasonDataCache', 'seasonalLinkActions', 'nativeRuntime', 'serverAuthoritativeMode', 'nativeSeasonCatchup', 'nativeLocalSeasonStore', 'localSeasonStore', 'localSeasonSqlStore', 'seasonWorkspaceBootstrap', 'seasonChangeEvents', 'appSessionCleanup', 'exportSave', 'remoteStore', 'supabase', 'supabaseRelationalMappers', 'supabaseStore', 'seasonSync', 'seasonAutoSync', 'seasonalDisplayAggregator', 'routeCountry', 'dashboardAnalysis', 'dashboardAiShared', 'dashboardAiAnalysis', 'dashboardReportExport', 'persistenceSchema']) {
     const sourcePath = name === 'dashboardAiShared'
       ? path.join(root, 'supabase', 'functions', '_shared', 'dashboardAiShared.ts')
       : path.join(root, 'src', 'lib', `${name}.ts`);
@@ -10562,6 +10562,18 @@ async function run() {
       seasonalPageSource.includes('sourceRows: []') &&
       seasonalPageSource.includes('sourceRows: 0'),
     'Supabase large season reads must be paginated, imports must verify remote counts, and operational routes must use native viewport reads instead of first-open workspace hydration'
+  );
+  const supabaseInFilterBatchMatch = supabaseStoreSource.match(/const SUPABASE_IN_FILTER_BATCH_SIZE = (\d+)/);
+  const supabaseInFilterBatchSize = Number(supabaseInFilterBatchMatch?.[1] ?? 0);
+  const representativeRecordIds = Array.from({ length: supabaseInFilterBatchSize }, (_, index) =>
+    `W26-2026-10-${String((index % 28) + 1).padStart(2, '0')}-VN${String(index).padStart(4, '0')}-DEP-${String(index).padStart(5, '0')}`
+  );
+  const representativeInFilterPath = `/rest/v1/season_flight_record_counters?select=record_id&record_id=in.(${representativeRecordIds.map(encodeURIComponent).join(',')})&limit=1`;
+  assert(
+    supabaseInFilterBatchSize > 0 &&
+      supabaseInFilterBatchSize <= 100 &&
+      representativeInFilterPath.length < 8000,
+    `Supabase record-id IN filters must stay below common proxy URI limits; batch=${supabaseInFilterBatchSize}, pathLength=${representativeInFilterPath.length}`
   );
   assert(
     seasonChangeEventsSource.includes('buildPendingChangeEvents') &&

@@ -349,12 +349,12 @@ function rowFromCandidate(candidate: RowCandidate, dates: string[], rowIndex: nu
   };
 }
 
-function occurrenceSignature(leg: Pick<FlightLeg, 'type' | 'date' | 'airline' | 'rawFlightNumber' | 'route' | 'schedule' | 'aircraft' | 'category' | 'codeShares' | 'intDomInd'>): string {
+function occurrenceSignature(leg: Pick<FlightLeg, 'type' | 'date' | 'airline' | 'flightNumber' | 'route' | 'schedule' | 'aircraft' | 'category' | 'codeShares' | 'intDomInd'>): string {
   return [
     leg.type,
     leg.date,
     leg.airline,
-    leg.rawFlightNumber,
+    leg.flightNumber,
     leg.route,
     leg.schedule,
     leg.aircraft,

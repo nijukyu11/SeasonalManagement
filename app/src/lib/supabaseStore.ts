@@ -89,7 +89,7 @@ type JsonRecord = Record<string, unknown>;
 type PayloadRow<T> = { payload: T | null };
 type SourceRowIndexRow = { row_index: number | null };
 const SUPABASE_SELECT_PAGE_SIZE = 1000;
-const SUPABASE_IN_FILTER_BATCH_SIZE = 500;
+const SUPABASE_IN_FILTER_BATCH_SIZE = 100;
 const SYNC_V2_EVENT_CHUNK_SIZE = 50;
 const OPERATIONAL_SETTINGS_BASE_COLUMNS = [
   'id',
@@ -1663,8 +1663,9 @@ export const supabaseStore: RemoteStore = {
   },
 
   async subscribeToSeasonEvents(seasonId: string, onEvent: (event: SeasonChangeEvent) => void): Promise<() => void> {
+    const channelTopic = `season-change-events:${seasonId}:${randomId('subscription')}`;
     const channel = client()
-      .channel(`season-change-events:${seasonId}`)
+      .channel(channelTopic)
       .on(
         'postgres_changes',
         {
