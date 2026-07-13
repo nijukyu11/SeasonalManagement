@@ -68,12 +68,21 @@ test('season repair tab owns the legacy conflict review control', () => {
   assert.match(seasonRepairTabSource, /\bSeasonConflictReviewControl\b/);
 });
 
-test('primary routes do not contain legacy native seed, summary, or conflict review controls', () => {
+test('primary routes do not contain legacy native reads, imports, or conflict controls', () => {
   for (const routeFile of primaryRouteFiles) {
     const source = readSource(routeFile);
-    assert.doesNotMatch(source, /\bseedSeasonSyncFromNative\b/, routeFile);
-    assert.doesNotMatch(source, /\bqueryNativeSyncSummary\b/, routeFile);
-    assert.doesNotMatch(source, /\bSeasonConflictReviewControl\b/, routeFile);
+    for (const staleSymbol of [
+      'seedSeasonSyncFromNative',
+      'queryNativeSyncSummary',
+      'queryNativeScheduleWindow',
+      'queryNativeAllocationWindow',
+      'ensureNativeSeasonBaseline',
+      'ensureNativeLocalSeason',
+      'importNativeSeasonSnapshot',
+      'SeasonConflictReviewControl',
+    ]) {
+      assert.doesNotMatch(source, new RegExp(`\\b${staleSymbol}\\b`), `${routeFile}: ${staleSymbol}`);
+    }
   }
 });
 

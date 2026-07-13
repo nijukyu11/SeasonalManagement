@@ -101,7 +101,8 @@ test('Settings keeps the explicit full-season repair import path', () => {
   const repairSource = readFileSync(join(root, 'app', 'settings', 'components', 'SeasonRepairTab.tsx'), 'utf8');
   assert.match(settingsSource, /handleSeasonRepairImport/);
   assert.match(settingsSource, /clearSeasonBaseline\(seasonId\)/);
-  assert.match(settingsSource, /sourceRows: \[\]/);
+  assert.match(settingsSource, /loadSeasonWorkspaceWindow\(\{/);
+  assert.doesNotMatch(settingsSource, /\b(?:query|import|check)Native/);
   assert.match(settingsSource, /totalSourceRows: 0/);
   assert.doesNotMatch(settingsSource, /batchWriteSourceRows/);
   assert.match(repairSource, /Seasonal Full Replace/);

@@ -20,7 +20,7 @@ export default function NativeStartupSessionReset({ children }: { children: Reac
   const [ready, setReady] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
   const [progress, setProgress] = useState<LoadProgress>(() =>
-    buildLoadProgress('Checking native runtime...', 10, 'Preparing local startup')
+    buildLoadProgress('Checking native runtime...', 10, 'Preparing app session')
   );
 
   useEffect(() => {
@@ -36,16 +36,16 @@ export default function NativeStartupSessionReset({ children }: { children: Reac
 
       try {
         if (!cancelled) {
-          setProgress(buildLoadProgress('Clearing local UI session...', 35, 'Keeping downloaded season database and Supabase login', { indeterminate: true }));
+          setProgress(buildLoadProgress('Clearing local UI session...', 35, 'Keeping Supabase login', { indeterminate: true }));
         }
         clearNativeAppEphemeralData({ preserveAuth: true });
         resetUiUndoSession();
         if (!cancelled) {
-          setProgress(buildLoadProgress('Loading local season data', 70, 'Opening downloaded workspace'));
+          setProgress(buildLoadProgress('Connecting to server workspace', 70, 'Loading saved data from Supabase'));
         }
       } catch (error) {
         if (!cancelled) {
-          setWarning(error instanceof Error && error.message ? error.message : 'Local startup cleanup failed.');
+          setWarning(error instanceof Error && error.message ? error.message : 'Session startup cleanup failed.');
           setProgress(buildLoadProgress('Continuing startup...', 85, 'Startup cleanup failed'));
         }
       } finally {

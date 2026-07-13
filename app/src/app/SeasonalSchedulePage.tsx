@@ -55,10 +55,7 @@ import {
 } from '@/lib/seasonalLinkActions';
 import { buildSeasonalDisplayGroups } from '@/lib/seasonalDisplayAggregator';
 import { matchesSeasonalFlightFilter } from '@/lib/seasonalFlightFilter';
-import {
-  createLocalWorkspace,
-  type LocalSyncMeta,
-} from '@/lib/localSeasonStore';
+import type { LocalSyncMeta } from '@/lib/localSeasonStore';
 import { appendAuditLogEntry, createFlightActionAuditFromHistory } from '@/lib/auditLog';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
@@ -83,13 +80,8 @@ import {
 } from './components/SeasonSyncProvider';
 import { useSeasonWorkspaceRefresh } from './hooks/useSeasonWorkspaceRefresh';
 import {
-  checkNativeSeasonIntegrity,
-  importNativeSeasonSnapshot,
-  queryNativeScheduleWindow,
   runNativeScheduleMutation,
 } from '@/lib/nativeSeasonRepository';
-import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
-import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
 
 const PAGE_SIZE = 50;
 const DAY_LABELS = ['1', '2', '3', '4', '5', '6', '7'];
@@ -378,10 +370,6 @@ export default function HomePage() {
       dateTo: debouncedFilters.dateTo || null,
       resourceType: 'schedule',
       limit: 100000,
-    }).catch((error) => {
-      if (SERVER_AUTHORITATIVE_MODE) throw error;
-      console.warn('Server seasonal schedule window unavailable, falling back to native SQLite', error);
-      return null;
     });
     if (serverWindow) {
       if (!requestIsCurrent()) return;
@@ -421,51 +409,7 @@ export default function HomePage() {
       });
       return;
     }
-    if (SERVER_AUTHORITATIVE_MODE) {
-      throw new Error('Server seasonal schedule window is unavailable.');
-    }
-
-    setLoadProgress(buildLoadProgress('Checking local season baseline', 30, season.seasonCode));
-    await ensureNativeSeasonBaseline(season);
-    setLoadProgress(buildLoadProgress('Querying native SQLite fallback', 40, season.seasonCode));
-    const scheduleWindow = await queryNativeScheduleWindow({
-      seasonId: season.id,
-      dateFrom: debouncedFilters.dateFrom || null,
-      dateTo: debouncedFilters.dateTo || null,
-      flightNumberFilter: debouncedFilters.flight || null,
-      routeFilter: debouncedFilters.route || null,
-      limit: 100000,
-    });
-    if (!scheduleWindow) throw new Error('Native seasonal schedule query is unavailable.');
-    if (!requestIsCurrent()) return;
-    loadedWindowKeyRef.current = windowKey;
-    const records = scheduleWindow.records;
-    const mods = new Map(scheduleWindow.modifications.map((mod) => [mod.legId, mod]));
-    const rows = buildPatternRowsFromRecords(records, mods);
-    setLoadProgress(buildLoadProgress('Rendering seasonal schedule', 80, `${records.length} records`));
-    setCachedSeasonData(season.id, {
-      rows,
-      records,
-      modifications: mods,
-      seasonDataVersion: season.dataVersion,
-    });
-    useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-      seasonId: season.id,
-      season,
-      rows,
-      records,
-      modifications: mods,
-      syncMeta: scheduleWindow.syncMeta,
-      windowKey,
-    });
-    setActiveSeason(season);
-    applySeasonData(rows, records, mods);
-    setModHistory([]);
-    setDraftState(null);
-    setSyncSummary({
-      pendingCount: scheduleWindow.syncMeta.pendingCount,
-      lastLocalChangeAt: scheduleWindow.syncMeta.lastLocalChangeAt,
-    });
+    throw new Error('Server seasonal schedule window is unavailable.');
   }, [applySeasonData, debouncedFilters.dateFrom, debouncedFilters.dateTo, debouncedFilters.flight, debouncedFilters.route]);
 
   const refreshSeasonalWindow = useCallback(() => {
@@ -1466,70 +1410,34 @@ export default function HomePage() {
         sourceRows: remoteImport.sourceRows,
         flightRecords: remoteImport.flightRecords,
       };
-      const serverEventHighWater = remoteImport.serverHighWater;
-
       setUploadProgress(buildImportProgress('Refreshing schedule', 94));
-      const history: ModHistoryEntry[] = [];
-      const patternRows = buildPatternRowsFromRecords(seasonRecords, seasonMods);
+      const refreshedWindow = await loadSeasonWorkspaceWindow({
+        seasonId,
+        dateFrom: debouncedFilters.dateFrom || null,
+        dateTo: debouncedFilters.dateTo || null,
+        resourceType: 'schedule',
+        limit: 100000,
+      });
+      if (!refreshedWindow) {
+        throw new Error('Server seasonal schedule window is unavailable after import.');
+      }
+      const refreshedRecords = refreshedWindow.records;
+      const refreshedModifications = refreshedWindow.modifications;
+      const patternRows = buildPatternRowsFromRecords(refreshedRecords, refreshedModifications);
       const previousSeasons = getCachedSeasons() ?? seasons;
       const nextSeasons = existing
         ? previousSeasons.map((season) => season.id === seasonId ? nextSeason : season)
         : [nextSeason, ...previousSeasons];
-      const workspace = createLocalWorkspace({
-        season: nextSeason,
-        rows: [],
-        records: seasonRecords,
-        modifications: seasonMods,
-        modHistory: history,
-        serverEventHighWater,
-      });
-      const imported = await importNativeSeasonSnapshot({
-        season: nextSeason,
-        sourceRows: [],
-        records: seasonRecords,
-        modifications: Array.from(seasonMods.values()),
-        modHistory: [],
-        serverEventHighWater,
-        entityVersions: {},
-      });
-      if (!imported) {
-        throw new Error('Native SQL snapshot import is unavailable. Desktop SQL storage is required.');
-      }
-      if (
-        imported.sourceRows !== 0 ||
-        imported.records !== seasonRecords.length ||
-        imported.modifications !== seasonMods.size ||
-        imported.modHistory !== 0
-      ) {
-        throw new Error(
-          `Local SQL import count mismatch: sourceRows=${imported.sourceRows}/0, records=${imported.records}/${seasonRecords.length}, modifications=${imported.modifications}/${seasonMods.size}, history=${imported.modHistory}/0.`
-        );
-      }
-      const localIntegrity = await checkNativeSeasonIntegrity(seasonId);
-      if (!localIntegrity) {
-        throw new Error('Native SQL integrity check is unavailable after import reset.');
-      }
-      if (
-        localIntegrity.sourceRows !== 0 ||
-        localIntegrity.baseSourceRows !== 0 ||
-        localIntegrity.records !== seasonRecords.length ||
-        localIntegrity.baseRecords !== seasonRecords.length ||
-        localIntegrity.pendingOps !== 0
-      ) {
-        throw new Error(
-          `Local SQL integrity mismatch after import: sourceRows=${localIntegrity.sourceRows}/0, baseSourceRows=${localIntegrity.baseSourceRows}/0, records=${localIntegrity.records}/${seasonRecords.length}, baseRecords=${localIntegrity.baseRecords}/${seasonRecords.length}, pendingOps=${localIntegrity.pendingOps}/0.`
-        );
-      }
       setCachedSeasons(nextSeasons);
-      setCachedSeasonData(seasonId, { rows: patternRows, records: seasonRecords, modifications: seasonMods, seasonDataVersion: nextSeason.dataVersion });
+      setCachedSeasonData(seasonId, { rows: patternRows, records: refreshedRecords, modifications: refreshedModifications, seasonDataVersion: nextSeason.dataVersion });
       useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
       useSeasonWorkspaceStore.getState().replaceSeasonWindow({
         seasonId,
         season: nextSeason,
         rows: patternRows,
-        records: seasonRecords,
-        modifications: seasonMods,
-        syncMeta: imported.syncMeta,
+        records: refreshedRecords,
+        modifications: refreshedModifications,
+        syncMeta: refreshedWindow.syncMeta,
         windowKey: buildSeasonalWindowKey({
           dateFrom: debouncedFilters.dateFrom || null,
           dateTo: debouncedFilters.dateTo || null,
@@ -1539,9 +1447,9 @@ export default function HomePage() {
       });
       publishSeasonalWorkspaceChange(
         seasonId,
-        imported.syncMeta.localRevision ?? workspace.syncMeta.localRevision,
+        refreshedWindow.syncMeta.localRevision,
         affectedRecordIds,
-        imported.syncMeta
+        refreshedWindow.syncMeta
       );
       void appendAuditLogEntry({
         seasonId,

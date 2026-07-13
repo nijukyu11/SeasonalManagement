@@ -1,12 +1,12 @@
 # SeasonalManagement Architecture
 
-Last updated: 2026-06-23
+Last updated: 2026-07-13
 
 ## Purpose
 
 SeasonalManagement is a native-first aviation operations app for importing seasonal Excel schedules, editing atomic flight legs, allocating check-in counters and gates, exporting recognized Excel/PDF outputs, and running read-only dashboard analysis.
 
-The current runtime target is the Tauri desktop app. Next.js/React is the UI shell; Supabase self-hosted is the durable write authority; Rust + SQLite is a read-through desktop cache, bounded query engine, and reporting accelerator; Supabase also remains the shared backend, auth boundary, and Edge Function host.
+The current runtime target is the Tauri desktop app. Next.js/React is the UI shell and self-hosted Supabase is the only operational read/write authority, auth boundary, Realtime source, and Edge Function host. Rust + SQLite remains packaged temporarily for explicitly enabled legacy repair tooling, not as a normal route read model or write queue.
 
 ## Runtime Shape
 
@@ -14,39 +14,38 @@ The current runtime target is the Tauri desktop app. Next.js/React is the UI she
 User action
   -> Next.js route/component
   -> TypeScript domain helper
-  -> nativeSeasonRepository.ts
   -> server-authoritative Supabase RPC
   -> season_change_events / relational tables
   -> route cache/store update
-
-Optional local projection
-  -> native SQLite cache/reporting tables
 
 Route cache miss read path
   -> readCachedWorkspaceWindow()
   -> loadSeasonWorkspaceWindow()
   -> Supabase window RPC or table read fallback
-  -> native SQLite only for legacy non-server-authoritative fallback/reporting paths
+
+Explicit legacy repair only
+  -> legacyNativeSyncAdapter.ts
+  -> native SQLite commands when NEXT_PUBLIC_ENABLE_LEGACY_NATIVE_SYNC_REPAIR=true
 ```
 
-Browser/static mode is not the operational source of truth. Legacy IndexedDB modules remain for compatibility, migration, and backup paths, but normal desktop routes should commit durable writes through authenticated Supabase RPCs and use SQLite/native APIs as cache and bounded read surfaces.
+Browser/static mode is not the operational source of truth. Legacy IndexedDB and SQLite modules remain for compatibility and repair, but normal desktop routes commit durable writes through authenticated Supabase RPCs and never use SQLite as a fallback read surface.
 
 ## Self-hosted Endpoint Cutover
 
 The 2026-06-22 self-hosted cutover uses Cloudflare Tunnel to expose the restored self-hosted Supabase endpoint at `https://supabase.ahtops.xyz`. The endpoint cutover itself was no-schema-change: release variables point signed builds at the self-hosted endpoint, while the restored database starts from the cloud server dump.
 
-Server-side write hardening is now partly implemented on the backend through `opsdata-supabase/supabase/migrations/20260622_server_side_write_hardening.sql`. Seasonal import/re-import should call `apply_seasonal_import_remote(jsonb)` through the remote store so season metadata, source rows, imported flight records, change events, and commit cursors are written atomically. Normal pending-op save still uses `sync_season_workspace_v2`, and clients must consume complete acknowledgements such as `acknowledgedOps`, `changedTargets`, `appliedEvents`, `conflictEvents`, `serverHighWater`, and `nextServerSeq`. Anon execute is intentionally revoked for these RPCs; live smoke needs an authenticated operator session.
+Server-side write hardening is implemented through `opsdata-supabase/supabase/migrations/20260622_server_side_write_hardening.sql`. Seasonal import/re-import calls `apply_seasonal_import_remote(jsonb)` through the remote store so season metadata, imported flight records, change events, and commit cursors are written atomically. Normal schedule/allocation saves use `apply_season_server_mutation_v1(jsonb)`; `sync_season_workspace_v2` is legacy repair/rollback only. Anon execute remains intentionally revoked, so live smoke requires an authenticated operator session.
 
 Online-first server-authoritative writes are staged through `opsdata-supabase/supabase/migrations/20260622_online_first_server_mutation_v1.sql`. Normal route mutation seams call `apply_season_server_mutation_v1(jsonb)` via `applySeasonServerMutationV1()` and update the active route/cache from server-authoritative responses or server-window reloads. `sync_season_workspace_v2`, native catch-up, native entity-version comparison, and native conflict review are legacy repair/rollback paths, not the main workflow. `season_mutation_receipts` provides idempotency by `(season_id, client_id, client_mutation_id)`.
 
-Online-first reads are now staged through `loadSeasonWorkspaceWindow()` in `remoteStore`. Primary route cache misses ask Supabase for the requested schedule/allocation window first. The frontend uses the optimized backend RPC `get_season_schedule_allocation_window_v1(...)` when available, with bounded Supabase table reads as the server-side fallback. In `SERVER_AUTHORITATIVE_MODE`, a failed server read must surface as a route fetch/load error instead of silently applying native SQLite data. Native SQLite viewport queries remain a cache/reporting accelerator and legacy fallback path, not the normal source of truth.
+Online-first reads use `loadSeasonWorkspaceWindow()` in `remoteStore`. Primary route cache misses ask Supabase for the requested schedule/allocation window. The frontend uses `get_season_schedule_allocation_window_v1(...)` when available, with bounded Supabase table reads as the server-side fallback. A failed server read surfaces as a route fetch/load error; native SQLite viewport queries are not a normal fallback.
 
 ### Sync vs Fetch data
 
-- `Sync` / `Save pending` means submit local pending operations to the server. It is retained for legacy rollback and any real pending local ops.
+- `Save` flushes route-owned drafts or debounced mutations directly to the server mutation RPC. There is no SQLite pending upload in normal operation.
 - `Fetch data` means read the latest server workspace window from self-hosted Supabase. It does not submit pending operations and must not call native pending sync.
 - If Check-in or Gate has a debounced local allocation edit that has not started committing yet, `Fetch data` must block and ask the operator to save/settle pending work instead of flushing that edit itself.
-- In server-authoritative mode, normal route refresh uses Supabase server-window reads first. Native SQLite is a cache/reporting accelerator, not the source of truth.
+- Normal route refresh uses Supabase server-window reads. Existing SQLite data is ignored.
 
 ### Online-first Legacy Sync Cleanup
 
@@ -54,7 +53,7 @@ Online-first reads are now staged through `loadSeasonWorkspaceWindow()` in `remo
 - `useSeasonWorkspaceRefresh()` accepts `onRefresh`; route refresh callbacks are cache/server-window refreshes, not native catch-up callbacks.
 - `SeasonAutoSyncScheduler` models only pending-submit states: `synced`, `dirty`, `scheduled`, `syncing`, `live`, `offline`, and `failed`. Removed states such as `catching_up`, `needs_review`, and `conflict` are legacy repair concepts.
 - `SeasonConflictReviewControl` is repair-only and hidden unless `NEXT_PUBLIC_ENABLE_LEGACY_NATIVE_SYNC_REPAIR=true`.
-- SQLite remains useful for bounded local reads, reporting, AI analysis, and explicit repair operations, but it must not decide freshness for primary route tabs.
+- SQLite is retained only for explicitly enabled legacy repair operations and must not decide normal freshness, save success, rollback state, reporting data, or AI context.
 
 ## Current Codebase Map
 
@@ -120,9 +119,17 @@ Excel workbook
 
 `sourceRows` are import evidence and compatibility backup. `FlightRecord` rows are the editable/exportable truth. Same-day and overnight relationships must be explicit through `turnaroundId`/`linkType`; export must not infer overnight pairings from time similarity.
 
-## Sync And Catch-Up
+## Current Save And Realtime Flow
 
-The user-facing action is `Save`, not continuous publish.
+1. Route-specific drafts and debounced allocation edits are held in React/Zustand memory.
+2. `SeasonSyncProvider` runs each route guard so pending route work is committed through `apply_season_server_mutation_v1(jsonb)`.
+3. Mutation response metadata updates the route cache and save badge immediately.
+4. Supabase Realtime events invalidate affected workspace windows on other clients.
+5. Mutation failure restores the optimistic view or reloads the bounded server window; it never reads SQLite.
+
+## Legacy Native Sync And Catch-Up
+
+The following flow is retained only for repair/rollback archaeology and is not used by normal server-first routes.
 
 1. Route-specific drafts are committed to native SQLite before Save.
 2. `SeasonSyncProvider` and `SeasonAutoSyncScheduler` coordinate status, guards, and user-facing progress.

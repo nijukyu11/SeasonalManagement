@@ -26,7 +26,6 @@ test('conflict review is legacy-native fallback outside normal server-authoritat
   assert.match(conflictControl, /LEGACY_NATIVE_SYNC_ENABLED/);
   assert.doesNotMatch(conflictControl, /SERVER_AUTHORITATIVE_MODE/);
   assert.match(conflictControl, /return null/);
-  assert.match(provider, /SERVER_AUTHORITATIVE_MODE/);
   assert.match(provider, /server-authoritative live refresh/i);
 });
 
@@ -34,8 +33,9 @@ test('native route mutation seams commit through server-authoritative RPC', () =
   const nativeLocalStore = readFileSync(join(process.cwd(), 'src/lib/nativeLocalSeasonStore.ts'), 'utf8');
   assert.match(nativeLocalStore, /SERVER_AUTHORITATIVE_MODE/);
   assert.match(nativeLocalStore, /applySeasonServerMutationV1/);
-  assert.match(nativeLocalStore, /runNativeSeasonCatchup/);
   assert.match(nativeLocalStore, /toServerAuthoritativeSyncMeta/);
+  assert.doesNotMatch(nativeLocalStore, /\bqueryNativeSyncSummary\b/);
+  assert.doesNotMatch(nativeLocalStore, /\brunNativeSeasonCatchup\b/);
 });
 
 test('schedule route mutations pass server-authoritative module sources', () => {
@@ -52,9 +52,20 @@ test('schedule route mutations pass server-authoritative module sources', () => 
   assert.match(localSeasonStore, /runNativeScheduleMutation\([\s\S]*'seasonal'\s*\)/);
 });
 
-test('server-authoritative writes surface catch-up failures instead of reporting stale success', () => {
+test('server-authoritative writes do not depend on SQLite cursor or catch-up', () => {
   const nativeLocalStore = readFileSync(join(process.cwd(), 'src/lib/nativeLocalSeasonStore.ts'), 'utf8');
-  assert.doesNotMatch(nativeLocalStore, /runNativeSeasonCatchup\(\{[\s\S]*?\}\)\.catch\(\(\) => null\)/);
+  assert.doesNotMatch(nativeLocalStore, /\bqueryNativeSyncSummary\b/);
+  assert.doesNotMatch(nativeLocalStore, /\brunNativeSeasonCatchup\b/);
+  assert.doesNotMatch(nativeLocalStore, /\bbaseServerSeq\b/);
+});
+
+test('normal native startup and close do not preload or mutate SQLite', () => {
+  const tauriConfig = readFileSync(join(process.cwd(), 'src-tauri/tauri.conf.json'), 'utf8');
+  const sessionCleanup = readFileSync(join(process.cwd(), 'src/lib/appSessionCleanup.ts'), 'utf8');
+  const closeGuard = readFileSync(join(process.cwd(), 'src/app/components/NativeCloseCleanupGuard.tsx'), 'utf8');
+  assert.doesNotMatch(tauriConfig, /sqlite:seasonal-management-local\.db/);
+  assert.doesNotMatch(sessionCleanup, /discardAllLocalPendingChanges|localSeasonStore/);
+  assert.doesNotMatch(closeGuard, /discardPendingLocalChanges|SQLite database|local database/);
 });
 
 test('gate commit promotes committed modifications before optimistic view can clear', () => {

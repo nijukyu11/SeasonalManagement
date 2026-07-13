@@ -73,9 +73,6 @@ import {
 } from '@/lib/seasonDataCache';
 import type { LocalSyncMeta } from '@/lib/localSeasonStore';
 import type { DashboardAiQueryScope, DashboardAiQueryScopeSourcePreset } from '@/lib/dashboardAiShared';
-import { queryNativeScheduleWindow } from '@/lib/nativeSeasonRepository';
-import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
-import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
@@ -1119,10 +1116,6 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           seasonId: targetSeason.id,
           resourceType: 'schedule',
           limit: 100000,
-        }).catch((error) => {
-          if (SERVER_AUTHORITATIVE_MODE) throw error;
-          console.warn('Server dashboard window unavailable, falling back to native SQLite', error);
-          return null;
         });
         if (cancelled) return;
         if (serverWindow) {
@@ -1162,44 +1155,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           return;
         }
 
-        setLoadProgress(buildLoadProgress('Checking local season baseline', 40, targetSeason.seasonCode));
-        await ensureNativeSeasonBaseline(targetSeason);
-        if (cancelled) return;
-        setLoadProgress(buildLoadProgress('Querying native SQLite fallback', 50, targetSeason.seasonCode));
-        const result = await queryNativeScheduleWindow({
-          seasonId: targetSeason.id,
-          limit: 100000,
-        });
-        if (cancelled) return;
-        if (!result) throw new Error('Native dashboard query is unavailable.');
-        const nextModifications = new Map(result.modifications.map((mod) => [mod.legId, mod]));
-        setLoadProgress(buildLoadProgress(
-          'Preparing dashboard',
-          80,
-          `${result.records.length} records`
-        ));
-        setSeason(targetSeason);
-        setRecords(result.records);
-        setModifications(nextModifications);
-        setDataSource('local');
-        setSyncMeta(result.syncMeta);
-        setCachedSeasonData(targetSeason.id, {
-          rows: [],
-          records: result.records,
-          modifications: nextModifications,
-          seasonDataVersion: targetSeason.dataVersion,
-        });
-        useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-          seasonId: targetSeason.id,
-          season: targetSeason,
-          rows: [],
-          records: result.records,
-          modifications: nextModifications,
-          syncMeta: result.syncMeta,
-          windowKey: overviewWindowKey,
-        });
-        loadedWindowKeyRef.current = overviewWindowKey;
-        setFetchUpdateNotice(null);
+        throw new Error('Server dashboard window is unavailable.');
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
       } finally {
@@ -1243,12 +1199,13 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   }, [effectiveRecords, modifications, records, season, syncMeta]);
 
   const loadAiWorkspaceSeason = useCallback(async (targetSeason: Season): Promise<DashboardAiWorkspaceSeasonData> => {
-    const result = await queryNativeScheduleWindow({
+    const result = await loadSeasonWorkspaceWindow({
       seasonId: targetSeason.id,
+      resourceType: 'schedule',
       limit: 100000,
     });
-    if (!result) throw new Error('Native dashboard schedule query is unavailable.');
-    const nextModifications = new Map(result.modifications.map((mod) => [mod.legId, mod]));
+    if (!result) throw new Error('Server dashboard schedule window is unavailable.');
+    const nextModifications = result.modifications;
     useSeasonWorkspaceStore.getState().replaceSeasonWindow({
       seasonId: targetSeason.id,
       season: targetSeason,
@@ -1263,10 +1220,10 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       records: result.records,
       modifications: nextModifications,
       effectiveRecords: buildEffectiveDashboardRecords(result.records, nextModifications),
-      dataSource: 'local',
+      dataSource: 'server',
       syncMeta: result.syncMeta,
-      total: result.total,
-      truncated: result.truncated,
+      total: result.records.length,
+      truncated: false,
     };
   }, []);
 

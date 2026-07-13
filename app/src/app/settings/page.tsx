@@ -10,8 +10,8 @@ import {
   createSeason,
   findSeasonByCode,
   getOperationalSettings,
-  getSeasonEventHighWater,
   getSeasons,
+  loadSeasonWorkspaceWindow,
   saveOperationalSettings,
   updateSeason,
   verifySeasonImportCounts,
@@ -47,11 +47,6 @@ import {
   setCachedSeasonData,
   setCachedSeasons,
 } from '@/lib/seasonDataCache';
-import {
-  checkNativeSeasonIntegrity,
-  importNativeSeasonSnapshot,
-  queryNativeSyncSummary,
-} from '@/lib/nativeSeasonRepository';
 import type {
   AiAnalysisModelSetting,
   AiAnalysisProvider,
@@ -1097,22 +1092,11 @@ export default function SettingsPage() {
       const legs = flightRecordsToLegs(records);
       const dates = legs.map((leg) => leg.date).sort();
       const existing = await findSeasonByCode(seasonCode);
-      const syncSummary = existing ? await queryNativeSyncSummary(existing.id) : null;
-      const pendingCount = syncSummary?.pendingCount ?? 0;
-      const conflictCount = syncSummary?.conflictCount ?? 0;
-      const syncRiskParts = [
-        pendingCount > 0 ? `${pendingCount} pending local change${pendingCount === 1 ? '' : 's'}` : null,
-        conflictCount > 0 ? `${conflictCount} conflict review item${conflictCount === 1 ? '' : 's'}` : null,
-      ].filter(Boolean);
-      const pendingNote = syncRiskParts.length > 0
-        ? `\n\nThis season has ${syncRiskParts.join(' and ')} that will be discarded by the repair import.`
-        : '';
       const confirmed = await showConfirm({
         title: 'Replace Full Season',
         message:
           `Replace the full ${seasonCode} baseline with ${records.length} flight records from ${file.name}? ` +
-          'This clears existing baseline records, modifications, and history for that season before recreating it.' +
-          pendingNote,
+          'This clears existing server records, modifications, and history for that season before recreating it.',
         tone: 'warning',
         confirmLabel: existing ? 'Replace Season' : 'Create Season',
       });
@@ -1154,49 +1138,20 @@ export default function SettingsPage() {
         sourceRows: 0,
         flightRecords: records.length,
       });
-      const serverEventHighWater = await getSeasonEventHighWater(seasonId);
-      const canonical = buildCanonicalSeasonalRows({ records, modifications: new Map() });
+      const refreshedWindow = await loadSeasonWorkspaceWindow({
+        seasonId,
+        resourceType: 'schedule',
+        limit: 500000,
+      });
+      if (!refreshedWindow) {
+        throw new Error('Server seasonal schedule window is unavailable after repair import.');
+      }
+      const canonical = buildCanonicalSeasonalRows({
+        records: refreshedWindow.records,
+        modifications: refreshedWindow.modifications,
+      });
       if (!canonical.validation.valid) {
         console.warn('Canonical seasonal pattern validation failed after repair import', canonical.diagnostics);
-      }
-
-      setSeasonRepairStatus(`Refreshing local SQL for ${seasonCode}`);
-      const imported = await importNativeSeasonSnapshot({
-        season: nextSeason,
-        sourceRows: [],
-        records,
-        modifications: [],
-        modHistory: [],
-        serverEventHighWater,
-        entityVersions: {},
-      });
-      if (!imported) {
-        throw new Error('Native SQL snapshot import is unavailable. Desktop SQL storage is required.');
-      }
-      if (
-        imported.sourceRows !== 0 ||
-        imported.records !== records.length ||
-        imported.modifications !== 0 ||
-        imported.modHistory !== 0
-      ) {
-        throw new Error(
-          `Local SQL repair import count mismatch: sourceRows=${imported.sourceRows}/0, records=${imported.records}/${records.length}, modifications=${imported.modifications}/0, history=${imported.modHistory}/0.`
-        );
-      }
-      const localIntegrity = await checkNativeSeasonIntegrity(seasonId);
-      if (!localIntegrity) {
-        throw new Error('Native SQL integrity check is unavailable after repair import.');
-      }
-      if (
-        localIntegrity.sourceRows !== 0 ||
-        localIntegrity.baseSourceRows !== 0 ||
-        localIntegrity.records !== records.length ||
-        localIntegrity.baseRecords !== records.length ||
-        localIntegrity.pendingOps !== 0
-      ) {
-        throw new Error(
-          `Local SQL integrity mismatch after repair import: sourceRows=${localIntegrity.sourceRows}/0, baseSourceRows=${localIntegrity.baseSourceRows}/0, records=${localIntegrity.records}/${records.length}, baseRecords=${localIntegrity.baseRecords}/${records.length}, pendingOps=${localIntegrity.pendingOps}/0.`
-        );
       }
 
       const previousSeasons = getCachedSeasons() ?? await getSeasons();
@@ -1206,15 +1161,15 @@ export default function SettingsPage() {
       setCachedSeasons(nextSeasons);
       setCachedSeasonData(seasonId, {
         rows: canonical.rows,
-        records,
-        modifications: new Map(),
+        records: refreshedWindow.records,
+        modifications: refreshedWindow.modifications,
         seasonDataVersion: nextSeason.dataVersion,
       });
       publishSeasonWorkspaceChanged({
         seasonId,
-        localRevision: imported.syncMeta.localRevision,
+        localRevision: refreshedWindow.syncMeta.localRevision,
         source: 'settings',
-        syncMeta: imported.syncMeta,
+        syncMeta: refreshedWindow.syncMeta,
       });
       void appendAuditLogEntry({
         seasonId,

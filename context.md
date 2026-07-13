@@ -8,9 +8,21 @@ A web-based aviation operations app for importing seasonal Excel schedules, revi
 
 ---
 
-## Latest Native Context - 2026-05-30
+## Current Server-First Context - 2026-07-13
 
-This section supersedes older IndexedDB/Firestore-first wording that may still appear deeper in this file.
+This section is the current runtime contract and supersedes the legacy native-first notes below.
+
+- The Tauri desktop app is fully server-first against self-hosted Supabase. Supabase relational tables, mutation RPCs, and server change events are the only durable operational authority.
+- Normal route reads use the in-memory workspace cache first, then `loadSeasonWorkspaceWindow()` against Supabase. A server read failure surfaces as an error; Seasonal, Detailed, Daily, Check-in, Gate, Dashboard, export, rollback, and import must not fall back to SQLite.
+- Normal route writes call `apply_season_server_mutation_v1(jsonb)` through the shared mutation boundary. They do not read `query_sync_summary`, derive `baseServerSeq` from SQLite, run native catch-up, or wait for a local projection after the server commits.
+- `SeasonSyncProvider` coordinates route draft flushes, pending-submit UI state, and Supabase Realtime invalidation. It does not poll native pending state or invoke `sync_pending_changes` in normal operation.
+- Check-in/Gate rollback clears the optimistic view and reloads the bounded server window. Seasonal import, Settings full replace, Daily import collision checks, and Dashboard AI workspace use server read-after-write/window data.
+- Existing SQLite databases are ignored by normal operation, including on a fresh install or a machine with stale historical data. Rust/SQLite code remains packaged temporarily only for explicit legacy repair and rollback tooling guarded by `NEXT_PUBLIC_ENABLE_LEGACY_NATIVE_SYNC_REPAIR=true`.
+- Save remains the user-facing action. Seasonal/Detailed draft guards flush directly to the server mutation RPC; successful server writes cannot be changed into failures by SQLite projection errors.
+
+## Legacy Native Context - 2026-05-30
+
+This section records the pre-server-first architecture for repair and archaeology only. It does not describe normal runtime behavior after 2026-07-13.
 
 - Native/Tauri desktop is the operational runtime. Browser/static fallback is no longer allowed to drive local-first behavior.
 - Rust + SQLite is the local source of truth for schedule data, mutations, pending sync, catch-up, integrity checks, and effective counts. TypeScript should behave as a viewport/IPC layer.

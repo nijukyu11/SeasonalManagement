@@ -3,7 +3,6 @@ import type { FlightModification, FlightRecord, ModHistoryEntry, ParsedRow } fro
 import { isTauriRuntime } from './nativeRuntime';
 import { applySeasonServerMutationV1 } from './remoteStore';
 import { getOrCreateSeasonClientId } from './seasonChangeEvents';
-import { queryNativeSyncSummary, runNativeSeasonCatchup } from './nativeSeasonCatchup';
 import { SERVER_AUTHORITATIVE_MODE } from './serverAuthoritativeMode';
 
 export interface NativeLocalModificationBatchDeltaResult {
@@ -78,25 +77,13 @@ async function applyServerAuthoritativeOperations(
   operations: unknown[]
 ): Promise<LocalSyncMeta> {
   const clientId = getOrCreateSeasonClientId();
-  const summary = await queryNativeSyncSummary(seasonId).catch(() => null);
-  const baseServerSeq = summary?.lastServerSeq ?? 0;
   const result = await applySeasonServerMutationV1({
     seasonId,
     clientId,
     clientMutationId: randomClientMutationId(),
     source,
-    baseServerSeq,
     operations,
   });
-  if (result.serverHighWater > baseServerSeq) {
-    await runNativeSeasonCatchup({
-      seasonId,
-      clientId,
-      localCursor: baseServerSeq,
-      serverHighWater: result.serverHighWater,
-      pageSize: 200,
-    });
-  }
   return toServerAuthoritativeSyncMeta(seasonId, clientId, result.nextServerSeq, result.appliedEvents);
 }
 

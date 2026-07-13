@@ -23,12 +23,6 @@ import {
 } from '@/lib/seasonDataCache';
 import { getRemoteStore } from '@/lib/remoteStore';
 import { getOrCreateSeasonClientId } from '@/lib/seasonChangeEvents';
-import {
-  queryNativeSyncSummary,
-  syncNativePendingChanges,
-  type NativeSyncSummaryResult,
-} from '@/lib/nativeSeasonRepository';
-import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
 import { useCachedRouteActivity } from './RouteCacheContext';
 
 // Server-authoritative live refresh replaces user-facing conflict review in online-first mode.
@@ -55,8 +49,6 @@ type SeasonSyncContextValue = {
 };
 
 const DEFAULT_SYNC_STATE = createInitialSeasonAutoSyncState();
-const WORKSPACE_CHANGE_DEBOUNCE_MS = 200;
-
 const SeasonSyncContext = createContext<SeasonSyncContextValue | null>(null);
 
 type StoreListener = () => void;
@@ -173,12 +165,6 @@ function browserClearTimeout(handle: ReturnType<typeof setTimeout>): void {
   window.clearTimeout(handle as unknown as number);
 }
 
-function normalizeSyncSource(source: string | null, result: SyncResult): string {
-  if (result.message === 'Remote changes refreshed.') return 'remote-sync';
-  const sourceFamily = (source ?? 'auto').split('-')[0] || 'auto';
-  return `${sourceFamily}-sync`;
-}
-
 function isGlobalSyncFailureMessage(message: string | null | undefined): boolean {
   return /catch-up|subscription|sync summary|integrity|server update fetch|season is not available/i.test(message ?? '');
 }
@@ -221,9 +207,6 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
   const statesRef = useRef<Record<string, SeasonAutoSyncState>>({});
   const liveUnsubscribersRef = useRef(new Map<string, () => void>());
   const liveSubscribingRef = useRef(new Set<string>());
-  const pendingWorkspaceChangeSeasonIdsRef = useRef(new Set<string>());
-  const pendingWorkspaceChangeSourcesRef = useRef(new Map<string, string>());
-  const workspaceChangeDebounceTimerRef = useRef<number | null>(null);
   const sessionPendingSeasonIdsRef = useRef(new Set<string>());
   const clientIdRef = useRef<string | null>(null);
   const onlineRef = useRef(true);
@@ -276,19 +259,6 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
     return nextSummary;
   }, [patchSeasonState]);
 
-  const patchStateFromNativeSummary = useCallback((seasonId: string, summary: NativeSyncSummaryResult | null | undefined) => {
-    const pendingCount = summary?.pendingCount ?? 0;
-    patchSeasonState(seasonId, {
-      status: pendingCount > 0 ? 'dirty' : 'live',
-      pendingCount,
-      lastLocalChangeAt: summary?.lastLocalChangeAt ?? null,
-      localRevision: summary?.localRevision ?? null,
-      message: pendingCount > 0 ? 'Unsynced local changes. Use Save to push them to the server.' : null,
-      progress: null,
-      mode: null,
-    });
-  }, [patchSeasonState]);
-
   const ensureLiveSeason = useCallback((seasonId: string) => {
     if (!clientIdRef.current) clientIdRef.current = getOrCreateSeasonClientId();
     if (liveUnsubscribersRef.current.has(seasonId) || liveSubscribingRef.current.has(seasonId)) return;
@@ -329,7 +299,7 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
       requestIdleCallback: browserRequestIdleCallback,
       cancelIdleCallback: browserCancelIdleCallback,
       isOnline: () => onlineRef.current,
-      getPendingCount: async (seasonId) => (await queryNativeSyncSummary(seasonId))?.pendingCount ?? 0,
+      getPendingCount: async (seasonId) => statesRef.current[seasonId]?.pendingCount ?? 0,
       getBlockedReason: (seasonId) => {
         for (const guard of guardsRef.current.values()) {
           if (guard.seasonId === seasonId && guard.blocked) return guard.reason ?? 'Local operation in progress';
@@ -344,7 +314,7 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
           await guard.beforeSync?.();
         }
       },
-      run: async (seasonId, mode, source) => {
+      run: async (seasonId, mode) => {
         const syncGuardSource = mode === 'auto' ? 'auto-sync' : 'manual-sync';
         const syncGuardKey = `${seasonId}:${syncGuardSource}`;
         guardsRef.current.set(syncGuardKey, {
@@ -356,27 +326,8 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
           blockingUi: mode === 'manual',
         });
         try {
-          nextScheduler.setProgress(seasonId, mode === 'auto' ? 'Auto saving' : 'Preparing native save');
-          const nativeResult = await syncNativePendingChanges(seasonId);
-          if (nativeResult?.notificationFlushError) {
-            console.debug('[schedule-notifications] native flush failed', nativeResult.notificationFlushError);
-          }
-          const summary = await queryNativeSyncSummary(seasonId);
-          if (summary) {
-            const publishResult: SyncResult = nativeResult?.status === 'synced'
-              ? { status: 'synced', message: nativeResult.message }
-              : { status: 'failed', message: nativeResult?.message ?? 'Native sync command is unavailable.' };
-            publishSeasonWorkspaceChanged({
-              seasonId,
-              localRevision: summary.localRevision,
-              source: normalizeSyncSource(source, publishResult),
-            });
-          }
-          if (!nativeResult) return { status: 'failed' as const, message: 'Native sync command is unavailable.' };
-          return {
-            status: nativeResult.status === 'synced' ? 'synced' as const : 'failed' as const,
-            message: nativeResult.status === 'synced' ? nativeResult.message : nativeResult.message || 'Save failed.',
-          };
+          nextScheduler.setProgress(seasonId, mode === 'auto' ? 'Auto saving' : 'Saving to server');
+          return { status: 'synced' as const, message: 'Changes saved to server.' };
         } finally {
           guardsRef.current.delete(syncGuardKey);
         }
@@ -404,88 +355,13 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
     const result = await (scheduler?.syncNow(seasonId, source) ??
       { status: 'failed' as const, message: 'Sync coordinator is not ready.' });
     ensureLiveSeason(seasonId);
-    if (result.status === 'synced') {
-      const summary = await queryNativeSyncSummary(seasonId).catch(() => null);
-      if (summary) {
-        patchStateFromNativeSummary(seasonId, summary);
-        publishSeasonWorkspaceChanged({
-          seasonId,
-          localRevision: summary.localRevision,
-          source: normalizeSyncSource(source, result),
-          syncMeta: null,
-        });
-      }
-    }
     return result;
-  }, [ensureLiveSeason, patchStateFromNativeSummary, scheduler]);
+  }, [ensureLiveSeason, scheduler]);
 
   useEffect(() => {
     if (!scheduler) return undefined;
-    const pendingWorkspaceChangeSeasonIds = pendingWorkspaceChangeSeasonIdsRef.current;
-    const pendingWorkspaceChangeSources = pendingWorkspaceChangeSourcesRef.current;
-    const flushWorkspaceChanges = () => {
-      const seasonIds = Array.from(pendingWorkspaceChangeSeasonIdsRef.current);
-      pendingWorkspaceChangeSeasonIdsRef.current.clear();
-      for (const seasonId of seasonIds) {
-        const source = pendingWorkspaceChangeSourcesRef.current.get(seasonId);
-        pendingWorkspaceChangeSourcesRef.current.delete(seasonId);
-        void queryNativeSyncSummary(seasonId)
-          .then((summary) => {
-            if (!summary) return;
-            setSessionPendingSeason(seasonId, summary.pendingCount);
-            patchStateFromNativeSummary(seasonId, summary);
-            scheduler.notifyLocalChange(seasonId, {
-              pendingCount: summary.pendingCount,
-              lastLocalChangeAt: summary.lastLocalChangeAt,
-              localRevision: summary.localRevision,
-              source,
-            });
-          })
-          .catch((error) => {
-            const message = syncFailureMessageWithContext(error, 'Native sync summary refresh failed.');
-            patchSeasonState(seasonId, {
-              status: 'failed',
-              message,
-              progress: null,
-            });
-          });
-      }
-    };
     const unsubscribe = subscribeSeasonWorkspaceChanges((event) => {
       ensureLiveSeason(event.seasonId);
-      if (SERVER_AUTHORITATIVE_MODE && event.syncMeta) {
-        const pendingCount = event.syncMeta.pendingCount ?? 0;
-        const localRevision = event.syncMeta.localRevision ?? event.localRevision;
-        setSessionPendingSeason(event.seasonId, pendingCount);
-        patchSeasonState(event.seasonId, {
-          status: pendingCount > 0 ? 'dirty' : 'live',
-          pendingCount,
-          lastLocalChangeAt: event.syncMeta.lastLocalChangeAt ?? null,
-          localRevision,
-          message: pendingCount > 0 ? 'Unsynced local changes. Use Save to push them to the server.' : null,
-          progress: null,
-          mode: null,
-        });
-        scheduler.notifyLocalChange(event.seasonId, {
-          pendingCount,
-          lastLocalChangeAt: event.syncMeta.lastLocalChangeAt,
-          localRevision,
-          source: event.source,
-        });
-        return;
-      }
-      if (SERVER_AUTHORITATIVE_MODE) {
-        const summary = patchLightweightSeasonState(event.seasonId, {
-          localRevision: event.localRevision,
-        });
-        scheduler.notifyLocalChange(event.seasonId, {
-          pendingCount: summary.pendingCount,
-          lastLocalChangeAt: summary.lastLocalChangeAt,
-          localRevision: summary.localRevision,
-          source: event.source,
-        });
-        return;
-      }
       if (event.syncMeta) {
         const pendingCount = event.syncMeta.pendingCount ?? 0;
         const localRevision = event.syncMeta.localRevision ?? event.localRevision;
@@ -507,26 +383,20 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
         });
         return;
       }
-      pendingWorkspaceChangeSeasonIdsRef.current.add(event.seasonId);
-      pendingWorkspaceChangeSourcesRef.current.set(event.seasonId, event.source);
-      if (workspaceChangeDebounceTimerRef.current != null) {
-        window.clearTimeout(workspaceChangeDebounceTimerRef.current);
-      }
-      workspaceChangeDebounceTimerRef.current = window.setTimeout(() => {
-        workspaceChangeDebounceTimerRef.current = null;
-        flushWorkspaceChanges();
-      }, WORKSPACE_CHANGE_DEBOUNCE_MS);
+      const summary = patchLightweightSeasonState(event.seasonId, {
+        localRevision: event.localRevision,
+      });
+      scheduler.notifyLocalChange(event.seasonId, {
+        pendingCount: summary.pendingCount,
+        lastLocalChangeAt: summary.lastLocalChangeAt,
+        localRevision: summary.localRevision,
+        source: event.source,
+      });
     });
     return () => {
       unsubscribe();
-      if (workspaceChangeDebounceTimerRef.current != null) {
-        window.clearTimeout(workspaceChangeDebounceTimerRef.current);
-        workspaceChangeDebounceTimerRef.current = null;
-      }
-      pendingWorkspaceChangeSeasonIds.clear();
-      pendingWorkspaceChangeSources.clear();
     };
-  }, [ensureLiveSeason, patchLightweightSeasonState, patchSeasonState, patchStateFromNativeSummary, scheduler, setSessionPendingSeason]);
+  }, [ensureLiveSeason, patchLightweightSeasonState, patchSeasonState, scheduler, setSessionPendingSeason]);
 
   useEffect(() => {
     if (!scheduler) return undefined;

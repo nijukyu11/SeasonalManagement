@@ -17,12 +17,18 @@ function writeJson(filePath, value) {
 }
 
 const packagePath = path.join(appRoot, 'package.json');
+const packageLockPath = path.join(appRoot, 'package-lock.json');
 const tauriConfigPath = path.join(appRoot, 'src-tauri', 'tauri.conf.json');
 const cargoPath = path.join(appRoot, 'src-tauri', 'Cargo.toml');
 
 const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
 packageJson.version = version;
 writeJson(packagePath, packageJson);
+
+const packageLock = JSON.parse(fs.readFileSync(packageLockPath, 'utf8'));
+packageLock.version = version;
+if (packageLock.packages?.['']) packageLock.packages[''].version = version;
+writeJson(packageLockPath, packageLock);
 
 const tauriConfig = JSON.parse(fs.readFileSync(tauriConfigPath, 'utf8'));
 tauriConfig.version = version;

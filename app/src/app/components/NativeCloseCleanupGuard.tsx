@@ -59,12 +59,11 @@ export default function NativeCloseCleanupGuard() {
 
         event.preventDefault();
         closingRef.current = true;
-        setCloseProgress(buildLoadProgress('Discarding local session edits...', 35, 'Keeping downloaded season database', { indeterminate: true }));
+        setCloseProgress(buildLoadProgress('Clearing session state...', 35, 'Server data is unchanged', { indeterminate: true }));
         try {
           const cleanupResult = await Promise.race([
             clearNativeAppSessionData({
               preserveAuth: true,
-              discardPendingLocalChanges: true,
               resetUndoSession: true,
             })
               .then(() => ({ status: 'cleared' as const }))
@@ -72,11 +71,11 @@ export default function NativeCloseCleanupGuard() {
             timeoutAfter(CLOSE_CLEANUP_TIMEOUT_MS),
           ]);
           if (cleanupResult.status === 'timeout') {
-            console.warn('[native-close-cleanup] cleanup timed out; closing with durable SQLite database preserved');
+            console.warn('[native-close-cleanup] session cleanup timed out; closing app');
           } else if (cleanupResult.status === 'failed') {
-            console.warn('[native-close-cleanup] cleanup failed; closing with durable SQLite database preserved', cleanupResult.error);
+            console.warn('[native-close-cleanup] session cleanup failed; closing app', cleanupResult.error);
           }
-          setCloseProgress(buildLoadProgress('Closing app...', 100, 'Local database preserved'));
+          setCloseProgress(buildLoadProgress('Closing app...', 100, 'Server data is unchanged'));
           await appWindow.destroy();
         } catch (error) {
           closingRef.current = false;

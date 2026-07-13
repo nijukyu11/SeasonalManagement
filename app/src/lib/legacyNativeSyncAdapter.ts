@@ -1,7 +1,9 @@
 import {
+  queryNativeConflictSummary,
   queryNativeSyncSummary,
   resolveNativeSeasonConflict,
   runNativeSeasonCatchup,
+  type NativeConflictSummaryResult,
   type NativeSeasonCatchupResult,
   type NativeSeasonConflictResolution,
   type NativeSeasonConflictResolveResult,
@@ -37,6 +39,13 @@ export async function queryLegacyNativeSyncSummary(
 ): Promise<NativeSyncSummaryResult | null> {
   assertLegacyNativeSyncEnabled();
   return queryNativeSyncSummary(seasonId);
+}
+
+export async function queryLegacyNativeConflictSummary(
+  seasonId: string
+): Promise<NativeConflictSummaryResult | null> {
+  assertLegacyNativeSyncEnabled();
+  return queryNativeConflictSummary(seasonId);
 }
 
 export async function resolveLegacyNativeSeasonConflict(

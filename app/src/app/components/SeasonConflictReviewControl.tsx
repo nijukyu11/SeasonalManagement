@@ -1,10 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { queryNativeConflictSummary, resolveNativeSeasonConflict } from '@/lib/nativeSeasonRepository';
 import type { SeasonConflictItem, SeasonConflictResolution } from '@/lib/seasonChangeEvents';
 import { publishSeasonWorkspaceChanged, subscribeSeasonWorkspaceChanges } from '@/lib/seasonDataCache';
-import { LEGACY_NATIVE_SYNC_ENABLED } from '@/lib/legacyNativeSyncAdapter';
+import {
+  LEGACY_NATIVE_SYNC_ENABLED,
+  queryLegacyNativeConflictSummary,
+  resolveLegacyNativeSeasonConflict,
+} from '@/lib/legacyNativeSyncAdapter';
 import { useAppDialog } from './AppDialog';
 
 interface SeasonConflictReviewControlProps {
@@ -29,7 +32,9 @@ export default function SeasonConflictReviewControl({ seasonId }: SeasonConflict
   useEffect(() => {
     let cancelled = false;
     const loadConflicts = async () => {
-      const summary = seasonId ? await queryNativeConflictSummary(seasonId) : null;
+      const summary = seasonId && LEGACY_NATIVE_SYNC_ENABLED
+        ? await queryLegacyNativeConflictSummary(seasonId)
+        : null;
       if (!cancelled) setConflicts((summary?.conflicts ?? []) as SeasonConflictItem[]);
     };
     void loadConflicts();
@@ -57,7 +62,7 @@ export default function SeasonConflictReviewControl({ seasonId }: SeasonConflict
     }
     setBusyConflictId(conflict.id);
     try {
-      const resolved = await resolveNativeSeasonConflict(seasonId, conflict.id, resolution);
+      const resolved = await resolveLegacyNativeSeasonConflict({ seasonId, conflictId: conflict.id, resolution });
       if (!resolved) throw new Error('Native conflict resolution is not available in this runtime.');
       setConflicts((current) => current.filter((entry) => entry.id !== conflict.id));
       publishSeasonWorkspaceChanged({

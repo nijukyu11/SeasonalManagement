@@ -34,9 +34,7 @@ import {
   applyLocalModificationBatchDelta,
   type LocalSyncMeta,
 } from '@/lib/localSeasonStore';
-import { queryNativeAllocationWindow, runNativeLocalModificationBatchDeltaResult } from '@/lib/nativeSeasonRepository';
-import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
-import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
+import { runNativeLocalModificationBatchDeltaResult } from '@/lib/nativeSeasonRepository';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import {
@@ -697,10 +695,6 @@ function GateAllocationContent() {
           dateTo: toDateTime.slice(0, 10),
           resourceType: 'gate',
           limit: 100000,
-        }).catch((error) => {
-          if (SERVER_AUTHORITATIVE_MODE) throw error;
-          console.warn('Server gate allocation window unavailable, falling back to native SQLite', error);
-          return null;
         });
         if (cancelled) return;
         if (serverWindow) {
@@ -729,40 +723,7 @@ function GateAllocationContent() {
           return;
         }
 
-        setLoadProgress(buildLoadProgress('Checking local season baseline', 40, targetSeason.seasonCode));
-        await ensureNativeSeasonBaseline(targetSeason);
-        if (cancelled) return;
-        setLoadProgress(buildLoadProgress('Querying native SQLite fallback', 50, targetSeason.seasonCode));
-        const result = await queryNativeAllocationWindow({
-          seasonId: targetSeason.id,
-          dateFrom: fromDateTime.slice(0, 10),
-          dateTo: toDateTime.slice(0, 10),
-          resourceType: 'gate',
-          limit: 10000,
-        });
-        if (cancelled) return;
-        if (!result) throw new Error('Native gate allocation query is unavailable.');
-        const nextModifications = new Map(result.modifications.map((mod) => [mod.legId, mod]));
-        setLoadProgress(buildLoadProgress(
-          'Preparing Gate Allocation',
-          80,
-          `${result.records.length} records`
-        ));
-        setFlightRecords(result.records);
-        replaceGateModifications(nextModifications);
-        patchCachedSeasonData(targetSeason.id, {
-          records: result.records,
-          modifications: nextModifications,
-        });
-        useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-          seasonId: targetSeason.id,
-          season: targetSeason,
-          records: result.records,
-          modifications: nextModifications,
-          syncMeta: result.syncMeta,
-          windowKey,
-        });
-        loadedWindowKeyRef.current = windowKey;
+        throw new Error('Server gate allocation window is unavailable.');
       } catch (err) {
         console.error('Error loading gate allocation', err);
         if (!cancelled) {
@@ -1097,15 +1058,15 @@ function GateAllocationContent() {
   const rollbackAccumulatedGateCommit = useCallback(async (error: unknown) => {
     if (season) {
       clearOptimisticGateAllocationView();
-      const result = await queryNativeAllocationWindow({
+      const result = await loadSeasonWorkspaceWindow({
         seasonId: season.id,
         dateFrom: fromDateTime.slice(0, 10),
         dateTo: toDateTime.slice(0, 10),
         resourceType: 'gate',
-        limit: 10000,
+        limit: 100000,
       }).catch(() => null);
       if (result) {
-        const nextModifications = new Map(result.modifications.map((mod) => [mod.legId, mod]));
+        const nextModifications = result.modifications;
         setFlightRecords(result.records);
         replaceGateModifications(nextModifications);
         patchCachedSeasonData(season.id, {

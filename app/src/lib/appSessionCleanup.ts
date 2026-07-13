@@ -1,5 +1,4 @@
 import { clearSeasonDataCache } from './seasonDataCache';
-import { discardAllLocalPendingChanges } from './localSeasonStore';
 import { resetUiUndoSession } from './uiUndoMemory';
 
 const APP_LOCAL_STORAGE_KEYS = new Set([
@@ -39,14 +38,11 @@ function clearAppOwnedWebStorage(preserveAuth: boolean): void {
 }
 
 export async function clearNativeAppSessionData(
-  input: { preserveAuth?: boolean; discardPendingLocalChanges?: boolean; resetUndoSession?: boolean } = {}
+  input: { preserveAuth?: boolean; resetUndoSession?: boolean } = {}
 ): Promise<void> {
   const preserveAuth = input.preserveAuth ?? true;
   clearNativeAppEphemeralData({ preserveAuth });
   if (input.resetUndoSession ?? false) resetUiUndoSession();
-  if (input.discardPendingLocalChanges ?? false) {
-    await discardAllLocalPendingChanges();
-  }
 }
 
 export function clearNativeAppEphemeralData(

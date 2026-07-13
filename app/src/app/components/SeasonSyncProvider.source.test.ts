@@ -31,12 +31,15 @@ test('provider source no longer contains native catch-up or manual fetch actions
     'runManualFetchSeason',
     'runCatchUpSeason',
     'runNativeSeasonCatchup',
+    'queryNativeSyncSummary',
+    'syncNativePendingChanges',
+    'NativeSyncSummaryResult',
   ]) {
     assert.doesNotMatch(source, new RegExp(`\\b${staleSymbol}\\b`), staleSymbol);
   }
 });
 
-test('server-authoritative workspace changes do not schedule native summary polling', () => {
+test('workspace changes do not schedule native summary polling', () => {
   const callbackStart = source.indexOf('const unsubscribe = subscribeSeasonWorkspaceChanges((event) => {');
   assert.notEqual(callbackStart, -1, 'workspace-change subscription should exist');
 
@@ -44,14 +47,9 @@ test('server-authoritative workspace changes do not schedule native summary poll
   assert.notEqual(callbackEnd, -1, 'workspace-change subscription cleanup should exist');
 
   const callbackSource = source.slice(callbackStart, callbackEnd);
-  const serverBranchMatch = callbackSource.match(/if \(SERVER_AUTHORITATIVE_MODE\) \{([\s\S]*?)\n      \}/);
-  assert.ok(serverBranchMatch?.[1], 'workspace-change callback should branch for SERVER_AUTHORITATIVE_MODE');
-
-  const serverBranchSource = serverBranchMatch[1];
-  assert.match(serverBranchSource, /\breturn;/, 'server-authoritative branch should return before native fallback');
-  assert.doesNotMatch(serverBranchSource, /\bqueryNativeSyncSummary\b/, 'server branch should not query native summary');
-  assert.doesNotMatch(serverBranchSource, /\bpendingWorkspaceChangeSeasonIdsRef\b/, 'server branch should not enqueue native summary refresh');
-  assert.doesNotMatch(serverBranchSource, /\bworkspaceChangeDebounceTimerRef\b/, 'server branch should not debounce native summary refresh');
+  assert.doesNotMatch(callbackSource, /\bqueryNativeSyncSummary\b/);
+  assert.doesNotMatch(callbackSource, /\bpendingWorkspaceChangeSeasonIdsRef\b/);
+  assert.doesNotMatch(callbackSource, /\bworkspaceChangeDebounceTimerRef\b/);
 });
 
 test('remote live server events publish workspace refresh events without native catch-up source', () => {
@@ -83,10 +81,10 @@ test('server-authoritative sync state does not read stale native conflict counts
   assert.doesNotMatch(source, /\bgetLocalSyncConflictCount\b/);
 });
 
-test('server-authoritative sync metadata events are not overwritten by native summary refresh', () => {
+test('server-authoritative sync metadata events are applied before lightweight events', () => {
   assert.match(
     source,
-    /if \(SERVER_AUTHORITATIVE_MODE && event\.syncMeta\) \{[\s\S]*?return;[\s\S]*?\}/
+    /if \(event\.syncMeta\) \{[\s\S]*?return;[\s\S]*?\}/
   );
 });
 
@@ -123,9 +121,9 @@ test('provider exposes strict season auto sync state instead of widened readable
   assert.match(source, /getSeasonSyncTone\(status:\s*SeasonAutoSyncState/);
 });
 
-test('provider normalizes native conflict results to narrow sync failures', () => {
+test('provider keeps sync results narrow without native conflict handling', () => {
   assert.doesNotMatch(source, /status:\s*'conflict'/);
   assert.doesNotMatch(source, /result\.status === 'synced' \|\| result\.status === 'conflict'/);
   assert.doesNotMatch(source, /nativeResult\.status === 'conflict'\s*\?\s*'conflict'/);
-  assert.match(source, /nativeResult\?\.status === 'synced'[\s\S]*status:\s*'synced'[\s\S]*status:\s*'failed'/);
+  assert.doesNotMatch(source, /\bnativeResult\b/);
 });

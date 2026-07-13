@@ -57,9 +57,7 @@ import {
 } from '@/lib/seasonDataCache';
 import { appendAuditLogEntry, createFlightActionAuditFromHistory } from '@/lib/auditLog';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
-import { ensureNativeLocalSeason, queryNativeScheduleWindow, runNativeScheduleMutation } from '@/lib/nativeSeasonRepository';
-import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
-import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
+import { runNativeScheduleMutation } from '@/lib/nativeSeasonRepository';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import type { LocalSyncMeta } from '@/lib/localSeasonStore';
@@ -662,10 +660,6 @@ function DailyScheduleContent() {
           dateTo: toDateTime.slice(0, 10),
           resourceType: 'schedule',
           limit: 100000,
-        }).catch((error) => {
-          if (SERVER_AUTHORITATIVE_MODE) throw error;
-          console.warn('Server daily schedule window unavailable, falling back to native SQLite', error);
-          return null;
         });
         if (cancelled) return;
         if (serverWindow) {
@@ -689,30 +683,7 @@ function DailyScheduleContent() {
           return;
         }
 
-        setLoadProgress(buildLoadProgress('Checking local season baseline', 40, targetSeason.seasonCode));
-        await ensureNativeSeasonBaseline(targetSeason);
-        if (cancelled) return;
-        setLoadProgress(buildLoadProgress('Querying native SQLite fallback', 50, targetSeason.seasonCode));
-        const result = await queryNativeScheduleWindow({
-          seasonId: targetSeason.id,
-          dateFrom: fromDateTime.slice(0, 10),
-          dateTo: toDateTime.slice(0, 10),
-          limit: 10000,
-        });
-        if (cancelled) return;
-        if (!result) throw new Error('Native daily schedule query is unavailable.');
-        const nextModifications = new Map(result.modifications.map((mod) => [mod.legId, mod]));
-        setLoadProgress(buildLoadProgress(
-          'Preparing Daily Schedule',
-          80,
-          `${result.records.length} records`
-        ));
-        applyDailyNativeState(targetSeason.id, result.records, nextModifications, result.syncMeta, {
-          replaceWindow: true,
-          season: targetSeason,
-          windowKey,
-        });
-        loadedWindowKeyRef.current = windowKey;
+        throw new Error('Server daily schedule window is unavailable.');
       } catch (err) {
         console.error('Error loading daily schedule', err);
         if (!cancelled) {
@@ -979,18 +950,16 @@ function DailyScheduleContent() {
             nextSeasons = [...nextSeasons, targetSeason];
             seasonsByCode.set(seasonCode, targetSeason);
           }
-          const ensuredSyncMeta = await ensureNativeLocalSeason(targetSeason);
-          if (!ensuredSyncMeta) throw new Error('Native local season bootstrap is unavailable.');
-
           const range = dailyImportDateRange(batch);
-          const currentWindow = await queryNativeScheduleWindow({
+          const currentWindow = await loadSeasonWorkspaceWindow({
             seasonId: targetSeason.id,
             dateFrom: range.from,
             dateTo: range.to,
+            resourceType: 'schedule',
             limit: 100000,
           });
-          if (!currentWindow) throw new Error(`Native daily schedule query is unavailable for ${seasonCode}.`);
-          const currentModifications = new Map(currentWindow.modifications.map((mod) => [mod.legId, mod]));
+          if (!currentWindow) throw new Error(`Server daily schedule window is unavailable for ${seasonCode}.`);
+          const currentModifications = currentWindow.modifications;
           const timestamp = Date.now();
           const maxRecordSourceIndex = Math.max(0, ...currentWindow.records.map((record) => record.sourceRowIndex ?? 0));
           const update = buildDailyScheduleImportUpdate({

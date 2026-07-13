@@ -75,22 +75,15 @@ test('route pages consult shared workspace read model before native query', () =
   }
 });
 
-test('server-authoritative routes do not silently fall back to native SQLite when server fetch fails', () => {
+test('server-authoritative routes never read native SQLite in normal operation', () => {
   for (const file of routeFiles) {
     const source = readFileSync(join(process.cwd(), file), 'utf8');
-    assert.match(source, /SERVER_AUTHORITATIVE_MODE/, file);
     assert.match(source, /loadSeasonWorkspaceWindow/, file);
     assert.match(source, /Loading server workspace/, file);
-    assert.match(
-      source,
-      /loadSeasonWorkspaceWindow[\s\S]*?queryNative(?:Schedule|Allocation)Window/,
-      file
-    );
-    assert.match(
-      source,
-      /loadSeasonWorkspaceWindow\([\s\S]*?\)\.catch\(\(error\) => \{[\s\S]*?if \(SERVER_AUTHORITATIVE_MODE\) throw error;[\s\S]*?falling back to native SQLite/,
-      file
-    );
+    assert.doesNotMatch(source, /\bqueryNative(?:Schedule|Allocation)Window\b/, file);
+    assert.doesNotMatch(source, /\bensureNative(?:SeasonBaseline|LocalSeason)\b/, file);
+    assert.doesNotMatch(source, /\bimportNativeSeasonSnapshot\b/, file);
+    assert.doesNotMatch(source, /falling back to native SQLite/i, file);
   }
 });
 
@@ -192,17 +185,18 @@ test('workspace activation refresh hydrates route state from shared store instea
   }
 });
 
-test('server-authoritative schedule pages reject missing server windows before native SQLite fallback', () => {
+test('server-authoritative schedule pages reject missing server windows without native fallback', () => {
   const seasonalSource = readFileSync(join(process.cwd(), 'src/app/SeasonalSchedulePage.tsx'), 'utf8');
   const seasonalLoad = extractFunctionBody(seasonalSource, 'loadSeasonRows');
-  assert.match(seasonalLoad, /if \(serverWindow\) \{[\s\S]*?return;[\s\S]*?\}\s*if \(SERVER_AUTHORITATIVE_MODE\) \{[\s\S]*?throw new Error\(/, 'seasonal');
-  assertBefore(seasonalLoad, 'if (SERVER_AUTHORITATIVE_MODE)', 'ensureNativeSeasonBaseline', 'seasonal');
-  assertBefore(seasonalLoad, 'if (SERVER_AUTHORITATIVE_MODE)', 'queryNativeScheduleWindow', 'seasonal');
+  assert.match(seasonalLoad, /if \(serverWindow\) \{[\s\S]*?return;[\s\S]*?\}\s*throw new Error\(/, 'seasonal');
+  assert.doesNotMatch(seasonalLoad, /\bensureNativeSeasonBaseline\b/, 'seasonal');
+  assert.doesNotMatch(seasonalLoad, /\bqueryNativeScheduleWindow\b/, 'seasonal');
 
   const detailedSource = readFileSync(join(process.cwd(), 'src/app/detailed/page.tsx'), 'utf8');
-  const detailedLoad = extractEffectContaining(detailedSource, 'Checking local season baseline');
-  assert.match(detailedLoad, /if \(serverWindow\) \{[\s\S]*?return;[\s\S]*?\}\s*if \(SERVER_AUTHORITATIVE_MODE\) \{[\s\S]*?throw new Error\(/, 'detailed');
-  assertBefore(detailedLoad, 'if (SERVER_AUTHORITATIVE_MODE)', 'ensureNativeSeasonBaseline', 'detailed');
+  const detailedLoad = detailedSource;
+  assert.match(detailedLoad, /if \(serverWindow\) \{[\s\S]*?return;[\s\S]*?\}\s*throw new Error\(/, 'detailed');
+  assert.doesNotMatch(detailedLoad, /\bensureNativeSeasonBaseline\b/, 'detailed');
+  assert.doesNotMatch(detailedLoad, /\bqueryNativeScheduleWindow\b/, 'detailed');
 });
 
 test('Seasonal export reads selected records from server workspace instead of native SQLite', () => {

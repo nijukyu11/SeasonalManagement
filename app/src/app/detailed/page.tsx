@@ -81,9 +81,7 @@ import {
 } from '../components/SeasonSyncProvider';
 import { useSessionScrollRestoration } from '../hooks/useSessionScrollRestoration';
 import { useSeasonWorkspaceRefresh } from '../hooks/useSeasonWorkspaceRefresh';
-import { queryNativeScheduleWindow, runNativeScheduleMutation } from '@/lib/nativeSeasonRepository';
-import { ensureNativeSeasonBaseline } from '@/lib/nativeSeasonBootstrap';
-import { SERVER_AUTHORITATIVE_MODE } from '@/lib/serverAuthoritativeMode';
+import { runNativeScheduleMutation } from '@/lib/nativeSeasonRepository';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import type { LocalSyncMeta } from '@/lib/localSeasonStore';
@@ -1267,10 +1265,6 @@ function DetailedScheduleContent() {
           dateTo: queryWindow.dateTo,
           resourceType: 'schedule',
           limit: 100000,
-        }).catch((error) => {
-          if (SERVER_AUTHORITATIVE_MODE) throw error;
-          console.warn('Server detailed schedule window unavailable, falling back to native SQLite', error);
-          return null;
         });
         if (cancelled) return;
         if (serverWindow) {
@@ -1354,137 +1348,7 @@ function DetailedScheduleContent() {
           });
           return;
         }
-        if (SERVER_AUTHORITATIVE_MODE) {
-          throw new Error('Server detailed schedule window is unavailable.');
-        }
-
-        setLoadProgress(buildLoadProgress('Checking local season baseline', 40, found.seasonCode));
-        await ensureNativeSeasonBaseline(found);
-        if (cancelled) return;
-        setLoadProgress(buildLoadProgress('Querying native SQLite fallback', 50, found.seasonCode));
-        const result = await queryNativeScheduleWindow({
-          seasonId: found.id,
-          dateFrom: queryWindow.dateFrom,
-          dateTo: queryWindow.dateTo,
-          flightNumberFilter: queryWindow.flightNumberFilter,
-          limit: 100000,
-        });
-        if (cancelled) return;
-        if (!result) throw new Error('Native detailed schedule query is unavailable.');
-        const canonicalRecords = result.records;
-        const mods = new Map(result.modifications.map((mod) => [mod.legId, mod]));
-        const history: ModHistoryEntry[] = [];
-        setLoadProgress(buildLoadProgress(
-          'Rendering calendar',
-          80,
-          `${canonicalRecords.length} records`
-        ));
-        setSyncSummary({
-          pendingCount: result.syncMeta.pendingCount,
-          lastLocalChangeAt: result.syncMeta.lastLocalChangeAt,
-        });
-        setLoadProgress(buildLoadProgress('Rendering calendar', 95, 'Applying filters'));
-        setFlightRecords(canonicalRecords);
-
-        const allSeasonLegs = flightRecordsToLegs(canonicalRecords);
-        const expanded = filterDetailedLegsForView(allSeasonLegs, activeArr, activeDep, activeFrom, activeTo);
-        if (activeArr || activeDep) {
-
-          // Build overnight companion map: for each primary leg, find its linked counterpart
-          // Only for TRUE overnight pairs (linked leg on a different date).
-          // Same-day turnarounds (ARR+DEP on same date) are normal pairs and excluded.
-          const companionMap = new Map<string, OvernightCompanion>();
-          for (const leg of expanded) {
-            if (!leg.linkId) continue;
-            const linked = leg.linkedRecordId
-              ? allSeasonLegs.find(l => l.id === leg.linkedRecordId)
-              : allSeasonLegs.find(l =>
-                  l.linkId === leg.linkId &&
-                  l.id !== leg.id &&
-                  l.type !== leg.type &&
-                  (l.pairAnchorDate ?? l.date) === (leg.pairAnchorDate ?? leg.date)
-                );
-            if (!linked) continue;
-            // Key by the primary leg's date (companion appears on same cell)
-            const key = `${leg.date}_${leg.id}`;
-            if (leg.type === 'A') {
-              // Viewing ARR: companion is the DEP on next day → show with +1
-              companionMap.set(key, {
-                flightNumber: linked.flightNumber,
-                schedule: leg.linkType === 'overnight' ? `${linked.schedule}+1` : linked.schedule,
-                route: linked.route,
-                aircraft: linked.aircraft,
-                type: 'D',
-                linkId: leg.linkId,
-              });
-            } else {
-              // Viewing DEP: companion is the ARR on previous day → show with -1
-              companionMap.set(key, {
-                flightNumber: linked.flightNumber,
-                schedule: leg.linkType === 'overnight' ? `${linked.schedule}-1` : linked.schedule,
-                route: linked.route,
-                aircraft: linked.aircraft,
-                type: 'A',
-                linkId: leg.linkId,
-              });
-            }
-          }
-          setOvernightCompanions(companionMap);
-        }
-
-        loadedWindowKeyRef.current = windowKey;
-        setCurrentMods(mods); // Store for undo history tracking
-        useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-          seasonId: found.id,
-          season: found,
-          records: canonicalRecords,
-          modifications: mods,
-          syncMeta: result.syncMeta,
-          windowKey,
-        });
-        const finalAllLegs = applyModificationsToFlightLegs(allSeasonLegs, mods);
-        const finalLegs = filterDetailedLegsForView(finalAllLegs, activeArr, activeDep, activeFrom, activeTo);
-
-        setAllLegs(finalAllLegs);
-        setLegs(finalLegs);
-        setOvernightCompanions(
-          activeArr || activeDep
-            ? buildOvernightCompanionMap(finalLegs, finalAllLegs)
-            : new Map()
-        );
-
-        setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession(history)));
-
-        // Set initial calendar date to the first leg's date if possible
-        if (activeFrom) {
-          setFromDate(activeFrom);
-        } else if (finalLegs.length > 0) {
-           const dates = finalLegs.map(l => new Date(l.date).getTime());
-           const minD = new Date(Math.min(...dates));
-           setFromDate(minD.toISOString().split('T')[0]);
-        } else {
-          setFromDate('');
-        }
-
-        if (activeTo) {
-          setToDate(activeTo);
-        } else if (finalLegs.length > 0) {
-           const dates = finalLegs.map(l => new Date(l.date).getTime());
-           const maxD = new Date(Math.max(...dates));
-           setToDate(maxD.toISOString().split('T')[0]);
-        } else {
-          setToDate('');
-        }
-
-        if (finalLegs.length > 0) {
-          const visibleLegIds = new Set(finalLegs.map((leg) => leg.id));
-          setSelectedLegIds((prev) => {
-            const preservedVisibleIds = Array.from(prev).filter((id) => visibleLegIds.has(id));
-            return preservedVisibleIds.length > 0 ? new Set(preservedVisibleIds) : new Set([finalLegs[0].id]);
-          });
-        } else {
-          setSelectedLegIds(new Set());
-        }
+        throw new Error('Server detailed schedule window is unavailable.');
       } catch (err) {
         if (!cancelled) {
           console.error('Error loading detailed schedule', err);

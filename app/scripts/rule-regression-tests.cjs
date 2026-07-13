@@ -34,7 +34,11 @@ function compileFixtureModules() {
       },
       fileName: `${name}.ts`,
     });
-    const commonJsOutput = output.outputText.replace(/require\("(\.\/[^"]+)\.ts"\)/g, 'require("$1.js")');
+    let commonJsOutput = output.outputText.replace(/require\("(\.\/[^"]+)\.ts"\)/g, 'require("$1.js")');
+    if (name === 'serverAuthoritativeMode') {
+      // Legacy fixture assertions exercise local-store invariants outside the production server-first branch.
+      commonJsOutput = commonJsOutput.replace('exports.SERVER_AUTHORITATIVE_MODE = true', 'exports.SERVER_AUTHORITATIVE_MODE = false');
+    }
     fs.writeFileSync(path.join(tempDir, `${name}.js`), commonJsOutput);
   }
 }
@@ -9216,8 +9220,8 @@ async function run() {
       detailedPageSource.includes('const detailedCommitSeqRef = useRef(0);') &&
       detailedPageSource.includes('const rollbackState = captureDetailedOptimisticRollbackState();') &&
       detailedPageSource.includes('restoreDetailedOptimisticState(rollbackState);') &&
-      detailedPageSource.includes('await runNativeScheduleMutation(season.id, addedRecords, [], regularMods, historyEntry)') &&
-      detailedPageSource.indexOf('setCurrentMods(nextMods);') < detailedPageSource.indexOf('await runNativeScheduleMutation(season.id, addedRecords, [], regularMods, historyEntry)') &&
+      detailedPageSource.includes("await runNativeScheduleMutation(season.id, addedRecords, [], regularMods, historyEntry, [], 'detailed')") &&
+      detailedPageSource.indexOf('setCurrentMods(nextMods);') < detailedPageSource.indexOf("await runNativeScheduleMutation(season.id, addedRecords, [], regularMods, historyEntry, [], 'detailed')") &&
       !detailedPageSource.includes('const workspace = await applyLocalModificationBatch(season.id, regularMods, historyEntry);'),
     'Detailed Schedule mass edits/adds/deletes must optimistically update visible state, persist only selected IDs through native mutation, and rollback immediately on failed commits'
   );
@@ -9587,12 +9591,11 @@ async function run() {
     ) &&
       [detailedPageSource, dailyPageSource, checkInPageSource, gatePageSource].every((source) => !source.includes('saveLocalSeasonWorkspace')) &&
       (!seasonalPageSource.includes('saveLocalSeasonWorkspace') || seasonalPageSource.includes("nativeFullSaveReason: 'import-reset'")) &&
-      detailedPageSource.includes('queryNativeScheduleWindow') &&
-      dailyPageSource.includes('queryNativeScheduleWindow') &&
-      (seasonalPageSource.includes('queryNativeSourceRowsWindow') || seasonalPageSource.includes('queryNativeScheduleWindow')) &&
+      operationalRouteSources.every((source) => source.includes('loadSeasonWorkspaceWindow')) &&
+      operationalRouteSources.every((source) => !/\bqueryNative(?:Schedule|Allocation|SourceRows)Window\b/.test(source)) &&
       checkInPageSource.includes('runNativeLocalModificationBatchDelta') &&
       gatePageSource.includes('runNativeLocalModificationBatchDelta'),
-    'Operational routes must use native atomic mutation/query APIs and must not call full-workspace persistence helpers'
+    'Operational routes must use server windows and server-authoritative mutation seams without native read or full-workspace persistence helpers'
   );
   assert(
     detailedConfirmModalSource.includes('recordsById') &&
@@ -9606,12 +9609,13 @@ async function run() {
       dailyPageSource.includes('findSeasonByCode(seasonCode)') &&
       dailyPageSource.includes('createSeason(seasonFields)') &&
       dailyPageSource.includes('getSeasonDateRange(seasonCode)') &&
-      dailyPageSource.includes('ensureNativeLocalSeason(targetSeason)') &&
+      dailyPageSource.includes('loadSeasonWorkspaceWindow({') &&
+      !dailyPageSource.includes('ensureNativeLocalSeason(targetSeason)') &&
       dailyPageSource.includes('seasonId: targetSeason.id') &&
       dailyPageSource.includes('runNativeScheduleMutation(') &&
       dailyPageSource.includes('targetSeason.id,') &&
       dailyPageSource.includes('router.push(`/daily?season=${routedSeason.id}`)'),
-    'Daily import must split files by inferred IATA season, create/bootstrap missing seasons, and commit each batch to its target season_id'
+    'Daily import must split files by inferred IATA season, load server state for missing seasons, and commit each batch to its target season_id'
   );
   const tsconfigSource = fs.readFileSync(path.join(root, 'tsconfig.json'), 'utf8');
   const packageJsonSource = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
@@ -9889,17 +9893,17 @@ async function run() {
       [checkInPageSource, gatePageSource, detailedPageSource].every((source) => source.includes('if (!isRouteActive) return undefined;')),
     'Cached module pages must read their own cached search params and disable global listeners while inactive'
   );
-  const assertSeasonSelectedBeforeBaseline = (source, routeName) => {
+  const assertSeasonSelectedBeforeServerWindow = (source, routeName) => {
     const seasonIndex = source.indexOf('setSeason(targetSeason);');
-    const baselineIndex = source.indexOf('await ensureNativeSeasonBaseline(targetSeason);');
+    const serverWindowIndex = source.indexOf("setLoadProgress(buildLoadProgress('Loading server workspace'");
     assert(
-      seasonIndex >= 0 && baselineIndex >= 0 && seasonIndex < baselineIndex,
-      `${routeName} must set the selected season before native baseline checks so Save controls stay visible while loading`
+      seasonIndex >= 0 && serverWindowIndex >= 0 && seasonIndex < serverWindowIndex,
+      `${routeName} must set the selected season before server-window loading so Save controls stay visible while loading`
     );
   };
-  assertSeasonSelectedBeforeBaseline(dailyPageSource, 'Daily Schedule');
-  assertSeasonSelectedBeforeBaseline(checkInPageSource, 'Check-in Allocation');
-  assertSeasonSelectedBeforeBaseline(gatePageSource, 'Gate Allocation');
+  assertSeasonSelectedBeforeServerWindow(dailyPageSource, 'Daily Schedule');
+  assertSeasonSelectedBeforeServerWindow(checkInPageSource, 'Check-in Allocation');
+  assertSeasonSelectedBeforeServerWindow(gatePageSource, 'Gate Allocation');
   assert(
     sessionStateHookSource.includes('sessionStorage.getItem(key)') &&
       sessionStateHookSource.includes('sessionStorage.setItem(key, JSON.stringify(value))') &&
@@ -9937,9 +9941,8 @@ async function run() {
       dashboardPageSource.includes("useSessionState<DashboardView>('dashboard:view'") &&
       dashboardPageSource.includes("useSessionScrollRestoration('dashboard:scroll'") &&
       detailedPageSource.includes("useSessionScrollRestoration('detailed:calendar-scroll'") &&
-      detailedPageSource.includes('const visibleLegIds = new Set(finalLegs.map((leg) => leg.id));') &&
-      detailedPageSource.includes('const preservedVisibleIds = Array.from(prev).filter((id) => visibleLegIds.has(id));') &&
-      detailedPageSource.includes('return preservedVisibleIds.length > 0 ? new Set(preservedVisibleIds) : new Set([finalLegs[0].id]);') &&
+      detailedPageSource.includes('const visibleIds = new Set(finalLegs.map((leg) => leg.id));') &&
+      detailedPageSource.includes('return new Set(Array.from(prev).filter((id) => visibleIds.has(id)));') &&
       settingsPageSource.includes("useSessionState<SettingsTab>('settings:activeTab'"),
     'Main modules must preserve filter/control state and scroll positions within the current browser session'
   );
@@ -9994,34 +9997,24 @@ async function run() {
     'All flight-data write paths, including Check-in and Gate workers, must publish season workspace changes for other cached tabs'
   );
   assert(
-    seasonSyncProviderSource.includes('const WORKSPACE_CHANGE_DEBOUNCE_MS = 200') &&
-      seasonSyncProviderSource.includes('pendingWorkspaceChangeSeasonIdsRef') &&
-      seasonSyncProviderSource.includes('pendingWorkspaceChangeSourcesRef') &&
-      seasonSyncProviderSource.includes('workspaceChangeDebounceTimerRef') &&
-      seasonSyncProviderSource.includes('window.clearTimeout(workspaceChangeDebounceTimerRef.current)') &&
-      seasonSyncProviderSource.includes('window.setTimeout(() =>') &&
-      seasonSyncProviderSource.includes('WORKSPACE_CHANGE_DEBOUNCE_MS') &&
-      seasonSyncProviderSource.includes('const seasonIds = Array.from(pendingWorkspaceChangeSeasonIdsRef.current)') &&
-      seasonSyncProviderSource.includes('const source = pendingWorkspaceChangeSourcesRef.current.get(seasonId)') &&
-      seasonSyncProviderSource.includes('pendingWorkspaceChangeSourcesRef.current.delete(seasonId)') &&
+    !seasonSyncProviderSource.includes('WORKSPACE_CHANGE_DEBOUNCE_MS') &&
+      !seasonSyncProviderSource.includes('pendingWorkspaceChangeSeasonIdsRef') &&
+      !seasonSyncProviderSource.includes('workspaceChangeDebounceTimerRef') &&
+      !seasonSyncProviderSource.includes('queryNativeSyncSummary') &&
       !seasonSyncProviderSource.includes('seedSeasonSyncFromNative') &&
       seasonSyncProviderSource.includes("source: 'server-live'") &&
       seasonSyncProviderSource.includes('publishSeasonWorkspaceChanged({') &&
-      seasonSyncProviderSource.indexOf('if (SERVER_AUTHORITATIVE_MODE)') < seasonSyncProviderSource.indexOf('pendingWorkspaceChangeSeasonIdsRef.current.add(event.seasonId)') &&
-      seasonSyncProviderSource.includes('source,'),
-    'SeasonSyncProvider must debounce workspace-change notifications without native summary polling and use server-live invalidation for remote changes'
+      seasonSyncProviderSource.includes('scheduler.notifyLocalChange(event.seasonId'),
+    'SeasonSyncProvider must apply workspace metadata directly without native summary polling and use server-live invalidation for remote changes'
   );
   assert(
-    seasonSyncProviderSource.includes('if (SERVER_AUTHORITATIVE_MODE && event.syncMeta)') &&
-      seasonSyncProviderSource.includes('if (SERVER_AUTHORITATIVE_MODE)') &&
-      seasonSyncProviderSource.indexOf('if (SERVER_AUTHORITATIVE_MODE && event.syncMeta)') <
-        seasonSyncProviderSource.indexOf('pendingWorkspaceChangeSeasonIdsRef.current.add(event.seasonId)') &&
-      seasonSyncProviderSource.indexOf('if (SERVER_AUTHORITATIVE_MODE)') <
-        seasonSyncProviderSource.indexOf('pendingWorkspaceChangeSeasonIdsRef.current.add(event.seasonId)'),
-    'SeasonSyncProvider workspace-change refresh must stay server-authoritative before legacy native summary fallback'
+    seasonSyncProviderSource.includes('if (event.syncMeta)') &&
+      !seasonSyncProviderSource.includes('SERVER_AUTHORITATIVE_MODE') &&
+      !seasonSyncProviderSource.includes('syncNativePendingChanges'),
+    'SeasonSyncProvider workspace-change refresh must stay server-only without a legacy native summary fallback'
   );
   const workspaceChangeListenerStart = seasonSyncProviderSource.indexOf('const unsubscribe = subscribeSeasonWorkspaceChanges((event) => {');
-  const workspaceChangeListenerEnd = seasonSyncProviderSource.indexOf('workspaceChangeDebounceTimerRef.current = window.setTimeout(() =>', workspaceChangeListenerStart);
+  const workspaceChangeListenerEnd = seasonSyncProviderSource.indexOf('    return () => {', workspaceChangeListenerStart);
   const workspaceChangeListenerImmediateBody = workspaceChangeListenerStart >= 0 && workspaceChangeListenerEnd > workspaceChangeListenerStart
     ? seasonSyncProviderSource.slice(workspaceChangeListenerStart, workspaceChangeListenerEnd)
     : '';
@@ -10030,7 +10023,7 @@ async function run() {
       workspaceChangeListenerImmediateBody.includes('setSessionPendingSeason(event.seasonId') &&
       workspaceChangeListenerImmediateBody.includes('patchSeasonState(event.seasonId') &&
       workspaceChangeListenerImmediateBody.includes('scheduler.notifyLocalChange(event.seasonId'),
-    'SeasonSyncProvider workspace-change listener must publish event.syncMeta immediately before debounce so route badges do not stay Synced while pending/conflict work waits for native summary refresh'
+    'SeasonSyncProvider workspace-change listener must publish event.syncMeta immediately so route badges do not stay stale'
   );
   assert(
     !seasonSyncProviderSource.includes('seedSeasonSyncFromNative') &&
@@ -10059,7 +10052,7 @@ async function run() {
     seasonSyncProviderSource.includes('function isGlobalSyncFailureMessage') &&
       seasonSyncProviderSource.includes('function syncFailureMessageWithContext') &&
       seasonSyncProviderSource.includes("syncFailureMessageWithContext(error, 'Live season subscription failed.')") &&
-      seasonSyncProviderSource.includes("syncFailureMessageWithContext(error, 'Native sync summary refresh failed.')") &&
+      !seasonSyncProviderSource.includes('Native sync summary refresh failed.') &&
       globalStatusBody.includes('isGlobalSyncFailureMessage(state.message)') &&
       globalStatusBody.includes("state.status === 'failed' && isGlobalSyncFailureMessage(state.message)") &&
       !globalStatusBody.includes('isRemoteCatchUpApplyingStatus(state)') &&
@@ -10102,7 +10095,7 @@ async function run() {
       appSessionCleanupSource.includes('export async function clearNativeAppSessionData') &&
       appSessionCleanupSource.includes('export function clearNativeAppEphemeralData') &&
       !appSessionCleanupSource.includes('clearAllLocalSeasonWorkspaces()') &&
-      appSessionCleanupSource.includes('discardAllLocalPendingChanges') &&
+      !appSessionCleanupSource.includes('discardAllLocalPendingChanges') &&
       appSessionCleanupSource.includes('resetUiUndoSession') &&
       appSessionCleanupSource.includes('clearSeasonDataCache()') &&
       appSessionCleanupSource.includes("key.startsWith('sb-')") &&
@@ -10119,9 +10112,10 @@ async function run() {
       nativeCloseCleanupGuardSource.includes('if (!confirmed)') &&
       nativeCloseCleanupGuardSource.indexOf('const confirmed = await showConfirm') < nativeCloseCleanupGuardSource.indexOf('if (!confirmed)') &&
       nativeCloseCleanupGuardSource.includes('Close App') &&
-      nativeCloseCleanupGuardSource.includes('Discarding local session edits') &&
+      nativeCloseCleanupGuardSource.includes('Clearing session state') &&
       nativeCloseCleanupGuardSource.includes('clearNativeAppSessionData({') &&
-      nativeCloseCleanupGuardSource.includes('discardPendingLocalChanges: true') &&
+      !nativeCloseCleanupGuardSource.includes('discardPendingLocalChanges') &&
+      !appSessionCleanupSource.includes('discardAllLocalPendingChanges') &&
       nativeCloseCleanupGuardSource.includes('resetUndoSession: true') &&
       nativeCloseCleanupGuardSource.includes('CLOSE_CLEANUP_TIMEOUT_MS') &&
       nativeCloseCleanupGuardSource.includes('Promise.race') &&
@@ -10149,7 +10143,7 @@ async function run() {
       !seasonSyncProviderSource.includes("window.addEventListener('beforeunload', handleBeforeUnload)") &&
       !seasonSyncProviderSource.includes('event.returnValue') &&
       !seasonSyncProviderSource.includes('startupDiscardReady'),
-    'Native app close cleanup must preserve the database while discarding pending local edits and Undo history'
+    'Native app close cleanup must clear ephemeral UI/Undo state without reading or mutating SQLite'
   );
   assert(
     appShellSource.includes("import NativeStartupSessionReset from './NativeStartupSessionReset';") &&
@@ -10173,7 +10167,7 @@ async function run() {
       tauriLibSource.includes('tauri_plugin_single_instance::init') &&
       tauriLibSource.includes('get_webview_window("main")') &&
       tauriLibSource.includes('window.set_focus()'),
-    'Native startup must clear only ephemeral UI/Undo state; pending local edits are discarded by the native close guard, not by first-open cleanup'
+    'Native startup must clear only ephemeral UI/Undo state without reading or mutating SQLite'
   );
   assert(
     nativeCatchupRustSource.includes('static SQLITE_SCHEMA_INIT_LOCK') &&
@@ -10280,23 +10274,21 @@ async function run() {
       seasonSyncProviderSource.includes('const shouldTrack = (pendingCount ?? 0) > 0;') &&
       !seasonSyncProviderSource.includes('markSessionPendingSeason') &&
       seasonSyncProviderSource.includes('setSessionPendingSeason(seasonId, state.pendingCount);') &&
-      seasonSyncProviderSource.includes('setSessionPendingSeason(seasonId, summary.pendingCount);'),
+      seasonSyncProviderSource.includes('setSessionPendingSeason(event.seasonId, pendingCount);'),
     'Session pending tracker must use real pending-submit counts, not mark every workspace event as a global pending warning'
   );
   assert(
-    seasonSyncProviderSource.indexOf('const flushWorkspaceChanges = () => {') >= 0 &&
-      seasonSyncProviderSource.indexOf('patchStateFromNativeSummary(seasonId, summary);', seasonSyncProviderSource.indexOf('const flushWorkspaceChanges = () => {')) >
-        seasonSyncProviderSource.indexOf('setSessionPendingSeason(seasonId, summary.pendingCount);') &&
-      seasonSyncProviderSource.indexOf('patchStateFromNativeSummary(seasonId, summary);', seasonSyncProviderSource.indexOf('const flushWorkspaceChanges = () => {')) <
-        seasonSyncProviderSource.indexOf('scheduler.notifyLocalChange(seasonId, {', seasonSyncProviderSource.indexOf('const flushWorkspaceChanges = () => {')),
-    'Legacy workspace-change summary refresh must patch provider pending state before scheduler notification'
+    !seasonSyncProviderSource.includes('flushWorkspaceChanges') &&
+      !seasonSyncProviderSource.includes('patchStateFromNativeSummary') &&
+      seasonSyncProviderSource.indexOf('setSessionPendingSeason(event.seasonId, pendingCount);') <
+        seasonSyncProviderSource.indexOf('scheduler.notifyLocalChange(event.seasonId, {'),
+    'Workspace-change metadata must patch provider pending state before scheduler notification without native summary refresh'
   );
   assert(
-    settingsPageSource.includes('syncSummary?.conflictCount') &&
-      settingsPageSource.includes('conflict review item') &&
-      settingsPageSource.includes('pending local change') &&
-      settingsPageSource.includes('will be discarded by the repair import'),
-    'Settings repair import confirmation must warn about conflict review items as well as pending local changes'
+    settingsPageSource.includes('This clears existing server records, modifications, and history') &&
+      !settingsPageSource.includes('queryNativeSyncSummary') &&
+      !settingsPageSource.includes('pending local change'),
+    'Settings repair import must describe the server replacement and ignore stale native pending metadata'
   );
   const settingsRepairImportStart = settingsPageSource.indexOf('const handleSeasonRepairImport');
   const settingsRepairPublishStart = settingsPageSource.indexOf('publishSeasonWorkspaceChanged({', settingsRepairImportStart);
@@ -10304,8 +10296,8 @@ async function run() {
   assert(
     settingsRepairImportStart >= 0 &&
       settingsRepairPublishStart > settingsRepairImportStart &&
-      settingsRepairPublishBlock.includes('syncMeta: imported.syncMeta'),
-    'Settings repair import must publish imported syncMeta so sync badges and session warnings update immediately after replacement'
+      settingsRepairPublishBlock.includes('syncMeta: refreshedWindow.syncMeta'),
+    'Settings repair import must publish server-window syncMeta so sync badges update immediately after replacement'
   );
   assert(
     seasonalPageSource.includes('const targetPendingCount = existing.id === activeSeason?.id ? syncPendingCount : 0') &&
@@ -10338,10 +10330,10 @@ async function run() {
     'Route Save handlers must label failed sync results as Save Failed instead of generic Save Status'
   );
   assert(
-    seasonSyncProviderSource.includes("? { status: 'synced', message: nativeResult.message }") &&
-      !seasonSyncProviderSource.includes('reviewCount: nativeResult.conflictCount') &&
+    seasonSyncProviderSource.includes("return { status: 'synced' as const, message: 'Changes saved to server.' };") &&
+      !seasonSyncProviderSource.includes('nativeResult') &&
       !seasonSyncProviderSource.includes('reviewCount'),
-    'Native sync publishResult must not restore legacy conflict review metadata in normal online-first events'
+    'Server save results must not restore native conflict review metadata in normal online-first events'
   );
   const primaryRouteSources = [seasonalPageSource, detailedPageSource, dailyPageSource, checkInPageSource, gatePageSource, dashboardPageSource];
   assert(
@@ -10472,13 +10464,13 @@ async function run() {
   );
   assert(
     nativeLocalSeasonStoreSource.includes("'scheduleNotification'") &&
-      seasonalPageSource.includes('await runNativeScheduleMutation(\n        activeSeason.id,\n        addedRecords,\n        [],\n        regularMods,\n        historyEntry\n      )') &&
+      seasonalPageSource.includes("await runNativeScheduleMutation(\n        activeSeason.id,\n        addedRecords,\n        [],\n        regularMods,\n        historyEntry,\n        [],\n        'seasonal'\n      )") &&
       nativeCatchupRustSource.includes('"sourceRow" => {}') &&
       nativeCatchupRustSource.includes('"scheduleNotification".to_string()') &&
       seasonalPageSource.includes('commitDraftBeforeSave') &&
       !seasonalPageSource.includes('Save & Publish') &&
       seasonalPageSource.includes('setDraftState({') &&
-      detailedPageSource.includes('await runNativeScheduleMutation(season.id, addedRecords, [], regularMods, historyEntry)') &&
+      detailedPageSource.includes("await runNativeScheduleMutation(season.id, addedRecords, [], regularMods, historyEntry, [], 'detailed')") &&
       detailedPageSource.includes('ADD TO DRAFT') &&
       detailedPageSource.includes('commitDraftBeforeSave') &&
       !detailedPageSource.includes('Save & Publish') &&
@@ -10552,16 +10544,12 @@ async function run() {
       seasonWorkspaceBootstrapSource.includes('loadDefaultServerBaseline') &&
       seasonWorkspaceBootstrapSource.includes('clean-stale') &&
       seasonWorkspaceBootstrapSource.includes('dirty-stale') &&
-      [detailedPageSource, dailyPageSource, dashboardPageSource].every((source) =>
-        source.includes('queryNativeScheduleWindow') && !source.includes("buildLoadProgress('Checking local workspace'")
+      [seasonalPageSource, detailedPageSource, dailyPageSource, dashboardPageSource, checkInPageSource, gatePageSource].every((source) =>
+        source.includes('loadSeasonWorkspaceWindow') && !source.includes('queryNativeScheduleWindow') && !source.includes('queryNativeAllocationWindow')
       ) &&
-      [checkInPageSource, gatePageSource].every((source) =>
-        source.includes('queryNativeAllocationWindow') && !source.includes("buildLoadProgress('Checking local workspace'")
-      ) &&
-      seasonalPageSource.includes('queryNativeScheduleWindow') &&
       seasonalPageSource.includes('sourceRows: []') &&
       seasonalPageSource.includes('sourceRows: 0'),
-    'Supabase large season reads must be paginated, imports must verify remote counts, and operational routes must use native viewport reads instead of first-open workspace hydration'
+    'Supabase large season reads must be paginated, imports must verify remote counts, and operational routes must use server windows without native fallback'
   );
   const supabaseInFilterBatchMatch = supabaseStoreSource.match(/const SUPABASE_IN_FILTER_BATCH_SIZE = (\d+)/);
   const supabaseInFilterBatchSize = Number(supabaseInFilterBatchMatch?.[1] ?? 0);
@@ -10616,7 +10604,8 @@ async function run() {
       supabaseStoreSource.includes("rpc('sync_season_workspace_v2'") &&
       supabaseStoreSource.includes("from('season_change_events')") &&
       supabaseStoreSource.includes('postgres_changes') &&
-      supabaseStoreSource.includes(".channel(`season-change-events:") &&
+      supabaseStoreSource.includes('const channelTopic = `season-change-events:${seasonId}:${randomId(\'subscription\')}`') &&
+      supabaseStoreSource.includes('.channel(channelTopic)') &&
       seasonSyncSource.includes('buildPendingChangeEvents') &&
       seasonSyncSource.includes('applySeasonEventRange') &&
       seasonSyncSource.includes('createWorkspaceFromRemoteSnapshot') &&
@@ -10636,10 +10625,9 @@ async function run() {
       seasonWorkspaceBootstrapSource.includes('getSeasonEntityVersions') &&
       seasonWorkspaceBootstrapSource.includes('serverEventHighWater') &&
       seasonWorkspaceBootstrapSource.includes('entityVersions') &&
-      [detailedPageSource, dailyPageSource, checkInPageSource, gatePageSource].every((source) =>
-        source.includes('queryNative')
+      [seasonalPageSource, detailedPageSource, dailyPageSource, checkInPageSource, gatePageSource].every((source) =>
+        source.includes('loadSeasonWorkspaceWindow') && !source.includes('queryNative') && !source.includes('ensureNativeSeasonBaseline')
       ) &&
-      seasonalPageSource.includes('queryNativeScheduleWindow') &&
       seasonalPageSource.includes('sourceRows: 0') &&
       !seasonSyncProviderSource.includes('applySeasonEventRange') &&
       seasonSyncProviderSource.includes('subscribeToSeasonEvents') &&
@@ -10662,7 +10650,8 @@ async function run() {
       seasonSyncSource.includes('remoteFields: pickFields') &&
       seasonConflictResolutionSource.includes('publishSeasonWorkspaceChanged') &&
       seasonConflictReviewControlSource.includes('LEGACY_NATIVE_SYNC_ENABLED') &&
-      seasonConflictReviewControlSource.includes('queryNativeConflictSummary') &&
+      seasonConflictReviewControlSource.includes('queryLegacyNativeConflictSummary') &&
+      !seasonConflictReviewControlSource.includes("from '@/lib/nativeSeasonRepository'") &&
       !seasonConflictReviewControlSource.includes('loadLocalSeasonWorkspace') &&
       seasonConflictReviewControlSource.includes('Keep mine') &&
       seasonConflictReviewControlSource.includes('Accept remote') &&
@@ -10820,7 +10809,8 @@ async function run() {
       localSeasonStoreSource.indexOf('runNativeLocalModificationBatchDelta') < localSeasonStoreSource.indexOf('export async function applyLocalModificationBatch') &&
       seasonWorkspaceBootstrapSource.includes("nativeFullSaveReason: 'server-baseline'") &&
       seasonSyncSource.match(/nativeFullSaveReason: 'sync-baseline'/g)?.length >= 5 &&
-      seasonalPageSource.includes('importNativeSeasonSnapshot({') &&
+      !seasonalPageSource.includes('importNativeSeasonSnapshot({') &&
+      seasonalPageSource.includes('loadSeasonWorkspaceWindow({') &&
       seasonalPageSource.includes('sourceRows: []') &&
       !seasonalPageSource.includes("nativeFullSaveReason: 'undo-reset'") &&
       detailedPageSource.includes('runNativeScheduleMutation') &&
@@ -10838,20 +10828,17 @@ async function run() {
     syncActionButtonSource.includes('export default function SyncActionButton') &&
       syncActionButtonSource.includes('const [clickLocked, setClickLocked] = useState(false)') &&
       syncActionButtonSource.includes('const clickLockedRef = useRef(false)') &&
-      syncActionButtonSource.includes('const busy = syncing || clickLocked') &&
+      syncActionButtonSource.includes('getSyncActionButtonState({') &&
+      syncActionButtonSource.includes('syncing: syncing || clickLocked') &&
       syncActionButtonSource.includes('clickLockedRef.current = true') &&
-      syncActionButtonSource.includes('aria-busy={busy ?') &&
+      syncActionButtonSource.includes('aria-busy={state.busy ?') &&
       syncActionButtonSource.includes('animate-spin') &&
       syncActionButtonSource.includes('min-w-[116px]') &&
-      syncActionButtonSource.includes('disabled={busy || !hasPending}') &&
+      syncActionButtonSource.includes('disabled={state.disabled}') &&
       syncActionButtonSource.includes('setClickLocked(true)') &&
       syncActionButtonSource.includes('clickLockedRef.current = false') &&
       syncActionButtonSource.includes('finally') &&
-      syncActionButtonSource.includes("const hasPending = pendingCount > 0") &&
-      syncActionButtonSource.includes("const label = busy ? 'Submitting...' : hasPending ? 'Save pending' : 'No pending'") &&
-      syncActionButtonSource.includes("'Submit pending changes to server'") &&
-      syncActionButtonSource.includes("'No pending changes to submit'") &&
-      syncActionButtonSource.includes('if (busy || !hasPending || clickLockedRef.current) return;') &&
+      syncActionButtonSource.includes('if (state.busy || !state.canSubmit || clickLockedRef.current) return;') &&
       !syncActionButtonSource.includes("'Syncing...'") &&
       !syncActionButtonSource.includes("'Sync now'") &&
       !syncActionButtonSource.includes("'Sync'") &&
@@ -11321,7 +11308,8 @@ async function run() {
   assert(
     remoteStoreSource.includes('RemoteDashboardSeasonData') &&
       remoteStoreSource.includes('getDashboardSeasonData') &&
-      dashboardPageSource.includes('queryNativeScheduleWindow') &&
+      dashboardPageSource.includes('loadSeasonWorkspaceWindow') &&
+      !dashboardPageSource.includes('queryNativeScheduleWindow') &&
       !dashboardPageSource.includes('loadOrSeedSeasonWorkspace') &&
       seasonWorkspaceBootstrapSource.includes('loadDefaultServerBaseline') &&
       seasonWorkspaceBootstrapSource.includes('getFlightRecords') &&
@@ -11334,7 +11322,7 @@ async function run() {
       supabaseStoreSource.includes('readRowsByInFilter') &&
       supabaseStoreSource.includes("selectAllRows<FlightRecordRelationalRow>('season_flight_records'") &&
       supabaseStoreSource.includes("selectAllRows<ModificationAddedLegRelationalRow>('season_modification_added_legs'"),
-    'Dashboard and AI data loading must use native local SQLite reads instead of page-local remote payload or full workspace bootstrap reads'
+    'Dashboard and AI data loading must use server workspace reads instead of native SQLite or full workspace bootstrap reads'
   );
   const settingsWriteOrder = supabaseStoreSource.slice(
     supabaseStoreSource.indexOf('async function writeOperationalSettingsRelational'),

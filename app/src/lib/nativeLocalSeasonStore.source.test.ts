@@ -52,3 +52,9 @@ test('server-authoritative schedule writes use route module source instead of sc
   assert.match(body, /applyServerAuthoritativeOperations\(seasonId,\s*source,\s*operations\)/);
   assert.doesNotMatch(body, /applyServerAuthoritativeOperations\(seasonId,\s*'schedule'/);
 });
+
+test('server-authoritative mutation boundary has no native read or catch-up dependency', () => {
+  assert.doesNotMatch(source, /\bqueryNativeSyncSummary\b/);
+  assert.doesNotMatch(source, /\brunNativeSeasonCatchup\b/);
+  assert.doesNotMatch(source, /\bbaseServerSeq\b/);
+});
