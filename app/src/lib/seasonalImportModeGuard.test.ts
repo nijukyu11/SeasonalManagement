@@ -116,3 +116,32 @@ test('remote source-row mutation APIs remain disabled for seasonal atomic data',
   assert.match(source, /export async function deleteSourceRow[\s\S]*throw sourceRowWritesDisabled\(\)/);
   assert.match(source, /export async function linkSourceRows[\s\S]*throw sourceRowWritesDisabled\(\)/);
 });
+
+test('seasonal source import V2 stages canonical rows behind a permissioned RPC', () => {
+  const migrationSource = readFileSync(
+    join(root, '..', 'supabase', 'migrations', '20260718090000_seasonal_source_import_v2.sql'),
+    'utf8'
+  );
+  const schemaSource = readFileSync(join(root, '..', 'supabase', 'schema.sql'), 'utf8');
+  const stageFunctionPattern = /create or replace function public\.stage_seasonal_import_v2\(p_import jsonb\)[\s\S]*?\n\$\$;/i;
+
+  for (const source of [migrationSource, schemaSource]) {
+    const stageFunctionSource = source.match(stageFunctionPattern)?.[0];
+    assert.ok(stageFunctionSource, 'stage_seasonal_import_v2 body must be present');
+    assert.match(source, /create table if not exists public\.season_import_batches/);
+    assert.match(source, /create table if not exists public\.season_import_batch_rows/);
+    assert.match(source, /alter table public\.season_import_batches enable row level security/);
+    assert.match(source, /alter table public\.season_import_batch_rows enable row level security/);
+    assert.match(source, /revoke all on table public\.season_import_batches from public, anon, authenticated/);
+    assert.match(source, /revoke all on table public\.season_import_batch_rows from public, anon, authenticated/);
+    assert.match(source, /grant execute on function public\.stage_seasonal_import_v2\(jsonb\) to authenticated/);
+    assert.match(stageFunctionSource, /public\.app_operator_has_permission\('seasonal\.write'\)/);
+    assert.match(stageFunctionSource, /on conflict \(request_id\) do nothing/);
+    assert.match(
+      stageFunctionSource,
+      /insert into public\.season_import_batch_rows[\s\S]*select[\s\S]*jsonb_array_elements\([\s\S]*with ordinality/i
+    );
+    assert.doesNotMatch(stageFunctionSource, /flightRecords/);
+    assert.doesNotMatch(stageFunctionSource, /for\s+v_record\s+in\s+select.*jsonb_array_elements/is);
+  }
+});
