@@ -28,33 +28,108 @@ function extractOpeningTagContaining(source: string, tagName: string, marker: st
   return source.slice(start, end + 1);
 }
 
-function extractUseCallbackSource(source: string, callbackName: string): string {
-  const sourceFile = ts.createSourceFile(
-    'SeasonalSchedulePage.tsx',
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX,
-  );
-  let callbackSource: string | null = null;
+function findNode<T extends ts.Node>(
+  root: ts.Node,
+  predicate: (node: ts.Node) => node is T,
+): T | null {
+  let found: T | null = null;
   const visit = (node: ts.Node): void => {
-    if (
-      ts.isVariableDeclaration(node)
-      && ts.isIdentifier(node.name)
-      && node.name.text === callbackName
-      && node.initializer
-      && ts.isCallExpression(node.initializer)
-      && ts.isIdentifier(node.initializer.expression)
-      && node.initializer.expression.text === 'useCallback'
-    ) {
-      callbackSource = node.initializer.getText(sourceFile);
+    if (found) return;
+    if (predicate(node)) {
+      found = node;
       return;
     }
     ts.forEachChild(node, visit);
   };
-  visit(sourceFile);
-  assert.ok(callbackSource, `${callbackName} should be declared with useCallback`);
-  return callbackSource;
+  visit(root);
+  return found;
+}
+
+function isIdentifierCall(node: ts.Node | undefined, name: string): node is ts.CallExpression {
+  return Boolean(
+    node
+    && ts.isCallExpression(node)
+    && ts.isIdentifier(node.expression)
+    && node.expression.text === name,
+  );
+}
+
+function extractUseCallbackBody(sourceFile: ts.SourceFile, callbackName: string): ts.Block {
+  const declaration = findNode(sourceFile, (node): node is ts.VariableDeclaration => (
+    ts.isVariableDeclaration(node)
+    && ts.isIdentifier(node.name)
+    && node.name.text === callbackName
+    && isIdentifierCall(node.initializer, 'useCallback')
+  ));
+  const initializer = declaration?.initializer;
+  assert.ok(isIdentifierCall(initializer, 'useCallback'));
+  const callback = initializer.arguments[0];
+  assert.ok(
+    callback
+    && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))
+    && ts.isBlock(callback.body),
+    `${callbackName} should be declared with a block-bodied useCallback`,
+  );
+  return callback.body;
+}
+
+function callMatchesTarget(
+  call: ts.CallExpression,
+  kind: 'identifier' | 'property',
+  name: string,
+): boolean {
+  if (kind === 'identifier') {
+    return ts.isIdentifier(call.expression) && call.expression.text === name;
+  }
+  return ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === name;
+}
+
+function branchReturns(statement: ts.Statement): boolean {
+  return ts.isReturnStatement(statement)
+    || (ts.isBlock(statement) && statement.statements.some(ts.isReturnStatement));
+}
+
+type GuardBoundary = readonly [
+  callbackName: string,
+  guardName: 'getSeasonalFileActionBlock' | 'validateSeasonalFileAction',
+  resultName: string,
+  sideEffectKind: 'identifier' | 'property',
+  sideEffectName: string,
+  boundaryLabel: string,
+];
+
+function assertGuardResultReturnsBeforeSideEffect(
+  sourceFile: ts.SourceFile,
+  boundary: GuardBoundary,
+): void {
+  const [callbackName, guardName, resultName, sideEffectKind, sideEffectName, boundaryLabel] = boundary;
+  const body = extractUseCallbackBody(sourceFile, callbackName);
+  const resultDeclaration = findNode(body, (node): node is ts.VariableDeclaration => (
+    ts.isVariableDeclaration(node)
+    && ts.isIdentifier(node.name)
+    && node.name.text === resultName
+    && isIdentifierCall(node.initializer, guardName)
+  ));
+  const sideEffectCall = findNode(body, (node): node is ts.CallExpression => (
+    ts.isCallExpression(node) && callMatchesTarget(node, sideEffectKind, sideEffectName)
+  ));
+  assert.ok(resultDeclaration, `${callbackName} should assign ${guardName} to ${resultName}`);
+  assert.ok(sideEffectCall, `${callbackName} should contain ${boundaryLabel}`);
+
+  const resultEnd = resultDeclaration.getEnd();
+  const sideEffectStart = sideEffectCall.getStart(sourceFile);
+  const earlyReturn = findNode(body, (node): node is ts.IfStatement => (
+    ts.isIfStatement(node)
+    && ts.isIdentifier(node.expression)
+    && node.expression.text === resultName
+    && branchReturns(node.thenStatement)
+    && node.getStart(sourceFile) > resultEnd
+    && node.getEnd() < sideEffectStart
+  ));
+  assert.ok(
+    earlyReturn,
+    `${callbackName} should return on ${resultName} before ${boundaryLabel}`,
+  );
 }
 
 test('Seasonal Schedule passes draft changes through the save guard flow', () => {
@@ -87,21 +162,29 @@ test('Seasonal file actions wire the controller at commit, apply, and download b
   assert.ok(source.lastIndexOf('validateSeasonalFileAction(', download) > exportStart);
 });
 
-test('every Seasonal file action entry point applies the state guard', () => {
+test('every Seasonal file action guard result returns before its side-effect boundary', () => {
   const source = readSource('app/SeasonalSchedulePage.tsx');
-  const entryPoints = [
-    ['handleImportClick', 'import'],
-    ['handleFile', 'import'],
-    ['handleExportUpdated', 'export'],
-  ] as const;
+  const sourceFile = ts.createSourceFile(
+    'SeasonalSchedulePage.tsx',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const cases: readonly GuardBoundary[] = [
+    ['handleImportClick', 'getSeasonalFileActionBlock', 'block', 'property', 'click', 'opening the import picker'],
+    ['handleFile', 'getSeasonalFileActionBlock', 'block', 'identifier', 'findSeasonByCode', 'the first import server lookup'],
+    ['handleFile', 'validateSeasonalFileAction', 'commitInvalidation', 'identifier', 'applySeasonalImportRemote', 'the import server commit'],
+    ['handleFile', 'validateSeasonalFileAction', 'applyInvalidation', 'identifier', 'setCachedSeasons', 'applying the committed cache snapshot'],
+    ['handleFile', 'validateSeasonalFileAction', 'finalApplyInvalidation', 'identifier', 'setSeasons', 'applying the committed UI snapshot'],
+    ['handleExportUpdated', 'getSeasonalFileActionBlock', 'initialBlock', 'identifier', 'loadSeasonWorkspaceWindow', 'the export server request'],
+    ['handleExportUpdated', 'validateSeasonalFileAction', 'snapshotInvalidation', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],
+    ['handleExportUpdated', 'getSeasonalFileActionBlock', 'snapshotBlock', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],
+    ['handleExportUpdated', 'validateSeasonalFileAction', 'downloadInvalidation', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],
+  ];
 
-  for (const [callbackName, action] of entryPoints) {
-    const callbackSource = extractUseCallbackSource(source, callbackName);
-    assert.match(
-      callbackSource,
-      new RegExp(`getSeasonalFileActionBlock\\s*\\(\\s*\\{[\\s\\S]*?action:\\s*'${action}'`),
-      `${callbackName} should guard ${action}`,
-    );
+  for (const entry of cases) {
+    assertGuardResultReturnsBeforeSideEffect(sourceFile, entry);
   }
 });
 
