@@ -2554,10 +2554,15 @@ $$;
 do $$
 declare
   v_stage_definition text;
+  v_core_definition text;
   v_generator_definition text;
+  v_diagnostics_definition text;
   v_preflight_definition text;
+  v_core_language text;
+  v_core_volatility "char";
   v_generator_language text;
   v_generator_volatility "char";
+  v_core_call text := 'public.seasonal_import_atomic_preview_v2(';
 begin
   select pg_get_functiondef('public.stage_seasonal_import_v2(jsonb)'::regprocedure)
   into v_stage_definition;
@@ -2571,19 +2576,58 @@ begin
   join pg_language languages on languages.oid = procedures.prolang
   where procedures.oid = 'public.generate_seasonal_import_records_v2(uuid)'::regprocedure;
 
+  select
+    pg_get_functiondef(procedures.oid),
+    languages.lanname,
+    procedures.provolatile
+  into v_core_definition, v_core_language, v_core_volatility
+  from pg_proc procedures
+  join pg_language languages on languages.oid = procedures.prolang
+  where procedures.oid =
+    'public.seasonal_import_atomic_preview_v2(uuid)'::regprocedure;
+
+  select pg_get_functiondef(
+    'public.seasonal_import_generation_diagnostics_v2(uuid)'::regprocedure
+  )
+  into v_diagnostics_definition;
+
   select pg_get_functiondef(
     'public.seasonal_import_expansion_preflight_v2(jsonb)'::regprocedure
   )
   into v_preflight_definition;
 
-  if position('generated_preview as materialized' in lower(v_stage_definition)) = 0
+  if position('atomic_preview as materialized' in lower(v_stage_definition)) = 0
+    or (
+      length(lower(v_stage_definition))
+      - length(replace(lower(v_stage_definition), v_core_call, ''))
+    ) / length(v_core_call) <> 1
+    or position('public.generate_seasonal_import_records_v2(' in lower(v_stage_definition)) <> 0
+    or position('public.seasonal_import_generation_diagnostics_v2(' in lower(v_stage_definition)) <> 0
+    or position('generate_series' in lower(v_stage_definition)) <> 0
+    or v_core_language <> 'sql'
+    or v_core_volatility <> 's'
+    or (
+      length(lower(v_core_definition))
+      - length(replace(lower(v_core_definition), 'generate_series', ''))
+    ) / length('generate_series') <> 1
+    or position('generated_dates as materialized' in lower(v_core_definition)) = 0
+    or position('day_offsets(day_offset)' in lower(v_core_definition)) = 0
+    or position('interval ''1 day''' in lower(v_core_definition)) <> 0
     or v_generator_language <> 'sql'
     or v_generator_volatility <> 's'
+    or (
+      length(lower(v_generator_definition))
+      - length(replace(lower(v_generator_definition), v_core_call, ''))
+    ) / length(v_core_call) <> 1
+    or position('generate_series' in lower(v_generator_definition)) <> 0
+    or (
+      length(lower(v_diagnostics_definition))
+      - length(replace(lower(v_diagnostics_definition), v_core_call, ''))
+    ) / length(v_core_call) <> 1
+    or position('generate_series' in lower(v_diagnostics_definition)) <> 0
     or position('generate_series' in lower(v_preflight_definition)) <> 0
-    or position('day_offsets(day_offset)' in lower(v_generator_definition)) = 0
-    or position('interval ''1 day''' in lower(v_generator_definition)) <> 0
   then
-    raise exception 'Task4 SQL shape contract was not preserved';
+    raise exception 'Task4 single-expansion SQL shape contract was not preserved';
   end if;
 
   if has_function_privilege(
@@ -2594,8 +2638,16 @@ begin
     'anon',
     'public.seasonal_import_expansion_preflight_v2(jsonb)',
     'EXECUTE'
+  ) or has_function_privilege(
+    'authenticated',
+    'public.seasonal_import_atomic_preview_v2(uuid)',
+    'EXECUTE'
+  ) or has_function_privilege(
+    'anon',
+    'public.seasonal_import_atomic_preview_v2(uuid)',
+    'EXECUTE'
   ) then
-    raise exception 'client roles must not execute the internal expansion preflight helper';
+    raise exception 'client roles must not execute internal expansion helpers';
   end if;
 end
 $$;

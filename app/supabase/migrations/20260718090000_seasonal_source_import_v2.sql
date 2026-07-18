@@ -293,8 +293,9 @@ as $$
   from operating_date_counts
 $$;
 
-create or replace function public.generate_seasonal_import_records_v2(p_batch_id uuid)
+create or replace function public.seasonal_import_atomic_preview_v2(p_batch_id uuid)
 returns table (
+  item_kind text,
   record_id text,
   occurrence_key text,
   link_id text,
@@ -316,7 +317,11 @@ returns table (
   link_type text,
   pair_anchor_date text,
   linked_record_id text,
-  turnaround_id text
+  turnaround_id text,
+  staging_row_index integer,
+  issue_order integer,
+  diagnostic_column_name text,
+  issue jsonb
 )
 language sql
 stable
@@ -360,57 +365,6 @@ as $$
     where rows.batch_id = p_batch_id
       and batches.status in ('staged', 'validated')
       and pg_catalog.jsonb_array_length(batches.diagnostics) = 0
-  ), generated_dates as (
-    select
-      canonical_rows.*,
-      canonical_rows.effective_date + day_offsets.day_offset
-        as source_scheduled_date
-    from canonical_rows
-    cross join lateral pg_catalog.generate_series(
-      0,
-      canonical_rows.discontinue_date - canonical_rows.effective_date
-    ) day_offsets(day_offset)
-  ), dow_filtered_dates as (
-    select generated_dates.*
-    from generated_dates
-    where (generated_dates.days_of_week->(
-      extract(isodow from generated_dates.source_scheduled_date)::integer - 1
-    ))::boolean
-  ), arr_dep_expansion as (
-    select
-      dow_filtered_dates.*,
-      sides.type,
-      sides.raw_flight,
-      sides.route,
-      sides.schedule,
-      sides.category,
-      sides.code_shares,
-      sides.int_dom_ind
-    from dow_filtered_dates
-    cross join lateral (
-      values
-        (
-          'A'::text,
-          dow_filtered_dates.arr_flight,
-          dow_filtered_dates.arr_route,
-          dow_filtered_dates.sta,
-          dow_filtered_dates.arr_category,
-          dow_filtered_dates.arr_code_shares,
-          dow_filtered_dates.arr_int_dom_ind,
-          dow_filtered_dates.has_arrival
-        ),
-        (
-          'D'::text,
-          dow_filtered_dates.dep_flight,
-          dow_filtered_dates.dep_route,
-          dow_filtered_dates.std,
-          dow_filtered_dates.dep_category,
-          dow_filtered_dates.dep_code_shares,
-          dow_filtered_dates.dep_int_dom_ind,
-          dow_filtered_dates.has_departure
-        )
-    ) sides(type, raw_flight, route, schedule, category, code_shares, int_dom_ind, side_is_present)
-    where sides.side_is_present
   ), linked_reference_counts as (
     select
       canonical_rows.explicit_linked_source_row_index as target_source_row_index,
@@ -418,114 +372,189 @@ as $$
     from canonical_rows
     where canonical_rows.explicit_linked_source_row_index is not null
     group by canonical_rows.explicit_linked_source_row_index
-  ), pair_anchor_resolution as (
+  ), linked_relationships as (
     select
-      arr_dep_expansion.*,
+      canonical_rows.*,
+      linked_row.source_row_index as target_source_row_index,
+      linked_row.explicit_linked_source_row_index as target_linked_source_row_index,
+      linked_row.source_link_type as target_link_type,
+      linked_row.airline as target_airline,
+      linked_row.sta as target_sta,
+      linked_row.std as target_std,
+      linked_row.has_arrival as target_has_arrival,
+      linked_row.has_departure as target_has_departure,
       case
-        when arr_dep_expansion.has_arrival and arr_dep_expansion.has_departure
+        when canonical_rows.has_arrival then coalesce(
+          canonical_rows.source_link_type,
+          linked_row.source_link_type,
+          case
+            when linked_row.std::time < canonical_rows.sta::time then 'overnight'
+            else 'sameday'
+          end
+        )
+        else coalesce(
+          linked_row.source_link_type,
+          canonical_rows.source_link_type,
+          case
+            when canonical_rows.std::time < linked_row.sta::time then 'overnight'
+            else 'sameday'
+          end
+        )
+      end as resolved_cross_row_link_type,
+      linked_reference_count.reference_count,
+      linked_row.source_row_index is not null
+        and linked_row.source_row_index <> canonical_rows.source_row_index
+        and linked_row.explicit_linked_source_row_index = canonical_rows.source_row_index
+        and linked_reference_count.reference_count = 1
+        and canonical_rows.has_arrival <> canonical_rows.has_departure
+        and linked_row.has_arrival <> linked_row.has_departure
+        and canonical_rows.has_arrival <> linked_row.has_arrival
+        and canonical_rows.airline = linked_row.airline
+        and not (
+          canonical_rows.source_link_type is not null
+          and linked_row.source_link_type is not null
+          and canonical_rows.source_link_type <> linked_row.source_link_type
+        ) as explicit_relationship_is_valid
+    from canonical_rows
+    left join canonical_rows linked_row
+      on linked_row.source_row_index = canonical_rows.explicit_linked_source_row_index
+    left join linked_reference_counts linked_reference_count
+      on linked_reference_count.target_source_row_index = linked_row.source_row_index
+  ), generated_dates AS MATERIALIZED (
+    select
+      linked_relationships.*,
+      linked_relationships.effective_date + day_offsets.day_offset
+        as source_scheduled_date
+    from linked_relationships
+    cross join lateral pg_catalog.generate_series(
+      0,
+      linked_relationships.discontinue_date - linked_relationships.effective_date
+    ) day_offsets(day_offset)
+    where (linked_relationships.days_of_week->(
+      extract(
+        isodow from linked_relationships.effective_date + day_offsets.day_offset
+      )::integer - 1
+    ))::boolean
+  ), rows_without_operating_dates as (
+    select linked_relationships.*
+    from linked_relationships
+    where not exists (
+      select 1
+      from generated_dates
+      where generated_dates.staging_row_index = linked_relationships.staging_row_index
+    )
+  ), explicit_pair_anchors as (
+    select
+      generated_dates.*,
+      case
+        when generated_dates.has_arrival then generated_dates.source_scheduled_date
+        when generated_dates.resolved_cross_row_link_type = 'overnight'
+          then generated_dates.source_scheduled_date - 1
+        else generated_dates.source_scheduled_date
+      end as diagnostic_pair_anchor_date
+    from generated_dates
+    where generated_dates.explicit_linked_source_row_index is not null
+      and generated_dates.explicit_relationship_is_valid
+  ), unmatched_pair_dates as (
+    select source_anchor.*
+    from explicit_pair_anchors source_anchor
+    where not exists (
+      select 1
+      from explicit_pair_anchors target_anchor
+      where target_anchor.source_row_index = source_anchor.explicit_linked_source_row_index
+        and target_anchor.explicit_linked_source_row_index = source_anchor.source_row_index
+        and target_anchor.diagnostic_pair_anchor_date
+          = source_anchor.diagnostic_pair_anchor_date
+    )
+  ), arr_dep_expansion as (
+    select
+      generated_dates.*,
+      sides.type,
+      sides.raw_flight,
+      sides.route,
+      sides.schedule,
+      sides.category,
+      sides.code_shares,
+      sides.int_dom_ind,
+      case
+        when generated_dates.has_arrival and generated_dates.has_departure
           then case
-            when arr_dep_expansion.std::time < arr_dep_expansion.sta::time
+            when generated_dates.std::time < generated_dates.sta::time
               then 'overnight'
             else 'sameday'
           end
-        when arr_dep_expansion.explicit_linked_source_row_index is not null
-          then case
-            when arr_dep_expansion.has_arrival then coalesce(
-              arr_dep_expansion.source_link_type,
-              linked_row.source_link_type,
-              case
-                when linked_row.std::time < arr_dep_expansion.sta::time then 'overnight'
-                else 'sameday'
-              end
-            )
-            else coalesce(
-              linked_row.source_link_type,
-              arr_dep_expansion.source_link_type,
-              case
-                when arr_dep_expansion.std::time < linked_row.sta::time then 'overnight'
-                else 'sameday'
-              end
-            )
-          end
+        when generated_dates.explicit_linked_source_row_index is not null
+          then generated_dates.resolved_cross_row_link_type
         else null
       end as resolved_link_type,
       case
-        when arr_dep_expansion.has_arrival
-          and arr_dep_expansion.has_departure
-          and arr_dep_expansion.type = 'D'
-          and arr_dep_expansion.std::time < arr_dep_expansion.sta::time
-          then arr_dep_expansion.source_scheduled_date + 1
-        else arr_dep_expansion.source_scheduled_date
+        when generated_dates.has_arrival
+          and generated_dates.has_departure
+          and sides.type = 'D'
+          and generated_dates.std::time < generated_dates.sta::time
+          then generated_dates.source_scheduled_date + 1
+        else generated_dates.source_scheduled_date
       end as resolved_scheduled_date,
       case
-        when arr_dep_expansion.has_arrival and arr_dep_expansion.has_departure
-          then arr_dep_expansion.source_scheduled_date
-        when arr_dep_expansion.explicit_linked_source_row_index is not null
-          and arr_dep_expansion.type = 'D'
-          and case
-            when arr_dep_expansion.has_arrival then coalesce(
-              arr_dep_expansion.source_link_type,
-              linked_row.source_link_type,
-              case
-                when linked_row.std::time < arr_dep_expansion.sta::time then 'overnight'
-                else 'sameday'
-              end
-            )
-            else coalesce(
-              linked_row.source_link_type,
-              arr_dep_expansion.source_link_type,
-              case
-                when arr_dep_expansion.std::time < linked_row.sta::time then 'overnight'
-                else 'sameday'
-              end
-            )
-          end = 'overnight'
-          then arr_dep_expansion.source_scheduled_date - 1
-        when arr_dep_expansion.explicit_linked_source_row_index is not null
-          then arr_dep_expansion.source_scheduled_date
+        when generated_dates.has_arrival and generated_dates.has_departure
+          then generated_dates.source_scheduled_date
+        when generated_dates.explicit_linked_source_row_index is not null
+          and sides.type = 'D'
+          and generated_dates.resolved_cross_row_link_type = 'overnight'
+          then generated_dates.source_scheduled_date - 1
+        when generated_dates.explicit_linked_source_row_index is not null
+          then generated_dates.source_scheduled_date
         else null
       end as resolved_pair_anchor_date,
       case
-        when arr_dep_expansion.has_arrival and arr_dep_expansion.has_departure
-          then arr_dep_expansion.source_row_index
-        else arr_dep_expansion.explicit_linked_source_row_index
+        when generated_dates.has_arrival and generated_dates.has_departure
+          then generated_dates.source_row_index
+        else generated_dates.explicit_linked_source_row_index
       end as resolved_linked_source_row_index,
-      arr_dep_expansion.has_arrival and arr_dep_expansion.has_departure
-        or arr_dep_expansion.explicit_linked_source_row_index is not null as requires_pair,
+      generated_dates.has_arrival and generated_dates.has_departure
+        or generated_dates.explicit_linked_source_row_index is not null as requires_pair,
       case
-        when arr_dep_expansion.explicit_linked_source_row_index is null then true
-        when linked_row.source_row_index is null then false
-        when linked_row.source_row_index = arr_dep_expansion.source_row_index then false
-        when linked_row.explicit_linked_source_row_index
-          is distinct from arr_dep_expansion.source_row_index then false
-        when linked_reference_count.reference_count <> 1 then false
-        when arr_dep_expansion.has_arrival = arr_dep_expansion.has_departure then false
-        when linked_row.has_arrival = linked_row.has_departure then false
-        when arr_dep_expansion.has_arrival = linked_row.has_arrival then false
-        when arr_dep_expansion.airline is distinct from linked_row.airline then false
-        when arr_dep_expansion.source_link_type is not null
-          and linked_row.source_link_type is not null
-          and arr_dep_expansion.source_link_type <> linked_row.source_link_type then false
-        else true
+        when generated_dates.explicit_linked_source_row_index is null then true
+        else generated_dates.explicit_relationship_is_valid
       end as relationship_is_valid
-    from arr_dep_expansion
-    left join canonical_rows linked_row
-      on linked_row.source_row_index = arr_dep_expansion.explicit_linked_source_row_index
-    left join linked_reference_counts linked_reference_count
-      on linked_reference_count.target_source_row_index = linked_row.source_row_index
+    from generated_dates
+    cross join lateral (
+      values
+        (
+          'A'::text,
+          generated_dates.arr_flight,
+          generated_dates.arr_route,
+          generated_dates.sta,
+          generated_dates.arr_category,
+          generated_dates.arr_code_shares,
+          generated_dates.arr_int_dom_ind,
+          generated_dates.has_arrival
+        ),
+        (
+          'D'::text,
+          generated_dates.dep_flight,
+          generated_dates.dep_route,
+          generated_dates.std,
+          generated_dates.dep_category,
+          generated_dates.dep_code_shares,
+          generated_dates.dep_int_dom_ind,
+          generated_dates.has_departure
+        )
+    ) sides(type, raw_flight, route, schedule, category, code_shares, int_dom_ind, side_is_present)
+    where sides.side_is_present
   ), normalized_flight_identity as (
     select
-      pair_anchor_resolution.*,
+      arr_dep_expansion.*,
       normalized.flight_number,
       normalized.raw_flight_number,
       public.seasonal_operational_date_v2(
-        pair_anchor_resolution.resolved_scheduled_date,
-        pair_anchor_resolution.schedule::time
+        arr_dep_expansion.resolved_scheduled_date,
+        arr_dep_expansion.schedule::time
       ) as resolved_operational_date
-    from pair_anchor_resolution
+    from arr_dep_expansion
     cross join lateral public.normalize_seasonal_flight_number_v2(
-      pair_anchor_resolution.airline,
-      pair_anchor_resolution.raw_flight
+      arr_dep_expansion.airline,
+      arr_dep_expansion.raw_flight
     ) normalized
   ), deterministic_ids as (
     select
@@ -618,7 +647,7 @@ as $$
       and counterpart.type = deterministic_ids.type
       and counterpart.resolved_scheduled_date = deterministic_ids.resolved_scheduled_date
       and counterpart.generated_record_id = deterministic_ids.generated_record_id
-  ), duplicate_key_diagnostics as (
+  ), committable_duplicate_keys as (
     select
       reciprocal_links.generated_occurrence_key as occurrence_key,
       pg_catalog.count(*)::integer as occurrence_count
@@ -629,247 +658,30 @@ as $$
   ), committable_records as (
     select reciprocal_links.*
     from reciprocal_links
-    left join duplicate_key_diagnostics own_duplicate
+    left join committable_duplicate_keys own_duplicate
       on own_duplicate.occurrence_key = reciprocal_links.generated_occurrence_key
-    left join duplicate_key_diagnostics counterpart_duplicate
+    left join committable_duplicate_keys counterpart_duplicate
       on counterpart_duplicate.occurrence_key = reciprocal_links.counterpart_occurrence_key
     where reciprocal_links.pair_is_valid
       and own_duplicate.occurrence_key is null
       and counterpart_duplicate.occurrence_key is null
-  )
-  select
-    committable_records.generated_record_id,
-    committable_records.generated_occurrence_key,
-    coalesce(
-      committable_records.generated_turnaround_id,
-      committable_records.generated_record_id
-    ),
-    committable_records.type,
-    committable_records.airline,
-    committable_records.flight_number,
-    committable_records.raw_flight_number,
-    coalesce(committable_records.route, ''),
-    committable_records.schedule,
-    committable_records.aircraft,
-    coalesce(committable_records.category, ''),
-    committable_records.code_shares,
-    committable_records.int_dom_ind,
-    committable_records.resolved_scheduled_date::text,
-    committable_records.resolved_operational_date::text,
-    extract(dow from committable_records.resolved_scheduled_date)::integer,
-    committable_records.source_row_index,
-    committable_records.resolved_linked_source_row_index,
-    committable_records.resolved_link_type,
-    committable_records.resolved_pair_anchor_date::text,
-    case
-      when committable_records.requires_pair
-        then committable_records.counterpart_record_id
-      else null
-    end,
-    committable_records.generated_turnaround_id
-  from committable_records
-  order by
-    committable_records.resolved_scheduled_date,
-    committable_records.type,
-    committable_records.airline,
-    committable_records.flight_number,
-    committable_records.source_row_index
-$$;
-
-create or replace function public.seasonal_import_generation_diagnostics_v2(
-  p_batch_id uuid
-)
-returns table (
-  staging_row_index integer,
-  issue_order integer,
-  column_name text,
-  issue jsonb
-)
-language sql
-stable
-set search_path = pg_catalog, pg_temp
-as $$
-  with canonical_rows as (
-    select
-      rows.row_index as staging_row_index,
-      coalesce(
-        batches.result #>> '{_staging,targetSeasonId}',
-        batches.season_id,
-        'pending:' || batches.season_code
-      ) as season_identity,
-      (rows.row_data->>'rowIndex')::integer as source_row_index,
-      (rows.row_data->>'effective')::date as effective_date,
-      (rows.row_data->>'discontinue')::date as discontinue_date,
-      rows.row_data->>'airline' as airline,
-      rows.row_data->'daysOfWeek' as days_of_week,
-      rows.row_data->>'sta' as sta,
-      rows.row_data->>'arrFlight' as arr_flight,
-      rows.row_data->>'std' as std,
-      rows.row_data->>'depFlight' as dep_flight,
-      nullif(rows.row_data->>'overnightLinkRowIndex', '')::integer
-        as explicit_linked_source_row_index,
-      nullif(rows.row_data->>'linkType', '') as source_link_type,
-      rows.row_data->>'arrFlight' is not null
-        and rows.row_data->>'sta' is not null as has_arrival,
-      rows.row_data->>'depFlight' is not null
-        and rows.row_data->>'std' is not null as has_departure
-    from public.season_import_batch_rows rows
-    join public.season_import_batches batches on batches.batch_id = rows.batch_id
-    where rows.batch_id = p_batch_id
-  ), linked_reference_counts as (
-    select
-      canonical_rows.explicit_linked_source_row_index as target_source_row_index,
-      pg_catalog.count(*)::integer as reference_count
-    from canonical_rows
-    where canonical_rows.explicit_linked_source_row_index is not null
-    group by canonical_rows.explicit_linked_source_row_index
-  ), linked_relationships as (
-    select
-      canonical_rows.*,
-      linked_row.source_row_index as target_source_row_index,
-      linked_row.explicit_linked_source_row_index as target_linked_source_row_index,
-      linked_row.source_link_type as target_link_type,
-      linked_row.airline as target_airline,
-      linked_row.has_arrival as target_has_arrival,
-      linked_row.has_departure as target_has_departure,
-      case
-        when canonical_rows.has_arrival then coalesce(
-          canonical_rows.source_link_type,
-          linked_row.source_link_type,
-          case
-            when linked_row.std::time < canonical_rows.sta::time then 'overnight'
-            else 'sameday'
-          end
-        )
-        else coalesce(
-          linked_row.source_link_type,
-          canonical_rows.source_link_type,
-          case
-            when canonical_rows.std::time < linked_row.sta::time then 'overnight'
-            else 'sameday'
-          end
-        )
-      end as resolved_link_type,
-      linked_reference_count.reference_count,
-      linked_row.source_row_index is not null
-        and linked_row.source_row_index <> canonical_rows.source_row_index
-        and linked_row.explicit_linked_source_row_index = canonical_rows.source_row_index
-        and linked_reference_count.reference_count = 1
-        and canonical_rows.has_arrival <> canonical_rows.has_departure
-        and linked_row.has_arrival <> linked_row.has_departure
-        and canonical_rows.has_arrival <> linked_row.has_arrival
-        and canonical_rows.airline = linked_row.airline
-        and not (
-          canonical_rows.source_link_type is not null
-          and linked_row.source_link_type is not null
-          and canonical_rows.source_link_type <> linked_row.source_link_type
-        ) as relationship_is_valid
-    from canonical_rows
-    left join canonical_rows linked_row
-      on linked_row.source_row_index = canonical_rows.explicit_linked_source_row_index
-    left join linked_reference_counts linked_reference_count
-      on linked_reference_count.target_source_row_index = linked_row.source_row_index
-  ), generated_dates as (
-    select
-      linked_relationships.*,
-      linked_relationships.effective_date + day_offsets.day_offset
-        as source_scheduled_date
-    from linked_relationships
-    cross join lateral pg_catalog.generate_series(
-      0,
-      linked_relationships.discontinue_date - linked_relationships.effective_date
-    ) day_offsets(day_offset)
-    where (linked_relationships.days_of_week->(
-      extract(
-        isodow from linked_relationships.effective_date + day_offsets.day_offset
-      )::integer - 1
-    ))::boolean
-  ), rows_without_operating_dates as (
-    select linked_relationships.*
-    from linked_relationships
-    where not exists (
-      select 1
-      from generated_dates
-      where generated_dates.staging_row_index = linked_relationships.staging_row_index
-    )
-  ), explicit_pair_anchors as (
-    select
-      generated_dates.*,
-      case
-        when generated_dates.has_arrival then generated_dates.source_scheduled_date
-        when generated_dates.resolved_link_type = 'overnight'
-          then generated_dates.source_scheduled_date - 1
-        else generated_dates.source_scheduled_date
-      end as pair_anchor_date
-    from generated_dates
-    where generated_dates.explicit_linked_source_row_index is not null
-      and generated_dates.relationship_is_valid
-  ), unmatched_pair_dates as (
-    select source_anchor.*
-    from explicit_pair_anchors source_anchor
-    where not exists (
-      select 1
-      from explicit_pair_anchors target_anchor
-      where target_anchor.source_row_index = source_anchor.explicit_linked_source_row_index
-        and target_anchor.explicit_linked_source_row_index = source_anchor.source_row_index
-        and target_anchor.pair_anchor_date = source_anchor.pair_anchor_date
-    )
-  ), arr_dep_expansion as (
-    select
-      generated_dates.staging_row_index,
-      generated_dates.season_identity,
-      generated_dates.source_row_index,
-      generated_dates.airline,
-      sides.type,
-      sides.raw_flight,
-      case
-        when generated_dates.has_arrival
-          and generated_dates.has_departure
-          and sides.type = 'D'
-          and generated_dates.std::time < generated_dates.sta::time
-          then generated_dates.source_scheduled_date + 1
-        else generated_dates.source_scheduled_date
-      end as scheduled_date
-    from generated_dates
-    cross join lateral (
-      values
-        ('A'::text, generated_dates.arr_flight, generated_dates.has_arrival),
-        ('D'::text, generated_dates.dep_flight, generated_dates.has_departure)
-    ) sides(type, raw_flight, side_is_present)
-    where sides.side_is_present
-  ), normalized_occurrences as (
-    select
-      arr_dep_expansion.*,
-      normalized.flight_number,
-      arr_dep_expansion.season_identity
-        || '|'
-        || arr_dep_expansion.scheduled_date::text
-        || '|'
-        || arr_dep_expansion.airline
-        || '|'
-        || normalized.flight_number as occurrence_key
-    from arr_dep_expansion
-    cross join lateral public.normalize_seasonal_flight_number_v2(
-      arr_dep_expansion.airline,
-      arr_dep_expansion.raw_flight
-    ) normalized
   ), duplicate_occurrences as (
     select
-      pg_catalog.min(normalized_occurrences.staging_row_index) as staging_row_index,
-      pg_catalog.min(normalized_occurrences.source_row_index) as source_row_index,
-      normalized_occurrences.occurrence_key,
+      pg_catalog.min(deterministic_ids.staging_row_index) as staging_row_index,
+      pg_catalog.min(deterministic_ids.source_row_index) as source_row_index,
+      deterministic_ids.generated_occurrence_key as occurrence_key,
       pg_catalog.array_agg(
-        distinct normalized_occurrences.source_row_index
-        order by normalized_occurrences.source_row_index
+        distinct deterministic_ids.source_row_index
+        order by deterministic_ids.source_row_index
       ) as source_row_indexes
-    from normalized_occurrences
-    group by normalized_occurrences.occurrence_key
+    from deterministic_ids
+    group by deterministic_ids.generated_occurrence_key
     having pg_catalog.count(*) > 1
   ), zero_row_diagnostics as (
     select
       rows_without_operating_dates.staging_row_index,
       190 as issue_order,
-      'daysOfWeek'::text as column_name,
+      'daysOfWeek'::text as diagnostic_column_name,
       pg_catalog.jsonb_build_object(
         'rowIndex', rows_without_operating_dates.source_row_index,
         'stagingRowIndex', rows_without_operating_dates.staging_row_index,
@@ -885,7 +697,7 @@ as $$
     select
       linked_relationships.staging_row_index,
       relationship_issues.issue_order,
-      'overnightLinkRowIndex'::text as column_name,
+      'overnightLinkRowIndex'::text as diagnostic_column_name,
       pg_catalog.jsonb_build_object(
         'rowIndex', linked_relationships.source_row_index,
         'stagingRowIndex', linked_relationships.staging_row_index,
@@ -928,7 +740,8 @@ as $$
           linked_relationships.target_source_row_index is not null
             and (
               linked_relationships.has_arrival = linked_relationships.has_departure
-              or linked_relationships.target_has_arrival = linked_relationships.target_has_departure
+              or linked_relationships.target_has_arrival
+                = linked_relationships.target_has_departure
               or linked_relationships.has_arrival = linked_relationships.target_has_arrival
               or linked_relationships.airline is distinct from linked_relationships.target_airline
             ),
@@ -956,7 +769,7 @@ as $$
     select
       unmatched_pair_dates.staging_row_index,
       240 as issue_order,
-      'daysOfWeek'::text as column_name,
+      'daysOfWeek'::text as diagnostic_column_name,
       pg_catalog.jsonb_build_object(
         'rowIndex', unmatched_pair_dates.source_row_index,
         'stagingRowIndex', unmatched_pair_dates.staging_row_index,
@@ -966,17 +779,17 @@ as $$
           'Row %s: linked row %s has no %s counterpart for pair anchor %s.',
           unmatched_pair_dates.source_row_index,
           unmatched_pair_dates.explicit_linked_source_row_index,
-          unmatched_pair_dates.resolved_link_type,
-          unmatched_pair_dates.pair_anchor_date
+          unmatched_pair_dates.resolved_cross_row_link_type,
+          unmatched_pair_dates.diagnostic_pair_anchor_date
         ),
-        'pairAnchorDate', unmatched_pair_dates.pair_anchor_date::text
+        'pairAnchorDate', unmatched_pair_dates.diagnostic_pair_anchor_date::text
       ) as issue
     from unmatched_pair_dates
   ), duplicate_diagnostics as (
     select
       duplicate_occurrences.staging_row_index,
       250 as issue_order,
-      null::text as column_name,
+      null::text as diagnostic_column_name,
       pg_catalog.jsonb_build_object(
         'rowIndex', duplicate_occurrences.source_row_index,
         'stagingRowIndex', duplicate_occurrences.staging_row_index,
@@ -991,14 +804,170 @@ as $$
         'sourceRowIndexes', pg_catalog.to_jsonb(duplicate_occurrences.source_row_indexes)
       ) as issue
     from duplicate_occurrences
+  ), generation_diagnostics as (
+    select * from zero_row_diagnostics
+    union all
+    select * from relationship_diagnostics
+    union all
+    select * from pair_date_diagnostics
+    union all
+    select * from duplicate_diagnostics
+  ), record_items as (
+    select
+      'record'::text as item_kind,
+      committable_records.generated_record_id as record_id,
+      committable_records.generated_occurrence_key as occurrence_key,
+      coalesce(
+        committable_records.generated_turnaround_id,
+        committable_records.generated_record_id
+      ) as link_id,
+      committable_records.type,
+      committable_records.airline,
+      committable_records.flight_number,
+      committable_records.raw_flight_number,
+      coalesce(committable_records.route, '') as route,
+      committable_records.schedule,
+      committable_records.aircraft,
+      coalesce(committable_records.category, '') as category,
+      committable_records.code_shares,
+      committable_records.int_dom_ind,
+      committable_records.resolved_scheduled_date::text as scheduled_date,
+      committable_records.resolved_operational_date::text as operational_date,
+      extract(dow from committable_records.resolved_scheduled_date)::integer
+        as day_of_week,
+      committable_records.source_row_index,
+      committable_records.resolved_linked_source_row_index as linked_source_row_index,
+      committable_records.resolved_link_type as link_type,
+      committable_records.resolved_pair_anchor_date::text as pair_anchor_date,
+      case
+        when committable_records.requires_pair
+          then committable_records.counterpart_record_id
+        else null
+      end as linked_record_id,
+      committable_records.generated_turnaround_id as turnaround_id,
+      null::integer as staging_row_index,
+      null::integer as issue_order,
+      null::text as diagnostic_column_name,
+      null::jsonb as issue
+    from committable_records
+  ), diagnostic_items as (
+    select
+      'diagnostic'::text as item_kind,
+      null::text as record_id,
+      null::text as occurrence_key,
+      null::text as link_id,
+      null::text as type,
+      null::text as airline,
+      null::text as flight_number,
+      null::text as raw_flight_number,
+      null::text as route,
+      null::text as schedule,
+      null::text as aircraft,
+      null::text as category,
+      null::text as code_shares,
+      null::text as int_dom_ind,
+      null::text as scheduled_date,
+      null::text as operational_date,
+      null::integer as day_of_week,
+      null::integer as source_row_index,
+      null::integer as linked_source_row_index,
+      null::text as link_type,
+      null::text as pair_anchor_date,
+      null::text as linked_record_id,
+      null::text as turnaround_id,
+      generation_diagnostics.staging_row_index,
+      generation_diagnostics.issue_order,
+      generation_diagnostics.diagnostic_column_name,
+      generation_diagnostics.issue
+    from generation_diagnostics
   )
-  select * from zero_row_diagnostics
+  select * from record_items
   union all
-  select * from relationship_diagnostics
-  union all
-  select * from pair_date_diagnostics
-  union all
-  select * from duplicate_diagnostics
+  select * from diagnostic_items
+$$;
+
+create or replace function public.generate_seasonal_import_records_v2(p_batch_id uuid)
+returns table (
+  record_id text,
+  occurrence_key text,
+  link_id text,
+  type text,
+  airline text,
+  flight_number text,
+  raw_flight_number text,
+  route text,
+  schedule text,
+  aircraft text,
+  category text,
+  code_shares text,
+  int_dom_ind text,
+  scheduled_date text,
+  operational_date text,
+  day_of_week integer,
+  source_row_index integer,
+  linked_source_row_index integer,
+  link_type text,
+  pair_anchor_date text,
+  linked_record_id text,
+  turnaround_id text
+)
+language sql
+stable
+set search_path = pg_catalog, pg_temp
+as $$
+  select
+    atomic_preview.record_id,
+    atomic_preview.occurrence_key,
+    atomic_preview.link_id,
+    atomic_preview.type,
+    atomic_preview.airline,
+    atomic_preview.flight_number,
+    atomic_preview.raw_flight_number,
+    atomic_preview.route,
+    atomic_preview.schedule,
+    atomic_preview.aircraft,
+    atomic_preview.category,
+    atomic_preview.code_shares,
+    atomic_preview.int_dom_ind,
+    atomic_preview.scheduled_date,
+    atomic_preview.operational_date,
+    atomic_preview.day_of_week,
+    atomic_preview.source_row_index,
+    atomic_preview.linked_source_row_index,
+    atomic_preview.link_type,
+    atomic_preview.pair_anchor_date,
+    atomic_preview.linked_record_id,
+    atomic_preview.turnaround_id
+  from public.seasonal_import_atomic_preview_v2(p_batch_id) atomic_preview
+  where atomic_preview.item_kind = 'record'
+  order by
+    atomic_preview.scheduled_date,
+    atomic_preview.type,
+    atomic_preview.airline,
+    atomic_preview.flight_number,
+    atomic_preview.source_row_index
+$$;
+
+create or replace function public.seasonal_import_generation_diagnostics_v2(
+  p_batch_id uuid
+)
+returns table (
+  staging_row_index integer,
+  issue_order integer,
+  column_name text,
+  issue jsonb
+)
+language sql
+stable
+set search_path = pg_catalog, pg_temp
+as $$
+  select
+    atomic_preview.staging_row_index,
+    atomic_preview.issue_order,
+    atomic_preview.diagnostic_column_name,
+    atomic_preview.issue
+  from public.seasonal_import_atomic_preview_v2(p_batch_id) atomic_preview
+  where atomic_preview.item_kind = 'diagnostic'
 $$;
 
 create or replace function public.stage_seasonal_import_v2(p_import jsonb)
@@ -2101,39 +2070,29 @@ begin
     with ordinality as source_rows(row_data, ordinality);
 
   if v_batch.status = 'staged' then
-    with generated_preview AS MATERIALIZED (
-      select
-        generated.record_id,
-        null::integer as staging_row_index,
-        null::integer as issue_order,
-        null::text as column_name,
-        null::jsonb as issue
-      from public.generate_seasonal_import_records_v2(v_batch.batch_id) generated
-      union all
-      select
-        null::text as record_id,
-        diagnostics.staging_row_index,
-        diagnostics.issue_order,
-        diagnostics.column_name,
-        diagnostics.issue
-      from public.seasonal_import_generation_diagnostics_v2(v_batch.batch_id) diagnostics
+    with atomic_preview AS MATERIALIZED (
+      select *
+      from public.seasonal_import_atomic_preview_v2(v_batch.batch_id)
     ), ranked_diagnostics as (
       select
-        generated_preview.*,
+        atomic_preview.staging_row_index,
+        atomic_preview.issue_order,
+        atomic_preview.diagnostic_column_name as column_name,
+        atomic_preview.issue,
         pg_catalog.row_number() over (
           order by
-            generated_preview.staging_row_index,
-            generated_preview.issue_order,
-            generated_preview.column_name
+            atomic_preview.staging_row_index,
+            atomic_preview.issue_order,
+            atomic_preview.diagnostic_column_name
         ) as diagnostic_rank
-      from generated_preview
-      where generated_preview.record_id is null
+      from atomic_preview
+      where atomic_preview.item_kind = 'diagnostic'
     )
     select
       (
         select pg_catalog.count(*)::integer
-        from generated_preview
-        where generated_preview.record_id is not null
+        from atomic_preview
+        where atomic_preview.item_kind = 'record'
       ),
       (
         select pg_catalog.count(*)::integer
@@ -2229,6 +2188,8 @@ revoke execute on function public.seasonal_operational_date_v2(date, time)
 revoke execute on function public.seasonal_record_id_v2(text, text, date, text, text)
   from public, anon, authenticated;
 revoke execute on function public.seasonal_import_expansion_preflight_v2(jsonb)
+  from public, anon, authenticated;
+revoke execute on function public.seasonal_import_atomic_preview_v2(uuid)
   from public, anon, authenticated;
 revoke execute on function public.generate_seasonal_import_records_v2(uuid)
   from public, anon, authenticated;
