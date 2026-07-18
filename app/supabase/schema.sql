@@ -1247,6 +1247,112 @@ as $$
     )
 $$;
 
+create or replace function public.seasonal_import_expansion_preflight_v2(
+  p_source_rows jsonb
+)
+returns table (
+  max_date_span integer,
+  atomic_side_count bigint
+)
+language sql
+immutable
+set search_path = pg_catalog, pg_temp
+as $$
+  with canonical_rows as (
+    select
+      (source_rows.row_data->>'effective')::date as effective_date,
+      (source_rows.row_data->>'discontinue')::date as discontinue_date,
+      source_rows.row_data->'daysOfWeek' as days_of_week,
+      (
+        case
+          when source_rows.row_data->>'arrFlight' is not null
+            and source_rows.row_data->>'sta' is not null then 1
+          else 0
+        end
+        + case
+          when source_rows.row_data->>'depFlight' is not null
+            and source_rows.row_data->>'std' is not null then 1
+          else 0
+        end
+      )::integer as side_count
+    from pg_catalog.jsonb_array_elements(p_source_rows) source_rows(row_data)
+  ), row_spans as (
+    select
+      canonical_rows.*,
+      (canonical_rows.discontinue_date - canonical_rows.effective_date + 1)::integer
+        as date_span,
+      (
+        case when (canonical_rows.days_of_week->0)::boolean then 1 else 0 end
+        + case when (canonical_rows.days_of_week->1)::boolean then 1 else 0 end
+        + case when (canonical_rows.days_of_week->2)::boolean then 1 else 0 end
+        + case when (canonical_rows.days_of_week->3)::boolean then 1 else 0 end
+        + case when (canonical_rows.days_of_week->4)::boolean then 1 else 0 end
+        + case when (canonical_rows.days_of_week->5)::boolean then 1 else 0 end
+        + case when (canonical_rows.days_of_week->6)::boolean then 1 else 0 end
+      )::integer as selected_day_count
+    from canonical_rows
+  ), operating_date_counts as (
+    select
+      row_spans.date_span,
+      row_spans.side_count,
+      (
+        (row_spans.date_span / 7) * row_spans.selected_day_count
+        + case
+          when row_spans.date_span % 7 > 0
+            and (row_spans.days_of_week->(
+              extract(isodow from row_spans.effective_date)::integer - 1
+            ))::boolean then 1
+          else 0
+        end
+        + case
+          when row_spans.date_span % 7 > 1
+            and (row_spans.days_of_week->(
+              extract(isodow from row_spans.effective_date + 1)::integer - 1
+            ))::boolean then 1
+          else 0
+        end
+        + case
+          when row_spans.date_span % 7 > 2
+            and (row_spans.days_of_week->(
+              extract(isodow from row_spans.effective_date + 2)::integer - 1
+            ))::boolean then 1
+          else 0
+        end
+        + case
+          when row_spans.date_span % 7 > 3
+            and (row_spans.days_of_week->(
+              extract(isodow from row_spans.effective_date + 3)::integer - 1
+            ))::boolean then 1
+          else 0
+        end
+        + case
+          when row_spans.date_span % 7 > 4
+            and (row_spans.days_of_week->(
+              extract(isodow from row_spans.effective_date + 4)::integer - 1
+            ))::boolean then 1
+          else 0
+        end
+        + case
+          when row_spans.date_span % 7 > 5
+            and (row_spans.days_of_week->(
+              extract(isodow from row_spans.effective_date + 5)::integer - 1
+            ))::boolean then 1
+          else 0
+        end
+      )::bigint as operating_date_count
+    from row_spans
+  )
+  select
+    coalesce(pg_catalog.max(operating_date_counts.date_span), 0)::integer,
+    coalesce(
+      pg_catalog.sum(
+        operating_date_counts.operating_date_count * operating_date_counts.side_count
+      ),
+      0
+    )::bigint
+  from operating_date_counts
+$$;
+
 create or replace function public.generate_seasonal_import_records_v2(p_batch_id uuid)
 returns table (
   record_id text,
@@ -1279,7 +1385,11 @@ as $$
   with canonical_rows as (
     select
       rows.row_index as staging_row_index,
-      coalesce(batches.season_id, 'pending:' || batches.season_code) as season_identity,
+      coalesce(
+        batches.result #>> '{_staging,targetSeasonId}',
+        batches.season_id,
+        'pending:' || batches.season_code
+      ) as season_identity,
       (rows.row_data->>'rowIndex')::integer as source_row_index,
       (rows.row_data->>'effective')::date as effective_date,
       (rows.row_data->>'discontinue')::date as discontinue_date,
@@ -1313,13 +1423,13 @@ as $$
   ), generated_dates as (
     select
       canonical_rows.*,
-      generated_date::date as source_scheduled_date
+      canonical_rows.effective_date + day_offsets.day_offset
+        as source_scheduled_date
     from canonical_rows
     cross join lateral pg_catalog.generate_series(
-      canonical_rows.effective_date,
-      canonical_rows.discontinue_date,
-      interval '1 day'
-    ) generated_date
+      0,
+      canonical_rows.discontinue_date - canonical_rows.effective_date
+    ) day_offsets(day_offset)
   ), dow_filtered_dates as (
     select generated_dates.*
     from generated_dates
@@ -1379,11 +1489,24 @@ as $$
             else 'sameday'
           end
         when arr_dep_expansion.explicit_linked_source_row_index is not null
-          then coalesce(
-            arr_dep_expansion.source_link_type,
-            linked_row.source_link_type,
-            'overnight'
-          )
+          then case
+            when arr_dep_expansion.has_arrival then coalesce(
+              arr_dep_expansion.source_link_type,
+              linked_row.source_link_type,
+              case
+                when linked_row.std::time < arr_dep_expansion.sta::time then 'overnight'
+                else 'sameday'
+              end
+            )
+            else coalesce(
+              linked_row.source_link_type,
+              arr_dep_expansion.source_link_type,
+              case
+                when arr_dep_expansion.std::time < linked_row.sta::time then 'overnight'
+                else 'sameday'
+              end
+            )
+          end
         else null
       end as resolved_link_type,
       case
@@ -1399,11 +1522,24 @@ as $$
           then arr_dep_expansion.source_scheduled_date
         when arr_dep_expansion.explicit_linked_source_row_index is not null
           and arr_dep_expansion.type = 'D'
-          and coalesce(
-            arr_dep_expansion.source_link_type,
-            linked_row.source_link_type,
-            'overnight'
-          ) = 'overnight'
+          and case
+            when arr_dep_expansion.has_arrival then coalesce(
+              arr_dep_expansion.source_link_type,
+              linked_row.source_link_type,
+              case
+                when linked_row.std::time < arr_dep_expansion.sta::time then 'overnight'
+                else 'sameday'
+              end
+            )
+            else coalesce(
+              linked_row.source_link_type,
+              arr_dep_expansion.source_link_type,
+              case
+                when arr_dep_expansion.std::time < linked_row.sta::time then 'overnight'
+                else 'sameday'
+              end
+            )
+          end = 'overnight'
           then arr_dep_expansion.source_scheduled_date - 1
         when arr_dep_expansion.explicit_linked_source_row_index is not null
           then arr_dep_expansion.source_scheduled_date
@@ -1616,7 +1752,11 @@ as $$
   with canonical_rows as (
     select
       rows.row_index as staging_row_index,
-      coalesce(batches.season_id, 'pending:' || batches.season_code) as season_identity,
+      coalesce(
+        batches.result #>> '{_staging,targetSeasonId}',
+        batches.season_id,
+        'pending:' || batches.season_code
+      ) as season_identity,
       (rows.row_data->>'rowIndex')::integer as source_row_index,
       (rows.row_data->>'effective')::date as effective_date,
       (rows.row_data->>'discontinue')::date as discontinue_date,
@@ -1652,11 +1792,24 @@ as $$
       linked_row.airline as target_airline,
       linked_row.has_arrival as target_has_arrival,
       linked_row.has_departure as target_has_departure,
-      coalesce(
-        canonical_rows.source_link_type,
-        linked_row.source_link_type,
-        'overnight'
-      ) as resolved_link_type,
+      case
+        when canonical_rows.has_arrival then coalesce(
+          canonical_rows.source_link_type,
+          linked_row.source_link_type,
+          case
+            when linked_row.std::time < canonical_rows.sta::time then 'overnight'
+            else 'sameday'
+          end
+        )
+        else coalesce(
+          linked_row.source_link_type,
+          canonical_rows.source_link_type,
+          case
+            when canonical_rows.std::time < linked_row.sta::time then 'overnight'
+            else 'sameday'
+          end
+        )
+      end as resolved_link_type,
       linked_reference_count.reference_count,
       linked_row.source_row_index is not null
         and linked_row.source_row_index <> canonical_rows.source_row_index
@@ -1679,15 +1832,17 @@ as $$
   ), generated_dates as (
     select
       linked_relationships.*,
-      generated_date::date as source_scheduled_date
+      linked_relationships.effective_date + day_offsets.day_offset
+        as source_scheduled_date
     from linked_relationships
     cross join lateral pg_catalog.generate_series(
-      linked_relationships.effective_date,
-      linked_relationships.discontinue_date,
-      interval '1 day'
-    ) generated_date
+      0,
+      linked_relationships.discontinue_date - linked_relationships.effective_date
+    ) day_offsets(day_offset)
     where (linked_relationships.days_of_week->(
-      extract(isodow from generated_date::date)::integer - 1
+      extract(
+        isodow from linked_relationships.effective_date + day_offsets.day_offset
+      )::integer - 1
     ))::boolean
   ), rows_without_operating_dates as (
     select linked_relationships.*
@@ -1921,6 +2076,7 @@ declare
   v_season_code text;
   v_requested_season_id text;
   v_season_id text;
+  v_target_season_id text;
   v_season_match_count integer := 0;
   v_expected_data_version integer;
   v_file_name text;
@@ -1935,10 +2091,14 @@ declare
   v_generation_diagnostics jsonb := '[]'::jsonb;
   v_generation_diagnostic_count integer := 0;
   v_generated_record_count integer := 0;
+  v_max_date_span integer := 0;
+  v_atomic_side_count bigint := 0;
   v_oversized_staging_row_index integer;
   v_oversized_column text;
   v_oversized_maximum_length integer;
   v_max_actionable_diagnostics constant integer := 1999;
+  v_max_seasonal_date_span constant integer := 550;
+  v_max_generated_atomic_count constant bigint := 100000;
   v_batch public.season_import_batches%rowtype;
 begin
   if not public.app_operator_has_permission('seasonal.write') then
@@ -2797,6 +2957,28 @@ begin
     );
   end if;
 
+  if v_diagnostic_count = 0 then
+    select preflight.max_date_span, preflight.atomic_side_count
+    into v_max_date_span, v_atomic_side_count
+    from public.seasonal_import_expansion_preflight_v2(
+      v_canonical_source_rows
+    ) preflight;
+
+    if v_max_date_span > v_max_seasonal_date_span then
+      raise exception 'Seasonal source date span % exceeds maximum date span of % days',
+        v_max_date_span,
+        v_max_seasonal_date_span
+        using errcode = '22023';
+    end if;
+
+    if v_atomic_side_count > v_max_generated_atomic_count then
+      raise exception 'Seasonal atomic record count % exceeds maximum of %',
+        v_atomic_side_count,
+        v_max_generated_atomic_count
+        using errcode = '22023';
+    end if;
+  end if;
+
   -- Block concurrent season inserts/updates until lookup and batch insert finish.
   lock table public.seasons in share mode;
 
@@ -2819,15 +3001,20 @@ begin
       using errcode = '22023';
   end if;
 
+  v_target_season_id := coalesce(
+    v_season_id,
+    'season-' || pg_catalog.gen_random_uuid()::text
+  );
+
   v_request_fingerprint := pg_catalog.encode(
     pg_catalog.sha256(
       pg_catalog.convert_to(
         pg_catalog.jsonb_build_object(
-          'fingerprintVersion', 1,
+          'fingerprintVersion', 2,
           'sourceRows', v_source_rows,
           'seasonIdentity', pg_catalog.jsonb_build_object(
             'seasonCode', v_season_code,
-            'seasonId', v_season_id
+            'targetSeasonId', v_target_season_id
           ),
           'expectedDataVersion', v_expected_data_version,
           'fileName', v_file_name
@@ -2865,8 +3052,9 @@ begin
     v_diagnostics,
     pg_catalog.jsonb_build_object(
       '_staging', pg_catalog.jsonb_build_object(
-        'fingerprintVersion', 1,
-        'requestFingerprint', v_request_fingerprint
+        'fingerprintVersion', 2,
+        'requestFingerprint', v_request_fingerprint,
+        'targetSeasonId', v_target_season_id
       )
     )
   )
@@ -2886,6 +3074,8 @@ begin
 
     v_persisted_request_fingerprint :=
       v_batch.result #>> '{_staging,requestFingerprint}';
+    v_target_season_id :=
+      v_batch.result #>> '{_staging,targetSeasonId}';
 
     select coalesce(
       pg_catalog.jsonb_agg(rows.row_data order by rows.row_index),
@@ -2900,13 +3090,51 @@ begin
         using errcode = '23505';
     end if;
 
+    if nullif(v_target_season_id, '') is null then
+      raise exception 'Import requestId % is missing persisted target season identity', v_request_id
+        using errcode = '23505';
+    end if;
+
+    if v_season_match_count = 1
+      and v_season_id is distinct from v_target_season_id
+    then
+      raise exception 'Import requestId % target season identity conflict: seasonCode % now resolves to %, expected %',
+        v_request_id,
+        v_season_code,
+        v_season_id,
+        v_target_season_id
+        using errcode = '23505';
+    end if;
+
+    v_request_fingerprint := pg_catalog.encode(
+      pg_catalog.sha256(
+        pg_catalog.convert_to(
+          pg_catalog.jsonb_build_object(
+            'fingerprintVersion', 2,
+            'sourceRows', v_source_rows,
+            'seasonIdentity', pg_catalog.jsonb_build_object(
+              'seasonCode', v_season_code,
+              'targetSeasonId', v_target_season_id
+            ),
+            'expectedDataVersion', v_expected_data_version,
+            'fileName', v_file_name
+          )::text,
+          'UTF8'
+        )
+      ),
+      'hex'
+    );
+
     if v_persisted_request_fingerprint is distinct from v_request_fingerprint then
       raise exception 'Import requestId % was already used with a different payload', v_request_id
         using errcode = '23505';
     end if;
 
     if v_batch.season_code is distinct from v_season_code
-      or v_batch.season_id is distinct from v_season_id
+      or (
+        v_batch.season_id is not null
+        and v_batch.season_id is distinct from v_target_season_id
+      )
       or v_batch.expected_data_version is distinct from v_expected_data_version
       or v_batch.file_name is distinct from v_file_name
       or v_persisted_source_rows is distinct from v_canonical_source_rows
@@ -2935,32 +3163,62 @@ begin
     with ordinality as source_rows(row_data, ordinality);
 
   if v_batch.status = 'staged' then
+    with generated_preview AS MATERIALIZED (
+      select
+        generated.record_id,
+        null::integer as staging_row_index,
+        null::integer as issue_order,
+        null::text as column_name,
+        null::jsonb as issue
+      from public.generate_seasonal_import_records_v2(v_batch.batch_id) generated
+      union all
+      select
+        null::text as record_id,
+        diagnostics.staging_row_index,
+        diagnostics.issue_order,
+        diagnostics.column_name,
+        diagnostics.issue
+      from public.seasonal_import_generation_diagnostics_v2(v_batch.batch_id) diagnostics
+    ), ranked_diagnostics as (
+      select
+        generated_preview.*,
+        pg_catalog.row_number() over (
+          order by
+            generated_preview.staging_row_index,
+            generated_preview.issue_order,
+            generated_preview.column_name
+        ) as diagnostic_rank
+      from generated_preview
+      where generated_preview.record_id is null
+    )
     select
-      pg_catalog.count(*)::integer,
+      (
+        select pg_catalog.count(*)::integer
+        from generated_preview
+        where generated_preview.record_id is not null
+      ),
+      (
+        select pg_catalog.count(*)::integer
+        from ranked_diagnostics
+      ),
       coalesce(
-      pg_catalog.jsonb_agg(
-        ranked_diagnostics.issue
-        order by
-            ranked_diagnostics.staging_row_index,
-            ranked_diagnostics.issue_order,
-            ranked_diagnostics.column_name
-        ) filter (
+        (
+          select pg_catalog.jsonb_agg(
+            ranked_diagnostics.issue
+            order by
+              ranked_diagnostics.staging_row_index,
+              ranked_diagnostics.issue_order,
+              ranked_diagnostics.column_name
+          )
+          from ranked_diagnostics
           where ranked_diagnostics.diagnostic_rank <= v_max_actionable_diagnostics
         ),
         '[]'::jsonb
       )
-    into v_generation_diagnostic_count, v_generation_diagnostics
-    from (
-      select
-        diagnostics.*,
-        pg_catalog.row_number() over (
-          order by
-            diagnostics.staging_row_index,
-            diagnostics.issue_order,
-            diagnostics.column_name
-        ) as diagnostic_rank
-      from public.seasonal_import_generation_diagnostics_v2(v_batch.batch_id) diagnostics
-    ) ranked_diagnostics;
+    into
+      v_generated_record_count,
+      v_generation_diagnostic_count,
+      v_generation_diagnostics;
 
     if v_generation_diagnostic_count > v_max_actionable_diagnostics then
       v_generation_diagnostics := v_generation_diagnostics || pg_catalog.jsonb_build_array(
@@ -2979,10 +3237,6 @@ begin
         )
       );
     end if;
-
-    select pg_catalog.count(*)::integer
-    into v_generated_record_count
-    from public.generate_seasonal_import_records_v2(v_batch.batch_id);
 
     if v_generated_record_count = 0 and v_generation_diagnostic_count = 0 then
       v_generation_diagnostics := pg_catalog.jsonb_build_array(
@@ -4896,6 +5150,8 @@ revoke execute on function public.normalize_seasonal_flight_number_v2(text, text
 revoke execute on function public.seasonal_operational_date_v2(date, time)
   from public, anon, authenticated;
 revoke execute on function public.seasonal_record_id_v2(text, text, date, text, text)
+  from public, anon, authenticated;
+revoke execute on function public.seasonal_import_expansion_preflight_v2(jsonb)
   from public, anon, authenticated;
 revoke execute on function public.generate_seasonal_import_records_v2(uuid)
   from public, anon, authenticated;

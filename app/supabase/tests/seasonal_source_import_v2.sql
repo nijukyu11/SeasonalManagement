@@ -273,6 +273,8 @@ declare
   v_persisted_row_data jsonb;
   v_fingerprint_before text;
   v_fingerprint_after text;
+  v_target_season_id_before text;
+  v_target_season_id_after text;
 begin
   v_payload := jsonb_build_object(
     'requestId', '94b529f8-ae7c-45d7-9887-8b5501d8a3b2',
@@ -342,13 +344,17 @@ begin
     raise exception 'staged source row was not canonically normalized: %', v_persisted_row_data;
   end if;
 
-  select batches.result #>> '{_staging,requestFingerprint}'
-  into v_fingerprint_before
+  select
+    batches.result #>> '{_staging,requestFingerprint}',
+    batches.result #>> '{_staging,targetSeasonId}'
+  into v_fingerprint_before, v_target_season_id_before
   from public.season_import_batches batches
   where batches.batch_id = (v_first->>'batchId')::uuid;
 
-  if char_length(coalesce(v_fingerprint_before, '')) <> 64 then
-    raise exception 'server request fingerprint was not persisted compactly';
+  if char_length(coalesce(v_fingerprint_before, '')) <> 64
+    or v_target_season_id_before <> 'seasonal-import-v2-test-season'
+  then
+    raise exception 'existing-season fingerprint or target identity was not persisted correctly';
   end if;
 
   begin
@@ -379,12 +385,15 @@ begin
   set result = jsonb_build_object('summary', 'future-result')
   where batch_id = (v_first->>'batchId')::uuid;
 
-  select batches.result #>> '{_staging,requestFingerprint}'
-  into v_fingerprint_after
+  select
+    batches.result #>> '{_staging,requestFingerprint}',
+    batches.result #>> '{_staging,targetSeasonId}'
+  into v_fingerprint_after, v_target_season_id_after
   from public.season_import_batches batches
   where batches.batch_id = (v_first->>'batchId')::uuid;
 
   if v_fingerprint_after is distinct from v_fingerprint_before
+    or v_target_season_id_after is distinct from v_target_season_id_before
     or not exists (
       select 1
       from public.season_import_batches batches
@@ -1805,6 +1814,788 @@ begin
     )
   then
     raise exception 'zero-generation batch was not blocked: %', v_result;
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_payload jsonb;
+  v_first jsonb;
+  v_retry jsonb;
+  v_batch_id uuid;
+  v_target_season_id text;
+  v_target_season_id_after text;
+  v_fingerprint text;
+  v_record_ids_before text[];
+  v_record_ids_after text[];
+  v_expected_record_id text;
+  v_occurrence_key text;
+begin
+  v_payload := jsonb_build_object(
+    'requestId', '7d11ad76-f172-4eca-9997-1d1689c08031',
+    'checksum', 'stable-new-season-target',
+    'seasonCode', 'NVI',
+    'fileName', 'new-season.csv',
+    'sourceRows', jsonb_build_array(jsonb_build_object(
+      'rowIndex', 300,
+      'effective', '2026-10-26',
+      'discontinue', '2026-10-26',
+      'airline', 'LJ',
+      'aircraft', '738',
+      'daysOfWeek', jsonb_build_array(true, false, false, false, false, false, false),
+      'std', '06:00',
+      'depFlight', '81',
+      'depRoute', 'ICN'
+    ))
+  );
+
+  v_first := public.stage_seasonal_import_v2(v_payload);
+  v_batch_id := (v_first->>'batchId')::uuid;
+
+  select
+    batches.result #>> '{_staging,targetSeasonId}',
+    batches.result #>> '{_staging,requestFingerprint}'
+  into v_target_season_id, v_fingerprint
+  from public.season_import_batches batches
+  where batches.batch_id = v_batch_id;
+
+  select
+    array_agg(generated.record_id order by generated.record_id),
+    min(generated.occurrence_key)
+  into v_record_ids_before, v_occurrence_key
+  from public.generate_seasonal_import_records_v2(v_batch_id) generated;
+
+  v_expected_record_id := public.seasonal_record_id_v2(
+    v_target_season_id,
+    'D',
+    '2026-10-26'::date,
+    'LJ',
+    'LJ081'
+  );
+
+  if v_first->>'status' <> 'validated'
+    or (v_first->>'generatedRecordCount')::integer <> 1
+    or nullif(v_target_season_id, '') is null
+    or char_length(coalesce(v_fingerprint, '')) <> 64
+    or cardinality(v_record_ids_before) <> 1
+    or v_record_ids_before[1] is distinct from v_expected_record_id
+    or v_occurrence_key is distinct from
+      v_target_season_id || '|2026-10-26|LJ|LJ081'
+  then
+    raise exception 'new-season target identity was not persisted before generation: %, %, %',
+      v_first,
+      v_target_season_id,
+      v_record_ids_before;
+  end if;
+
+  insert into public.seasons (
+    id,
+    season_code,
+    name,
+    file_name,
+    uploaded_at,
+    effective_start,
+    effective_end,
+    total_legs,
+    total_source_rows,
+    data_version
+  )
+  values (
+    v_target_season_id,
+    'NVI',
+    'Stable New Season Identity',
+    '',
+    0,
+    '',
+    '',
+    0,
+    0,
+    0
+  );
+
+  v_retry := public.stage_seasonal_import_v2(v_payload);
+
+  select
+    batches.result #>> '{_staging,targetSeasonId}',
+    array_agg(generated.record_id order by generated.record_id)
+  into v_target_season_id_after, v_record_ids_after
+  from public.season_import_batches batches
+  join lateral public.generate_seasonal_import_records_v2(batches.batch_id) generated on true
+  where batches.batch_id = v_batch_id
+  group by batches.result;
+
+  if v_retry->>'batchId' is distinct from v_first->>'batchId'
+    or v_retry->>'status' is distinct from v_first->>'status'
+    or v_retry->>'generatedRecordCount' is distinct from v_first->>'generatedRecordCount'
+    or v_target_season_id_after is distinct from v_target_season_id
+    or v_record_ids_after is distinct from v_record_ids_before
+  then
+    raise exception 'new-season retry drifted after Task5-style season creation: %, %, %, %',
+      v_first,
+      v_retry,
+      v_record_ids_before,
+      v_record_ids_after;
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_payload jsonb;
+  v_first jsonb;
+  v_batch_id uuid;
+  v_target_season_id text;
+  v_record_ids_before text[];
+  v_record_ids_after text[];
+begin
+  v_payload := jsonb_build_object(
+    'requestId', 'f41edb3f-c4a8-4ab4-86f2-0a52ed71f406',
+    'checksum', 'new-season-conflicting-target',
+    'seasonCode', 'NVC',
+    'sourceRows', jsonb_build_array(jsonb_build_object(
+      'rowIndex', 310,
+      'effective', '2026-10-26',
+      'discontinue', '2026-10-26',
+      'airline', 'LJ',
+      'aircraft', '738',
+      'daysOfWeek', jsonb_build_array(true, false, false, false, false, false, false),
+      'std', '06:00',
+      'depFlight', '82',
+      'depRoute', 'ICN'
+    ))
+  );
+
+  v_first := public.stage_seasonal_import_v2(v_payload);
+  v_batch_id := (v_first->>'batchId')::uuid;
+
+  select batches.result #>> '{_staging,targetSeasonId}'
+  into v_target_season_id
+  from public.season_import_batches batches
+  where batches.batch_id = v_batch_id;
+
+  select array_agg(generated.record_id order by generated.record_id)
+  into v_record_ids_before
+  from public.generate_seasonal_import_records_v2(v_batch_id) generated;
+
+  insert into public.seasons (
+    id,
+    season_code,
+    name,
+    file_name,
+    uploaded_at,
+    effective_start,
+    effective_end,
+    total_legs,
+    total_source_rows,
+    data_version
+  )
+  values (
+    'independently-created-nvc-season',
+    'NVC',
+    'Conflicting New Season Identity',
+    '',
+    0,
+    '',
+    '',
+    0,
+    0,
+    0
+  );
+
+  begin
+    perform public.stage_seasonal_import_v2(v_payload);
+    raise exception 'independent same-code season did not conflict with persisted target identity';
+  exception
+    when unique_violation then
+      if position('target season identity conflict' in lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  select array_agg(generated.record_id order by generated.record_id)
+  into v_record_ids_after
+  from public.generate_seasonal_import_records_v2(v_batch_id) generated;
+
+  if nullif(v_target_season_id, '') is null
+    or v_target_season_id = 'independently-created-nvc-season'
+    or v_record_ids_after is distinct from v_record_ids_before
+  then
+    raise exception 'conflicting season changed persisted target identity or generated IDs';
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_rows jsonb;
+  v_result jsonb;
+  v_max_date_span integer;
+  v_atomic_side_count bigint;
+begin
+  select jsonb_agg(
+    jsonb_build_object(
+      'rowIndex', source_index,
+      'effective', '2026-01-01',
+      'discontinue', ('2026-01-01'::date + 499)::text,
+      'airline', 'LJ',
+      'aircraft', '738',
+      'daysOfWeek', jsonb_build_array(true, true, true, true, true, true, true),
+      'std', '06:00',
+      'depFlight', source_index::text,
+      'depRoute', 'ICN'
+    )
+    order by source_index
+  )
+  into v_rows
+  from generate_series(1, 200) source_index;
+
+  select preflight.max_date_span, preflight.atomic_side_count
+  into v_max_date_span, v_atomic_side_count
+  from public.seasonal_import_expansion_preflight_v2(v_rows) preflight;
+
+  if v_max_date_span <> 500 or v_atomic_side_count <> 100000 then
+    raise exception '100000-side preflight boundary was not exact: %, %',
+      v_max_date_span,
+      v_atomic_side_count;
+  end if;
+
+  select jsonb_agg(row_data order by row_index)
+  into v_rows
+  from (
+    select
+      source_index as row_index,
+      jsonb_build_object(
+        'rowIndex', source_index,
+        'effective', '2026-01-01',
+        'discontinue', case
+          when source_index <= 103 then ('2026-01-01'::date + 549)::text
+          else ('2026-01-01'::date + 363)::text
+        end,
+        'airline', 'LJ',
+        'aircraft', '738',
+        'daysOfWeek', jsonb_build_array(true, true, true, true, true, true, true),
+        'std', '06:00',
+        'depFlight', source_index::text,
+        'depRoute', 'ICN'
+      ) as row_data
+    from generate_series(1, 104) source_index
+  ) synthetic_w26;
+
+  select preflight.max_date_span, preflight.atomic_side_count
+  into v_max_date_span, v_atomic_side_count
+  from public.seasonal_import_expansion_preflight_v2(v_rows) preflight;
+
+  if v_max_date_span <> 550 or v_atomic_side_count <> 57014 then
+    raise exception 'W26-scale synthetic preflight was not allowed exactly: %, %',
+      v_max_date_span,
+      v_atomic_side_count;
+  end if;
+
+  begin
+    perform public.stage_seasonal_import_v2(jsonb_build_object(
+      'requestId', '844c563c-7704-46ca-ae81-c4a2f36021d9',
+      'checksum', 'date-span-over-limit',
+      'seasonCode', 'RSC',
+      'sourceRows', jsonb_build_array(jsonb_build_object(
+        'rowIndex', 320,
+        'effective', '2026-01-01',
+        'discontinue', ('2026-01-01'::date + 550)::text,
+        'airline', 'LJ',
+        'aircraft', '738',
+        'daysOfWeek', jsonb_build_array(true, true, true, true, true, true, true),
+        'std', '06:00',
+        'depFlight', '81',
+        'depRoute', 'ICN'
+      ))
+    ));
+    raise exception '551-day source span was not rejected';
+  exception
+    when invalid_parameter_value then
+      if position('date span' in lower(sqlerrm)) = 0
+        or position('550' in sqlerrm) = 0
+      then
+        raise;
+      end if;
+  end;
+
+  if exists (
+    select 1
+    from public.season_import_batches batches
+    where batches.request_id = '844c563c-7704-46ca-ae81-c4a2f36021d9'
+  ) then
+    raise exception 'date-span resource violation persisted a staging batch';
+  end if;
+
+  select jsonb_agg(
+    jsonb_build_object(
+      'rowIndex', source_index,
+      'effective', '2026-01-01',
+      'discontinue', ('2026-01-01'::date + 499)::text,
+      'airline', 'LJ',
+      'aircraft', '738',
+      'daysOfWeek', jsonb_build_array(true, true, true, true, true, true, true),
+      'std', '06:00',
+      'depFlight', source_index::text,
+      'depRoute', 'ICN'
+    )
+    order by source_index
+  )
+  into v_rows
+  from generate_series(1, 201) source_index;
+
+  perform set_config('statement_timeout', '3000', true);
+  begin
+    v_result := public.stage_seasonal_import_v2(jsonb_build_object(
+      'requestId', '902c91a3-cee5-4f11-bc4a-f35a672ea1f2',
+      'checksum', 'atomic-side-count-over-limit',
+      'seasonCode', 'RSC',
+      'sourceRows', v_rows
+    ));
+    raise exception '100500 atomic sides were not rejected: %', v_result;
+  exception
+    when invalid_parameter_value then
+      if position('atomic record count' in lower(sqlerrm)) = 0
+        or position('100000' in sqlerrm) = 0
+      then
+        raise;
+      end if;
+  end;
+  perform set_config('statement_timeout', '0', true);
+
+  if exists (
+    select 1
+    from public.season_import_batches batches
+    where batches.request_id = '902c91a3-cee5-4f11-bc4a-f35a672ea1f2'
+  ) then
+    raise exception 'atomic-count resource violation persisted a staging batch';
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_result jsonb;
+  v_batch_id uuid;
+  v_record_count integer;
+  v_occurrence_count integer;
+  v_turnaround_count integer;
+  v_reciprocal_count integer;
+begin
+  v_result := public.stage_seasonal_import_v2(jsonb_build_object(
+    'requestId', 'a4661c07-e25b-413d-887d-d718555de258',
+    'checksum', 'inferred-cross-row-sameday',
+    'seasonCode', 'TV2',
+    'sourceRows', jsonb_build_array(
+      jsonb_build_object(
+        'rowIndex', 330,
+        'effective', '2026-07-06',
+        'discontinue', '2026-07-06',
+        'airline', 'LJ',
+        'aircraft', '738',
+        'daysOfWeek', jsonb_build_array(true, false, false, false, false, false, false),
+        'sta', '08:00',
+        'arrFlight', '80',
+        'arrRoute', 'ICN',
+        'overnightLinkRowIndex', 331
+      ),
+      jsonb_build_object(
+        'rowIndex', 331,
+        'effective', '2026-07-06',
+        'discontinue', '2026-07-06',
+        'airline', 'LJ',
+        'aircraft', '738',
+        'daysOfWeek', jsonb_build_array(true, false, false, false, false, false, false),
+        'std', '09:00',
+        'depFlight', '81',
+        'depRoute', 'ICN',
+        'overnightLinkRowIndex', 330
+      )
+    )
+  ));
+  v_batch_id := (v_result->>'batchId')::uuid;
+
+  select
+    count(*)::integer,
+    count(distinct generated.occurrence_key)::integer,
+    count(distinct generated.turnaround_id)::integer,
+    count(*) filter (
+      where counterpart.record_id = generated.linked_record_id
+        and counterpart.linked_record_id = generated.record_id
+        and counterpart.turnaround_id = generated.turnaround_id
+    )::integer
+  into v_record_count, v_occurrence_count, v_turnaround_count, v_reciprocal_count
+  from public.generate_seasonal_import_records_v2(v_batch_id) generated
+  left join public.generate_seasonal_import_records_v2(v_batch_id) counterpart
+    on counterpart.record_id = generated.linked_record_id;
+
+  if v_result->>'status' <> 'validated'
+    or (v_result->>'generatedRecordCount')::integer <> 2
+    or v_record_count <> 2
+    or v_occurrence_count <> 2
+    or v_turnaround_count <> 1
+    or v_reciprocal_count <> 2
+    or exists (
+      select 1
+      from public.generate_seasonal_import_records_v2(v_batch_id) generated
+      where generated.link_type <> 'sameday'
+        or generated.flight_number not in ('LJ080', 'LJ081')
+        or generated.raw_flight_number not in ('080', '081')
+        or generated.scheduled_date <> '2026-07-06'
+        or generated.operational_date <> '2026-07-06'
+        or generated.pair_anchor_date <> '2026-07-06'
+        or generated.linked_source_row_index = generated.source_row_index
+    )
+  then
+    raise exception 'missing-linkType same-day cross-row inference failed: %', v_result;
+  end if;
+
+  v_result := public.stage_seasonal_import_v2(jsonb_build_object(
+    'requestId', '01d57d2f-3c4e-4994-aadb-0a8d06ee6cb0',
+    'checksum', 'inferred-cross-row-overnight',
+    'seasonCode', 'TV2',
+    'sourceRows', jsonb_build_array(
+      jsonb_build_object(
+        'rowIndex', 340,
+        'effective', '2026-07-06',
+        'discontinue', '2026-07-06',
+        'airline', 'LJ',
+        'aircraft', '738',
+        'daysOfWeek', jsonb_build_array(true, false, false, false, false, false, false),
+        'sta', '23:00',
+        'arrFlight', '80',
+        'arrRoute', 'ICN',
+        'overnightLinkRowIndex', 341
+      ),
+      jsonb_build_object(
+        'rowIndex', 341,
+        'effective', '2026-07-07',
+        'discontinue', '2026-07-07',
+        'airline', 'LJ',
+        'aircraft', '738',
+        'daysOfWeek', jsonb_build_array(false, true, false, false, false, false, false),
+        'std', '01:00',
+        'depFlight', '81',
+        'depRoute', 'ICN',
+        'overnightLinkRowIndex', 340
+      )
+    )
+  ));
+  v_batch_id := (v_result->>'batchId')::uuid;
+
+  select
+    count(*)::integer,
+    count(distinct generated.occurrence_key)::integer,
+    count(distinct generated.turnaround_id)::integer,
+    count(*) filter (
+      where counterpart.record_id = generated.linked_record_id
+        and counterpart.linked_record_id = generated.record_id
+        and counterpart.turnaround_id = generated.turnaround_id
+    )::integer
+  into v_record_count, v_occurrence_count, v_turnaround_count, v_reciprocal_count
+  from public.generate_seasonal_import_records_v2(v_batch_id) generated
+  left join public.generate_seasonal_import_records_v2(v_batch_id) counterpart
+    on counterpart.record_id = generated.linked_record_id;
+
+  if v_result->>'status' <> 'validated'
+    or (v_result->>'generatedRecordCount')::integer <> 2
+    or v_record_count <> 2
+    or v_occurrence_count <> 2
+    or v_turnaround_count <> 1
+    or v_reciprocal_count <> 2
+    or not exists (
+      select 1
+      from public.generate_seasonal_import_records_v2(v_batch_id) generated
+      where generated.type = 'A'
+        and generated.flight_number = 'LJ080'
+        and generated.raw_flight_number = '080'
+        and generated.scheduled_date = '2026-07-06'
+        and generated.operational_date = '2026-07-06'
+        and generated.link_type = 'overnight'
+        and generated.pair_anchor_date = '2026-07-06'
+    )
+    or not exists (
+      select 1
+      from public.generate_seasonal_import_records_v2(v_batch_id) generated
+      where generated.type = 'D'
+        and generated.flight_number = 'LJ081'
+        and generated.raw_flight_number = '081'
+        and generated.scheduled_date = '2026-07-07'
+        and generated.operational_date = '2026-07-06'
+        and generated.link_type = 'overnight'
+        and generated.pair_anchor_date = '2026-07-06'
+    )
+  then
+    raise exception 'missing-linkType overnight cross-row inference failed: %', v_result;
+  end if;
+
+  v_result := public.stage_seasonal_import_v2(jsonb_build_object(
+    'requestId', '2ce249ed-7eb5-44fd-a655-cb0e73bd1e23',
+    'checksum', 'explicit-sameday-overrides-inference',
+    'seasonCode', 'TV2',
+    'sourceRows', jsonb_build_array(
+      jsonb_build_object(
+        'rowIndex', 350,
+        'effective', '2026-07-06',
+        'discontinue', '2026-07-06',
+        'airline', 'LJ',
+        'aircraft', '738',
+        'daysOfWeek', jsonb_build_array(true, false, false, false, false, false, false),
+        'sta', '23:00',
+        'arrFlight', '80',
+        'arrRoute', 'ICN',
+        'overnightLinkRowIndex', 351,
+        'linkType', 'sameday'
+      ),
+      jsonb_build_object(
+        'rowIndex', 351,
+        'effective', '2026-07-06',
+        'discontinue', '2026-07-06',
+        'airline', 'LJ',
+        'aircraft', '738',
+        'daysOfWeek', jsonb_build_array(true, false, false, false, false, false, false),
+        'std', '01:00',
+        'depFlight', '81',
+        'depRoute', 'ICN',
+        'overnightLinkRowIndex', 350
+      )
+    )
+  ));
+  v_batch_id := (v_result->>'batchId')::uuid;
+
+  select
+    count(*)::integer,
+    count(distinct generated.occurrence_key)::integer,
+    count(distinct generated.turnaround_id)::integer,
+    count(*) filter (
+      where counterpart.record_id = generated.linked_record_id
+        and counterpart.linked_record_id = generated.record_id
+        and counterpart.turnaround_id = generated.turnaround_id
+    )::integer
+  into v_record_count, v_occurrence_count, v_turnaround_count, v_reciprocal_count
+  from public.generate_seasonal_import_records_v2(v_batch_id) generated
+  left join public.generate_seasonal_import_records_v2(v_batch_id) counterpart
+    on counterpart.record_id = generated.linked_record_id;
+
+  if v_result->>'status' <> 'validated'
+    or (v_result->>'generatedRecordCount')::integer <> 2
+    or v_record_count <> 2
+    or v_occurrence_count <> 2
+    or v_turnaround_count <> 1
+    or v_reciprocal_count <> 2
+    or exists (
+      select 1
+      from public.generate_seasonal_import_records_v2(v_batch_id) generated
+      where generated.link_type <> 'sameday'
+        or generated.flight_number not in ('LJ080', 'LJ081')
+        or generated.raw_flight_number not in ('080', '081')
+        or generated.scheduled_date <> '2026-07-06'
+        or generated.pair_anchor_date <> '2026-07-06'
+        or generated.linked_source_row_index = generated.source_row_index
+        or (
+          generated.type = 'A'
+          and generated.operational_date <> '2026-07-06'
+        )
+        or (
+          generated.type = 'D'
+          and generated.operational_date <> '2026-07-05'
+        )
+    )
+  then
+    raise exception 'explicit same-day linkType did not override inferred overnight: %', v_result;
+  end if;
+
+  v_result := public.stage_seasonal_import_v2(jsonb_build_object(
+    'requestId', '2c949159-3bef-4cd4-8a90-12649398817f',
+    'checksum', 'explicit-overnight-overrides-inference',
+    'seasonCode', 'TV2',
+    'sourceRows', jsonb_build_array(
+      jsonb_build_object(
+        'rowIndex', 360,
+        'effective', '2026-07-06',
+        'discontinue', '2026-07-06',
+        'airline', 'LJ',
+        'aircraft', '738',
+        'daysOfWeek', jsonb_build_array(true, false, false, false, false, false, false),
+        'sta', '08:00',
+        'arrFlight', '80',
+        'arrRoute', 'ICN',
+        'overnightLinkRowIndex', 361,
+        'linkType', 'overnight'
+      ),
+      jsonb_build_object(
+        'rowIndex', 361,
+        'effective', '2026-07-07',
+        'discontinue', '2026-07-07',
+        'airline', 'LJ',
+        'aircraft', '738',
+        'daysOfWeek', jsonb_build_array(false, true, false, false, false, false, false),
+        'std', '09:00',
+        'depFlight', '81',
+        'depRoute', 'ICN',
+        'overnightLinkRowIndex', 360
+      )
+    )
+  ));
+  v_batch_id := (v_result->>'batchId')::uuid;
+
+  select
+    count(*)::integer,
+    count(distinct generated.occurrence_key)::integer,
+    count(distinct generated.turnaround_id)::integer,
+    count(*) filter (
+      where counterpart.record_id = generated.linked_record_id
+        and counterpart.linked_record_id = generated.record_id
+        and counterpart.turnaround_id = generated.turnaround_id
+    )::integer
+  into v_record_count, v_occurrence_count, v_turnaround_count, v_reciprocal_count
+  from public.generate_seasonal_import_records_v2(v_batch_id) generated
+  left join public.generate_seasonal_import_records_v2(v_batch_id) counterpart
+    on counterpart.record_id = generated.linked_record_id;
+
+  if v_result->>'status' <> 'validated'
+    or (v_result->>'generatedRecordCount')::integer <> 2
+    or v_record_count <> 2
+    or v_occurrence_count <> 2
+    or v_turnaround_count <> 1
+    or v_reciprocal_count <> 2
+    or exists (
+      select 1
+      from public.generate_seasonal_import_records_v2(v_batch_id) generated
+      where generated.link_type <> 'overnight'
+        or generated.flight_number not in ('LJ080', 'LJ081')
+        or generated.raw_flight_number not in ('080', '081')
+        or generated.pair_anchor_date <> '2026-07-06'
+        or generated.linked_source_row_index = generated.source_row_index
+        or (
+          generated.type = 'A'
+          and (
+            generated.scheduled_date <> '2026-07-06'
+            or generated.operational_date <> '2026-07-06'
+          )
+        )
+        or (
+          generated.type = 'D'
+          and (
+            generated.scheduled_date <> '2026-07-07'
+            or generated.operational_date <> '2026-07-07'
+          )
+        )
+    )
+  then
+    raise exception 'explicit overnight linkType did not override inferred same-day: %', v_result;
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_payload jsonb;
+  v_utc_result jsonb;
+  v_apia_result jsonb;
+  v_utc_dates text[];
+  v_apia_dates text[];
+begin
+  perform set_config('statement_timeout', '5000', true);
+  perform set_config('TimeZone', 'UTC', true);
+
+  v_payload := jsonb_build_object(
+    'checksum', 'timezone-date-series',
+    'seasonCode', 'TV2',
+    'sourceRows', jsonb_build_array(jsonb_build_object(
+      'rowIndex', 370,
+      'effective', '2011-12-29',
+      'discontinue', '2011-12-31',
+      'airline', 'LJ',
+      'aircraft', '738',
+      'daysOfWeek', jsonb_build_array(true, true, true, true, true, true, true),
+      'std', '06:00',
+      'depFlight', '81',
+      'depRoute', 'ICN'
+    ))
+  );
+
+  v_utc_result := public.stage_seasonal_import_v2(
+    v_payload || jsonb_build_object('requestId', 'a96d4566-a175-4510-a55a-f630ff8fe8ba')
+  );
+
+  select array_agg(generated.scheduled_date order by generated.scheduled_date)
+  into v_utc_dates
+  from public.generate_seasonal_import_records_v2((v_utc_result->>'batchId')::uuid) generated;
+
+  perform set_config('TimeZone', 'Pacific/Apia', true);
+  v_apia_result := public.stage_seasonal_import_v2(
+    v_payload || jsonb_build_object('requestId', '19d82d62-5d35-43a9-8e8d-e36cbe9aceff')
+  );
+
+  select array_agg(generated.scheduled_date order by generated.scheduled_date)
+  into v_apia_dates
+  from public.generate_seasonal_import_records_v2((v_apia_result->>'batchId')::uuid) generated;
+
+  perform set_config('TimeZone', 'UTC', true);
+  perform set_config('statement_timeout', '0', true);
+
+  if v_utc_result->>'status' <> 'validated'
+    or v_apia_result->>'status' <> 'validated'
+    or v_utc_result->>'generatedRecordCount' <> '3'
+    or v_apia_result->>'generatedRecordCount' <> '3'
+    or v_utc_dates is distinct from array['2011-12-29', '2011-12-30', '2011-12-31']::text[]
+    or v_apia_dates is distinct from v_utc_dates
+  then
+    raise exception 'date expansion changed across UTC/Pacific-Apia: %, %, %, %',
+      v_utc_result,
+      v_apia_result,
+      v_utc_dates,
+      v_apia_dates;
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_stage_definition text;
+  v_generator_definition text;
+  v_preflight_definition text;
+  v_generator_language text;
+  v_generator_volatility "char";
+begin
+  select pg_get_functiondef('public.stage_seasonal_import_v2(jsonb)'::regprocedure)
+  into v_stage_definition;
+
+  select
+    pg_get_functiondef(procedures.oid),
+    languages.lanname,
+    procedures.provolatile
+  into v_generator_definition, v_generator_language, v_generator_volatility
+  from pg_proc procedures
+  join pg_language languages on languages.oid = procedures.prolang
+  where procedures.oid = 'public.generate_seasonal_import_records_v2(uuid)'::regprocedure;
+
+  select pg_get_functiondef(
+    'public.seasonal_import_expansion_preflight_v2(jsonb)'::regprocedure
+  )
+  into v_preflight_definition;
+
+  if position('generated_preview as materialized' in lower(v_stage_definition)) = 0
+    or v_generator_language <> 'sql'
+    or v_generator_volatility <> 's'
+    or position('generate_series' in lower(v_preflight_definition)) <> 0
+    or position('day_offsets(day_offset)' in lower(v_generator_definition)) = 0
+    or position('interval ''1 day''' in lower(v_generator_definition)) <> 0
+  then
+    raise exception 'Task4 SQL shape contract was not preserved';
+  end if;
+
+  if has_function_privilege(
+    'authenticated',
+    'public.seasonal_import_expansion_preflight_v2(jsonb)',
+    'EXECUTE'
+  ) or has_function_privilege(
+    'anon',
+    'public.seasonal_import_expansion_preflight_v2(jsonb)',
+    'EXECUTE'
+  ) then
+    raise exception 'client roles must not execute the internal expansion preflight helper';
   end if;
 end
 $$;
