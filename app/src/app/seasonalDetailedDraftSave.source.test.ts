@@ -92,6 +92,7 @@ function branchReturns(statement: ts.Statement): boolean {
 type GuardBoundary = readonly [
   callbackName: string,
   guardName: 'getSeasonalFileActionBlock' | 'validateSeasonalFileAction',
+  expectedAction: 'import' | 'export',
   resultName: string,
   sideEffectKind: 'identifier' | 'property',
   sideEffectName: string,
@@ -102,7 +103,7 @@ function assertGuardResultReturnsBeforeSideEffect(
   sourceFile: ts.SourceFile,
   boundary: GuardBoundary,
 ): void {
-  const [callbackName, guardName, resultName, sideEffectKind, sideEffectName, boundaryLabel] = boundary;
+  const [callbackName, guardName, expectedAction, resultName, sideEffectKind, sideEffectName, boundaryLabel] = boundary;
   const body = extractUseCallbackBody(sourceFile, callbackName);
   const resultDeclaration = findNode(body, (node): node is ts.VariableDeclaration => (
     ts.isVariableDeclaration(node)
@@ -115,6 +116,21 @@ function assertGuardResultReturnsBeforeSideEffect(
   ));
   assert.ok(resultDeclaration, `${callbackName} should assign ${guardName} to ${resultName}`);
   assert.ok(sideEffectCall, `${callbackName} should contain ${boundaryLabel}`);
+
+  const guardCall = resultDeclaration.initializer;
+  assert.ok(isIdentifierCall(guardCall, guardName));
+  if (guardName === 'getSeasonalFileActionBlock') {
+    const input = guardCall.arguments[0];
+    assert.ok(input && ts.isObjectLiteralExpression(input), `${callbackName} should pass guard options inline`);
+    const actionProperty = input.properties.find((property): property is ts.PropertyAssignment => (
+      ts.isPropertyAssignment(property)
+      && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+      && property.name.text === 'action'
+    ));
+    assert.ok(actionProperty, `${callbackName} guard should declare its action`);
+    assert.ok(ts.isStringLiteral(actionProperty.initializer), `${callbackName} guard action should be a string literal`);
+    assert.equal(actionProperty.initializer.text, expectedAction, `${callbackName} should guard ${expectedAction}`);
+  }
 
   const resultEnd = resultDeclaration.getEnd();
   const sideEffectStart = sideEffectCall.getStart(sourceFile);
@@ -172,15 +188,15 @@ test('every Seasonal file action guard result returns before its side-effect bou
     ts.ScriptKind.TSX,
   );
   const cases: readonly GuardBoundary[] = [
-    ['handleImportClick', 'getSeasonalFileActionBlock', 'block', 'property', 'click', 'opening the import picker'],
-    ['handleFile', 'getSeasonalFileActionBlock', 'block', 'identifier', 'findSeasonByCode', 'the first import server lookup'],
-    ['handleFile', 'validateSeasonalFileAction', 'commitInvalidation', 'identifier', 'applySeasonalImportRemote', 'the import server commit'],
-    ['handleFile', 'validateSeasonalFileAction', 'applyInvalidation', 'identifier', 'setCachedSeasons', 'applying the committed cache snapshot'],
-    ['handleFile', 'validateSeasonalFileAction', 'finalApplyInvalidation', 'identifier', 'setSeasons', 'applying the committed UI snapshot'],
-    ['handleExportUpdated', 'getSeasonalFileActionBlock', 'initialBlock', 'identifier', 'loadSeasonWorkspaceWindow', 'the export server request'],
-    ['handleExportUpdated', 'validateSeasonalFileAction', 'snapshotInvalidation', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],
-    ['handleExportUpdated', 'getSeasonalFileActionBlock', 'snapshotBlock', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],
-    ['handleExportUpdated', 'validateSeasonalFileAction', 'downloadInvalidation', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],
+    ['handleImportClick', 'getSeasonalFileActionBlock', 'import', 'block', 'property', 'click', 'opening the import picker'],
+    ['handleFile', 'getSeasonalFileActionBlock', 'import', 'block', 'identifier', 'findSeasonByCode', 'the first import server lookup'],
+    ['handleFile', 'validateSeasonalFileAction', 'import', 'commitInvalidation', 'identifier', 'applySeasonalImportRemote', 'the import server commit'],
+    ['handleFile', 'validateSeasonalFileAction', 'import', 'applyInvalidation', 'identifier', 'setCachedSeasons', 'applying the committed cache snapshot'],
+    ['handleFile', 'validateSeasonalFileAction', 'import', 'finalApplyInvalidation', 'identifier', 'setSeasons', 'applying the committed UI snapshot'],
+    ['handleExportUpdated', 'getSeasonalFileActionBlock', 'export', 'initialBlock', 'identifier', 'loadSeasonWorkspaceWindow', 'the export server request'],
+    ['handleExportUpdated', 'validateSeasonalFileAction', 'export', 'snapshotInvalidation', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],
+    ['handleExportUpdated', 'getSeasonalFileActionBlock', 'export', 'snapshotBlock', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],
+    ['handleExportUpdated', 'validateSeasonalFileAction', 'export', 'downloadInvalidation', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],
   ];
 
   for (const entry of cases) {
