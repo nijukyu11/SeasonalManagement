@@ -37,6 +37,9 @@ test('normalizeSeasonalDate accepts case-insensitive seasonal dates and ISO date
 });
 
 test('normalizeSeasonalDate accepts Excel serial dates and rejects rollover dates', () => {
+  assert.equal(normalizeSeasonalDate(0), null);
+  assert.equal(normalizeSeasonalDate(0.5), null);
+  assert.equal(normalizeSeasonalDate(60), null);
   assert.equal(normalizeSeasonalDate(46447), '2027-03-01');
   assert.equal(normalizeSeasonalDate('31-Apr-27'), null);
   assert.equal(normalizeSeasonalDate('2027-04-31'), null);
@@ -44,13 +47,14 @@ test('normalizeSeasonalDate accepts Excel serial dates and rejects rollover date
 
 test('normalizeSeasonalTime accepts strict clock values and valid Excel fractions', () => {
   assert.equal(normalizeSeasonalTime('00:00'), '00:00');
-  assert.equal(normalizeSeasonalTime('7:05'), '07:05');
+  assert.equal(normalizeSeasonalTime('07:05'), '07:05');
   assert.equal(normalizeSeasonalTime('23:59'), '23:59');
   assert.equal(normalizeSeasonalTime(0.5), '12:00');
   assert.equal(normalizeSeasonalTime(1439 / 1440), '23:59');
 });
 
 test('normalizeSeasonalTime rejects values outside the canonical clock range', () => {
+  assert.equal(normalizeSeasonalTime('7:05'), null);
   assert.equal(normalizeSeasonalTime('24:00'), null);
   assert.equal(normalizeSeasonalTime('12:60'), null);
   assert.equal(normalizeSeasonalTime('noon'), null);

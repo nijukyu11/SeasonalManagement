@@ -1,3 +1,4 @@
+import XLSX from 'xlsx';
 import type { ParsedRow, SeasonalSourceRowIssue } from './types.ts';
 
 const MONTHS: Record<string, number> = {
@@ -16,23 +17,6 @@ const MONTHS: Record<string, number> = {
 };
 
 const DAY_HEADERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
-
-function parseExcelDateSerial(value: number): { year: number; month: number; day: number } | null {
-  if (!Number.isInteger(value) || value < 0) return null;
-
-  if (value === 60) {
-    return { year: 1900, month: 2, day: 29 };
-  }
-
-  const adjustedSerial = value > 60 ? value - 1 : value;
-  const base = Date.UTC(1899, 11, 31);
-  const date = new Date(base + adjustedSerial * 24 * 60 * 60 * 1000);
-  return {
-    year: date.getUTCFullYear(),
-    month: date.getUTCMonth() + 1,
-    day: date.getUTCDate(),
-  };
-}
 
 export const REQUIRED_SEASONAL_HEADERS = [
   'Effective',
@@ -79,10 +63,13 @@ function buildUtcIsoDate(year: number, month: number, day: number): string | nul
 
 export function normalizeSeasonalDate(value: unknown): string | null {
   if (typeof value === 'number') {
-    if (!Number.isFinite(value)) return null;
-    const parsed = parseExcelDateSerial(Math.floor(value));
+    if (!Number.isFinite(value) || !Number.isInteger(value)) return null;
+    if (value <= 0 || value === 60) return null;
+
+    const parsed = XLSX.SSF.parse_date_code(value);
     if (!parsed) return null;
-    return buildUtcIsoDate(parsed.year, parsed.month, parsed.day);
+
+    return buildUtcIsoDate(parsed.y, parsed.m, parsed.d);
   }
 
   if (typeof value !== 'string') return null;
@@ -121,7 +108,7 @@ export function normalizeSeasonalTime(value: unknown): string | null {
   const text = value.trim();
   if (!text) return null;
 
-  const match = text.match(/^(\d{1,2}):(\d{2})$/);
+  const match = text.match(/^(\d{2}):(\d{2})$/);
   if (!match) return null;
   const hours = Number(match[1]);
   const minutes = Number(match[2]);

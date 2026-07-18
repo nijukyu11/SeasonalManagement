@@ -95,7 +95,7 @@ test('parseSeasonalSchedule returns canonical dates, times, booleans, and upperc
       Discontinue: 46448,
       STA: 0.5,
       ARRRoute: 'dad',
-      STD: '7:05',
+      STD: '07:05',
       DEPFlight: '456a',
       DEPRoute: 'sgn',
     }),
