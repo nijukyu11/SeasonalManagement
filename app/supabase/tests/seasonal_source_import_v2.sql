@@ -325,6 +325,30 @@ begin
     raise exception 'server request fingerprint was not persisted compactly';
   end if;
 
+  begin
+    update public.season_import_batches
+    set result = '"scalar"'::jsonb
+    where batch_id = (v_first->>'batchId')::uuid;
+    raise exception 'scalar result update was not rejected';
+  exception
+    when sqlstate '22023' then
+      if position('result must be null or a JSON object' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+
+  begin
+    update public.season_import_batches
+    set result = '[]'::jsonb
+    where batch_id = (v_first->>'batchId')::uuid;
+    raise exception 'array result update was not rejected';
+  exception
+    when sqlstate '22023' then
+      if position('result must be null or a JSON object' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+
   update public.season_import_batches
   set result = jsonb_build_object('summary', 'future-result')
   where batch_id = (v_first->>'batchId')::uuid;
@@ -379,7 +403,7 @@ begin
     '{sourceRows}',
     jsonb_build_array(
       jsonb_build_object('rowIndex', 900, 'effective', 'invalid'),
-      jsonb_build_object('rowIndex', 901, 'effective', 'also-invalid')
+      jsonb_build_object('rowIndex', 901, 'effective', 'bad-date')
     )
   );
 
@@ -811,6 +835,8 @@ do $$
 declare
   v_large_rows jsonb;
   v_result jsonb;
+  v_batch_count integer;
+  v_row_count integer;
 begin
   begin
     perform public.stage_seasonal_import_v2(jsonb_build_object(
@@ -858,42 +884,66 @@ begin
       end if;
   end;
 
+  begin
+    perform public.stage_seasonal_import_v2(jsonb_build_object(
+      'requestId', 'f496331f-0a8c-4f6c-b0d0-18fd5be5cbdf',
+      'checksum', 'oversized-airline-probe',
+      'seasonCode', 'TV2',
+      'sourceRows', jsonb_build_array(jsonb_build_object(
+        'rowIndex', 60,
+        'effective', '2026-10-25',
+        'discontinue', '2026-10-25',
+        'airline', repeat('V', 2097152),
+        'aircraft', '321',
+        'daysOfWeek', jsonb_build_array(false, false, false, false, false, false, true),
+        'sta', '07:05',
+        'arrFlight', 'VN360',
+        'arrRoute', 'KIX'
+      ))
+    ));
+    raise exception 'oversized Airline probe was not rejected';
+  exception
+    when sqlstate '22023' then
+      if position('canonical source field Airline exceeds maximum length of 16' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+
+  select count(*)::integer
+  into v_batch_count
+  from public.season_import_batches batches
+  where batches.request_id = 'f496331f-0a8c-4f6c-b0d0-18fd5be5cbdf';
+
+  select count(*)::integer
+  into v_row_count
+  from public.season_import_batch_rows rows
+  join public.season_import_batches batches on batches.batch_id = rows.batch_id
+  where batches.request_id = 'f496331f-0a8c-4f6c-b0d0-18fd5be5cbdf';
+
+  if v_batch_count <> 0 or v_row_count <> 0 then
+    raise exception 'oversized Airline probe persisted a batch or row';
+  end if;
+
   v_result := public.stage_seasonal_import_v2(jsonb_build_object(
-    'requestId', 'f496331f-0a8c-4f6c-b0d0-18fd5be5cbdf',
-    'checksum', 'oversized-canonical-fields',
+    'requestId', '6bd45db7-47b4-4293-812b-2794f25e91c2',
+    'checksum', 'near-limit-canonical-fields',
     'seasonCode', 'TV2',
     'sourceRows', jsonb_build_array(jsonb_build_object(
-      'rowIndex', 60,
+      'rowIndex', 62,
       'effective', '2026-10-25',
       'discontinue', '2026-10-25',
-      'airline', repeat('V', 17),
-      'aircraft', '321',
+      'airline', repeat('V', 16),
+      'aircraft', repeat('A', 64),
       'daysOfWeek', jsonb_build_array(false, false, false, false, false, false, true),
       'sta', '07:05',
-      'arrFlight', 'VN360',
-      'arrRoute', 'KIX',
-      'arrCodeShares', repeat('C', 4097)
+      'arrFlight', repeat('F', 64),
+      'arrRoute', repeat('R', 512),
+      'arrCodeShares', repeat('C', 4096)
     ))
   ));
 
-  if v_result->>'status' <> 'failed'
-    or (v_result->>'valid')::boolean
-    or not exists (
-      select 1
-      from jsonb_array_elements(v_result->'diagnostics') diagnostic
-      where diagnostic->>'rowIndex' = '60'
-        and diagnostic->>'code' = 'field-too-long'
-        and diagnostic->>'column' = 'Airline'
-    )
-    or not exists (
-      select 1
-      from jsonb_array_elements(v_result->'diagnostics') diagnostic
-      where diagnostic->>'rowIndex' = '60'
-        and diagnostic->>'code' = 'field-too-long'
-        and diagnostic->>'column' = 'ARRCodeShares'
-    )
-  then
-    raise exception 'oversized canonical field diagnostics were not returned: %', v_result;
+  if v_result->>'status' <> 'staged' or not (v_result->>'valid')::boolean then
+    raise exception 'near-limit canonical fields were rejected: %', v_result;
   end if;
 
   begin
@@ -914,7 +964,7 @@ begin
 
   select jsonb_agg(jsonb_build_object('rowIndex', source_index))
   into v_large_rows
-  from generate_series(1, 100001) source_index;
+  from generate_series(1, 20001) source_index;
 
   begin
     perform public.stage_seasonal_import_v2(jsonb_build_object(
@@ -926,10 +976,25 @@ begin
     raise exception 'oversized sourceRows was not rejected';
   exception
     when sqlstate '22023' then
-      if position('sourceRows exceeds maximum of 100000 rows' in sqlerrm) = 0 then
+      if position('sourceRows exceeds maximum of 20000 rows' in sqlerrm) = 0 then
         raise;
       end if;
   end;
+
+  select count(*)::integer
+  into v_batch_count
+  from public.season_import_batches batches
+  where batches.request_id = '311da643-715f-4cde-b9f9-dc46b1750832';
+
+  select count(*)::integer
+  into v_row_count
+  from public.season_import_batch_rows rows
+  join public.season_import_batches batches on batches.batch_id = rows.batch_id
+  where batches.request_id = '311da643-715f-4cde-b9f9-dc46b1750832';
+
+  if v_batch_count <> 0 or v_row_count <> 0 then
+    raise exception 'max+1 sourceRows persisted a batch or row';
+  end if;
 
   begin
     perform public.stage_seasonal_import_v2(jsonb_build_object(
@@ -956,6 +1021,45 @@ begin
         raise;
       end if;
   end;
+end
+$$;
+
+do $$
+declare
+  v_rows jsonb;
+  v_result jsonb;
+  v_summary jsonb;
+begin
+  select jsonb_agg(jsonb_build_object('rowIndex', source_index))
+  into v_rows
+  from generate_series(1, 2000) source_index;
+
+  v_result := public.stage_seasonal_import_v2(jsonb_build_object(
+    'requestId', 'd65399b0-8365-42d0-9308-777a56cdfef4',
+    'checksum', 'bounded-diagnostics',
+    'seasonCode', 'TV2',
+    'sourceRows', v_rows
+  ));
+
+  select diagnostic
+  into v_summary
+  from jsonb_array_elements(v_result->'diagnostics') diagnostic
+  where diagnostic->>'code' = 'diagnostics-truncated';
+
+  if v_result->>'status' <> 'failed'
+    or jsonb_array_length(v_result->'diagnostics') <> 2000
+    or v_summary is null
+    or (v_summary->>'shownDiagnostics')::integer <> 1999
+    or (v_summary->>'totalDiagnostics')::integer <= 1999
+    or not exists (
+      select 1
+      from jsonb_array_elements(v_result->'diagnostics') diagnostic
+      where diagnostic->>'rowIndex' = '1'
+        and diagnostic->>'code' <> 'diagnostics-truncated'
+    )
+  then
+    raise exception 'diagnostics output was not capped with actionable rows and summary: %', v_result;
+  end if;
 end
 $$;
 

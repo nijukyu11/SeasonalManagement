@@ -28,6 +28,8 @@ drop table if exists public.season_modifications cascade;
 drop table if exists public.season_flight_record_checkin_windows cascade;
 drop table if exists public.season_flight_record_counters cascade;
 drop table if exists public.season_flight_records cascade;
+drop table if exists public.season_import_batch_rows cascade;
+drop table if exists public.season_import_batches cascade;
 drop table if exists public.season_source_row_days cascade;
 drop table if exists public.season_source_rows cascade;
 drop table if exists public.season_change_events cascade;
@@ -392,6 +394,8 @@ create table if not exists public.season_import_batches (
   generated_record_count integer not null default 0,
   diagnostics jsonb not null default '[]'::jsonb,
   result jsonb,
+  constraint season_import_batches_result_object_check
+    check (result is null or pg_catalog.jsonb_typeof(result) = 'object'),
   created_by uuid not null default auth.uid(),
   created_at timestamptz not null default now(),
   committed_at timestamptz
@@ -403,6 +407,21 @@ create table if not exists public.season_import_batch_rows (
   row_data jsonb not null,
   primary key (batch_id, row_index)
 );
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_catalog.pg_constraint constraints
+    where constraints.conrelid = 'public.season_import_batches'::pg_catalog.regclass
+      and constraints.conname = 'season_import_batches_result_object_check'
+  ) then
+    alter table public.season_import_batches
+      add constraint season_import_batches_result_object_check
+      check (result is null or pg_catalog.jsonb_typeof(result) = 'object');
+  end if;
+end;
+$$;
 
 create table if not exists public.season_flight_records (
   season_id text not null references public.seasons(id) on delete restrict,
@@ -1090,6 +1109,13 @@ language plpgsql
 set search_path = pg_catalog, pg_temp
 as $$
 begin
+  if new.result is not null
+    and pg_catalog.jsonb_typeof(new.result) <> 'object'
+  then
+    raise exception 'season_import_batches.result must be null or a JSON object'
+      using errcode = '22023';
+  end if;
+
   if old.result ? '_staging' then
     new.result := (
       coalesce(new.result, '{}'::jsonb) - '_staging'
@@ -1131,6 +1157,11 @@ declare
   v_request_fingerprint text;
   v_persisted_request_fingerprint text;
   v_diagnostics jsonb := '[]'::jsonb;
+  v_diagnostic_count integer := 0;
+  v_oversized_staging_row_index integer;
+  v_oversized_column text;
+  v_oversized_maximum_length integer;
+  v_max_actionable_diagnostics constant integer := 1999;
   v_batch public.season_import_batches%rowtype;
 begin
   if not public.app_operator_has_permission('seasonal.write') then
@@ -1240,8 +1271,8 @@ begin
       using errcode = '22023';
   end if;
 
-  if pg_catalog.jsonb_array_length(v_source_rows) > 100000 then
-    raise exception 'sourceRows exceeds maximum of 100000 rows'
+  if pg_catalog.jsonb_array_length(v_source_rows) > 20000 then
+    raise exception 'sourceRows exceeds maximum of 20000 rows'
       using errcode = '22023';
   end if;
 
@@ -1267,6 +1298,54 @@ begin
       raise exception 'expectedDataVersion must not be negative'
         using errcode = '22023';
     end if;
+  end if;
+
+  select
+    (source_rows.ordinality - 1)::integer,
+    field_limits.column_name,
+    field_limits.maximum_length
+  into
+    v_oversized_staging_row_index,
+    v_oversized_column,
+    v_oversized_maximum_length
+  from pg_catalog.jsonb_array_elements(v_source_rows)
+    with ordinality as source_rows(raw_row, ordinality)
+  cross join lateral (
+    values
+      ('Effective', 'effective', 10),
+      ('Discontinue', 'discontinue', 10),
+      ('Airline', 'airline', 16),
+      ('Aircraft', 'aircraft', 64),
+      ('STA', 'sta', 5),
+      ('ARRFlight', 'arrFlight', 64),
+      ('ARRFlightType', 'arrFlightType', 32),
+      ('ARRRoute', 'arrRoute', 512),
+      ('ARRFlightCategory', 'arrFlightCategory', 64),
+      ('ARRCodeShares', 'arrCodeShares', 4096),
+      ('ARRIntDomInd', 'arrIntDomInd', 32),
+      ('STD', 'std', 5),
+      ('DEPFlight', 'depFlight', 64),
+      ('DEPFlightType', 'depFlightType', 32),
+      ('DEPRoute', 'depRoute', 512),
+      ('DEPFlightCategory', 'depFlightCategory', 64),
+      ('DEPCodeShares', 'depCodeShares', 4096),
+      ('DEPIntDomInd', 'depIntDomInd', 32),
+      ('linkType', 'linkType', 16)
+  ) as field_limits(column_name, json_key, maximum_length)
+  where pg_catalog.jsonb_typeof(source_rows.raw_row) = 'object'
+    and pg_catalog.jsonb_typeof(source_rows.raw_row->field_limits.json_key) = 'string'
+    and pg_catalog.char_length(
+      pg_catalog.btrim(source_rows.raw_row->>field_limits.json_key)
+    ) > field_limits.maximum_length
+  order by source_rows.ordinality, field_limits.column_name
+  limit 1;
+
+  if found then
+    raise exception 'sourceRows[%] canonical source field % exceeds maximum length of %',
+      v_oversized_staging_row_index,
+      v_oversized_column,
+      v_oversized_maximum_length
+      using errcode = '22023';
   end if;
 
   with input_rows as (
@@ -1882,55 +1961,10 @@ begin
     ) as field_types(column_name, type_is_valid, expected_type)
     where canonical_rows.row_is_object
       and not field_types.type_is_valid
-  ), length_diagnostic_items as (
-    select
-      canonical_rows.staging_row_index,
-      77 as issue_order,
-      field_lengths.column_name,
-      pg_catalog.jsonb_build_object(
-        'rowIndex', canonical_rows.diagnostic_row_index,
-        'stagingRowIndex', canonical_rows.staging_row_index,
-        'code', 'field-too-long',
-        'column', field_lengths.column_name,
-        'message', pg_catalog.format(
-          'Row %s: %s exceeds maximum length of %s.',
-          canonical_rows.diagnostic_row_index,
-          field_lengths.column_name,
-          field_lengths.maximum_length
-        )
-      ) as issue
-    from canonical_rows
-    cross join lateral (
-      values
-        ('Effective', canonical_rows.effective_value, 10),
-        ('Discontinue', canonical_rows.discontinue_value, 10),
-        ('Airline', canonical_rows.airline_value, 16),
-        ('Aircraft', canonical_rows.aircraft_value, 64),
-        ('STA', canonical_rows.sta_value, 5),
-        ('ARRFlight', canonical_rows.arr_flight_value, 64),
-        ('ARRFlightType', canonical_rows.arr_flight_type_value, 32),
-        ('ARRRoute', canonical_rows.arr_route_value, 512),
-        ('ARRFlightCategory', canonical_rows.arr_flight_category_value, 64),
-        ('ARRCodeShares', canonical_rows.arr_code_shares_value, 4096),
-        ('ARRIntDomInd', canonical_rows.arr_int_dom_ind_value, 32),
-        ('STD', canonical_rows.std_value, 5),
-        ('DEPFlight', canonical_rows.dep_flight_value, 64),
-        ('DEPFlightType', canonical_rows.dep_flight_type_value, 32),
-        ('DEPRoute', canonical_rows.dep_route_value, 512),
-        ('DEPFlightCategory', canonical_rows.dep_flight_category_value, 64),
-        ('DEPCodeShares', canonical_rows.dep_code_shares_value, 4096),
-        ('DEPIntDomInd', canonical_rows.dep_int_dom_ind_value, 32),
-        ('linkType', canonical_rows.link_type_value, 16)
-    ) as field_lengths(column_name, field_value, maximum_length)
-    where canonical_rows.row_is_object
-      and field_lengths.field_value is not null
-      and pg_catalog.char_length(field_lengths.field_value) > field_lengths.maximum_length
   ), diagnostic_items as (
     select * from row_diagnostic_items
     union all
     select * from type_diagnostic_items
-    union all
-    select * from length_diagnostic_items
   )
   select
     coalesce(
@@ -1945,18 +1979,46 @@ begin
     ),
     coalesce(
       (
-        select pg_catalog.jsonb_agg(
-          diagnostic_items.issue
+        select pg_catalog.jsonb_agg(limited_diagnostics.issue order by limited_diagnostics.item_order)
+        from (
+          select
+            diagnostic_items.issue,
+            pg_catalog.row_number() over (
+              order by
+                diagnostic_items.staging_row_index,
+                diagnostic_items.issue_order,
+                diagnostic_items.column_name
+            ) as item_order
+          from diagnostic_items
           order by
             diagnostic_items.staging_row_index,
             diagnostic_items.issue_order,
             diagnostic_items.column_name
-        )
-        from diagnostic_items
+          limit v_max_actionable_diagnostics
+        ) limited_diagnostics
       ),
       '[]'::jsonb
-    )
-  into v_canonical_source_rows, v_diagnostics;
+    ),
+    (select pg_catalog.count(*)::integer from diagnostic_items)
+  into v_canonical_source_rows, v_diagnostics, v_diagnostic_count;
+
+  if v_diagnostic_count > v_max_actionable_diagnostics then
+    v_diagnostics := v_diagnostics || pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'rowIndex', null,
+        'stagingRowIndex', null,
+        'code', 'diagnostics-truncated',
+        'column', null,
+        'message', pg_catalog.format(
+          'Showing the first %s of %s diagnostics. Fix the listed rows and retry.',
+          v_max_actionable_diagnostics,
+          v_diagnostic_count
+        ),
+        'shownDiagnostics', v_max_actionable_diagnostics,
+        'totalDiagnostics', v_diagnostic_count
+      )
+    );
+  end if;
 
   -- Block concurrent season inserts/updates until lookup and batch insert finish.
   lock table public.seasons in share mode;

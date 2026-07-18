@@ -8,6 +8,8 @@
     "build": "next build",
     "test:dashboard-contract": "node --test src/lib/dashboardReportingContract.source.test.ts",
     "test:rules": "node scripts/rule-regression-tests.cjs",
+    "test:seasonal-import-sql": "node supabase/tests/seasonal_source_import_v2_pglite.mjs",
+    "test:seasonal-schema-twice": "node supabase/tests/seasonal_schema_twice.mjs",
     "test:updater": "node --experimental-strip-types --test src/lib/appUpdater.test.ts",
     "release:repo": "node scripts/configure-release-repo.cjs",
     "release:version": "node scripts/sync-release-version.cjs",
@@ -42,6 +44,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4",
     "@skawld/agent-sdk": "^0.1.0",
     "@tailwindcss/container-queries": "^0.1.1",
     "@tailwindcss/forms": "^0.5.11",
@@ -54,6 +57,7 @@
     "better-sqlite3": "^11.10.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
+    "pg": "^8.22.0",
     "postcss": "^8.5.13",
     "tailwindcss": "^4.2.4",
     "typescript": "^5"
