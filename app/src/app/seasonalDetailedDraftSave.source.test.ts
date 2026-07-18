@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import ts from 'typescript';
 
 const sourceRoot = join(process.cwd(), 'src');
 
@@ -25,6 +26,35 @@ function extractOpeningTagContaining(source: string, tagName: string, marker: st
   const end = source.indexOf('>', markerIndex);
   assert.notEqual(end, -1, `${tagName} opening tag should close`);
   return source.slice(start, end + 1);
+}
+
+function extractUseCallbackSource(source: string, callbackName: string): string {
+  const sourceFile = ts.createSourceFile(
+    'SeasonalSchedulePage.tsx',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  let callbackSource: string | null = null;
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.name.text === callbackName
+      && node.initializer
+      && ts.isCallExpression(node.initializer)
+      && ts.isIdentifier(node.initializer.expression)
+      && node.initializer.expression.text === 'useCallback'
+    ) {
+      callbackSource = node.initializer.getText(sourceFile);
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  assert.ok(callbackSource, `${callbackName} should be declared with useCallback`);
+  return callbackSource;
 }
 
 test('Seasonal Schedule passes draft changes through the save guard flow', () => {
@@ -55,6 +85,24 @@ test('Seasonal file actions wire the controller at commit, apply, and download b
   assert.ok(source.lastIndexOf('validateSeasonalFileAction(', commit) > importStart);
   assert.ok(source.lastIndexOf('validateSeasonalFileAction(', importApply) > commit);
   assert.ok(source.lastIndexOf('validateSeasonalFileAction(', download) > exportStart);
+});
+
+test('every Seasonal file action entry point applies the state guard', () => {
+  const source = readSource('app/SeasonalSchedulePage.tsx');
+  const entryPoints = [
+    ['handleImportClick', 'import'],
+    ['handleFile', 'import'],
+    ['handleExportUpdated', 'export'],
+  ] as const;
+
+  for (const [callbackName, action] of entryPoints) {
+    const callbackSource = extractUseCallbackSource(source, callbackName);
+    assert.match(
+      callbackSource,
+      new RegExp(`getSeasonalFileActionBlock\\s*\\(\\s*\\{[\\s\\S]*?action:\\s*'${action}'`),
+      `${callbackName} should guard ${action}`,
+    );
+  }
 });
 
 test('Seasonal Import and Export controls are disabled for draft changes', () => {
