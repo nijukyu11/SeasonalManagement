@@ -30,6 +30,7 @@ import {
 } from '@/lib/importProgress';
 import { buildSeasonDisplayLabel, buildSeasonNameFromFileName, getDirtyImportGuard } from '@/lib/importSeasonRules';
 import { buildSeasonalImportPatch, type SeasonalImportPatchStats } from '@/lib/seasonalImportPatch';
+import { getSeasonalFileActionBlock, reconcileSeasonalSelection } from '@/lib/seasonalFileActionGuard';
 import {
   getCachedSeasons,
   publishSeasonWorkspaceChanged,
@@ -258,6 +259,7 @@ export default function HomePage() {
   const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
   const draftChangeCount = ((draftState?.records.length ?? 0) + (draftState?.modifications.length ?? 0));
   const hasDraftChanges = draftChangeCount > 0;
+  const seasonalFileActionBusy = loading || uploading || isExporting || syncInProgress || fetchingServerData;
 
   // Pagination
   const [page, setPage] = useState(0);
@@ -314,6 +316,13 @@ export default function HomePage() {
     setFlightRecords(records);
     setDisplayRows(enrichRows(rows));
     setModifications(mods);
+    setSelectedRecordIds((previous) => {
+      const { unknownIds } = reconcileSeasonalSelection(
+        Array.from(previous),
+        new Set(records.map((record) => record.id)),
+      );
+      return unknownIds.length === 0 ? previous : new Set();
+    });
   }, []);
 
   const publishSeasonalWorkspaceChange = useCallback((
@@ -481,6 +490,7 @@ export default function HomePage() {
   const handleSeasonChange = useCallback(async (seasonId: string) => {
     const found = seasons.find(s => s.id === seasonId);
     if (!found) return;
+    setSelectedRecordIds(new Set());
     setActiveSeason(found);
     setPage(0);
     sessionStorage.setItem('activeSeasonId', seasonId);
@@ -718,16 +728,32 @@ export default function HomePage() {
   }, [countGroupLegs, filteredGroups, debouncedFilters.dateFrom, debouncedFilters.dateTo]);
 
   const handleExportUpdated = useCallback(async () => {
-    if (!activeSeason || activeDisplayLegs.length === 0 || isExporting) return;
-    try {
-      if (selectedRecordIds.size === 0) {
-        void showAlert({
-          title: 'Select flights to export',
-          message: 'Tick the flight rows you want to export. To export the full schedule, select all rows first.',
-          tone: 'info',
-        });
-        return;
+    if (!activeSeason) return;
+    const localSelection = reconcileSeasonalSelection(
+      Array.from(selectedRecordIds),
+      new Set(flightRecords.map((record) => record.id)),
+    );
+    const initialBlock = getSeasonalFileActionBlock({
+      action: 'export',
+      hasDraftChanges,
+      busy: seasonalFileActionBusy,
+      selectedCount: localSelection.matchedIds.length,
+      staleSelectionCount: localSelection.unknownIds.length,
+    });
+    if (initialBlock) {
+      if (initialBlock.code === 'stale-selection') {
+        setSelectedRecordIds(new Set(localSelection.matchedIds));
       }
+      void showAlert({
+        title: initialBlock.code === 'no-selection' ? 'Select flights to export' : 'Cannot Export',
+        message: initialBlock.code === 'no-selection'
+          ? 'Tick the flight rows you want to export. To export the full schedule, select all rows first.'
+          : initialBlock.message,
+        tone: initialBlock.code === 'no-selection' ? 'info' : 'warning',
+      });
+      return;
+    }
+    try {
       setIsExporting(true);
       const exportWindow = await loadSeasonWorkspaceWindow({
         seasonId: activeSeason.id,
@@ -739,7 +765,23 @@ export default function HomePage() {
       if (!exportWindow) throw new Error('Server seasonal schedule export window is unavailable.');
       const exportRecords = exportWindow.records;
       const exportModifications = exportWindow.modifications;
-      const selectedIds = Array.from(selectedRecordIds);
+      const serverSelection = reconcileSeasonalSelection(
+        localSelection.matchedIds,
+        new Set(exportRecords.map((record) => record.id)),
+      );
+      const snapshotBlock = getSeasonalFileActionBlock({
+        action: 'export',
+        hasDraftChanges,
+        busy: false,
+        selectedCount: serverSelection.matchedIds.length,
+        staleSelectionCount: serverSelection.unknownIds.length,
+      });
+      if (snapshotBlock) {
+        setSelectedRecordIds(new Set(serverSelection.matchedIds));
+        void showAlert({ title: 'Cannot Export', message: snapshotBlock.message, tone: 'warning' });
+        return;
+      }
+      const selectedIds = serverSelection.matchedIds;
       const canonicalExport = buildCanonicalSeasonalRows({
         records: exportRecords,
         modifications: exportModifications,
@@ -779,7 +821,15 @@ export default function HomePage() {
     } finally {
       setIsExporting(false);
     }
-  }, [activeDisplayLegs, activeSeason, isExporting, notifyExportCompleted, selectedRecordIds, showAlert]);
+  }, [
+    activeSeason,
+    flightRecords,
+    hasDraftChanges,
+    notifyExportCompleted,
+    seasonalFileActionBusy,
+    selectedRecordIds,
+    showAlert,
+  ]);
 
   const handleUndo = useCallback(async (targetEntry: ModHistoryEntry) => {
     if (!activeSeason || syncInProgress) return;
@@ -1270,14 +1320,47 @@ export default function HomePage() {
   }, [activeSeason, debouncedFilters.dateFrom, debouncedFilters.dateTo, debouncedFilters.flight, debouncedFilters.route, fetchingServerData, hasDraftChanges, loadSeasonRows, showAlert, syncInProgress]);
 
   // Import handler
+  const handleImportClick = useCallback(() => {
+    const block = getSeasonalFileActionBlock({
+      action: 'import',
+      hasDraftChanges,
+      busy: seasonalFileActionBusy,
+    });
+    if (block) {
+      void showAlert({ title: 'Import Blocked', message: block.message, tone: 'warning' });
+      return;
+    }
+    fileInputRef.current?.click();
+  }, [hasDraftChanges, seasonalFileActionBusy, showAlert]);
+
   const handleFile = useCallback(async (file: File) => {
-    if (uploading || syncInProgress || fetchingServerData) return;
+    const block = getSeasonalFileActionBlock({
+      action: 'import',
+      hasDraftChanges,
+      busy: seasonalFileActionBusy,
+    });
+    if (block) {
+      void showAlert({ title: 'Import Blocked', message: block.message, tone: 'warning' });
+      return;
+    }
     setUploading(true);
     try {
       setUploadProgress(buildImportProgress('Parsing file', 5));
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: 'array' });
-      const { seasonCode, rows: parsedRows } = parseSeasonalSchedule(workbook);
+      const { seasonCode, rows: parsedRows, issues } = parseSeasonalSchedule(workbook);
+
+      if (issues.length > 0) {
+        const visibleIssues = issues.slice(0, 10).map((issue) => issue.message);
+        const remainingCount = issues.length - visibleIssues.length;
+        const remainingMessage = remainingCount > 0 ? `\n...and ${remainingCount} more issue(s).` : '';
+        void showAlert({
+          title: 'Import Failed',
+          message: `${visibleIssues.join('\n')}${remainingMessage}`,
+          tone: 'warning',
+        });
+        return;
+      }
 
       if (parsedRows.length === 0) {
         void showAlert({ title: 'Import Failed', message: 'File contains no valid data.', tone: 'warning' });
@@ -1314,7 +1397,6 @@ export default function HomePage() {
             tone: 'warning',
             choices: [
               { value: 'cancel', label: 'Cancel' },
-              { value: 'discard', label: 'Discard local changes and re-import', tone: 'warning' },
               { value: 'sync', label: 'Sync first', tone: 'info' },
             ],
           });
@@ -1339,7 +1421,6 @@ export default function HomePage() {
 
       const uploadedAt = Date.now();
       let seasonRecords = importedRecords;
-      let seasonMods = new Map<string, FlightModification>();
       let recordsToWrite = importedRecords;
       let affectedRecordIds = importedRecords.map((record) => record.id);
       let modificationDeleteRecordIds = importedRecords.map((record) => record.id);
@@ -1365,7 +1446,6 @@ export default function HomePage() {
           importedRecords,
         });
         seasonRecords = patch.mergedRecords;
-        seasonMods = patch.remainingModifications;
         recordsToWrite = patch.recordsToWrite;
         affectedRecordIds = patch.affectedRecordIds;
         modificationDeleteRecordIds = patch.modificationDeleteRecordIds;
@@ -1491,7 +1571,9 @@ export default function HomePage() {
       useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
       setActiveSeason(nextSeason);
       sessionStorage.setItem('activeSeasonId', seasonId);
-      applySeasonData(patternRows, seasonRecords, seasonMods);
+      applySeasonData(patternRows, refreshedRecords, refreshedModifications);
+      setSelectedRecordIds(new Set());
+      setDraftState(null);
       setPage(0);
       setUploadProgress(buildImportProgress('Import complete', 100, `${verifiedCounts.flightRecords} flight records`));
       if (duplicatePeriods.length > 0) {
@@ -1511,16 +1593,15 @@ export default function HomePage() {
     debouncedFilters.dateTo,
     debouncedFilters.flight,
     debouncedFilters.route,
+    hasDraftChanges,
     loadSeasonRows,
     publishSeasonalWorkspaceChange,
+    seasonalFileActionBusy,
     seasons,
     showAlert,
     showChoice,
     syncAnySeasonNow,
-    fetchingServerData,
     syncPendingCount,
-    syncInProgress,
-    uploading,
   ]);
 
   const handleRowDoubleClick = useCallback((group: DisplayGroup) => {
@@ -1732,8 +1813,8 @@ export default function HomePage() {
               <button
                 type="button"
                 className="flex items-center gap-1.5 bg-primary text-on-primary text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-40"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading || syncInProgress || fetchingServerData}
+                onClick={handleImportClick}
+                disabled={seasonalFileActionBusy || hasDraftChanges}
               >
                 <span className="material-symbols-outlined text-[16px]">cloud_upload</span>
                 Import
@@ -1748,7 +1829,7 @@ export default function HomePage() {
               <button
                 className="flex items-center gap-1.5 bg-tertiary-container text-on-tertiary-container text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-tertiary-container/80 transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={handleExportUpdated}
-                disabled={activeDisplayLegs.length === 0 || selectedRecordIds.size === 0 || isExporting}
+                disabled={activeDisplayLegs.length === 0 || selectedRecordIds.size === 0 || seasonalFileActionBusy || hasDraftChanges}
                 title={isExporting ? 'Exporting selected flights' : selectedRecordIds.size === 0 ? 'Select flights to export' : 'Export selected flights'}
               >
                 <span className={`material-symbols-outlined text-[16px] ${isExporting ? 'animate-spin' : ''}`}>{isExporting ? 'sync' : 'download'}</span>
