@@ -3299,6 +3299,184 @@ do $$
 declare
   v_stage jsonb;
   v_batch_id uuid;
+  v_generated_id text;
+  v_before jsonb;
+  v_after jsonb;
+begin
+  insert into public.seasons (
+    id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+    total_legs, total_source_rows, data_version, last_synced_at
+  ) values (
+    'task5-manual-id-collision-season', 'X62', 'Task 5 manual ID collision',
+    'before.xlsx', 10, '2026-11-15', '2026-11-15', 1, 1, 1, 10
+  );
+  insert into public.season_source_rows (
+    season_id, row_index, effective, discontinue, airline, aircraft,
+    sta, arr_flight, arr_route
+  ) values (
+    'task5-manual-id-collision-season', 900, '2026-11-15', '2026-11-15',
+    'VN', '320', '07:00', 'VN050', 'OLD'
+  );
+  insert into public.season_source_row_days values (
+    'task5-manual-id-collision-season', 900, 7
+  );
+  insert into public.season_flight_records (
+    season_id, record_id, link_id, type, airline, flight_number, raw_flight_number,
+    route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+    operational_date, day_of_week, source_row_index, source_kind, source_side, status
+  ) values (
+    'task5-manual-id-collision-season', 'task5-manual-id-existing-base',
+    'task5-manual-id-existing-base', 'A', 'VN', 'VN050', '050', 'OLD', '07:00',
+    '320', 'J', '2026-11-15', '2026-11-15', '07:00', '2026-11-15', 7,
+    900, 'imported', 'ARR', 'active'
+  );
+
+  v_generated_id := public.seasonal_record_id_v2(
+    'task5-manual-id-collision-season',
+    'A',
+    '2026-11-15'::date,
+    'VN',
+    'VN100'
+  );
+
+  insert into public.season_modifications (
+    season_id, leg_id, action, changed_fields
+  ) values (
+    'task5-manual-id-collision-season', 'task5-manual-id-parent',
+    'added', array['addedLeg']
+  );
+  insert into public.season_modification_added_legs (
+    season_id, leg_id, record_id, type, airline, flight_number, raw_flight_number,
+    route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+    operational_date, day_of_week, action, source_kind, source_side, status
+  ) values (
+    'task5-manual-id-collision-season', 'task5-manual-id-parent', v_generated_id,
+    'A', 'VN', 'VN999', '999', 'MANUAL', '08:00', '321', 'J',
+    '2026-11-15', '2026-11-15', '08:00', '2026-11-15', 7,
+    'added', 'added', 'ARR', 'active'
+  );
+  insert into public.season_modification_counters (
+    leg_id, counter_group, item_index, counter_value
+  ) values ('task5-manual-id-parent', 'A', 0, '24');
+  insert into public.season_modification_checkin_windows (
+    leg_id, counter_key, window_start, window_end
+  ) values ('task5-manual-id-parent', '24', '05:00', '07:30');
+
+  v_stage := pg_temp.task5_stage(
+    '5a3d286f-8af4-4c87-996f-9106ae7e8474',
+    'task5-manual-id-collision-season',
+    'X62',
+    1,
+    'task5-manual-id-collision',
+    jsonb_build_array(pg_temp.task5_source_row(1, '2026-11-15', 'VN100', null))
+  );
+  v_batch_id := (v_stage->>'batchId')::uuid;
+  v_before := pg_temp.task5_snapshot('task5-manual-id-collision-season', v_batch_id);
+
+  begin
+    perform public.commit_seasonal_import_v2(v_batch_id, 1);
+    raise exception 'effective manual record ID collision was not rejected';
+  exception
+    when unique_violation then
+      if position(v_generated_id in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+
+  v_after := pg_temp.task5_snapshot('task5-manual-id-collision-season', v_batch_id);
+  if v_after is distinct from v_before then
+    raise exception 'manual ID collision did not roll back the whole commit';
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_stage jsonb;
+  v_result jsonb;
+  v_generated_id text;
+begin
+  insert into public.seasons (
+    id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+    total_legs, total_source_rows, data_version
+  ) values (
+    'task5-hidden-manual-id-season', 'X63', 'Task 5 hidden manual ID', '', 0,
+    '', '', 0, 0, 1
+  );
+
+  v_generated_id := public.seasonal_record_id_v2(
+    'task5-hidden-manual-id-season',
+    'A',
+    '2026-11-16'::date,
+    'VN',
+    'VN110'
+  );
+
+  insert into public.season_modifications (
+    season_id, leg_id, action, changed_fields
+  ) values (
+    'task5-hidden-manual-id-season', 'task5-hidden-manual-id-parent',
+    'deleted', array['addedLeg']
+  );
+  insert into public.season_modification_added_legs (
+    season_id, leg_id, record_id, type, airline, flight_number, raw_flight_number,
+    route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+    operational_date, day_of_week, action, source_kind, source_side, status
+  ) values (
+    'task5-hidden-manual-id-season', 'task5-hidden-manual-id-parent', v_generated_id,
+    'A', 'VN', 'VN998', '998', 'HIDDEN', '08:00', '321', 'J',
+    '2026-11-16', '2026-11-16', '08:00', '2026-11-16', 1,
+    'added', 'added', 'ARR', 'active'
+  );
+
+  v_stage := pg_temp.task5_stage(
+    '650f1441-4952-4c52-9870-530ace306d24',
+    'task5-hidden-manual-id-season',
+    'X63',
+    1,
+    'task5-hidden-manual-id',
+    jsonb_build_array(pg_temp.task5_source_row(1, '2026-11-16', 'VN110', null))
+  );
+  v_result := public.commit_seasonal_import_v2((v_stage->>'batchId')::uuid, 1);
+
+  if v_result->>'status' <> 'committed'
+    or not exists (
+      select 1
+      from public.season_flight_records records
+      where records.record_id = v_generated_id
+        and records.season_id = 'task5-hidden-manual-id-season'
+        and records.source_kind = 'imported'
+    )
+    or not exists (
+      select 1
+      from public.season_modifications modifications
+      where modifications.leg_id = 'task5-hidden-manual-id-parent'
+        and modifications.action = 'deleted'
+    )
+    or not exists (
+      select 1
+      from public.season_modification_added_legs added_legs
+      where added_legs.leg_id = 'task5-hidden-manual-id-parent'
+        and added_legs.record_id = v_generated_id
+    )
+    or not exists (
+      select 1
+      from public.seasons seasons
+      where seasons.id = 'task5-hidden-manual-id-season'
+        and seasons.total_legs = 1
+        and seasons.effective_start = '2026-11-16'
+        and seasons.effective_end = '2026-11-16'
+    )
+  then
+    raise exception 'hidden manual ID did not follow the non-effective contract: %', v_result;
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_stage jsonb;
+  v_batch_id uuid;
   v_before jsonb;
   v_after jsonb;
 begin

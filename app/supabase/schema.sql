@@ -3475,6 +3475,7 @@ begin
   drop table if exists pg_temp.seasonal_import_commit_old_records_v2;
   drop table if exists pg_temp.seasonal_import_commit_affected_ids_v2;
   drop table if exists pg_temp.seasonal_import_commit_effective_manual_v2;
+  drop table if exists pg_temp.seasonal_import_commit_effective_manual_ids_v2;
 
   create temporary table seasonal_import_commit_records_v2
   on commit drop
@@ -3535,6 +3536,7 @@ begin
       coalesce(nullif(records.scheduled_date, ''), nullif(records.date, '')) as scheduled_date,
       pg_catalog.upper(pg_catalog.btrim(records.airline)) as airline,
       coalesce(nullif(records.flight_number, ''), records.raw_flight_number) as raw_flight_number,
+      array[records.record_id]::text[] as protected_ids,
       0 as source_priority
     from public.season_flight_records records
     left join public.season_modifications modifications
@@ -3552,6 +3554,7 @@ begin
       coalesce(nullif(added_legs.scheduled_date, ''), nullif(added_legs.date, '')),
       pg_catalog.upper(pg_catalog.btrim(added_legs.airline)),
       coalesce(nullif(added_legs.flight_number, ''), added_legs.raw_flight_number),
+      array[added_legs.leg_id, added_legs.record_id]::text[],
       1
     from public.season_modification_added_legs added_legs
     join public.season_modifications modifications
@@ -3562,6 +3565,19 @@ begin
       and added_legs.status = 'active'
       and added_legs.action is distinct from 'deleted'
       and modifications.action = 'added'
+  ), manual_ids_by_leg as (
+    select
+      manual_candidates.leg_id,
+      pg_catalog.array_agg(
+        distinct protected.manual_id
+        order by protected.manual_id
+      ) as protected_ids
+    from manual_candidates
+    cross join lateral pg_catalog.unnest(
+      manual_candidates.protected_ids
+    ) protected(manual_id)
+    where nullif(pg_catalog.btrim(protected.manual_id), '') is not null
+    group by manual_candidates.leg_id
   ), ranked_manual as (
     select
       manual_candidates.*,
@@ -3577,6 +3593,7 @@ begin
     ranked_manual.scheduled_date,
     ranked_manual.airline,
     normalized.flight_number,
+    manual_ids_by_leg.protected_ids,
     case
       when ranked_manual.scheduled_date is null or normalized.flight_number is null then null
       else
@@ -3589,6 +3606,8 @@ begin
         || normalized.flight_number
     end as occurrence_key
   from ranked_manual
+  join manual_ids_by_leg
+    on manual_ids_by_leg.leg_id = ranked_manual.leg_id
   left join lateral public.normalize_seasonal_flight_number_v2(
     ranked_manual.airline,
     ranked_manual.raw_flight_number
@@ -3599,6 +3618,21 @@ begin
     on pg_temp.seasonal_import_commit_effective_manual_v2 (leg_id);
   create index seasonal_import_commit_effective_manual_occurrence_v2
     on pg_temp.seasonal_import_commit_effective_manual_v2 (occurrence_key);
+
+  create temporary table seasonal_import_commit_effective_manual_ids_v2
+  on commit drop
+  as
+  select
+    protected.manual_id,
+    pg_catalog.min(manual.leg_id) as owner_leg_id
+  from pg_temp.seasonal_import_commit_effective_manual_v2 manual
+  cross join lateral pg_catalog.unnest(
+    manual.protected_ids
+  ) protected(manual_id)
+  group by protected.manual_id;
+
+  create unique index seasonal_import_commit_effective_manual_id_v2
+    on pg_temp.seasonal_import_commit_effective_manual_ids_v2 (manual_id);
 
   select generated.occurrence_key, manual.record_id
   into v_collision_occurrence_key, v_collision_record_id
@@ -3685,6 +3719,20 @@ begin
 
   create unique index seasonal_import_commit_final_id_v2
     on pg_temp.seasonal_import_commit_records_v2 (final_record_id);
+
+  select generated.final_record_id
+  into v_conflicting_record_id
+  from pg_temp.seasonal_import_commit_records_v2 generated
+  join pg_temp.seasonal_import_commit_effective_manual_ids_v2 manual_ids
+    on manual_ids.manual_id = generated.final_record_id
+  order by generated.final_record_id
+  limit 1;
+
+  if found then
+    raise exception 'Generated record ID % collides with an effective manual ID',
+      v_conflicting_record_id
+      using errcode = '23505';
+  end if;
 
   select records.record_id
   into v_conflicting_record_id
