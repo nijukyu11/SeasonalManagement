@@ -1,5 +1,29 @@
-import XLSX from 'xlsx';
-import type { ParsedRow, SeasonalSourceRowIssue } from './types.ts';
+import * as XLSX from 'xlsx';
+import type { SeasonalSourceRowCandidate, SeasonalSourceRowIssue } from './types.ts';
+
+type ExcelSsf = typeof XLSX.SSF;
+
+function isExcelSsf(value: unknown): value is ExcelSsf {
+  return typeof value === 'object'
+    && value !== null
+    && typeof (value as { parse_date_code?: unknown }).parse_date_code === 'function';
+}
+
+function resolveExcelSsf(): ExcelSsf {
+  const moduleNamespace = XLSX as unknown as Record<string, unknown>;
+  const namespaceSsf = moduleNamespace['SSF'];
+  if (isExcelSsf(namespaceSsf)) return namespaceSsf;
+
+  const commonJsModule = moduleNamespace['default'];
+  if (typeof commonJsModule === 'object' && commonJsModule !== null) {
+    const commonJsSsf = (commonJsModule as Record<string, unknown>)['SSF'];
+    if (isExcelSsf(commonJsSsf)) return commonJsSsf;
+  }
+
+  throw new Error('XLSX SSF date parser is unavailable.');
+}
+
+const EXCEL_SSF = resolveExcelSsf();
 
 const MONTHS: Record<string, number> = {
   JAN: 1,
@@ -61,12 +85,12 @@ function buildUtcIsoDate(year: number, month: number, day: number): string | nul
   ].join('-');
 }
 
-export function normalizeSeasonalDate(value: unknown): string | null {
+export function normalizeSeasonalDate(value: unknown, date1904 = false): string | null {
   if (typeof value === 'number') {
     if (!Number.isFinite(value) || !Number.isInteger(value)) return null;
-    if (value <= 0 || value === 60) return null;
+    if (value <= 0 || (!date1904 && value === 60)) return null;
 
-    const parsed = XLSX.SSF.parse_date_code(value);
+    const parsed = EXCEL_SSF.parse_date_code(value, { date1904 });
     if (!parsed) return null;
 
     return buildUtcIsoDate(parsed.y, parsed.m, parsed.d);
@@ -142,7 +166,7 @@ function hasText(value: unknown): boolean {
 }
 
 function rowIssue(
-  row: ParsedRow,
+  row: SeasonalSourceRowCandidate,
   code: SeasonalSourceRowIssue['code'],
   column: string | null,
   message: string,
@@ -155,10 +179,13 @@ function rowIssue(
   };
 }
 
-export function validateSeasonalSourceRow(row: ParsedRow): SeasonalSourceRowIssue[] {
+export function validateSeasonalSourceRow(
+  row: SeasonalSourceRowCandidate,
+  date1904 = false,
+): SeasonalSourceRowIssue[] {
   const issues: SeasonalSourceRowIssue[] = [];
-  const effective = normalizeSeasonalDate(row.effective);
-  const discontinue = normalizeSeasonalDate(row.discontinue);
+  const effective = normalizeSeasonalDate(row.effective, date1904);
+  const discontinue = normalizeSeasonalDate(row.discontinue, date1904);
 
   if (!effective) {
     issues.push(rowIssue(
@@ -235,9 +262,10 @@ export function validateSeasonalSourceRow(row: ParsedRow): SeasonalSourceRowIssu
 
   const hasArrFlight = hasText(row.arrFlight);
   const hasArrRoute = hasText(row.arrRoute);
-  const hasAnyArrival = !isBlank(row.sta) || hasArrFlight || hasArrRoute;
-  const hasCompleteArrival = sta != null && hasArrFlight && hasArrRoute;
-  if (hasAnyArrival && !hasCompleteArrival) {
+  const hasSta = hasText(row.sta);
+  const hasAnyArrival = hasSta || hasArrFlight || hasArrRoute;
+  const hasStructurallyCompleteArrival = hasSta && hasArrFlight && hasArrRoute;
+  if (hasAnyArrival && !hasStructurallyCompleteArrival) {
     issues.push(rowIssue(
       row,
       'incomplete-flight-side',
@@ -248,9 +276,10 @@ export function validateSeasonalSourceRow(row: ParsedRow): SeasonalSourceRowIssu
 
   const hasDepFlight = hasText(row.depFlight);
   const hasDepRoute = hasText(row.depRoute);
-  const hasAnyDeparture = !isBlank(row.std) || hasDepFlight || hasDepRoute;
-  const hasCompleteDeparture = std != null && hasDepFlight && hasDepRoute;
-  if (hasAnyDeparture && !hasCompleteDeparture) {
+  const hasStd = hasText(row.std);
+  const hasAnyDeparture = hasStd || hasDepFlight || hasDepRoute;
+  const hasStructurallyCompleteDeparture = hasStd && hasDepFlight && hasDepRoute;
+  if (hasAnyDeparture && !hasStructurallyCompleteDeparture) {
     issues.push(rowIssue(
       row,
       'incomplete-flight-side',
@@ -259,7 +288,7 @@ export function validateSeasonalSourceRow(row: ParsedRow): SeasonalSourceRowIssu
     ));
   }
 
-  if (!hasCompleteArrival && !hasCompleteDeparture) {
+  if (!hasStructurallyCompleteArrival && !hasStructurallyCompleteDeparture) {
     issues.push(rowIssue(
       row,
       'no-flight-side',

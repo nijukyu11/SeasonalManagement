@@ -1,6 +1,30 @@
 // ─── Domain Types ──────────────────────────────────────────────
 
-/** Raw row parsed from the seasonal schedule Excel file */
+/** Raw seasonal spreadsheet row retained as unknown until validation succeeds. */
+export interface SeasonalSourceRowCandidate {
+  rowIndex: number;
+  effective: unknown;
+  discontinue: unknown;
+  airline: unknown;
+  aircraft: unknown;
+  daysOfWeek: unknown[];
+  sta: unknown;
+  arrFlight: unknown;
+  arrFlightType: unknown;
+  arrRoute: unknown;
+  arrFlightCategory: unknown;
+  arrCodeShares: unknown;
+  arrIntDomInd: unknown;
+  std: unknown;
+  depFlight: unknown;
+  depFlightType: unknown;
+  depRoute: unknown;
+  depFlightCategory: unknown;
+  depCodeShares: unknown;
+  depIntDomInd: unknown;
+}
+
+/** Canonical row parsed from the seasonal schedule Excel file. */
 export interface ParsedRow {
   rowIndex: number;
   effective: string;       // ISO date, e.g., "2026-03-29"

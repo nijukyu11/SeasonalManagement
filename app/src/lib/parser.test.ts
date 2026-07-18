@@ -50,12 +50,16 @@ function sourceRow(overrides: Record<string, unknown> = {}): Record<string, unkn
 function workbookFromRows(
   rows: Record<string, unknown>[],
   headers: readonly string[] = REQUIRED_HEADERS,
+  options: { date1904?: boolean } = {},
 ): XLSX.WorkBook {
   const sheet = XLSX.utils.aoa_to_sheet([
     [...headers],
     ...rows.map((row) => headers.map((header) => row[header] ?? '')),
   ]);
   const workbook = XLSX.utils.book_new();
+  if (options.date1904 !== undefined) {
+    workbook.Workbook = { WBProps: { date1904: options.date1904 } };
+  }
   XLSX.utils.book_append_sheet(workbook, sheet, 'S27');
   return workbook;
 }
@@ -127,6 +131,16 @@ test('parseSeasonalSchedule returns canonical dates, times, booleans, and upperc
   });
 });
 
+test('parseSeasonalSchedule honors the workbook 1904 date system', () => {
+  const result = parseSeasonalSchedule(workbookFromRows([
+    sourceRow({ Effective: 59, Discontinue: 60 }),
+  ], REQUIRED_HEADERS, { date1904: true }));
+
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.rows[0]?.effective, '1904-02-29');
+  assert.equal(result.rows[0]?.discontinue, '1904-03-01');
+});
+
 test('parseSeasonalSchedule accepts a real Excel boolean TRUE for DOW', () => {
   const workbook = workbookFromRows([sourceRow()]);
 
@@ -189,6 +203,29 @@ test('parseSeasonalSchedule reports invalid times and invalid DOW values', () =>
   assert.ok(result.issues.some((issue) => issue.code === 'invalid-time' && issue.column === 'STA'));
   assert.ok(result.issues.some((issue) => issue.code === 'invalid-time' && issue.column === 'STD'));
   assert.ok(result.issues.some((issue) => issue.code === 'invalid-day-value' && issue.column === 'Mon'));
+});
+
+test('parseSeasonalSchedule does not report structural side issues for present invalid times', () => {
+  const result = parseSeasonalSchedule(workbookFromRows([
+    sourceRow({ STA: '24:00' }),
+    sourceRow({
+      STA: '',
+      ARRFlight: '',
+      ARRRoute: '',
+      STD: '12:60',
+      DEPFlight: '456',
+      DEPRoute: 'sgn',
+    }),
+  ]));
+
+  assert.equal(result.rows.length, 0);
+  assert.deepEqual(
+    result.issues.map(({ code, rowIndex, column }) => ({ code, rowIndex, column })),
+    [
+      { code: 'invalid-time', rowIndex: 1, column: 'STA' },
+      { code: 'invalid-time', rowIndex: 2, column: 'STD' },
+    ],
+  );
 });
 
 test('parseSeasonalSchedule reports missing airline and aircraft on non-empty rows', () => {

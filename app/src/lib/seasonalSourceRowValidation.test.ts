@@ -45,6 +45,13 @@ test('normalizeSeasonalDate accepts Excel serial dates and rejects rollover date
   assert.equal(normalizeSeasonalDate('2027-04-31'), null);
 });
 
+test('normalizeSeasonalDate honors the Excel 1904 date system', () => {
+  assert.equal(normalizeSeasonalDate(0, true), null);
+  assert.equal(normalizeSeasonalDate(0.5, true), null);
+  assert.equal(normalizeSeasonalDate(59, true), '1904-02-29');
+  assert.equal(normalizeSeasonalDate(60, true), '1904-03-01');
+});
+
 test('normalizeSeasonalTime accepts strict clock values and valid Excel fractions', () => {
   assert.equal(normalizeSeasonalTime('00:00'), '00:00');
   assert.equal(normalizeSeasonalTime('07:05'), '07:05');

@@ -5,6 +5,7 @@ import type {
   FlightLeg,
   ParseResult,
   DisplayRow,
+  SeasonalSourceRowCandidate,
   SeasonalSourceRowIssue,
 } from './types';
 import { normalizeSeasonSheetName } from './importSeasonRules.ts';
@@ -110,6 +111,7 @@ export function parseSeasonalSchedule(workbook: XLSX.WorkBook): ParseResult {
   const sheetName = workbook.SheetNames[0];
   const seasonCode = normalizeSeasonSheetName(sheetName);
   const sheet = workbook.Sheets[sheetName];
+  const date1904 = workbook.Workbook?.WBProps?.date1904 === true;
 
   const headerRows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
     header: 1,
@@ -146,12 +148,12 @@ export function parseSeasonalSchedule(workbook: XLSX.WorkBook): ParseResult {
     if (!sourceRowHasContent(r)) continue;
 
     // Preserve raw date, time, and day values until validation can diagnose them.
-    const candidate: ParsedRow = {
+    const candidate: SeasonalSourceRowCandidate = {
       rowIndex: i + 1, // 1-indexed (header is row 0)
-      effective: r['Effective'] as string,
-      discontinue: r['Discontinue'] as string,
-      airline: normalizeRequiredUpperText(r['Airline']),
-      aircraft: normalizeRequiredUpperText(r['Aircraft']),
+      effective: r['Effective'],
+      discontinue: r['Discontinue'],
+      airline: r['Airline'],
+      aircraft: r['Aircraft'],
       daysOfWeek: [
         r['Mon'],
         r['Tue'],
@@ -160,34 +162,52 @@ export function parseSeasonalSchedule(workbook: XLSX.WorkBook): ParseResult {
         r['Fri'],
         r['Sat'],
         r['Sun'],
-      ] as boolean[],
-      sta: r['STA'] as string | null,
-      arrFlight: upperOrNull(r['ARRFlight']),
-      arrFlightType: upperOrNull(r['ARRFlightType']),
-      arrRoute: upperOrNull(r['ARRRoute']),
-      arrFlightCategory: upperOrNull(r['ARRFlightCategory']),
-      arrCodeShares: upperOrNull(r['ARRCodeShares']),
-      arrIntDomInd: upperOrNull(r['ARRIntDomInd']),
-      std: r['STD'] as string | null,
-      depFlight: upperOrNull(r['DEPFlight']),
-      depFlightType: upperOrNull(r['DEPFlightType']),
-      depRoute: upperOrNull(r['DEPRoute']),
-      depFlightCategory: upperOrNull(r['DEPFlightCategory']),
-      depCodeShares: upperOrNull(r['DEPCodeShares']),
-      depIntDomInd: upperOrNull(r['DEPIntDomInd']),
+      ],
+      sta: r['STA'],
+      arrFlight: r['ARRFlight'],
+      arrFlightType: r['ARRFlightType'],
+      arrRoute: r['ARRRoute'],
+      arrFlightCategory: r['ARRFlightCategory'],
+      arrCodeShares: r['ARRCodeShares'],
+      arrIntDomInd: r['ARRIntDomInd'],
+      std: r['STD'],
+      depFlight: r['DEPFlight'],
+      depFlightType: r['DEPFlightType'],
+      depRoute: r['DEPRoute'],
+      depFlightCategory: r['DEPFlightCategory'],
+      depCodeShares: r['DEPCodeShares'],
+      depIntDomInd: r['DEPIntDomInd'],
     };
 
-    const rowIssues = validateSeasonalSourceRow(candidate);
+    const rowIssues = validateSeasonalSourceRow(candidate, date1904);
     issues.push(...rowIssues);
     if (rowIssues.length > 0) continue;
 
+    const effective = normalizeSeasonalDate(candidate.effective, date1904);
+    const discontinue = normalizeSeasonalDate(candidate.discontinue, date1904);
+    if (!effective || !discontinue) continue;
+
     const row: ParsedRow = {
-      ...candidate,
-      effective: normalizeSeasonalDate(candidate.effective)!,
-      discontinue: normalizeSeasonalDate(candidate.discontinue)!,
+      rowIndex: candidate.rowIndex,
+      effective,
+      discontinue,
+      airline: normalizeRequiredUpperText(candidate.airline),
+      aircraft: normalizeRequiredUpperText(candidate.aircraft),
       daysOfWeek: candidate.daysOfWeek.map((day) => normalizeSeasonalDay(day).value),
       sta: normalizeSeasonalTime(candidate.sta),
+      arrFlight: upperOrNull(candidate.arrFlight),
+      arrFlightType: upperOrNull(candidate.arrFlightType),
+      arrRoute: upperOrNull(candidate.arrRoute),
+      arrFlightCategory: upperOrNull(candidate.arrFlightCategory),
+      arrCodeShares: upperOrNull(candidate.arrCodeShares),
+      arrIntDomInd: upperOrNull(candidate.arrIntDomInd),
       std: normalizeSeasonalTime(candidate.std),
+      depFlight: upperOrNull(candidate.depFlight),
+      depFlightType: upperOrNull(candidate.depFlightType),
+      depRoute: upperOrNull(candidate.depRoute),
+      depFlightCategory: upperOrNull(candidate.depFlightCategory),
+      depCodeShares: upperOrNull(candidate.depCodeShares),
+      depIntDomInd: upperOrNull(candidate.depIntDomInd),
     };
     rows.push(row);
   }
