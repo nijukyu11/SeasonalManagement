@@ -3259,6 +3259,7 @@ declare
   v_generated_record_count integer := 0;
   v_source_row_count integer := 0;
   v_flight_record_count integer := 0;
+  v_active_record_count integer := 0;
   v_preserved_operational_count integer := 0;
   v_removed_imported_count integer := 0;
   v_effective_start text;
@@ -3466,6 +3467,7 @@ begin
   drop table if exists pg_temp.seasonal_import_commit_existing_v2;
   drop table if exists pg_temp.seasonal_import_commit_matches_v2;
   drop table if exists pg_temp.seasonal_import_commit_old_records_v2;
+  drop table if exists pg_temp.seasonal_import_commit_affected_ids_v2;
 
   create temporary table seasonal_import_commit_records_v2
   on commit drop
@@ -3596,7 +3598,7 @@ begin
       scheduled_date,
       airline,
       flight_number,
-      type
+      status
     );
 
   select generated.occurrence_key
@@ -3606,10 +3608,9 @@ begin
     on existing.scheduled_date = generated.scheduled_date
     and existing.airline = generated.airline
     and existing.flight_number = generated.flight_number
-    and existing.type = generated.type
+    and existing.status = 'active'
   group by generated.generated_record_id, generated.occurrence_key
   having pg_catalog.count(*) > 1
-    or pg_catalog.count(*) filter (where existing.status = 'active') > 1
   order by generated.occurrence_key
   limit 1;
 
@@ -3630,7 +3631,7 @@ begin
     on existing.scheduled_date = generated.scheduled_date
     and existing.airline = generated.airline
     and existing.flight_number = generated.flight_number
-    and existing.type = generated.type
+    and existing.status = 'active'
   group by generated.generated_record_id;
 
   update pg_temp.seasonal_import_commit_records_v2 generated
@@ -3680,6 +3681,18 @@ begin
   create unique index seasonal_import_commit_old_record_id_v2
     on pg_temp.seasonal_import_commit_old_records_v2 (record_id);
 
+  create temporary table seasonal_import_commit_affected_ids_v2
+  on commit drop
+  as
+  select old_records.record_id
+  from pg_temp.seasonal_import_commit_old_records_v2 old_records
+  union
+  select generated.final_record_id
+  from pg_temp.seasonal_import_commit_records_v2 generated;
+
+  create unique index seasonal_import_commit_affected_id_v2
+    on pg_temp.seasonal_import_commit_affected_ids_v2 (record_id);
+
   select pg_catalog.count(*)::integer
   into v_preserved_operational_count
   from pg_temp.seasonal_import_commit_records_v2 generated
@@ -3726,24 +3739,22 @@ begin
     and modifications.action = 'modified'
     and exists (
       select 1
-      from pg_temp.seasonal_import_commit_records_v2 generated
-      where generated.final_record_id = modifications.leg_id
-        and generated.matched_record_id is not null
+      from pg_temp.seasonal_import_commit_affected_ids_v2 affected
+      where affected.record_id = modifications.leg_id
     );
 
   delete from public.season_modifications modifications
   where modifications.season_id = v_target_season_id
     and exists (
       select 1
-      from pg_temp.seasonal_import_commit_old_records_v2 old_records
-      where old_records.record_id = modifications.leg_id
+      from pg_temp.seasonal_import_commit_affected_ids_v2 affected
+      where affected.record_id = modifications.leg_id
     )
     and (
       not exists (
         select 1
         from pg_temp.seasonal_import_commit_records_v2 generated
         where generated.final_record_id = modifications.leg_id
-          and generated.matched_record_id is not null
       )
       or modifications.action <> 'modified'
       or pg_catalog.cardinality(modifications.changed_fields) = 0
@@ -3755,8 +3766,8 @@ begin
     and modifications.season_id = v_target_season_id
     and exists (
       select 1
-      from pg_temp.seasonal_import_commit_old_records_v2 old_records
-      where old_records.record_id = modifications.leg_id
+      from pg_temp.seasonal_import_commit_affected_ids_v2 affected
+      where affected.record_id = modifications.leg_id
     )
     and not ('counter' = any(modifications.changed_fields));
 
@@ -3766,8 +3777,8 @@ begin
     and modifications.season_id = v_target_season_id
     and exists (
       select 1
-      from pg_temp.seasonal_import_commit_old_records_v2 old_records
-      where old_records.record_id = modifications.leg_id
+      from pg_temp.seasonal_import_commit_affected_ids_v2 affected
+      where affected.record_id = modifications.leg_id
     )
     and not ('checkInCounterWindows' = any(modifications.changed_fields));
 
@@ -3775,8 +3786,8 @@ begin
   where added_legs.season_id = v_target_season_id
     and exists (
       select 1
-      from pg_temp.seasonal_import_commit_old_records_v2 old_records
-      where old_records.record_id = added_legs.leg_id
+      from pg_temp.seasonal_import_commit_affected_ids_v2 affected
+      where affected.record_id = added_legs.leg_id
     );
 
   delete from public.season_flight_records records
@@ -3787,10 +3798,18 @@ begin
       from pg_temp.seasonal_import_commit_old_records_v2 old_records
       where old_records.record_id = records.record_id
     )
-    and not exists (
-      select 1
-      from pg_temp.seasonal_import_commit_records_v2 generated
-      where generated.final_record_id = records.record_id
+    and (
+      not exists (
+        select 1
+        from pg_temp.seasonal_import_commit_records_v2 generated
+        where generated.final_record_id = records.record_id
+      )
+      or exists (
+        select 1
+        from pg_temp.seasonal_import_commit_records_v2 generated
+        where generated.final_record_id = records.record_id
+          and generated.matched_record_id is null
+      )
     );
 
   insert into public.season_flight_records (
@@ -3888,6 +3907,7 @@ begin
     on existing.record_id = generated.final_record_id
     and existing.season_id = v_target_season_id
     and existing.source_kind = 'imported'
+    and generated.matched_record_id is not null
   left join pg_temp.seasonal_import_commit_records_v2 counterpart
     on counterpart.generated_record_id = generated.linked_record_id
   on conflict (record_id) do update set
@@ -4009,11 +4029,8 @@ begin
   where batch_rows.batch_id = p_batch_id
     and (days.day_value #>> '{}')::boolean;
 
-  select
-    pg_catalog.count(*)::integer,
-    pg_catalog.min(source_rows.effective),
-    pg_catalog.max(source_rows.discontinue)
-  into v_source_row_count, v_effective_start, v_effective_end
+  select pg_catalog.count(*)::integer
+  into v_source_row_count
   from public.season_source_rows source_rows
   where source_rows.season_id = v_target_season_id;
 
@@ -4022,6 +4039,16 @@ begin
   from public.season_flight_records records
   where records.season_id = v_target_season_id
     and records.source_kind = 'imported';
+
+  select
+    pg_catalog.count(*)::integer,
+    pg_catalog.min(coalesce(nullif(records.scheduled_date, ''), nullif(records.date, ''))),
+    pg_catalog.max(coalesce(nullif(records.scheduled_date, ''), nullif(records.date, '')))
+  into v_active_record_count, v_effective_start, v_effective_end
+  from public.season_flight_records records
+  where records.season_id = v_target_season_id
+    and records.status = 'active'
+    and records.action is distinct from 'deleted';
 
   if v_source_row_count <> v_batch.source_row_count then
     raise exception 'Read-back source row count mismatch for batch %: staged %, committed %',
@@ -4054,7 +4081,7 @@ begin
     uploaded_at = v_now_ms,
     effective_start = coalesce(v_effective_start, ''),
     effective_end = coalesce(v_effective_end, ''),
-    total_legs = v_flight_record_count,
+    total_legs = v_active_record_count,
     total_source_rows = v_source_row_count,
     data_version = v_next_data_version,
     last_synced_at = v_now_ms

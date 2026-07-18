@@ -3130,6 +3130,15 @@ begin
     '10:00', '2026-10-29', 'W26', 'SER_MANUAL', 4,
     0, null, null, null,
     null, 'added', 'ARR', 'active', null
+  ),
+  (
+    'task5-rebase-season', 'inactive-added-outlier-id', 'inactive-added-outlier-id',
+    'A', 'VN', 'VN778', '778',
+    null, 'INACTIVE', '10:00', '321', 'J', null, 'I',
+    99, 22, 23, null, null, null, null, null, null, '2026-01-01', '2026-01-01',
+    '10:00', '2026-01-01', 'W25', 'SER_INACTIVE', 3,
+    0, null, null, null,
+    null, 'added', 'ARR', 'deleted', null
   );
 
   insert into public.season_flight_record_counters
@@ -3311,8 +3320,8 @@ begin
     where seasons.id = 'task5-rebase-season'
       and seasons.file_name = 'X52-task5.xlsx'
       and seasons.effective_start = '2026-10-25'
-      and seasons.effective_end = '2026-10-28'
-      and seasons.total_legs = 4
+      and seasons.effective_end = '2026-10-29'
+      and seasons.total_legs = 5
       and seasons.total_source_rows = 3
       and seasons.data_version = 8
       and seasons.last_synced_at is not null
@@ -3361,6 +3370,303 @@ begin
     or (select count(*) from public.season_change_events where season_id = 'task5-rebase-season') <> v_event_count
   then
     raise exception 'recommit duplicated version or event writes';
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_stage jsonb;
+  v_batch_id uuid;
+  v_result jsonb;
+begin
+  insert into public.seasons (
+    id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+    total_legs, total_source_rows, data_version
+  ) values (
+    'task5-active-match-season', 'X58', 'Task 5 active legacy match', '', 0,
+    '2026-11-05', '2026-11-05', 1, 0, 1
+  );
+
+  insert into public.season_flight_records (
+    season_id, record_id, link_id, type, airline, flight_number, raw_flight_number,
+    route, schedule, aircraft, category, gate, date, scheduled_date, scheduled_time,
+    operational_date, day_of_week, source_kind, source_side, status
+  ) values (
+    'task5-active-match-season', 'task5-active-legacy-id', 'task5-active-legacy-id',
+    'D', 'VN', 'VN700', '700', 'OLD-ACTIVE', '09:00', '320', 'OLD', 44,
+    '2026-11-05', '2026-11-05', '09:00', '2026-11-05', 4,
+    'imported', 'DEP', 'active'
+  ), (
+    'task5-active-match-season', 'task5-inactive-history-id', 'task5-inactive-history-id',
+    'A', 'VN', 'VN700', '700', 'OLD-INACTIVE', '08:00', '320', 'OLD', 99,
+    '2026-11-05', '2026-11-05', '08:00', '2026-11-05', 4,
+    'imported', 'ARR', 'deleted'
+  ), (
+    'task5-active-match-season',
+    public.seasonal_record_id_v2(
+      'task5-active-match-season', 'A', date '2026-11-05', 'VN', 'VN701'
+    ),
+    'task5-inactive-deterministic-id',
+    'A', 'VN', 'VN701', '701', 'OLD-DETERMINISTIC', '08:00', '320', 'OLD', 98,
+    '2026-11-05', '2026-11-05', '08:00', '2026-11-05', 4,
+    'imported', 'ARR', 'deleted'
+  );
+
+  insert into public.season_flight_record_counters (
+    record_id, counter_group, item_index, counter_value
+  ) values (
+    public.seasonal_record_id_v2(
+      'task5-active-match-season', 'A', date '2026-11-05', 'VN', 'VN701'
+    ),
+    'A', 0, '98'
+  );
+
+  v_stage := pg_temp.task5_stage(
+    '0f3e3a7c-bfaa-4f3b-b5bf-193225c6f066',
+    'task5-active-match-season',
+    'X58',
+    1,
+    'task5-active-match',
+    jsonb_build_array(
+      pg_temp.task5_source_row(1, '2026-11-05', 'VN700', null),
+      pg_temp.task5_source_row(2, '2026-11-05', 'VN701', null)
+    )
+  );
+  v_batch_id := (v_stage->>'batchId')::uuid;
+  v_result := public.commit_seasonal_import_v2(v_batch_id, 1);
+
+  if (v_result->>'preservedOperationalCount')::integer <> 1
+    or not exists (
+      select 1
+      from public.season_flight_records records
+      where records.record_id = 'task5-active-legacy-id'
+        and records.season_id = 'task5-active-match-season'
+        and records.type = 'A'
+        and records.status = 'active'
+        and records.gate = 44
+        and records.route = 'KIX'
+    )
+    or exists (
+      select 1
+      from public.season_flight_records records
+      where records.record_id = 'task5-inactive-history-id'
+    )
+    or not exists (
+      select 1
+      from public.season_flight_records records
+      where records.record_id = public.seasonal_record_id_v2(
+          'task5-active-match-season', 'A', date '2026-11-05', 'VN', 'VN701'
+        )
+        and records.status = 'active'
+        and records.gate is null
+        and records.route = 'KIX'
+    )
+    or exists (
+      select 1
+      from public.season_flight_record_counters counters
+      where counters.record_id = public.seasonal_record_id_v2(
+        'task5-active-match-season', 'A', date '2026-11-05', 'VN', 'VN701'
+      )
+    )
+  then
+    raise exception 'active legacy record was not selected without type or inactive history state was reused';
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_stage jsonb;
+  v_batch_id uuid;
+  v_before jsonb;
+  v_after jsonb;
+begin
+  insert into public.seasons (
+    id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+    total_legs, total_source_rows, data_version
+  ) values (
+    'task5-active-ambiguity-season', 'X59', 'Task 5 active ambiguity', '', 0,
+    '2026-11-06', '2026-11-06', 2, 0, 1
+  );
+
+  insert into public.season_flight_records (
+    season_id, record_id, link_id, type, airline, flight_number, raw_flight_number,
+    route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+    operational_date, day_of_week, source_kind, source_side, status
+  ) values (
+    'task5-active-ambiguity-season', 'task5-ambiguous-arr-id', 'task5-ambiguous-arr-id',
+    'A', 'VN', 'VN710', '710', 'OLD-ARR', '08:00', '320', 'OLD',
+    '2026-11-06', '2026-11-06', '08:00', '2026-11-06', 5,
+    'imported', 'ARR', 'active'
+  ), (
+    'task5-active-ambiguity-season', 'task5-ambiguous-dep-id', 'task5-ambiguous-dep-id',
+    'D', 'VN', 'VN710', '710', 'OLD-DEP', '09:00', '320', 'OLD',
+    '2026-11-06', '2026-11-06', '09:00', '2026-11-06', 5,
+    'imported', 'DEP', 'active'
+  );
+
+  v_stage := pg_temp.task5_stage(
+    '722658a7-f8f0-4a50-a079-dd8ae06b1d0a',
+    'task5-active-ambiguity-season',
+    'X59',
+    1,
+    'task5-active-ambiguity',
+    jsonb_build_array(pg_temp.task5_source_row(1, '2026-11-06', 'VN710', null))
+  );
+  v_batch_id := (v_stage->>'batchId')::uuid;
+  v_before := pg_temp.task5_snapshot('task5-active-ambiguity-season', v_batch_id);
+
+  begin
+    perform public.commit_seasonal_import_v2(v_batch_id, 1);
+    raise exception 'two active legacy records with the same key were not rejected';
+  exception
+    when cardinality_violation then
+      if position('ambiguous existing imported occurrence' in lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  v_after := pg_temp.task5_snapshot('task5-active-ambiguity-season', v_batch_id);
+  if v_after is distinct from v_before then
+    raise exception 'active legacy ambiguity did not roll back the whole commit';
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_stage jsonb;
+  v_batch_id uuid;
+  v_deleted_id text;
+  v_mixed_id text;
+  v_source_only_id text;
+begin
+  insert into public.seasons (
+    id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+    total_legs, total_source_rows, data_version
+  ) values (
+    'task5-final-id-cleanup-season', 'X60', 'Task 5 final ID cleanup', '', 0,
+    '', '', 0, 0, 1
+  );
+
+  v_stage := pg_temp.task5_stage(
+    '61243467-c8e6-40d3-a898-0141697cad31',
+    'task5-final-id-cleanup-season',
+    'X60',
+    1,
+    'task5-final-id-cleanup',
+    jsonb_build_array(
+      pg_temp.task5_source_row(1, '2026-11-12', 'VN720', 'VN721'),
+      pg_temp.task5_source_row(2, '2026-11-13', 'VN722', null)
+    )
+  );
+  v_batch_id := (v_stage->>'batchId')::uuid;
+
+  select generated.record_id into strict v_deleted_id
+  from public.generate_seasonal_import_records_v2(v_batch_id) generated
+  where generated.source_row_index = 1 and generated.type = 'A';
+  select generated.record_id into strict v_mixed_id
+  from public.generate_seasonal_import_records_v2(v_batch_id) generated
+  where generated.source_row_index = 1 and generated.type = 'D';
+  select generated.record_id into strict v_source_only_id
+  from public.generate_seasonal_import_records_v2(v_batch_id) generated
+  where generated.source_row_index = 2 and generated.type = 'A';
+
+  insert into public.season_modifications (
+    season_id, leg_id, action, changed_fields, schedule, route, gate
+  ) values (
+    'task5-final-id-cleanup-season', v_deleted_id, 'deleted',
+    array['schedule'], '00:01', null, null
+  ), (
+    'task5-final-id-cleanup-season', v_mixed_id, 'modified',
+    array['schedule', 'route', 'gate', 'counter', 'checkInCounterWindows'],
+    '00:02', 'STALE-ROUTE', 42
+  ), (
+    'task5-final-id-cleanup-season', v_source_only_id, 'modified',
+    array['schedule', 'route'], '00:03', 'SOURCE-ONLY', null
+  );
+
+  insert into public.season_modification_counters
+    (leg_id, counter_group, item_index, counter_value)
+  values
+    (v_deleted_id, 'A', 0, '10'),
+    (v_mixed_id, 'A', 0, '20'),
+    (v_source_only_id, 'A', 0, '30');
+  insert into public.season_modification_checkin_windows
+    (leg_id, counter_key, window_start, window_end)
+  values
+    (v_deleted_id, '10', '01:00', '02:00'),
+    (v_mixed_id, '20', '03:00', '04:00');
+  insert into public.season_modification_added_legs (
+    season_id, leg_id, record_id, type, airline, flight_number, raw_flight_number,
+    date, scheduled_date, source_kind, source_side, status
+  ) values (
+    'task5-final-id-cleanup-season', v_mixed_id, 'stale-added-shadow',
+    'D', 'VN', 'VN721', '721', '2026-11-12', '2026-11-12',
+    'added', 'DEP', 'active'
+  );
+
+  perform public.commit_seasonal_import_v2(v_batch_id, 1);
+
+  if not exists (
+    select 1
+    from public.season_flight_records records
+    where records.record_id = v_deleted_id
+      and records.status = 'active'
+      and records.action is null
+      and records.route = 'KIX'
+      and records.schedule = '08:00'
+  ) or exists (
+    select 1 from public.season_modifications modifications
+    where modifications.leg_id = v_deleted_id
+  ) then
+    raise exception 'stale deleted modification hid or altered a newly generated imported record';
+  end if;
+
+  if not exists (
+    select 1
+    from public.season_flight_records records
+    where records.record_id = v_mixed_id
+      and records.status = 'active'
+      and records.action is null
+      and records.route = 'ICN'
+      and records.schedule = '09:00'
+  ) or not exists (
+    select 1
+    from public.season_modifications modifications
+    where modifications.leg_id = v_mixed_id
+      and modifications.action = 'modified'
+      and modifications.changed_fields = array[
+        'gate', 'counter', 'checkInCounterWindows'
+      ]::text[]
+      and modifications.schedule is null
+      and modifications.route is null
+      and modifications.gate = 42
+  ) then
+    raise exception 'mixed modification on a newly generated imported ID was not rebased';
+  end if;
+
+  if exists (
+    select 1 from public.season_modifications modifications
+    where modifications.leg_id = v_source_only_id
+  ) or exists (
+    select 1 from public.season_modification_counters counters
+    where counters.leg_id in (v_deleted_id, v_source_only_id)
+  ) or exists (
+    select 1 from public.season_modification_checkin_windows windows
+    where windows.leg_id = v_deleted_id
+  ) or exists (
+    select 1 from public.season_modification_added_legs added_legs
+    where added_legs.leg_id = v_mixed_id
+  ) then
+    raise exception 'source-only modifications or dangling final-ID children survived cleanup';
+  end if;
+
+  if (select count(*) from public.season_modification_counters where leg_id = v_mixed_id) <> 1
+    or (select count(*) from public.season_modification_checkin_windows where leg_id = v_mixed_id) <> 1
+  then
+    raise exception 'valid operational children on a newly generated ID were not preserved';
   end if;
 end
 $$;
