@@ -30,7 +30,15 @@ import {
 } from '@/lib/importProgress';
 import { buildSeasonDisplayLabel, buildSeasonNameFromFileName, getDirtyImportGuard } from '@/lib/importSeasonRules';
 import { buildSeasonalImportPatch, type SeasonalImportPatchStats } from '@/lib/seasonalImportPatch';
-import { getSeasonalFileActionBlock, reconcileSeasonalSelection } from '@/lib/seasonalFileActionGuard';
+import {
+  buildSeasonalAvailableRecordIds,
+  createSeasonalFileActionController,
+  getSeasonalFileActionBlock,
+  reconcileSeasonalSelection,
+  type SeasonalFileActionInvalidation,
+  type SeasonalFileActionOperation,
+  type SeasonalMutationOperation,
+} from '@/lib/seasonalFileActionGuard';
 import {
   getCachedSeasons,
   publishSeasonWorkspaceChanged,
@@ -76,7 +84,6 @@ import {
   getSeasonSyncPendingCount,
   getSeasonSyncTone,
   useSeasonSync,
-  useSeasonSyncActions,
   useSeasonSyncGuard,
 } from './components/SeasonSyncProvider';
 import { useSeasonWorkspaceRefresh } from './hooks/useSeasonWorkspaceRefresh';
@@ -113,6 +120,10 @@ interface SeasonalScheduleDraftState {
   baseModifications: Map<string, FlightModification>;
   records: FlightRecord[];
   modifications: FlightModification[];
+}
+
+function countSeasonalDraftChanges(draft: SeasonalScheduleDraftState | null): number {
+  return (draft?.records.length ?? 0) + (draft?.modifications.length ?? 0);
 }
 
 function getLoadErrorMessage(error: unknown): string {
@@ -215,6 +226,13 @@ export default function HomePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const loadedWindowKeyRef = useRef<string | null>(null);
   const fetchServerDataRequestRef = useRef(0);
+  const fileActionControllerRef = useRef(createSeasonalFileActionController());
+  const latestActiveSeasonRef = useRef<Season | null>(null);
+  const latestDraftStateRef = useRef<{
+    value: SeasonalScheduleDraftState | null;
+    revision: number;
+    hasDraftChanges: boolean;
+  }>({ value: null, revision: 0, hasDraftChanges: false });
   const latestRouteWindowRef = useRef<{ seasonId: string | null; windowKey: string }>({
     seasonId: null,
     windowKey: '',
@@ -224,13 +242,13 @@ export default function HomePage() {
 
   // Data
   const [seasons, setSeasons] = useState<Season[]>([]);
-  const [activeSeason, setActiveSeason] = useState<Season | null>(null);
+  const [activeSeason, setActiveSeasonState] = useState<Season | null>(null);
   const [displayRows, setDisplayRows] = useState<DisplayRow[]>([]);
   const [flightRecords, setFlightRecords] = useState<FlightRecord[]>([]);
   const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
   const [modifications, setModifications] = useState<Map<string, FlightModification>>(new Map());
   const [modHistory, setModHistory] = useState<ModHistoryEntry[]>([]);
-  const [draftState, setDraftState] = useState<SeasonalScheduleDraftState | null>(null);
+  const [draftState, setDraftStateValue] = useState<SeasonalScheduleDraftState | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
@@ -248,8 +266,24 @@ export default function HomePage() {
   });
   const [isUndoOpen, setIsUndoOpen] = useState(false);
   const [isUndoing, setIsUndoing] = useState(false);
+  const [activeFileActionToken, setActiveFileActionToken] = useState<number | null>(null);
+  const [activeMutationToken, setActiveMutationToken] = useState<number | null>(null);
+  const setActiveSeason = useCallback((nextSeason: Season | null) => {
+    latestActiveSeasonRef.current = nextSeason;
+    setActiveSeasonState(nextSeason);
+  }, []);
+  const setDraftState = useCallback((nextDraft: SeasonalScheduleDraftState | null) => {
+    const latest = latestDraftStateRef.current;
+    if (latest.value !== nextDraft) {
+      latestDraftStateRef.current = {
+        value: nextDraft,
+        revision: latest.revision + 1,
+        hasDraftChanges: countSeasonalDraftChanges(nextDraft) > 0,
+      };
+    }
+    setDraftStateValue(nextDraft);
+  }, []);
   const { status: syncStatus, syncNow } = useSeasonSync(activeSeason?.id, 'seasonal');
-  const { syncNow: syncAnySeasonNow } = useSeasonSyncActions();
   const [fetchingServerData, setFetchingServerData] = useState(false);
   const syncInProgress = syncStatus.status === 'syncing';
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' ? syncStatus.message : null);
@@ -257,9 +291,63 @@ export default function HomePage() {
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncSummary.pendingCount);
   const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount);
   const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
-  const draftChangeCount = ((draftState?.records.length ?? 0) + (draftState?.modifications.length ?? 0));
+  const draftChangeCount = countSeasonalDraftChanges(draftState);
   const hasDraftChanges = draftChangeCount > 0;
-  const seasonalFileActionBusy = loading || uploading || isExporting || syncInProgress || fetchingServerData;
+  const seasonalFileActionActive = activeFileActionToken !== null;
+  const seasonalMutationActive = activeMutationToken !== null;
+  const seasonalFileActionBusy = loading
+    || uploading
+    || isExporting
+    || syncInProgress
+    || fetchingServerData
+    || seasonalFileActionActive
+    || seasonalMutationActive
+    || isNewFlightOpen
+    || linkModalGroupKey !== null;
+
+  const beginSeasonalFileAction = useCallback((action: SeasonalFileActionOperation['action']) => {
+    const operation = fileActionControllerRef.current.beginFileAction(action, {
+      seasonId: latestActiveSeasonRef.current?.id ?? null,
+      draftRevision: latestDraftStateRef.current.revision,
+    });
+    if (operation) setActiveFileActionToken(operation.token);
+    return operation;
+  }, []);
+  const validateSeasonalFileAction = useCallback((operation: SeasonalFileActionOperation) => (
+    fileActionControllerRef.current.validateFileAction(operation, {
+      seasonId: latestActiveSeasonRef.current?.id ?? null,
+      draftRevision: latestDraftStateRef.current.revision,
+      hasDraftChanges: latestDraftStateRef.current.hasDraftChanges,
+    })
+  ), []);
+  const finishSeasonalFileAction = useCallback((operation: SeasonalFileActionOperation) => {
+    fileActionControllerRef.current.finishFileAction(operation);
+    setActiveFileActionToken((current) => current === operation.token ? null : current);
+  }, []);
+  const beginSeasonalMutation = useCallback(() => {
+    const operation = fileActionControllerRef.current.beginMutation();
+    if (operation) setActiveMutationToken(operation.token);
+    return operation;
+  }, []);
+  const finishSeasonalMutation = useCallback((operation: SeasonalMutationOperation) => {
+    fileActionControllerRef.current.finishMutation(operation);
+    setActiveMutationToken((current) => current === operation.token ? null : current);
+  }, []);
+  const isSeasonalFileActionBusyNow = useCallback(() => (
+    seasonalFileActionBusy
+    || fileActionControllerRef.current.isFileActionActive()
+    || fileActionControllerRef.current.isMutationActive()
+  ), [seasonalFileActionBusy]);
+  const showSeasonalFileActionInvalidation = useCallback((
+    action: SeasonalFileActionOperation['action'],
+    invalidation: SeasonalFileActionInvalidation,
+  ) => {
+    void showAlert({
+      title: action === 'import' ? 'Import Interrupted' : 'Cannot Export',
+      message: `${invalidation.message} Review the current season and try again.`,
+      tone: 'warning',
+    });
+  }, [showAlert]);
 
   // Pagination
   const [page, setPage] = useState(0);
@@ -319,7 +407,7 @@ export default function HomePage() {
     setSelectedRecordIds((previous) => {
       const { unknownIds } = reconcileSeasonalSelection(
         Array.from(previous),
-        new Set(records.map((record) => record.id)),
+        buildSeasonalAvailableRecordIds(records, mods),
       );
       return unknownIds.length === 0 ? previous : new Set();
     });
@@ -419,10 +507,11 @@ export default function HomePage() {
       return;
     }
     throw new Error('Server seasonal schedule window is unavailable.');
-  }, [applySeasonData, debouncedFilters.dateFrom, debouncedFilters.dateTo, debouncedFilters.flight, debouncedFilters.route]);
+  }, [applySeasonData, debouncedFilters.dateFrom, debouncedFilters.dateTo, debouncedFilters.flight, debouncedFilters.route, setActiveSeason, setDraftState]);
 
   const refreshSeasonalWindow = useCallback(() => {
     if (!activeSeason) return null;
+    if (fileActionControllerRef.current.isFileActionActive()) return null;
     if (hasDraftChanges) return null;
     const snapshot = readWorkspaceWindowSnapshot(
       useSeasonWorkspaceStore.getState().workspaces[activeSeason.id],
@@ -448,7 +537,7 @@ export default function HomePage() {
       seasonDataVersion: activeSeason.dataVersion,
     });
     return snapshot;
-  }, [activeSeason, applySeasonData, currentSeasonalWindowKey, hasDraftChanges]);
+  }, [activeSeason, applySeasonData, currentSeasonalWindowKey, hasDraftChanges, setActiveSeason, setDraftState]);
 
   useSeasonWorkspaceRefresh({
     seasonId: activeSeason?.id,
@@ -485,9 +574,10 @@ export default function HomePage() {
         setLoading(false);
       }
     })();
-  }, [loadSeasonRows]);
+  }, [loadSeasonRows, setActiveSeason]);
 
   const handleSeasonChange = useCallback(async (seasonId: string) => {
+    if (fileActionControllerRef.current.isFileActionActive()) return;
     const found = seasons.find(s => s.id === seasonId);
     if (!found) return;
     setSelectedRecordIds(new Set());
@@ -505,10 +595,10 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [loadSeasonRows, seasons]);
+  }, [loadSeasonRows, seasons, setActiveSeason]);
 
   const handleRetryLoad = useCallback(async () => {
-    if (!activeSeason) return;
+    if (!activeSeason || fileActionControllerRef.current.isFileActionActive()) return;
     setLoading(true);
     setLoadError(null);
     try {
@@ -729,14 +819,15 @@ export default function HomePage() {
 
   const handleExportUpdated = useCallback(async () => {
     if (!activeSeason) return;
+    const exportSeason = activeSeason;
     const localSelection = reconcileSeasonalSelection(
       Array.from(selectedRecordIds),
-      new Set(flightRecords.map((record) => record.id)),
+      buildSeasonalAvailableRecordIds(flightRecords, modifications),
     );
     const initialBlock = getSeasonalFileActionBlock({
       action: 'export',
-      hasDraftChanges,
-      busy: seasonalFileActionBusy,
+      hasDraftChanges: latestDraftStateRef.current.hasDraftChanges,
+      busy: isSeasonalFileActionBusyNow(),
       selectedCount: localSelection.matchedIds.length,
       staleSelectionCount: localSelection.unknownIds.length,
     });
@@ -753,25 +844,39 @@ export default function HomePage() {
       });
       return;
     }
+    const operation = beginSeasonalFileAction('export');
+    if (!operation) {
+      void showAlert({
+        title: 'Cannot Export',
+        message: 'Another Seasonal operation is still running.',
+        tone: 'warning',
+      });
+      return;
+    }
     try {
       setIsExporting(true);
       const exportWindow = await loadSeasonWorkspaceWindow({
-        seasonId: activeSeason.id,
+        seasonId: exportSeason.id,
         dateFrom: null,
         dateTo: null,
         resourceType: 'schedule',
         limit: FULL_SEASON_EXPORT_LIMIT,
       });
       if (!exportWindow) throw new Error('Server seasonal schedule export window is unavailable.');
+      const snapshotInvalidation = validateSeasonalFileAction(operation);
+      if (snapshotInvalidation) {
+        showSeasonalFileActionInvalidation('export', snapshotInvalidation);
+        return;
+      }
       const exportRecords = exportWindow.records;
       const exportModifications = exportWindow.modifications;
       const serverSelection = reconcileSeasonalSelection(
         localSelection.matchedIds,
-        new Set(exportRecords.map((record) => record.id)),
+        buildSeasonalAvailableRecordIds(exportRecords, exportModifications),
       );
       const snapshotBlock = getSeasonalFileActionBlock({
         action: 'export',
-        hasDraftChanges,
+        hasDraftChanges: latestDraftStateRef.current.hasDraftChanges,
         busy: false,
         selectedCount: serverSelection.matchedIds.length,
         staleSelectionCount: serverSelection.unknownIds.length,
@@ -814,25 +919,37 @@ export default function HomePage() {
         });
         return;
       }
-      const result = await downloadCanonicalSeasonalExcel(canonicalExport.rows, activeSeason.seasonCode);
+      const downloadInvalidation = validateSeasonalFileAction(operation);
+      if (downloadInvalidation) {
+        showSeasonalFileActionInvalidation('export', downloadInvalidation);
+        return;
+      }
+      const result = await downloadCanonicalSeasonalExcel(canonicalExport.rows, exportSeason.seasonCode);
       notifyExportCompleted(result);
     } catch (err) {
       void showAlert({ title: 'Export Failed', message: (err as Error).message, tone: 'error' });
     } finally {
       setIsExporting(false);
+      finishSeasonalFileAction(operation);
     }
   }, [
     activeSeason,
+    beginSeasonalFileAction,
+    finishSeasonalFileAction,
     flightRecords,
-    hasDraftChanges,
+    isSeasonalFileActionBusyNow,
+    modifications,
     notifyExportCompleted,
-    seasonalFileActionBusy,
     selectedRecordIds,
     showAlert,
+    showSeasonalFileActionInvalidation,
+    validateSeasonalFileAction,
   ]);
 
   const handleUndo = useCallback(async (targetEntry: ModHistoryEntry) => {
     if (!activeSeason || syncInProgress) return;
+    const mutation = beginSeasonalMutation();
+    if (!mutation) return;
     setIsUndoing(true);
     try {
       const targetIdx = modHistory.findIndex((entry) => entry.id === targetEntry.id);
@@ -912,35 +1029,38 @@ export default function HomePage() {
         afterModifications: nextMods,
         targetRecordIds: affectedIds,
       }));
-      setSelectedRecordIds((prev) => {
-        const visibleIds = new Set(nextRecords.map((record) => record.id));
-        return new Set(Array.from(prev).filter((id) => visibleIds.has(id)));
-      });
       setIsUndoOpen(false);
     } catch (err) {
       void showAlert({ title: 'Undo Failed', message: (err as Error).message, tone: 'error' });
     } finally {
       setIsUndoing(false);
+      finishSeasonalMutation(mutation);
     }
-  }, [activeSeason, applySeasonData, flightRecords, modHistory, modifications, publishSeasonalWorkspaceChange, showAlert, syncInProgress]);
+  }, [activeSeason, applySeasonData, beginSeasonalMutation, finishSeasonalMutation, flightRecords, modHistory, modifications, publishSeasonalWorkspaceChange, showAlert, syncInProgress]);
 
   const handleDiscardSeasonalDraft = useCallback(() => {
     if (!activeSeason || !draftState) return;
-    setCachedSeasonData(activeSeason.id, {
-      rows: draftState.baseRows,
-      records: draftState.baseRecords,
-      modifications: draftState.baseModifications,
-      seasonDataVersion: activeSeason.dataVersion,
-    });
-    useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
-      seasonId: activeSeason.id,
-      rows: draftState.baseRows,
-      records: draftState.baseRecords,
-      modifications: draftState.baseModifications,
-    });
-    applySeasonData(draftState.baseRows, draftState.baseRecords, draftState.baseModifications);
-    setDraftState(null);
-  }, [activeSeason, applySeasonData, draftState]);
+    const mutation = beginSeasonalMutation();
+    if (!mutation) return;
+    try {
+      setCachedSeasonData(activeSeason.id, {
+        rows: draftState.baseRows,
+        records: draftState.baseRecords,
+        modifications: draftState.baseModifications,
+        seasonDataVersion: activeSeason.dataVersion,
+      });
+      useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
+        seasonId: activeSeason.id,
+        rows: draftState.baseRows,
+        records: draftState.baseRecords,
+        modifications: draftState.baseModifications,
+      });
+      applySeasonData(draftState.baseRows, draftState.baseRecords, draftState.baseModifications);
+      setDraftState(null);
+    } finally {
+      finishSeasonalMutation(mutation);
+    }
+  }, [activeSeason, applySeasonData, beginSeasonalMutation, draftState, finishSeasonalMutation, setDraftState]);
 
   const commitDraftBeforeSave = useCallback(async () => {
     if (!activeSeason || !draftState || syncInProgress) return;
@@ -994,6 +1114,8 @@ export default function HomePage() {
       targetRecordIds,
     });
 
+    const mutation = beginSeasonalMutation();
+    if (!mutation) throw new Error('Another Seasonal operation is still running.');
     try {
       const nativeSyncMeta = await runNativeScheduleMutation(
         activeSeason.id,
@@ -1028,21 +1150,26 @@ export default function HomePage() {
       }));
     } catch (err) {
       throw err;
+    } finally {
+      finishSeasonalMutation(mutation);
     }
   }, [
     activeSeason,
+    beginSeasonalMutation,
     draftState,
+    finishSeasonalMutation,
     flightRecords,
     handleDiscardSeasonalDraft,
     modHistory,
     modifications,
     publishSeasonalWorkspaceChange,
+    setDraftState,
     syncInProgress,
   ]);
 
   useSeasonSyncGuard(activeSeason?.id, 'seasonal', {
-    blocked: uploading,
-    reason: 'Importing seasonal file',
+    blocked: seasonalFileActionActive,
+    reason: uploading ? 'Importing seasonal file' : 'Exporting seasonal file',
     beforeSync: commitDraftBeforeSave,
   });
   useSeasonSyncGuard(activeSeason?.id, 'seasonal-hydration', {
@@ -1059,37 +1186,39 @@ export default function HomePage() {
 
   const handleDeleteGroup = useCallback(async (group: DisplayGroup) => {
     if (!activeSeason || syncInProgress) return;
-    const ids = Array.from(group.recordIds);
-    if (ids.length === 0) return;
-
-    const flightLabel = `${group.airline}${group.arrFlightNumber || group.depFlightNumber}`;
-    const deletionTargets = resolveLinkedDeletionTargets(activeDisplayLegs, ids);
-    let targetIds = deletionTargets.selectedIds;
-    if (deletionTargets.hasActiveCounterpart) {
-      const choice = await showChoice({
-        title: 'Delete Linked Flight Pair',
-        message: `${flightLabel} is linked to ${deletionTargets.counterpartIds.length} active counterpart occurrence(s).\n\nChoose whether to delete the full turnaround pair or only the selected leg.`,
-        tone: 'warning',
-        choices: [
-          { value: 'pair', label: `Delete Entire Flight Pair (${deletionTargets.pairIds.length})`, tone: 'warning' },
-          { value: 'selected', label: `Delete Selected Leg Only (${deletionTargets.selectedIds.length})` },
-          { value: 'cancel', label: 'Cancel' },
-        ],
-      });
-      if (choice === 'pair') targetIds = deletionTargets.pairIds;
-      else if (choice === 'selected') targetIds = deletionTargets.selectedIds;
-      else return;
-    } else {
-      const shouldDelete = await showConfirm({
-        title: 'Delete Flight Group',
-        message: `Delete ${ids.length} flight occurrence(s) for ${flightLabel}?`,
-        tone: 'warning',
-        confirmLabel: 'Delete',
-      });
-      if (!shouldDelete) return;
-    }
-
+    const mutation = beginSeasonalMutation();
+    if (!mutation) return;
     try {
+      const ids = Array.from(group.recordIds);
+      if (ids.length === 0) return;
+
+      const flightLabel = `${group.airline}${group.arrFlightNumber || group.depFlightNumber}`;
+      const deletionTargets = resolveLinkedDeletionTargets(activeDisplayLegs, ids);
+      let targetIds = deletionTargets.selectedIds;
+      if (deletionTargets.hasActiveCounterpart) {
+        const choice = await showChoice({
+          title: 'Delete Linked Flight Pair',
+          message: `${flightLabel} is linked to ${deletionTargets.counterpartIds.length} active counterpart occurrence(s).\n\nChoose whether to delete the full turnaround pair or only the selected leg.`,
+          tone: 'warning',
+          choices: [
+            { value: 'pair', label: `Delete Entire Flight Pair (${deletionTargets.pairIds.length})`, tone: 'warning' },
+            { value: 'selected', label: `Delete Selected Leg Only (${deletionTargets.selectedIds.length})` },
+            { value: 'cancel', label: 'Cancel' },
+          ],
+        });
+        if (choice === 'pair') targetIds = deletionTargets.pairIds;
+        else if (choice === 'selected') targetIds = deletionTargets.selectedIds;
+        else return;
+      } else {
+        const shouldDelete = await showConfirm({
+          title: 'Delete Flight Group',
+          message: `Delete ${ids.length} flight occurrence(s) for ${flightLabel}?`,
+          tone: 'warning',
+          confirmLabel: 'Delete',
+        });
+        if (!shouldDelete) return;
+      }
+
       const deleteMods = targetIds.map((id) => ({ legId: id, action: 'deleted' as const }));
       const nextMods = new Map(modifications);
       deleteMods.forEach((mod) => nextMods.set(mod.legId, mod));
@@ -1127,32 +1256,36 @@ export default function HomePage() {
       });
     } catch (err) {
       void showAlert({ title: 'Delete Failed', message: (err as Error).message, tone: 'error' });
+    } finally {
+      finishSeasonalMutation(mutation);
     }
-  }, [activeDisplayLegs, activeSeason, displayRows, draftState, flightRecords, modifications, showAlert, showChoice, showConfirm, syncInProgress]);
+  }, [activeDisplayLegs, activeSeason, beginSeasonalMutation, displayRows, draftState, finishSeasonalMutation, flightRecords, modifications, setDraftState, showAlert, showChoice, showConfirm, syncInProgress]);
 
   const handleUnlinkGroup = useCallback(async (group: DisplayGroup) => {
     if (!activeSeason || syncInProgress) return;
-    const persistedIds = new Set(flightRecords.map((record) => record.id));
-    const linkedIds = group.legs
-      .filter((leg) => persistedIds.has(leg.id) && (leg.linkedRecordId || leg.linkType))
-      .map((leg) => leg.id);
-    if (linkedIds.length === 0) return;
-
-    const result = unlinkFlightRecords(flightRecords, linkedIds);
-    if (result.updatedRecords.length === 0) return;
-
-    const flightLabel = `${group.airline}${group.arrFlightNumber || group.depFlightNumber}`;
-    const counterpartCount = Math.max(0, result.updatedRecords.length - linkedIds.length);
-    const counterpartText = counterpartCount > 0 ? ` and ${counterpartCount} counterpart record(s)` : '';
-    const shouldUnlink = await showConfirm({
-      title: 'Unlink Flight Group',
-      message: `Unlink ${linkedIds.length} linked occurrence(s) for ${flightLabel}${counterpartText}?\nThis applies to the full Seasonal row. Use Detailed Schedule for a narrower period.`,
-      tone: 'warning',
-      confirmLabel: 'Unlink',
-    });
-    if (!shouldUnlink) return;
-
+    const mutation = beginSeasonalMutation();
+    if (!mutation) return;
     try {
+      const persistedIds = new Set(flightRecords.map((record) => record.id));
+      const linkedIds = group.legs
+        .filter((leg) => persistedIds.has(leg.id) && (leg.linkedRecordId || leg.linkType))
+        .map((leg) => leg.id);
+      if (linkedIds.length === 0) return;
+
+      const result = unlinkFlightRecords(flightRecords, linkedIds);
+      if (result.updatedRecords.length === 0) return;
+
+      const flightLabel = `${group.airline}${group.arrFlightNumber || group.depFlightNumber}`;
+      const counterpartCount = Math.max(0, result.updatedRecords.length - linkedIds.length);
+      const counterpartText = counterpartCount > 0 ? ` and ${counterpartCount} counterpart record(s)` : '';
+      const shouldUnlink = await showConfirm({
+        title: 'Unlink Flight Group',
+        message: `Unlink ${linkedIds.length} linked occurrence(s) for ${flightLabel}${counterpartText}?\nThis applies to the full Seasonal row. Use Detailed Schedule for a narrower period.`,
+        tone: 'warning',
+        confirmLabel: 'Unlink',
+      });
+      if (!shouldUnlink) return;
+
       const historyTimestamp = Date.now();
       const historyEntry = buildFlightRecordHistoryEntry({
         id: `LOCAL_RECORD_${historyTimestamp}`,
@@ -1212,11 +1345,15 @@ export default function HomePage() {
       });
     } catch (err) {
       void showAlert({ title: 'Unlink Failed', message: (err as Error).message, tone: 'error' });
+    } finally {
+      finishSeasonalMutation(mutation);
     }
-  }, [activeSeason, flightRecords, modHistory, modifications, publishSeasonalWorkspaceChange, showAlert, showConfirm, syncInProgress]);
+  }, [activeSeason, beginSeasonalMutation, finishSeasonalMutation, flightRecords, modHistory, modifications, publishSeasonalWorkspaceChange, showAlert, showConfirm, syncInProgress]);
 
   const handleApplySeasonalLinkCandidate = useCallback(async (candidate: SeasonalLinkCandidate) => {
     if (!activeSeason || syncInProgress) return;
+    const mutation = beginSeasonalMutation();
+    if (!mutation) return;
 
     try {
       setLinkingCandidateKey(candidate.key);
@@ -1278,11 +1415,12 @@ export default function HomePage() {
       void showAlert({ title: 'Link Failed', message: (err as Error).message, tone: 'error' });
     } finally {
       setLinkingCandidateKey(null);
+      finishSeasonalMutation(mutation);
     }
-  }, [activeSeason, flightRecords, modHistory, modifications, publishSeasonalWorkspaceChange, showAlert, syncInProgress]);
+  }, [activeSeason, beginSeasonalMutation, finishSeasonalMutation, flightRecords, modHistory, modifications, publishSeasonalWorkspaceChange, showAlert, syncInProgress]);
 
   const handleSync = useCallback(async () => {
-    if (!activeSeason || syncInProgress) return;
+    if (!activeSeason || syncInProgress || fileActionControllerRef.current.isFileActionActive()) return;
     try {
       const result = await syncNow();
       void showAlert({
@@ -1296,7 +1434,7 @@ export default function HomePage() {
   }, [activeSeason, showAlert, syncInProgress, syncNow]);
 
   const fetchServerData = useCallback(async () => {
-    if (!activeSeason || fetchingServerData || syncInProgress) return;
+    if (!activeSeason || fetchingServerData || syncInProgress || fileActionControllerRef.current.isFileActionActive()) return;
     if (hasDraftChanges) return;
     const windowKey = buildSeasonalWindowKey({
       dateFrom: debouncedFilters.dateFrom || null,
@@ -1323,24 +1461,33 @@ export default function HomePage() {
   const handleImportClick = useCallback(() => {
     const block = getSeasonalFileActionBlock({
       action: 'import',
-      hasDraftChanges,
-      busy: seasonalFileActionBusy,
+      hasDraftChanges: latestDraftStateRef.current.hasDraftChanges,
+      busy: isSeasonalFileActionBusyNow(),
     });
     if (block) {
       void showAlert({ title: 'Import Blocked', message: block.message, tone: 'warning' });
       return;
     }
     fileInputRef.current?.click();
-  }, [hasDraftChanges, seasonalFileActionBusy, showAlert]);
+  }, [isSeasonalFileActionBusyNow, showAlert]);
 
   const handleFile = useCallback(async (file: File) => {
     const block = getSeasonalFileActionBlock({
       action: 'import',
-      hasDraftChanges,
-      busy: seasonalFileActionBusy,
+      hasDraftChanges: latestDraftStateRef.current.hasDraftChanges,
+      busy: isSeasonalFileActionBusyNow(),
     });
     if (block) {
       void showAlert({ title: 'Import Blocked', message: block.message, tone: 'warning' });
+      return;
+    }
+    const operation = beginSeasonalFileAction('import');
+    if (!operation) {
+      void showAlert({
+        title: 'Import Blocked',
+        message: 'Another Seasonal operation is still running.',
+        tone: 'warning',
+      });
       return;
     }
     setUploading(true);
@@ -1391,31 +1538,12 @@ export default function HomePage() {
         });
 
         if (dirtyGuard.shouldBlock) {
-          const choice = await showChoice({
-            title: 'Unsynced Changes',
-            message: `${dirtyGuard.message}\n\nChoose how to continue.`,
+          void showAlert({
+            title: 'Import Blocked',
+            message: `${dirtyGuard.message}\n\nSave pending changes before importing this season.`,
             tone: 'warning',
-            choices: [
-              { value: 'cancel', label: 'Cancel' },
-              { value: 'sync', label: 'Sync first', tone: 'info' },
-            ],
           });
-
-          if (choice === 'cancel' || choice == null) return;
-          if (choice === 'sync') {
-            const result = await syncAnySeasonNow(existing.id, 'seasonal');
-            if (result.status !== 'synced') {
-              void showAlert({
-                title: 'Import Blocked',
-                message: result.message ?? 'Save failed.',
-                tone: 'error',
-              });
-              return;
-            }
-            if (activeSeason?.id === existing.id) {
-              await loadSeasonRows(activeSeason, true);
-            }
-          }
+          return;
         }
       }
 
@@ -1470,6 +1598,11 @@ export default function HomePage() {
       const commitLabel = existing ? `Patching season ${seasonCode}` : `Creating season ${seasonCode}`;
       setUploadProgress(buildImportProgress(commitLabel, existing ? 32 : 28, existing ? `${affectedRecordIds.length} affected records` : undefined));
       setUploadProgress(buildImportBatchProgress('Committing seasonal import', 0, seasonRecords.length, 35, 90));
+      const commitInvalidation = validateSeasonalFileAction(operation);
+      if (commitInvalidation) {
+        showSeasonalFileActionInvalidation('import', commitInvalidation);
+        return;
+      }
       const remoteImport = await applySeasonalImportRemote({
         seasonId: existing?.id ?? null,
         seasonCode,
@@ -1508,6 +1641,11 @@ export default function HomePage() {
       const nextSeasons = existing
         ? previousSeasons.map((season) => season.id === seasonId ? nextSeason : season)
         : [nextSeason, ...previousSeasons];
+      const applyInvalidation = validateSeasonalFileAction(operation);
+      if (applyInvalidation) {
+        showSeasonalFileActionInvalidation('import', applyInvalidation);
+        return;
+      }
       setCachedSeasons(nextSeasons);
       setCachedSeasonData(seasonId, { rows: patternRows, records: refreshedRecords, modifications: refreshedModifications, seasonDataVersion: nextSeason.dataVersion });
       useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
@@ -1567,6 +1705,11 @@ export default function HomePage() {
           duplicatePeriods: duplicatePeriods.length,
         },
       });
+      const finalApplyInvalidation = validateSeasonalFileAction(operation);
+      if (finalApplyInvalidation) {
+        showSeasonalFileActionInvalidation('import', finalApplyInvalidation);
+        return;
+      }
       setSeasons(nextSeasons);
       useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
       setActiveSeason(nextSeason);
@@ -1585,27 +1728,30 @@ export default function HomePage() {
     } finally {
       setUploading(false);
       setUploadProgress(null);
+      finishSeasonalFileAction(operation);
     }
   }, [
     activeSeason,
     applySeasonData,
+    beginSeasonalFileAction,
     debouncedFilters.dateFrom,
     debouncedFilters.dateTo,
     debouncedFilters.flight,
     debouncedFilters.route,
-    hasDraftChanges,
-    loadSeasonRows,
+    finishSeasonalFileAction,
+    isSeasonalFileActionBusyNow,
     publishSeasonalWorkspaceChange,
-    seasonalFileActionBusy,
     seasons,
+    setActiveSeason,
+    setDraftState,
     showAlert,
-    showChoice,
-    syncAnySeasonNow,
+    showSeasonalFileActionInvalidation,
     syncPendingCount,
+    validateSeasonalFileAction,
   ]);
 
   const handleRowDoubleClick = useCallback((group: DisplayGroup) => {
-    if (!activeSeason) return;
+    if (!activeSeason || fileActionControllerRef.current.isFileActionActive()) return;
     router.push(buildSeasonalLinkRoute(activeSeason.id, group, {
       dateFrom: debouncedFilters.dateFrom,
       dateTo: debouncedFilters.dateTo,
@@ -1631,6 +1777,7 @@ export default function HomePage() {
               <select
                 value={activeSeason?.id ?? ''}
                 onChange={(event) => handleSeasonChange(event.target.value)}
+                disabled={seasonalFileActionActive}
                 className="min-w-[200px] cursor-pointer appearance-none rounded-lg border border-outline-variant bg-surface-container-low py-2 pl-10 pr-10 text-sm font-medium text-on-surface shadow-sm transition-colors hover:bg-surface-container-high focus:outline-none focus:ring-2 focus:ring-primary"
               >
                 {seasons.map((seasonItem) => (
@@ -1658,11 +1805,11 @@ export default function HomePage() {
               <FetchServerUpdatesButton
                 fetching={fetchingServerData}
                 progress={fetchProgress}
-                disabled={syncInProgress}
+                disabled={syncInProgress || seasonalFileActionActive}
                 onFetch={fetchServerData}
               />
               <SyncActionButton
-                syncing={syncInProgress}
+                syncing={syncInProgress || seasonalFileActionActive}
                 pendingCount={syncPendingCount}
                 draftCount={draftChangeCount}
                 progress={syncProgress}
@@ -1678,7 +1825,7 @@ export default function HomePage() {
               </span>
               <button
                 onClick={handleDiscardSeasonalDraft}
-                disabled={syncInProgress}
+                disabled={syncInProgress || seasonalFileActionActive}
                 className="rounded px-3 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
               >
                 Discard
@@ -1689,8 +1836,10 @@ export default function HomePage() {
             <div className="flex flex-wrap items-center gap-2">
               <button
                 className="flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 font-label-caps text-label-caps text-on-primary shadow-sm transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
-                onClick={() => setIsNewFlightOpen(true)}
-                disabled={syncInProgress || hasDraftChanges}
+                onClick={() => {
+                  if (!fileActionControllerRef.current.isFileActionActive()) setIsNewFlightOpen(true);
+                }}
+                disabled={syncInProgress || hasDraftChanges || seasonalFileActionActive}
                 title="Create a new seasonal flight"
               >
                 <span className="material-symbols-outlined text-[16px]">add</span>
@@ -1699,7 +1848,7 @@ export default function HomePage() {
               <div className="relative">
                 <button
                   className="flex items-center gap-2 rounded-lg border border-outline-variant px-3 py-1.5 font-label-caps text-label-caps text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={syncInProgress || hasDraftChanges || modHistory.length === 0 || isUndoing}
+                  disabled={syncInProgress || hasDraftChanges || modHistory.length === 0 || isUndoing || seasonalFileActionActive}
                   onClick={() => setIsUndoOpen(!isUndoOpen)}
                   title="Undo local changes"
                 >
@@ -1724,7 +1873,7 @@ export default function HomePage() {
                             </div>
                             <button
                               onClick={() => handleUndo(entry)}
-                              disabled={isUndoing}
+                              disabled={isUndoing || seasonalFileActionActive}
                               className="flex-shrink-0 rounded-lg bg-error-container px-3 py-1.5 text-xs font-medium text-on-error-container transition-colors hover:bg-error/20 disabled:opacity-50"
                             >
                               {idx === 0 ? 'Undo' : 'Revert'}
@@ -1854,13 +2003,14 @@ export default function HomePage() {
                     <FetchServerUpdatesButton
                       fetching={fetchingServerData}
                       progress={fetchProgress}
-                      disabled={syncInProgress}
+                      disabled={syncInProgress || seasonalFileActionActive}
                       onFetch={fetchServerData}
                     />
                     <button
                       type="button"
                       onClick={() => { void handleRetryLoad(); }}
-                      className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 font-label-md text-label-md text-on-primary shadow-sm hover:bg-primary/90"
+                      disabled={seasonalFileActionActive}
+                      className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 font-label-md text-label-md text-on-primary shadow-sm hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <span className="material-symbols-outlined text-[18px]">refresh</span>
                       Retry
@@ -1884,7 +2034,7 @@ export default function HomePage() {
                   <FetchServerUpdatesButton
                     fetching={fetchingServerData}
                     progress={fetchProgress}
-                    disabled={syncInProgress}
+                    disabled={syncInProgress || seasonalFileActionActive}
                     onFetch={fetchServerData}
                   />
                 )}
@@ -2086,9 +2236,13 @@ export default function HomePage() {
                               <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
                                 {linkAction.canLink && (
                                   <button
-                                    className="inline-flex h-6 items-center gap-0.5 rounded px-1.5 text-[11px] font-semibold text-primary hover:bg-primary-container/40 transition-colors"
+                                    className="inline-flex h-6 items-center gap-0.5 rounded px-1.5 text-[11px] font-semibold text-primary hover:bg-primary-container/40 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
                                     title="Show matching flight legs to link"
-                                    onClick={(e) => { e.stopPropagation(); setLinkModalGroupKey(group.key); }}
+                                    disabled={seasonalFileActionActive}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (!fileActionControllerRef.current.isFileActionActive()) setLinkModalGroupKey(group.key);
+                                    }}
                                   >
                                     <span className="material-symbols-outlined text-[14px]">link</span>
                                     Link
@@ -2096,8 +2250,9 @@ export default function HomePage() {
                                 )}
                                 {linkAction.canUnlink && (
                                   <button
-                                    className="inline-flex h-6 items-center gap-0.5 rounded px-1.5 text-[11px] font-semibold text-tertiary hover:bg-tertiary-container/40 transition-colors"
+                                    className="inline-flex h-6 items-center gap-0.5 rounded px-1.5 text-[11px] font-semibold text-tertiary hover:bg-tertiary-container/40 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
                                     title="Unlink this full Seasonal row"
+                                    disabled={seasonalFileActionActive}
                                     onClick={(e) => { e.stopPropagation(); handleUnlinkGroup(group); }}
                                   >
                                     <span className="material-symbols-outlined text-[14px]">link_off</span>
@@ -2105,8 +2260,9 @@ export default function HomePage() {
                                   </button>
                                 )}
                                 <button
-                                  className="inline-flex h-6 w-6 items-center justify-center rounded text-outline hover:bg-error-container hover:text-error transition-colors"
+                                  className="inline-flex h-6 w-6 items-center justify-center rounded text-outline hover:bg-error-container hover:text-error transition-colors disabled:cursor-not-allowed disabled:opacity-40"
                                   title="Delete flight group"
+                                  disabled={seasonalFileActionActive}
                                   onClick={(e) => { e.stopPropagation(); handleDeleteGroup(group); }}
                                 >
                                   <span className="material-symbols-outlined text-[16px]">delete</span>
@@ -2213,7 +2369,7 @@ export default function HomePage() {
                       </div>
                       <button
                         className="shrink-0 rounded bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary hover:bg-primary-container hover:text-on-primary-container disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        disabled={linkingCandidateKey !== null}
+                        disabled={linkingCandidateKey !== null || seasonalFileActionActive}
                         onClick={() => handleApplySeasonalLinkCandidate(candidate)}
                       >
                         {linkingCandidateKey === candidate.key ? 'Linking' : `Link ${candidate.matchCount}`}
@@ -2236,6 +2392,8 @@ export default function HomePage() {
         seasonEnd={activeSeason?.effectiveEnd}
         onSubmitSeasonal={async (row) => {
           if (!activeSeason || syncInProgress) return;
+          const mutation = beginSeasonalMutation();
+          if (!mutation) return;
           try {
             const nextRowIndex = Math.max(0, ...displayRows.map((displayRow) => displayRow.rowIndex)) + 1;
             const savedRow = { ...row, rowIndex: nextRowIndex };
@@ -2273,6 +2431,8 @@ export default function HomePage() {
           } catch (err) {
             console.error(err);
             void showAlert({ title: 'Add Flight Failed', message: (err as Error).message, tone: 'error' });
+          } finally {
+            finishSeasonalMutation(mutation);
           }
         }}
       />

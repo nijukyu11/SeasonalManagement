@@ -17,14 +17,6 @@ function extractFirstTag(source: string, tagName: string): string {
   return source.slice(start, end + 2);
 }
 
-function extractCallback(source: string, callbackName: string, nextCallbackName: string): string {
-  const start = source.indexOf(`const ${callbackName} = useCallback`);
-  assert.notEqual(start, -1, `${callbackName} should exist`);
-  const end = source.indexOf(`const ${nextCallbackName} = useCallback`, start + 1);
-  assert.notEqual(end, -1, `${nextCallbackName} should follow ${callbackName}`);
-  return source.slice(start, end);
-}
-
 function extractOpeningTagContaining(source: string, tagName: string, marker: string): string {
   const markerIndex = source.indexOf(marker);
   assert.notEqual(markerIndex, -1, `${marker} should exist`);
@@ -41,10 +33,7 @@ test('Seasonal Schedule passes draft changes through the save guard flow', () =>
 
   assert.match(syncButton, /draftCount=\{draftChangeCount\}/);
   assert.match(syncButton, /onSync=\{handleSync\}/);
-  assert.match(
-    source,
-    /const\s+draftChangeCount\s*=\s*\(\(\s*draftState\?\.records\.length\s*\?\?\s*0\s*\)\s*\+\s*\(\s*draftState\?\.modifications\.length\s*\?\?\s*0\s*\)\s*\);/
-  );
+  assert.match(source, /const\s+draftChangeCount\s*=\s*countSeasonalDraftChanges\(draftState\);/);
   assert.match(source, /const\s+hasDraftChanges\s*=\s*draftChangeCount\s*>\s*0;/);
   assert.match(
     source,
@@ -52,37 +41,41 @@ test('Seasonal Schedule passes draft changes through the save guard flow', () =>
   );
 });
 
-test('Seasonal file actions block busy, draft, and invalid selection state', () => {
+test('Seasonal file actions wire the controller at commit, apply, and download boundaries', () => {
   const source = readSource('app/SeasonalSchedulePage.tsx');
-  const importPicker = extractCallback(source, 'handleImportClick', 'handleFile');
-  const importFile = extractCallback(source, 'handleFile', 'handleRowDoubleClick');
-  const exportAction = extractCallback(source, 'handleExportUpdated', 'handleUndo');
+  const importStart = source.indexOf('const handleFile = useCallback');
+  const exportStart = source.indexOf('const handleExportUpdated = useCallback');
+  const commit = source.indexOf('applySeasonalImportRemote', importStart);
+  const importApply = source.indexOf('applySeasonData(patternRows, refreshedRecords, refreshedModifications)', commit);
+  const download = source.indexOf('downloadCanonicalSeasonalExcel', exportStart);
 
-  assert.match(source, /import\s*\{\s*getSeasonalFileActionBlock,\s*reconcileSeasonalSelection\s*\}/);
-  assert.match(importPicker, /getSeasonalFileActionBlock\(\{[\s\S]*?action:\s*'import'/);
-  assert.match(importFile, /getSeasonalFileActionBlock\(\{[\s\S]*?action:\s*'import'/);
-  assert.match(exportAction, /getSeasonalFileActionBlock\(\{[\s\S]*?action:\s*'export'/);
-  assert.ok(
-    exportAction.indexOf('getSeasonalFileActionBlock') < exportAction.indexOf('loadSeasonWorkspaceWindow'),
-    'export guard should run before the server export request',
-  );
+  assert.match(source, /createSeasonalFileActionController/);
+  assert.match(source, /beginSeasonalFileAction\('import'\)/);
+  assert.match(source, /beginSeasonalFileAction\('export'\)/);
+  assert.ok(source.lastIndexOf('validateSeasonalFileAction(', commit) > importStart);
+  assert.ok(source.lastIndexOf('validateSeasonalFileAction(', importApply) > commit);
+  assert.ok(source.lastIndexOf('validateSeasonalFileAction(', download) > exportStart);
 });
 
 test('Seasonal Import and Export controls are disabled for draft changes', () => {
   const source = readSource('app/SeasonalSchedulePage.tsx');
   const importButton = extractOpeningTagContaining(source, 'button', 'onClick={handleImportClick}');
   const exportButton = extractOpeningTagContaining(source, 'button', 'onClick={handleExportUpdated}');
+  const seasonSelect = extractOpeningTagContaining(source, 'select', 'disabled={seasonalFileActionActive}');
 
   assert.match(importButton, /disabled=\{[^}]*hasDraftChanges[^}]*\}/);
   assert.match(exportButton, /disabled=\{[^}]*hasDraftChanges[^}]*\}/);
+  assert.match(seasonSelect, /disabled=\{seasonalFileActionActive\}/);
+  assert.ok((source.match(/beginSeasonalMutation\(\)/g) ?? []).length >= 5);
 });
 
 test('Seasonal selection is reset or reconciled at every snapshot boundary', () => {
   const source = readSource('app/SeasonalSchedulePage.tsx');
-  const seasonChange = extractCallback(source, 'handleSeasonChange', 'handleRetryLoad');
 
-  assert.match(seasonChange, /setSelectedRecordIds\(new Set\(\)\)/);
-  assert.match(source, /reconcileSeasonalSelection\(\s*Array\.from\(previous\),\s*new Set\(records\.map/);
+  assert.match(source, /const handleSeasonChange[\s\S]{0,500}setSelectedRecordIds\(new Set\(\)\)/);
+  assert.match(source, /reconcileSeasonalSelection\(\s*Array\.from\(previous\),\s*buildSeasonalAvailableRecordIds\(records,\s*mods\)/);
+  assert.match(source, /buildSeasonalAvailableRecordIds\(flightRecords,\s*modifications\)/);
+  assert.match(source, /buildSeasonalAvailableRecordIds\(exportRecords,\s*exportModifications\)/);
   assert.match(source, /return\s+unknownIds\.length\s*===\s*0\s*\?\s*previous\s*:\s*new Set\(\);/);
   assert.match(
     source,
@@ -92,13 +85,16 @@ test('Seasonal selection is reset or reconciled at every snapshot boundary', () 
 
 test('Seasonal import rejects parser issues before calculating or committing records', () => {
   const source = readSource('app/SeasonalSchedulePage.tsx');
-  const importFile = extractCallback(source, 'handleFile', 'handleRowDoubleClick');
-  const issueCheck = importFile.indexOf('issues.length > 0');
+  const importStart = source.indexOf('const handleFile = useCallback');
+  const issueCheck = source.indexOf('issues.length > 0', importStart);
+  const calculation = source.indexOf('mergeDuplicateImportPeriods', importStart);
+  const commit = source.indexOf('applySeasonalImportRemote', importStart);
 
   assert.notEqual(issueCheck, -1, 'parser issues should be checked');
-  assert.ok(issueCheck < importFile.indexOf('mergeDuplicateImportPeriods'));
-  assert.ok(issueCheck < importFile.indexOf('applySeasonalImportRemote'));
-  assert.doesNotMatch(importFile, /Discard local changes and re-import/);
+  assert.ok(issueCheck < calculation);
+  assert.ok(issueCheck < commit);
+  assert.doesNotMatch(source, /Discard local changes and re-import/);
+  assert.doesNotMatch(source, /Sync first/);
 });
 
 test('Detailed Schedule passes draft changes through the save guard flow', () => {
