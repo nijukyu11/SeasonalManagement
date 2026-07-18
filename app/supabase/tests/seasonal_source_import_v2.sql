@@ -206,6 +206,62 @@ begin
 end
 $$;
 
+create or replace function pg_temp.task5_owner_snapshot(
+  p_batch_id uuid,
+  p_season_id text
+)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+  select pg_catalog.jsonb_build_object(
+    'batch', (
+      select pg_catalog.to_jsonb(batches)
+      from public.season_import_batches batches
+      where batches.batch_id = p_batch_id
+    ),
+    'season', (
+      select pg_catalog.to_jsonb(seasons)
+      from public.seasons seasons
+      where seasons.id = p_season_id
+    ),
+    'sourceRows', (
+      select pg_catalog.count(*)
+      from public.season_source_rows rows
+      where rows.season_id = p_season_id
+    ),
+    'records', (
+      select pg_catalog.count(*)
+      from public.season_flight_records records
+      where records.season_id = p_season_id
+    ),
+    'events', (
+      select pg_catalog.count(*)
+      from public.season_change_events events
+      where events.season_id = p_season_id
+    ),
+    'eventActor', (
+      select events.actor_user_id
+      from public.season_change_events events
+      where events.op_id = p_batch_id::text
+    )
+  )
+$$;
+
+create or replace function pg_temp.task5_batch_target(p_batch_id uuid)
+returns text
+language sql
+stable
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+  select batches.result #>> '{_staging,targetSeasonId}'
+  from public.season_import_batches batches
+  where batches.batch_id = p_batch_id
+$$;
+
 set local role authenticated;
 
 do $$
@@ -244,6 +300,10 @@ do $$
 declare
   v_result jsonb;
   v_commit jsonb;
+  v_batch_id uuid;
+  v_target_season_id text;
+  v_before jsonb;
+  v_after jsonb;
 begin
   v_result := public.stage_seasonal_import_v2(jsonb_build_object(
     'requestId', '6beb1398-52a5-4340-93b8-bb0cb32094ec',
@@ -290,15 +350,40 @@ begin
       'arrRoute', 'KIX'
     ))
   ));
+  v_batch_id := (v_result->>'batchId')::uuid;
+  v_target_season_id := pg_temp.task5_batch_target(v_batch_id);
+
+  v_before := pg_temp.task5_owner_snapshot(v_batch_id, v_target_season_id);
+
   perform set_config(
     'request.jwt.claim.sub',
     'd11b35f2-62b1-4310-b3ca-4d46762c79e8',
     true
   );
-  v_commit := public.commit_seasonal_import_v2(
-    (v_result->>'batchId')::uuid,
-    0
+
+  begin
+    perform public.commit_seasonal_import_v2(v_batch_id, 0);
+    raise exception 'foreign operator committed another owner''s staged import';
+  exception
+    when insufficient_privilege then
+      if position('not available to the current operator' in lower(sqlerrm)) = 0
+        or position(v_batch_id::text in sqlerrm) > 0
+      then
+        raise;
+      end if;
+  end;
+
+  v_after := pg_temp.task5_owner_snapshot(v_batch_id, v_target_season_id);
+  if v_after is distinct from v_before then
+    raise exception 'foreign commit changed batch metadata or Seasonal state';
+  end if;
+
+  perform set_config(
+    'request.jwt.claim.sub',
+    'a2a8ee9c-8e84-4cb7-aef6-358af42c3b31',
+    true
   );
+  v_commit := public.commit_seasonal_import_v2(v_batch_id, 0);
 
   if v_commit->>'status' <> 'committed'
     or v_commit->>'seasonCode' <> 'AV2'
@@ -307,6 +392,37 @@ begin
     or (v_commit->>'dataVersion')::integer <> 1
   then
     raise exception 'authenticated commit RPC execute path failed: %', v_commit;
+  end if;
+
+  if pg_temp.task5_owner_snapshot(v_batch_id, v_target_season_id)->>'eventActor'
+    is distinct from 'a2a8ee9c-8e84-4cb7-aef6-358af42c3b31'
+  then
+    raise exception 'import event actor was not the staging owner/committer';
+  end if;
+
+  v_before := pg_temp.task5_owner_snapshot(v_batch_id, v_target_season_id);
+
+  perform set_config(
+    'request.jwt.claim.sub',
+    'd11b35f2-62b1-4310-b3ca-4d46762c79e8',
+    true
+  );
+
+  begin
+    perform public.commit_seasonal_import_v2(v_batch_id, 0);
+    raise exception 'foreign operator received another owner''s recommit result';
+  exception
+    when insufficient_privilege then
+      if position('not available to the current operator' in lower(sqlerrm)) = 0
+        or position(v_batch_id::text in sqlerrm) > 0
+      then
+        raise;
+      end if;
+  end;
+
+  v_after := pg_temp.task5_owner_snapshot(v_batch_id, v_target_season_id);
+  if v_after is distinct from v_before then
+    raise exception 'foreign recommit changed committed batch metadata or Seasonal state';
   end if;
 
   perform set_config(
@@ -326,6 +442,7 @@ begin
       'requestId', 'dcdf8f0e-9589-4712-a132-047f5d61eb6c',
       'checksum', 'empty-source-rows',
       'seasonCode', 'TV2',
+      'expectedDataVersion', 3,
       'sourceRows', '[]'::jsonb
     ));
     raise exception 'empty sourceRows was not rejected';
@@ -335,6 +452,87 @@ begin
         raise;
       end if;
   end;
+end
+$$;
+
+do $$
+declare
+  v_common jsonb;
+  v_case record;
+begin
+  v_common := jsonb_build_object(
+    'checksum', 'strict-expected-data-version',
+    'seasonCode', 'EVC',
+    'expectedDataVersion', 0,
+    'sourceRows', jsonb_build_array(jsonb_build_object(
+      'rowIndex', 1,
+      'effective', '2026-10-25',
+      'discontinue', '2026-10-25',
+      'airline', 'VN',
+      'aircraft', '321',
+      'daysOfWeek', jsonb_build_array(false, false, false, false, false, false, true),
+      'sta', '08:00',
+      'arrFlight', 'VN400',
+      'arrRoute', 'KIX'
+    ))
+  );
+
+  for v_case in
+    select cases.case_name, cases.request_id, cases.payload
+    from (values
+      (
+        'missing',
+        '3a667f5f-1001-4389-8f2d-f0d5f04bac01'::uuid,
+        v_common - 'expectedDataVersion'
+      ),
+      (
+        'null',
+        '3a667f5f-1001-4389-8f2d-f0d5f04bac02'::uuid,
+        v_common || jsonb_build_object('expectedDataVersion', null)
+      ),
+      (
+        'string',
+        '3a667f5f-1001-4389-8f2d-f0d5f04bac03'::uuid,
+        v_common || jsonb_build_object('expectedDataVersion', '0')
+      ),
+      (
+        'fraction',
+        '3a667f5f-1001-4389-8f2d-f0d5f04bac04'::uuid,
+        v_common || jsonb_build_object('expectedDataVersion', 0.5)
+      ),
+      (
+        'negative',
+        '3a667f5f-1001-4389-8f2d-f0d5f04bac05'::uuid,
+        v_common || jsonb_build_object('expectedDataVersion', -1)
+      )
+    ) cases(case_name, request_id, payload)
+  loop
+    begin
+      perform public.stage_seasonal_import_v2(
+        jsonb_build_object('requestId', v_case.request_id) || v_case.payload
+      );
+      raise exception 'expectedDataVersion % case was not rejected', v_case.case_name;
+    exception
+      when sqlstate '22023' then
+        if position('expecteddataversion' in lower(sqlerrm)) = 0 then
+          raise;
+        end if;
+    end;
+  end loop;
+
+  if exists (
+    select 1
+    from public.season_import_batches batches
+    where batches.request_id = any(array[
+      '3a667f5f-1001-4389-8f2d-f0d5f04bac01'::uuid,
+      '3a667f5f-1001-4389-8f2d-f0d5f04bac02'::uuid,
+      '3a667f5f-1001-4389-8f2d-f0d5f04bac03'::uuid,
+      '3a667f5f-1001-4389-8f2d-f0d5f04bac04'::uuid,
+      '3a667f5f-1001-4389-8f2d-f0d5f04bac05'::uuid
+    ])
+  ) then
+    raise exception 'invalid expectedDataVersion payload inserted a staging batch';
+  end if;
 end
 $$;
 
@@ -351,6 +549,8 @@ declare
   v_fingerprint_after text;
   v_target_season_id_before text;
   v_target_season_id_after text;
+  v_owner_state_before jsonb;
+  v_owner_state_after jsonb;
 begin
   v_payload := jsonb_build_object(
     'requestId', '94b529f8-ae7c-45d7-9887-8b5501d8a3b2',
@@ -540,12 +740,58 @@ begin
       end if;
   end;
 
+  select jsonb_build_object(
+    'batch', to_jsonb(batches),
+    'rows', (
+      select coalesce(jsonb_agg(to_jsonb(rows) order by rows.row_index), '[]'::jsonb)
+      from public.season_import_batch_rows rows
+      where rows.batch_id = batches.batch_id
+    )
+  ) into v_owner_state_before
+  from public.season_import_batches batches
+  where batches.batch_id = (v_first->>'batchId')::uuid;
+
   perform set_config('request.jwt.claim.sub', 'd11b35f2-62b1-4310-b3ca-4d46762c79e8', true);
-  v_second := public.stage_seasonal_import_v2(v_payload);
+  begin
+    perform public.stage_seasonal_import_v2(v_payload);
+    raise exception 'foreign operator received another owner''s idempotent stage result';
+  exception
+    when insufficient_privilege then
+      if position('not available to the current operator' in lower(sqlerrm)) = 0
+        or position(v_payload->>'requestId' in sqlerrm) > 0
+        or position(v_payload->>'checksum' in sqlerrm) > 0
+      then
+        raise;
+      end if;
+  end;
   perform set_config('request.jwt.claim.sub', 'a2a8ee9c-8e84-4cb7-aef6-358af42c3b31', true);
 
+  select jsonb_build_object(
+    'batch', to_jsonb(batches),
+    'rows', (
+      select coalesce(jsonb_agg(to_jsonb(rows) order by rows.row_index), '[]'::jsonb)
+      from public.season_import_batch_rows rows
+      where rows.batch_id = batches.batch_id
+    )
+  ) into v_owner_state_after
+  from public.season_import_batches batches
+  where batches.batch_id = (v_first->>'batchId')::uuid;
+
+  if v_owner_state_after is distinct from v_owner_state_before then
+    raise exception 'foreign stage retry changed batch metadata or staged rows';
+  end if;
+
+  v_second := public.stage_seasonal_import_v2(v_payload);
   if v_second->>'batchId' is distinct from v_first->>'batchId' then
-    raise exception 'authorized shared retry did not return the original batch: %', v_second;
+    raise exception 'same-owner idempotent retry did not return the original batch: %', v_second;
+  end if;
+  if not exists (
+    select 1
+    from public.season_import_batches batches
+    where batches.batch_id = (v_first->>'batchId')::uuid
+      and batches.created_by = auth.uid()
+  ) then
+    raise exception 'staged batch owner was not preserved on same-owner retry';
   end if;
 
   if (v_second - array[
@@ -585,6 +831,7 @@ begin
     'requestId', 'a4f147de-42ca-4ff7-a6ef-a28d135d0f8b',
     'checksum', 'invalid-then-corrected-payload',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(jsonb_build_object(
       'rowIndex', 6,
       'effective', '2026-10-25',
@@ -626,6 +873,7 @@ begin
     'requestId', '869dfbb7-816a-43e7-82f4-1407931a4ef4',
     'checksum', 'invalid-canonical-row-checksum',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(jsonb_build_object(
       'rowIndex', 7,
       'effective', '2026-10-25',
@@ -677,6 +925,7 @@ begin
     'requestId', 'a1741032-4fb4-4840-b089-e286520e9a82',
     'checksum', 'invalid-calendar-dates',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', 21,
@@ -755,6 +1004,7 @@ begin
     'requestId', 'ef8bfc8c-0096-4cfe-a4ce-8393b9b94f95',
     'checksum', 'strict-canonical-json-types',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', '30',
@@ -890,6 +1140,7 @@ begin
     'requestId', '471b2fc4-01de-4ab8-80dc-1307a366bf06',
     'checksum', 'duplicate-logical-row-index',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', 40,
@@ -961,6 +1212,7 @@ begin
       'requestId', '69cc5b3b-c24c-4147-8221-4b25c7152c69',
       'checksum', repeat('x', 257),
       'seasonCode', 'TV2',
+      'expectedDataVersion', 3,
       'sourceRows', jsonb_build_array(jsonb_build_object('rowIndex', 1))
     ));
     raise exception 'oversized checksum was not rejected';
@@ -976,6 +1228,7 @@ begin
       'requestId', '0d17e04a-b56f-47d6-984d-35ab337c86cd',
       'checksum', 'oversized-season-code',
       'seasonCode', repeat('S', 33),
+      'expectedDataVersion', 3,
       'sourceRows', jsonb_build_array(jsonb_build_object('rowIndex', 1))
     ));
     raise exception 'oversized seasonCode was not rejected';
@@ -992,6 +1245,7 @@ begin
       'checksum', 'oversized-season-id',
       'seasonId', repeat('s', 257),
       'seasonCode', 'TV2',
+      'expectedDataVersion', 3,
       'sourceRows', jsonb_build_array(jsonb_build_object('rowIndex', 1))
     ));
     raise exception 'oversized seasonId was not rejected';
@@ -1007,6 +1261,7 @@ begin
       'requestId', 'f496331f-0a8c-4f6c-b0d0-18fd5be5cbdf',
       'checksum', 'oversized-airline-probe',
       'seasonCode', 'TV2',
+      'expectedDataVersion', 3,
       'sourceRows', jsonb_build_array(jsonb_build_object(
         'rowIndex', 60,
         'effective', '2026-10-25',
@@ -1046,6 +1301,7 @@ begin
     'requestId', '6bd45db7-47b4-4293-812b-2794f25e91c2',
     'checksum', 'near-limit-canonical-fields',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(jsonb_build_object(
       'rowIndex', 62,
       'effective', '2026-10-25',
@@ -1072,6 +1328,7 @@ begin
       'requestId', '685cafb3-6a9a-4588-92ed-70ffcf36fa02',
       'checksum', 'oversized-file-name',
       'seasonCode', 'TV2',
+      'expectedDataVersion', 3,
       'fileName', repeat('x', 1025),
       'sourceRows', jsonb_build_array(jsonb_build_object('rowIndex', 1))
     ));
@@ -1092,6 +1349,7 @@ begin
       'requestId', '311da643-715f-4cde-b9f9-dc46b1750832',
       'checksum', 'oversized-source-rows',
       'seasonCode', 'TV2',
+      'expectedDataVersion', 3,
       'sourceRows', v_large_rows
     ));
     raise exception 'oversized sourceRows was not rejected';
@@ -1122,6 +1380,7 @@ begin
       'requestId', '553123fd-dda8-4ede-a85c-b69e4f9b0270',
       'checksum', 'oversized-total-request',
       'seasonCode', 'TV2',
+      'expectedDataVersion', 3,
       'sourceRows', jsonb_build_array(jsonb_build_object(
         'rowIndex', 61,
         'effective', '2026-10-25',
@@ -1159,6 +1418,7 @@ begin
     'requestId', 'd65399b0-8365-42d0-9308-777a56cdfef4',
     'checksum', 'bounded-diagnostics',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', v_rows
   ));
 
@@ -1197,6 +1457,7 @@ begin
     'requestId', '2bb2a7ec-e8a6-49d5-a30e-4c48dc0cb084',
     'checksum', 'departure-only-two-mondays',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(jsonb_build_object(
       'rowIndex', 100,
       'effective', '2026-07-06',
@@ -1248,6 +1509,7 @@ begin
     'requestId', '16d8e786-7cb6-48f3-b7f0-2ac0f0fda02b',
     'checksum', 'same-row-sameday-pair',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(jsonb_build_object(
       'rowIndex', 110,
       'effective', '2026-07-06',
@@ -1314,6 +1576,7 @@ begin
     'requestId', 'aa074eed-5c38-4514-b96f-176db2516881',
     'checksum', 'same-row-overnight-pair',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(jsonb_build_object(
       'rowIndex', 120,
       'effective', '2026-07-06',
@@ -1392,6 +1655,7 @@ begin
     'requestId', '70e15cc0-53f6-4d1a-a45e-b111a3903e1c',
     'checksum', 'explicit-linked-source-rows',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', 130,
@@ -1472,6 +1736,7 @@ begin
     'requestId', '3e7849d3-9f85-494c-9bd8-07ef10705cbf',
     'checksum', 'flight-number-normalization',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', 140,
@@ -1533,6 +1798,7 @@ begin
     'requestId', '80c64f57-c42f-4f13-990e-989a05ba8e26',
     'checksum', 'duplicate-occurrence-overlap',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', 150,
@@ -1647,6 +1913,7 @@ begin
     'requestId', '1ee64a50-132c-4574-8c92-5d195dc72f76',
     'checksum', 'missing-linked-row',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(jsonb_build_object(
       'rowIndex', 160,
       'effective', '2026-07-06',
@@ -1678,6 +1945,7 @@ begin
     'requestId', 'c3abf3fb-6a48-4e50-bbba-e45faef27804',
     'checksum', 'ambiguous-linked-target',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', 170,
@@ -1735,6 +2003,7 @@ begin
     'requestId', 'cb141584-8dbd-4745-8495-e591d4a3c57d',
     'checksum', 'incompatible-pair-type',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', 180,
@@ -1779,6 +2048,7 @@ begin
     'requestId', '93489717-9362-4fe3-a2b3-7ee3e7039541',
     'checksum', 'incompatible-link-type',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', 190,
@@ -1823,6 +2093,7 @@ begin
     'requestId', '7d27de2f-8bb4-4995-a1cb-43e33ba5b539',
     'checksum', 'incompatible-pair-date',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', 200,
@@ -1868,6 +2139,7 @@ begin
     'requestId', '7a614d1c-8c9f-4497-886f-80ac3f9fffb3',
     'checksum', 'zero-generated-records',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(jsonb_build_object(
       'rowIndex', 210,
       'effective', '2026-07-06',
@@ -1912,6 +2184,7 @@ begin
     'requestId', '7d11ad76-f172-4eca-9997-1d1689c08031',
     'checksum', 'stable-new-season-target',
     'seasonCode', 'NVI',
+    'expectedDataVersion', 0,
     'fileName', 'new-season.csv',
     'sourceRows', jsonb_build_array(jsonb_build_object(
       'rowIndex', 300,
@@ -2029,6 +2302,7 @@ begin
     'requestId', 'f41edb3f-c4a8-4ab4-86f2-0a52ed71f406',
     'checksum', 'new-season-conflicting-target',
     'seasonCode', 'NVC',
+    'expectedDataVersion', 0,
     'sourceRows', jsonb_build_array(jsonb_build_object(
       'rowIndex', 310,
       'effective', '2026-10-26',
@@ -2173,6 +2447,7 @@ begin
       'requestId', '844c563c-7704-46ca-ae81-c4a2f36021d9',
       'checksum', 'date-span-over-limit',
       'seasonCode', 'RSC',
+      'expectedDataVersion', 0,
       'sourceRows', jsonb_build_array(jsonb_build_object(
         'rowIndex', 320,
         'effective', '2026-01-01',
@@ -2226,6 +2501,7 @@ begin
       'requestId', '902c91a3-cee5-4f11-bc4a-f35a672ea1f2',
       'checksum', 'atomic-side-count-over-limit',
       'seasonCode', 'RSC',
+      'expectedDataVersion', 0,
       'sourceRows', v_rows
     ));
     raise exception '100500 atomic sides were not rejected: %', v_result;
@@ -2262,6 +2538,7 @@ begin
     'requestId', 'a4661c07-e25b-413d-887d-d718555de258',
     'checksum', 'inferred-cross-row-sameday',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', 330,
@@ -2330,6 +2607,7 @@ begin
     'requestId', '01d57d2f-3c4e-4994-aadb-0a8d06ee6cb0',
     'checksum', 'inferred-cross-row-overnight',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', 340,
@@ -2409,6 +2687,7 @@ begin
     'requestId', '2ce249ed-7eb5-44fd-a655-cb0e73bd1e23',
     'checksum', 'explicit-sameday-overrides-inference',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', 350,
@@ -2485,6 +2764,7 @@ begin
     'requestId', '2c949159-3bef-4cd4-8a90-12649398817f',
     'checksum', 'explicit-overnight-overrides-inference',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(
       jsonb_build_object(
         'rowIndex', 360,
@@ -2578,6 +2858,7 @@ begin
   v_payload := jsonb_build_object(
     'checksum', 'timezone-date-series',
     'seasonCode', 'TV2',
+    'expectedDataVersion', 3,
     'sourceRows', jsonb_build_array(jsonb_build_object(
       'rowIndex', 370,
       'effective', '2011-12-29',
@@ -2760,6 +3041,7 @@ begin
       'requestId', '4b32dbcd-c51c-45c4-a534-a1675c65d8f4',
       'checksum', 'ambiguous-season-code',
       'seasonCode', 'TV2',
+      'expectedDataVersion', 3,
       'sourceRows', jsonb_build_array(jsonb_build_object(
         'rowIndex', 50,
         'effective', '2026-10-25',
@@ -2819,6 +3101,7 @@ begin
       'requestId', '7f3a7e0c-84af-4a2e-bbf5-e422611df69d',
       'checksum', 'permission-denied',
       'seasonCode', 'TV2',
+      'expectedDataVersion', 3,
       'sourceRows', jsonb_build_array(jsonb_build_object('rowIndex', 2))
     ));
     raise exception 'operator without seasonal.write was not rejected';
@@ -3021,6 +3304,65 @@ declare
 begin
   insert into public.seasons (
     id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+    total_legs, total_source_rows, data_version
+  ) values (
+    'task5-mod-added-collision-season', 'X61', 'Task 5 modification-added collision',
+    '', 0, '2026-11-14', '2026-11-14', 1, 0, 1
+  );
+  insert into public.season_modifications (
+    season_id, leg_id, action, changed_fields
+  ) values (
+    'task5-mod-added-collision-season', 'task5-active-mod-added-collision',
+    'added', array['addedLeg']
+  );
+  insert into public.season_modification_added_legs (
+    season_id, leg_id, record_id, type, airline, flight_number, raw_flight_number,
+    route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+    operational_date, day_of_week, action, source_kind, source_side, status
+  ) values (
+    'task5-mod-added-collision-season', 'task5-active-mod-added-collision',
+    'task5-active-mod-added-collision-record', 'A', 'VN', 'VN730', '730',
+    'MANUAL', '08:00', '321', 'J', '2026-11-14', '2026-11-14', '08:00',
+    '2026-11-14', 6, 'added', 'added', 'ARR', 'active'
+  );
+
+  v_stage := pg_temp.task5_stage(
+    '47d6e9e4-ef4c-4d44-b161-147ee3234e5a',
+    'task5-mod-added-collision-season',
+    'X61',
+    1,
+    'task5-mod-added-collision',
+    jsonb_build_array(pg_temp.task5_source_row(1, '2026-11-14', 'VN730', null))
+  );
+  v_batch_id := (v_stage->>'batchId')::uuid;
+  v_before := pg_temp.task5_snapshot('task5-mod-added-collision-season', v_batch_id);
+
+  begin
+    perform public.commit_seasonal_import_v2(v_batch_id, 1);
+    raise exception 'active modification-added occurrence collision was not rejected';
+  exception
+    when unique_violation then
+      if position('manual added occurrence collision' in lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  v_after := pg_temp.task5_snapshot('task5-mod-added-collision-season', v_batch_id);
+  if v_after is distinct from v_before then
+    raise exception 'modification-added collision did not roll back the whole commit';
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_stage jsonb;
+  v_batch_id uuid;
+  v_before jsonb;
+  v_after jsonb;
+begin
+  insert into public.seasons (
+    id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
     total_legs, total_source_rows, data_version, last_synced_at
   ) values (
     'task5-stale-season', 'X51', 'Task 5 stale', 'before.xlsx', 1,
@@ -3139,7 +3481,38 @@ begin
     '10:00', '2026-01-01', 'W25', 'SER_INACTIVE', 3,
     0, null, null, null,
     null, 'added', 'ARR', 'deleted', null
+  ),
+  (
+    'task5-rebase-season', 'hidden-manual-base-id', 'hidden-manual-base-id',
+    'A', 'VN', 'VN504', '504',
+    null, 'HIDDEN-MANUAL', '08:00', '321', 'J', null, 'I',
+    55, 24, 25, null, null, null, null, null, null, '2026-10-28', '2026-10-28',
+    '08:00', '2026-10-28', 'W26', 'SER_HIDDEN_MANUAL', 3,
+    0, null, null, null,
+    null, 'added', 'ARR', 'active', null
+  ),
+  (
+    'task5-rebase-season', 'action-deleted-manual-id', 'action-deleted-manual-id',
+    'A', 'VN', 'VN501', '501',
+    null, 'ACTION-DELETED', '08:00', '321', 'J', null, 'I',
+    56, 26, 27, null, null, null, null, null, null, '2026-10-25', '2026-10-25',
+    '08:00', '2026-10-25', 'W26', 'SER_ACTION_DELETED', 0,
+    0, null, null, null,
+    null, 'added', 'ARR', 'active', null
+  ),
+  (
+    'task5-rebase-season', 'dedupe-manual-id', 'dedupe-manual-id',
+    'A', 'VN', 'VN780', '780',
+    null, 'DEDUPE-BASE', '10:00', '321', 'J', null, 'I',
+    57, 28, 29, null, null, null, null, null, null, '2026-10-31', '2026-10-31',
+    '10:00', '2026-10-31', 'W26', 'SER_DEDUPE_BASE', 5,
+    0, null, null, null,
+    null, 'added', 'ARR', 'active', null
   );
+
+  update public.season_flight_records records
+  set action = 'deleted'
+  where records.record_id = 'action-deleted-manual-id';
 
   insert into public.season_flight_record_counters
     (record_id, counter_group, item_index, counter_value)
@@ -3170,6 +3543,57 @@ begin
     array['gate'], null, null, null, null,
     null, 30, null, null, null, null, null, null, null,
     null, null, null
+  ), (
+    'task5-rebase-season', 'hidden-manual-base-id', 'deleted',
+    array[]::text[], null, null, null, null,
+    null, null, null, null, null, null, null, null, null,
+    null, null, null
+  ), (
+    'task5-rebase-season', 'child-deleted-added-id', 'added',
+    array['addedLeg'], null, null, null, null,
+    null, null, null, null, null, null, null, null, null,
+    null, null, null
+  ), (
+    'task5-rebase-season', 'parent-deleted-added-id', 'deleted',
+    array['addedLeg'], null, null, null, null,
+    null, null, null, null, null, null, null, null, null,
+    null, null, null
+  ), (
+    'task5-rebase-season', 'active-mod-added-id', 'added',
+    array['addedLeg'], null, null, null, null,
+    null, null, null, null, null, null, null, null, null,
+    null, null, null
+  ), (
+    'task5-rebase-season', 'dedupe-manual-id', 'added',
+    array['addedLeg'], null, null, null, null,
+    null, null, null, null, null, null, null, null, null,
+    null, null, null
+  );
+
+  insert into public.season_modification_added_legs (
+    season_id, leg_id, record_id, type, airline, flight_number, raw_flight_number,
+    route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+    operational_date, day_of_week, action, source_kind, source_side, status
+  ) values (
+    'task5-rebase-season', 'child-deleted-added-id', 'child-deleted-added-record',
+    'A', 'VN', 'VN503', '503', 'CHILD-DELETED', '08:00', '321', 'J',
+    '2026-10-26', '2026-10-26', '08:00', '2026-10-26', 1,
+    'deleted', 'added', 'ARR', 'active'
+  ), (
+    'task5-rebase-season', 'parent-deleted-added-id', 'parent-deleted-added-record',
+    'A', 'VN', 'VN504', '504', 'PARENT-DELETED', '08:00', '321', 'J',
+    '2026-10-28', '2026-10-28', '08:00', '2026-10-28', 3,
+    'added', 'added', 'ARR', 'active'
+  ), (
+    'task5-rebase-season', 'active-mod-added-id', 'active-mod-added-record',
+    'A', 'VN', 'VN790', '790', 'ACTIVE-MOD-ADDED', '10:00', '321', 'J',
+    '2026-11-01', '2026-11-01', '10:00', '2026-11-01', 6,
+    'added', 'added', 'ARR', 'active'
+  ), (
+    'task5-rebase-season', 'dedupe-manual-id', 'dedupe-child-record',
+    'A', 'VN', 'VN9998', '9998', 'DEDUPE-CHILD', '10:00', '321', 'J',
+    '2026-12-31', '2026-12-31', '10:00', '2026-12-31', 4,
+    'added', 'added', 'ARR', 'active'
   );
   insert into public.season_modification_counters
     (leg_id, counter_group, item_index, counter_value)
@@ -3287,6 +3711,19 @@ begin
 
   if not exists (
     select 1
+    from public.season_modification_added_legs added_legs
+    join public.season_modifications modifications
+      on modifications.leg_id = added_legs.leg_id
+      and modifications.season_id = added_legs.season_id
+    where added_legs.leg_id = 'active-mod-added-id'
+      and added_legs.status = 'active'
+      and modifications.action = 'added'
+  ) then
+    raise exception 'active modification-added manual leg was removed by re-import';
+  end if;
+
+  if not exists (
+    select 1
     from public.season_modifications modifications
     where modifications.leg_id = 'legacy-arr-id'
       and modifications.action = 'modified'
@@ -3320,8 +3757,8 @@ begin
     where seasons.id = 'task5-rebase-season'
       and seasons.file_name = 'X52-task5.xlsx'
       and seasons.effective_start = '2026-10-25'
-      and seasons.effective_end = '2026-10-29'
-      and seasons.total_legs = 5
+      and seasons.effective_end = '2026-11-01'
+      and seasons.total_legs = 7
       and seasons.total_source_rows = 3
       and seasons.data_version = 8
       and seasons.last_synced_at is not null

@@ -2059,6 +2059,7 @@ declare
   v_generation_diagnostics jsonb := '[]'::jsonb;
   v_generation_diagnostic_count integer := 0;
   v_generated_record_count integer := 0;
+  v_existing_created_by uuid;
   v_max_date_span integer := 0;
   v_atomic_side_count bigint := 0;
   v_oversized_staging_row_index integer;
@@ -2133,6 +2134,16 @@ begin
         using errcode = '22023';
   end;
 
+  select batches.created_by
+  into v_existing_created_by
+  from public.season_import_batches batches
+  where batches.request_id = v_request_id;
+
+  if found and v_existing_created_by is distinct from auth.uid() then
+    raise exception 'Seasonal import request is not available to the current operator'
+      using errcode = '42501';
+  end if;
+
   if v_checksum is null then
     raise exception 'checksum is required'
       using errcode = '22023';
@@ -2181,29 +2192,20 @@ begin
       using errcode = '22023';
   end if;
 
-  if p_import ? 'expectedDataVersion'
-    and pg_catalog.jsonb_typeof(p_import->'expectedDataVersion') <> 'null'
+  if pg_catalog.jsonb_typeof(p_import->'expectedDataVersion') is distinct from 'number'
+    or coalesce(p_import->>'expectedDataVersion', '') !~ '^(0|[1-9][0-9]*)$'
   then
-    if pg_catalog.jsonb_typeof(p_import->'expectedDataVersion') <> 'number'
-      or coalesce(p_import->>'expectedDataVersion', '') !~ '^[0-9]+$'
-    then
-      raise exception 'expectedDataVersion must be an integer'
-        using errcode = '22023';
-    end if;
-
-    begin
-      v_expected_data_version := (p_import->>'expectedDataVersion')::integer;
-    exception
-      when invalid_text_representation or numeric_value_out_of_range then
-        raise exception 'expectedDataVersion must be an integer'
-          using errcode = '22023';
-    end;
-
-    if v_expected_data_version < 0 then
-      raise exception 'expectedDataVersion must not be negative'
-        using errcode = '22023';
-    end if;
+    raise exception 'expectedDataVersion must be a non-negative JSON integer'
+      using errcode = '22023';
   end if;
+
+  begin
+    v_expected_data_version := (p_import->>'expectedDataVersion')::integer;
+  exception
+    when invalid_text_representation or numeric_value_out_of_range then
+      raise exception 'expectedDataVersion must be a non-negative JSON integer'
+        using errcode = '22023';
+  end;
 
   select
     (source_rows.ordinality - 1)::integer,
@@ -3003,7 +3005,8 @@ begin
     status,
     source_row_count,
     diagnostics,
-    result
+    result,
+    created_by
   )
   values (
     v_request_id,
@@ -3024,7 +3027,8 @@ begin
         'requestFingerprint', v_request_fingerprint,
         'targetSeasonId', v_target_season_id
       )
-    )
+    ),
+    auth.uid()
   )
   on conflict (request_id) do nothing
   returning * into v_batch;
@@ -3033,11 +3037,12 @@ begin
     select batches.*
     into v_batch
     from public.season_import_batches batches
-    where batches.request_id = v_request_id;
+    where batches.request_id = v_request_id
+      and batches.created_by = auth.uid();
 
     if not found then
-      raise exception 'Unable to resolve concurrent seasonal import request %', v_request_id
-        using errcode = '40001';
+      raise exception 'Seasonal import request is not available to the current operator'
+        using errcode = '42501';
     end if;
 
     v_persisted_request_fingerprint :=
@@ -3259,7 +3264,7 @@ declare
   v_generated_record_count integer := 0;
   v_source_row_count integer := 0;
   v_flight_record_count integer := 0;
-  v_active_record_count integer := 0;
+  v_effective_record_count integer := 0;
   v_preserved_operational_count integer := 0;
   v_removed_imported_count integer := 0;
   v_effective_start text;
@@ -3286,11 +3291,12 @@ begin
   into v_batch
   from public.season_import_batches batches
   where batches.batch_id = p_batch_id
+    and batches.created_by = auth.uid()
   for update;
 
   if not found then
-    raise exception 'Seasonal import batch % was not found', p_batch_id
-      using errcode = '22023';
+    raise exception 'Seasonal import request is not available to the current operator'
+      using errcode = '42501';
   end if;
 
   if v_batch.status = 'committed' then
@@ -3468,6 +3474,7 @@ begin
   drop table if exists pg_temp.seasonal_import_commit_matches_v2;
   drop table if exists pg_temp.seasonal_import_commit_old_records_v2;
   drop table if exists pg_temp.seasonal_import_commit_affected_ids_v2;
+  drop table if exists pg_temp.seasonal_import_commit_effective_manual_v2;
 
   create temporary table seasonal_import_commit_records_v2
   on commit drop
@@ -3518,22 +3525,34 @@ begin
       using errcode = 'P0001';
   end if;
 
-  with manual_added as (
+  create temporary table seasonal_import_commit_effective_manual_v2
+  on commit drop
+  as
+  with manual_candidates as (
     select
+      records.record_id as leg_id,
       records.record_id,
-      coalesce(nullif(records.scheduled_date, ''), records.date) as scheduled_date,
-      records.airline,
-      coalesce(nullif(records.flight_number, ''), records.raw_flight_number) as raw_flight_number
+      coalesce(nullif(records.scheduled_date, ''), nullif(records.date, '')) as scheduled_date,
+      pg_catalog.upper(pg_catalog.btrim(records.airline)) as airline,
+      coalesce(nullif(records.flight_number, ''), records.raw_flight_number) as raw_flight_number,
+      0 as source_priority
     from public.season_flight_records records
+    left join public.season_modifications modifications
+      on modifications.season_id = records.season_id
+      and modifications.leg_id = records.record_id
     where records.season_id = v_target_season_id
-      and records.source_kind = 'added'
+      and (records.source_kind = 'added' or records.action = 'added')
       and records.status = 'active'
+      and records.action is distinct from 'deleted'
+      and modifications.action is distinct from 'deleted'
     union all
     select
+      added_legs.leg_id,
       added_legs.record_id,
-      coalesce(nullif(added_legs.scheduled_date, ''), added_legs.date),
-      added_legs.airline,
-      coalesce(nullif(added_legs.flight_number, ''), added_legs.raw_flight_number)
+      coalesce(nullif(added_legs.scheduled_date, ''), nullif(added_legs.date, '')),
+      pg_catalog.upper(pg_catalog.btrim(added_legs.airline)),
+      coalesce(nullif(added_legs.flight_number, ''), added_legs.raw_flight_number),
+      1
     from public.season_modification_added_legs added_legs
     join public.season_modifications modifications
       on modifications.leg_id = added_legs.leg_id
@@ -3541,27 +3560,50 @@ begin
     where added_legs.season_id = v_target_season_id
       and added_legs.source_kind = 'added'
       and added_legs.status = 'active'
+      and added_legs.action is distinct from 'deleted'
       and modifications.action = 'added'
-  ), normalized_manual_added as (
+  ), ranked_manual as (
     select
-      manual_added.record_id,
+      manual_candidates.*,
+      pg_catalog.row_number() over (
+        partition by manual_candidates.leg_id
+        order by manual_candidates.source_priority, manual_candidates.record_id
+      ) as manual_rank
+    from manual_candidates
+  )
+  select
+    ranked_manual.leg_id,
+    ranked_manual.record_id,
+    ranked_manual.scheduled_date,
+    ranked_manual.airline,
+    normalized.flight_number,
+    case
+      when ranked_manual.scheduled_date is null or normalized.flight_number is null then null
+      else
       v_target_season_id
         || '|'
-        || manual_added.scheduled_date
+        || ranked_manual.scheduled_date
         || '|'
-        || pg_catalog.upper(pg_catalog.btrim(manual_added.airline))
+        || ranked_manual.airline
         || '|'
-        || normalized.flight_number as occurrence_key
-    from manual_added
-    cross join lateral public.normalize_seasonal_flight_number_v2(
-      manual_added.airline,
-      manual_added.raw_flight_number
-    ) normalized
-  )
+        || normalized.flight_number
+    end as occurrence_key
+  from ranked_manual
+  left join lateral public.normalize_seasonal_flight_number_v2(
+    ranked_manual.airline,
+    ranked_manual.raw_flight_number
+  ) normalized on true
+  where ranked_manual.manual_rank = 1;
+
+  create unique index seasonal_import_commit_effective_manual_leg_v2
+    on pg_temp.seasonal_import_commit_effective_manual_v2 (leg_id);
+  create index seasonal_import_commit_effective_manual_occurrence_v2
+    on pg_temp.seasonal_import_commit_effective_manual_v2 (occurrence_key);
+
   select generated.occurrence_key, manual.record_id
   into v_collision_occurrence_key, v_collision_record_id
   from pg_temp.seasonal_import_commit_records_v2 generated
-  join normalized_manual_added manual
+  join pg_temp.seasonal_import_commit_effective_manual_v2 manual
     on manual.occurrence_key = generated.occurrence_key
   order by generated.occurrence_key, manual.record_id
   limit 1;
@@ -4040,15 +4082,42 @@ begin
   where records.season_id = v_target_season_id
     and records.source_kind = 'imported';
 
+  with effective_schedule_candidates as (
+    select
+      records.record_id as leg_id,
+      coalesce(nullif(records.scheduled_date, ''), nullif(records.date, '')) as scheduled_date,
+      0 as source_priority
+    from public.season_flight_records records
+    left join public.season_modifications modifications
+      on modifications.season_id = records.season_id
+      and modifications.leg_id = records.record_id
+    where records.season_id = v_target_season_id
+      and records.source_kind = 'imported'
+      and records.status = 'active'
+      and records.action is distinct from 'deleted'
+      and modifications.action is distinct from 'deleted'
+    union all
+    select
+      manual.leg_id,
+      manual.scheduled_date,
+      1
+    from pg_temp.seasonal_import_commit_effective_manual_v2 manual
+  ), ranked_effective_schedule as (
+    select
+      effective_schedule_candidates.*,
+      pg_catalog.row_number() over (
+        partition by effective_schedule_candidates.leg_id
+        order by effective_schedule_candidates.source_priority
+      ) as effective_rank
+    from effective_schedule_candidates
+  )
   select
     pg_catalog.count(*)::integer,
-    pg_catalog.min(coalesce(nullif(records.scheduled_date, ''), nullif(records.date, ''))),
-    pg_catalog.max(coalesce(nullif(records.scheduled_date, ''), nullif(records.date, '')))
-  into v_active_record_count, v_effective_start, v_effective_end
-  from public.season_flight_records records
-  where records.season_id = v_target_season_id
-    and records.status = 'active'
-    and records.action is distinct from 'deleted';
+    pg_catalog.min(ranked_effective_schedule.scheduled_date),
+    pg_catalog.max(ranked_effective_schedule.scheduled_date)
+  into v_effective_record_count, v_effective_start, v_effective_end
+  from ranked_effective_schedule
+  where ranked_effective_schedule.effective_rank = 1;
 
   if v_source_row_count <> v_batch.source_row_count then
     raise exception 'Read-back source row count mismatch for batch %: staged %, committed %',
@@ -4081,7 +4150,7 @@ begin
     uploaded_at = v_now_ms,
     effective_start = coalesce(v_effective_start, ''),
     effective_end = coalesce(v_effective_end, ''),
-    total_legs = v_active_record_count,
+    total_legs = v_effective_record_count,
     total_source_rows = v_source_row_count,
     data_version = v_next_data_version,
     last_synced_at = v_now_ms
