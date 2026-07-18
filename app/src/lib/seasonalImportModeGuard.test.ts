@@ -6,6 +6,12 @@ import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
+function requireSqlSection(source: string, pattern: RegExp, label: string): string {
+  const section = source.match(pattern)?.[0];
+  assert.ok(section, `${label} must be present`);
+  return section.replace(/\r\n/g, '\n');
+}
+
 test('main Seasonal import uses server-side transaction import and does not call direct remote write sequence', () => {
   const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
   assert.match(source, /buildSeasonalImportPatch/);
@@ -123,11 +129,34 @@ test('seasonal source import V2 stages canonical rows behind a permissioned RPC'
     'utf8'
   );
   const schemaSource = readFileSync(join(root, '..', 'supabase', 'schema.sql'), 'utf8');
+  const importBatchTablePattern = /create table if not exists public\.season_import_batches[\s\S]*?\n\);/i;
+  const importBatchRowsTablePattern = /create table if not exists public\.season_import_batch_rows[\s\S]*?\n\);/i;
   const stageFunctionPattern = /create or replace function public\.stage_seasonal_import_v2\(p_import jsonb\)[\s\S]*?\n\$\$;/i;
+  const preserveFingerprintFunctionPattern = /create or replace function public\.preserve_season_import_batch_staging_metadata_v2\(\)[\s\S]*?\n\$\$;/i;
+  const preserveFingerprintTriggerPattern = /drop trigger if exists preserve_season_import_batch_staging_metadata_v2[\s\S]*?execute function public\.preserve_season_import_batch_staging_metadata_v2\(\);/i;
+
+  for (const [label, pattern] of [
+    ['season_import_batches table', importBatchTablePattern],
+    ['season_import_batch_rows table', importBatchRowsTablePattern],
+    ['staging metadata trigger function', preserveFingerprintFunctionPattern],
+    ['staging metadata trigger', preserveFingerprintTriggerPattern],
+    ['stage_seasonal_import_v2 function', stageFunctionPattern],
+  ] as const) {
+    assert.equal(
+      requireSqlSection(schemaSource, pattern, `${label} in schema.sql`),
+      requireSqlSection(migrationSource, pattern, `${label} in migration`),
+      `${label} must stay byte-for-byte equivalent between migration and schema.sql`
+    );
+  }
 
   for (const source of [migrationSource, schemaSource]) {
     const stageFunctionSource = source.match(stageFunctionPattern)?.[0];
+    const preserveFingerprintFunctionSource = source.match(preserveFingerprintFunctionPattern)?.[0];
     assert.ok(stageFunctionSource, 'stage_seasonal_import_v2 body must be present');
+    assert.ok(
+      preserveFingerprintFunctionSource,
+      'preserve_season_import_batch_staging_metadata_v2 body must be present'
+    );
     assert.match(source, /create table if not exists public\.season_import_batches/);
     assert.match(source, /create table if not exists public\.season_import_batch_rows/);
     assert.match(source, /alter table public\.season_import_batches enable row level security/);
@@ -138,10 +167,19 @@ test('seasonal source import V2 stages canonical rows behind a permissioned RPC'
     assert.match(stageFunctionSource, /public\.app_operator_has_permission\('seasonal\.write'\)/);
     assert.match(stageFunctionSource, /set search_path = pg_catalog, pg_temp/);
     assert.match(stageFunctionSource, /on conflict \(request_id\) do nothing/);
+    assert.match(stageFunctionSource, /requestFingerprint/);
+    assert.match(stageFunctionSource, /v_request_fingerprint/);
+    assert.match(stageFunctionSource, /pg_catalog\.sha256/);
+    assert.match(stageFunctionSource, /v_batch\.result #>> '\{_staging,requestFingerprint\}'/);
     assert.match(stageFunctionSource, /jsonb_agg\(rows\.row_data order by rows\.row_index\)/);
     assert.match(stageFunctionSource, /v_persisted_source_rows is distinct from v_canonical_source_rows/);
     assert.match(stageFunctionSource, /duplicate-row-index/);
     assert.match(stageFunctionSource, /Ambiguous seasonCode/);
+    assert.match(stageFunctionSource, /lock table public\.seasons in share mode/);
+    assert.match(stageFunctionSource, /octet_length\(p_import::text\) > 67108864/);
+    assert.match(stageFunctionSource, /char_length\(v_season_code\) > 32/);
+    assert.match(stageFunctionSource, /char_length\(v_requested_season_id\) > 256/);
+    assert.match(stageFunctionSource, /field-too-long/);
     assert.match(stageFunctionSource, /jsonb_array_length\(v_source_rows\) > 100000/);
     assert.match(stageFunctionSource, /char_length\(v_checksum\) > 256/);
     assert.match(stageFunctionSource, /char_length\(v_file_name\) > 1024/);
@@ -152,7 +190,16 @@ test('seasonal source import V2 stages canonical rows behind a permissioned RPC'
     assert.doesNotMatch(stageFunctionSource, /\bto_date\s*\(/i);
     assert.doesNotMatch(stageFunctionSource, /v_batch\.created_by is distinct from auth\.uid\(\)/);
     assert.doesNotMatch(stageFunctionSource, /flightRecords/);
-    assert.doesNotMatch(stageFunctionSource, /for\s+v_record\s+in\s+select.*jsonb_array_elements/is);
+    assert.doesNotMatch(
+      stageFunctionSource,
+      /for\s+v_record\s+in\s+select[\s\S]*jsonb_array_elements/i
+    );
+    assert.match(preserveFingerprintFunctionSource, /old\.result->'_staging'/);
+    assert.match(source, /before update of result on public\.season_import_batches/);
+    assert.match(
+      source,
+      /revoke execute on function public\.preserve_season_import_batch_staging_metadata_v2\(\)[\s\S]*from public, anon, authenticated/
+    );
   }
 });
 
@@ -170,7 +217,34 @@ test('seasonal source import V2 SQL suite preserves runtime regression fixtures'
   assert.match(sqlTestSource, /strict-canonical-json-types/);
   assert.match(sqlTestSource, /duplicate-logical-row-index/);
   assert.match(sqlTestSource, /same-checksum retry with changed sourceRows was not rejected/);
+  assert.match(sqlTestSource, /invalid payload corrected under the same request identity was not rejected/);
+  assert.match(sqlTestSource, /request fingerprint was not preserved across result update/);
+  assert.match(sqlTestSource, /p_import exceeds maximum size of 67108864 bytes/);
+  assert.match(sqlTestSource, /seasonCode exceeds maximum length of 32/);
+  assert.match(sqlTestSource, /seasonId exceeds maximum length of 256/);
+  assert.match(sqlTestSource, /field-too-long/);
   assert.match(sqlTestSource, /sourceRows exceeds maximum of 100000 rows/);
   assert.match(sqlTestSource, /Ambiguous seasonCode/);
   assert.match(sqlTestSource, /rollback;\s*$/);
+});
+
+test('seasonal source import V2 tracks a bounded real-PostgreSQL concurrency harness', () => {
+  const concurrencySource = readFileSync(
+    join(root, '..', 'supabase', 'tests', 'seasonal_source_import_v2_concurrency.mjs'),
+    'utf8'
+  );
+
+  assert.match(concurrencySource, /new Client\(/);
+  assert.match(concurrencySource, /Promise\.all\(/);
+  assert.match(concurrencySource, /stage_seasonal_import_v2/);
+  assert.match(concurrencySource, /connectionTimeoutMillis: 5_000/);
+  assert.match(concurrencySource, /query_timeout: 35_000/);
+  assert.match(concurrencySource, /60_000/);
+  assert.match(concurrencySource, /SEASONAL_TEST_TEMP_DB/);
+  assert.match(concurrencySource, /PGlite cannot prove multi-session locking/);
+  assert.match(concurrencySource, /season lookup race/);
+  assert.match(
+    concurrencySource,
+    /count\(\*\)[\s\S]*season_import_batches[\s\S]*count\(\*\)[\s\S]*season_import_batch_rows/i
+  );
 });

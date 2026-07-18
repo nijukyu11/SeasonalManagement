@@ -135,6 +135,14 @@ begin
     raise exception 'anon must not have execute on stage_seasonal_import_v2(jsonb)';
   end if;
 
+  if has_function_privilege(
+    'authenticated',
+    'public.preserve_season_import_batch_staging_metadata_v2()',
+    'EXECUTE'
+  ) then
+    raise exception 'authenticated must not execute the staging metadata trigger function';
+  end if;
+
   if not exists (
     select 1
     from pg_class
@@ -244,6 +252,8 @@ declare
   v_second jsonb;
   v_persisted_row_count integer;
   v_persisted_row_data jsonb;
+  v_fingerprint_before text;
+  v_fingerprint_after text;
 begin
   v_payload := jsonb_build_object(
     'requestId', '94b529f8-ae7c-45d7-9887-8b5501d8a3b2',
@@ -306,15 +316,63 @@ begin
     raise exception 'staged source row was not canonically normalized: %', v_persisted_row_data;
   end if;
 
+  select batches.result #>> '{_staging,requestFingerprint}'
+  into v_fingerprint_before
+  from public.season_import_batches batches
+  where batches.batch_id = (v_first->>'batchId')::uuid;
+
+  if char_length(coalesce(v_fingerprint_before, '')) <> 64 then
+    raise exception 'server request fingerprint was not persisted compactly';
+  end if;
+
+  update public.season_import_batches
+  set result = jsonb_build_object('summary', 'future-result')
+  where batch_id = (v_first->>'batchId')::uuid;
+
+  select batches.result #>> '{_staging,requestFingerprint}'
+  into v_fingerprint_after
+  from public.season_import_batches batches
+  where batches.batch_id = (v_first->>'batchId')::uuid;
+
+  if v_fingerprint_after is distinct from v_fingerprint_before
+    or not exists (
+      select 1
+      from public.season_import_batches batches
+      where batches.batch_id = (v_first->>'batchId')::uuid
+        and batches.result->>'summary' = 'future-result'
+    )
+  then
+    raise exception 'request fingerprint was not preserved across result update';
+  end if;
+
+  v_second := public.stage_seasonal_import_v2(
+    jsonb_set(v_payload, '{seasonCode}', '" TV2 "'::jsonb)
+  );
+
+  if v_second->>'batchId' is distinct from v_first->>'batchId' then
+    raise exception 'normalized season identity retry did not return the original batch: %', v_second;
+  end if;
+
+  v_second := public.stage_seasonal_import_v2(v_payload - 'seasonId');
+
+  if v_second->>'batchId' is distinct from v_first->>'batchId' then
+    raise exception 'resolved season identity retry did not return the original batch: %', v_second;
+  end if;
+
   v_canonical_retry_payload := jsonb_set(v_payload, '{sourceRows,0,airline}', '"VN"'::jsonb);
   v_canonical_retry_payload := jsonb_set(v_canonical_retry_payload, '{sourceRows,0,aircraft}', '"321"'::jsonb);
   v_canonical_retry_payload := jsonb_set(v_canonical_retry_payload, '{sourceRows,0,arrFlight}', '"VN336"'::jsonb);
   v_canonical_retry_payload := jsonb_set(v_canonical_retry_payload, '{sourceRows,0,arrRoute}', '"KIX"'::jsonb);
-  v_second := public.stage_seasonal_import_v2(v_canonical_retry_payload);
 
-  if v_second->>'batchId' is distinct from v_first->>'batchId' then
-    raise exception 'canonically equivalent retry did not return the original batch: %', v_second;
-  end if;
+  begin
+    perform public.stage_seasonal_import_v2(v_canonical_retry_payload);
+    raise exception 'same-checksum retry with canonically equivalent but changed sourceRows was not rejected';
+  exception
+    when unique_violation then
+      if position('different payload' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
 
   v_retry_payload := jsonb_set(
     v_payload,
@@ -369,6 +427,49 @@ begin
   exception
     when unique_violation then
       if position('different checksum' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+end
+$$;
+
+do $$
+declare
+  v_invalid_payload jsonb;
+  v_corrected_payload jsonb;
+  v_first jsonb;
+begin
+  v_invalid_payload := jsonb_build_object(
+    'requestId', 'a4f147de-42ca-4ff7-a6ef-a28d135d0f8b',
+    'checksum', 'invalid-then-corrected-payload',
+    'seasonCode', 'TV2',
+    'sourceRows', jsonb_build_array(jsonb_build_object(
+      'rowIndex', 6,
+      'effective', '2026-10-25',
+      'discontinue', '2026-10-25',
+      'airline', 'VN',
+      'aircraft', '321',
+      'daysOfWeek', jsonb_build_array(false, false, false, false, false, false, true),
+      'sta', 705,
+      'std', '08:05',
+      'depFlight', 'VN337',
+      'depRoute', 'KIX'
+    ))
+  );
+
+  v_first := public.stage_seasonal_import_v2(v_invalid_payload);
+  if v_first->>'status' <> 'failed' then
+    raise exception 'invalid raw payload did not create the expected failed batch: %', v_first;
+  end if;
+
+  v_corrected_payload := jsonb_set(v_invalid_payload, '{sourceRows,0,sta}', 'null'::jsonb);
+
+  begin
+    perform public.stage_seasonal_import_v2(v_corrected_payload);
+    raise exception 'invalid payload corrected under the same request identity was not rejected';
+  exception
+    when unique_violation then
+      if position('different payload' in sqlerrm) = 0 then
         raise;
       end if;
   end;
@@ -709,6 +810,7 @@ $$;
 do $$
 declare
   v_large_rows jsonb;
+  v_result jsonb;
 begin
   begin
     perform public.stage_seasonal_import_v2(jsonb_build_object(
@@ -722,8 +824,77 @@ begin
     when sqlstate '22023' then
       if position('checksum exceeds maximum length of 256' in sqlerrm) = 0 then
         raise;
+    end if;
+  end;
+
+  begin
+    perform public.stage_seasonal_import_v2(jsonb_build_object(
+      'requestId', '0d17e04a-b56f-47d6-984d-35ab337c86cd',
+      'checksum', 'oversized-season-code',
+      'seasonCode', repeat('S', 33),
+      'sourceRows', jsonb_build_array(jsonb_build_object('rowIndex', 1))
+    ));
+    raise exception 'oversized seasonCode was not rejected';
+  exception
+    when sqlstate '22023' then
+      if position('seasonCode exceeds maximum length of 32' in sqlerrm) = 0 then
+        raise;
       end if;
   end;
+
+  begin
+    perform public.stage_seasonal_import_v2(jsonb_build_object(
+      'requestId', '7a259d52-6988-47d8-9f8d-e01d58d060c1',
+      'checksum', 'oversized-season-id',
+      'seasonId', repeat('s', 257),
+      'seasonCode', 'TV2',
+      'sourceRows', jsonb_build_array(jsonb_build_object('rowIndex', 1))
+    ));
+    raise exception 'oversized seasonId was not rejected';
+  exception
+    when sqlstate '22023' then
+      if position('seasonId exceeds maximum length of 256' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+
+  v_result := public.stage_seasonal_import_v2(jsonb_build_object(
+    'requestId', 'f496331f-0a8c-4f6c-b0d0-18fd5be5cbdf',
+    'checksum', 'oversized-canonical-fields',
+    'seasonCode', 'TV2',
+    'sourceRows', jsonb_build_array(jsonb_build_object(
+      'rowIndex', 60,
+      'effective', '2026-10-25',
+      'discontinue', '2026-10-25',
+      'airline', repeat('V', 17),
+      'aircraft', '321',
+      'daysOfWeek', jsonb_build_array(false, false, false, false, false, false, true),
+      'sta', '07:05',
+      'arrFlight', 'VN360',
+      'arrRoute', 'KIX',
+      'arrCodeShares', repeat('C', 4097)
+    ))
+  ));
+
+  if v_result->>'status' <> 'failed'
+    or (v_result->>'valid')::boolean
+    or not exists (
+      select 1
+      from jsonb_array_elements(v_result->'diagnostics') diagnostic
+      where diagnostic->>'rowIndex' = '60'
+        and diagnostic->>'code' = 'field-too-long'
+        and diagnostic->>'column' = 'Airline'
+    )
+    or not exists (
+      select 1
+      from jsonb_array_elements(v_result->'diagnostics') diagnostic
+      where diagnostic->>'rowIndex' = '60'
+        and diagnostic->>'code' = 'field-too-long'
+        and diagnostic->>'column' = 'ARRCodeShares'
+    )
+  then
+    raise exception 'oversized canonical field diagnostics were not returned: %', v_result;
+  end if;
 
   begin
     perform public.stage_seasonal_import_v2(jsonb_build_object(
@@ -756,6 +927,32 @@ begin
   exception
     when sqlstate '22023' then
       if position('sourceRows exceeds maximum of 100000 rows' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+
+  begin
+    perform public.stage_seasonal_import_v2(jsonb_build_object(
+      'requestId', '553123fd-dda8-4ede-a85c-b69e4f9b0270',
+      'checksum', 'oversized-total-request',
+      'seasonCode', 'TV2',
+      'sourceRows', jsonb_build_array(jsonb_build_object(
+        'rowIndex', 61,
+        'effective', '2026-10-25',
+        'discontinue', '2026-10-25',
+        'airline', 'VN',
+        'aircraft', '321',
+        'daysOfWeek', jsonb_build_array(false, false, false, false, false, false, true),
+        'sta', '07:05',
+        'arrFlight', 'VN361',
+        'arrRoute', 'KIX'
+      )),
+      'padding', repeat('x', 67108864)
+    ));
+    raise exception 'oversized total request was not rejected';
+  exception
+    when sqlstate '22023' then
+      if position('p_import exceeds maximum size of 67108864 bytes' in sqlerrm) = 0 then
         raise;
       end if;
   end;

@@ -26,6 +26,30 @@ create table if not exists public.season_import_batch_rows (
 alter table public.season_import_batches enable row level security;
 alter table public.season_import_batch_rows enable row level security;
 
+create or replace function public.preserve_season_import_batch_staging_metadata_v2()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, pg_temp
+as $$
+begin
+  if old.result ? '_staging' then
+    new.result := (
+      coalesce(new.result, '{}'::jsonb) - '_staging'
+    ) || pg_catalog.jsonb_build_object('_staging', old.result->'_staging');
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists preserve_season_import_batch_staging_metadata_v2
+  on public.season_import_batches;
+
+create trigger preserve_season_import_batch_staging_metadata_v2
+before update of result on public.season_import_batches
+for each row
+execute function public.preserve_season_import_batch_staging_metadata_v2();
+
 create or replace function public.stage_seasonal_import_v2(p_import jsonb)
 returns jsonb
 language plpgsql
@@ -46,6 +70,8 @@ declare
   v_source_row_count integer;
   v_canonical_source_rows jsonb := '[]'::jsonb;
   v_persisted_source_rows jsonb := '[]'::jsonb;
+  v_request_fingerprint text;
+  v_persisted_request_fingerprint text;
   v_diagnostics jsonb := '[]'::jsonb;
   v_batch public.season_import_batches%rowtype;
 begin
@@ -56,6 +82,11 @@ begin
 
   if p_import is null or pg_catalog.jsonb_typeof(p_import) <> 'object' then
     raise exception 'p_import must be a JSON object'
+      using errcode = '22023';
+  end if;
+
+  if pg_catalog.octet_length(p_import::text) > 67108864 then
+    raise exception 'p_import exceeds maximum size of 67108864 bytes'
       using errcode = '22023';
   end if;
 
@@ -120,6 +151,18 @@ begin
 
   if v_season_code is null then
     raise exception 'seasonCode is required'
+      using errcode = '22023';
+  end if;
+
+  if pg_catalog.char_length(v_season_code) > 32 then
+    raise exception 'seasonCode exceeds maximum length of 32'
+      using errcode = '22023';
+  end if;
+
+  if v_requested_season_id is not null
+    and pg_catalog.char_length(v_requested_season_id) > 256
+  then
+    raise exception 'seasonId exceeds maximum length of 256'
       using errcode = '22023';
   end if;
 
@@ -781,10 +824,55 @@ begin
     ) as field_types(column_name, type_is_valid, expected_type)
     where canonical_rows.row_is_object
       and not field_types.type_is_valid
+  ), length_diagnostic_items as (
+    select
+      canonical_rows.staging_row_index,
+      77 as issue_order,
+      field_lengths.column_name,
+      pg_catalog.jsonb_build_object(
+        'rowIndex', canonical_rows.diagnostic_row_index,
+        'stagingRowIndex', canonical_rows.staging_row_index,
+        'code', 'field-too-long',
+        'column', field_lengths.column_name,
+        'message', pg_catalog.format(
+          'Row %s: %s exceeds maximum length of %s.',
+          canonical_rows.diagnostic_row_index,
+          field_lengths.column_name,
+          field_lengths.maximum_length
+        )
+      ) as issue
+    from canonical_rows
+    cross join lateral (
+      values
+        ('Effective', canonical_rows.effective_value, 10),
+        ('Discontinue', canonical_rows.discontinue_value, 10),
+        ('Airline', canonical_rows.airline_value, 16),
+        ('Aircraft', canonical_rows.aircraft_value, 64),
+        ('STA', canonical_rows.sta_value, 5),
+        ('ARRFlight', canonical_rows.arr_flight_value, 64),
+        ('ARRFlightType', canonical_rows.arr_flight_type_value, 32),
+        ('ARRRoute', canonical_rows.arr_route_value, 512),
+        ('ARRFlightCategory', canonical_rows.arr_flight_category_value, 64),
+        ('ARRCodeShares', canonical_rows.arr_code_shares_value, 4096),
+        ('ARRIntDomInd', canonical_rows.arr_int_dom_ind_value, 32),
+        ('STD', canonical_rows.std_value, 5),
+        ('DEPFlight', canonical_rows.dep_flight_value, 64),
+        ('DEPFlightType', canonical_rows.dep_flight_type_value, 32),
+        ('DEPRoute', canonical_rows.dep_route_value, 512),
+        ('DEPFlightCategory', canonical_rows.dep_flight_category_value, 64),
+        ('DEPCodeShares', canonical_rows.dep_code_shares_value, 4096),
+        ('DEPIntDomInd', canonical_rows.dep_int_dom_ind_value, 32),
+        ('linkType', canonical_rows.link_type_value, 16)
+    ) as field_lengths(column_name, field_value, maximum_length)
+    where canonical_rows.row_is_object
+      and field_lengths.field_value is not null
+      and pg_catalog.char_length(field_lengths.field_value) > field_lengths.maximum_length
   ), diagnostic_items as (
     select * from row_diagnostic_items
     union all
     select * from type_diagnostic_items
+    union all
+    select * from length_diagnostic_items
   )
   select
     coalesce(
@@ -812,6 +900,9 @@ begin
     )
   into v_canonical_source_rows, v_diagnostics;
 
+  -- Block concurrent season inserts/updates until lookup and batch insert finish.
+  lock table public.seasons in share mode;
+
   select
     pg_catalog.count(*)::integer,
     pg_catalog.min(seasons.id)
@@ -831,6 +922,25 @@ begin
       using errcode = '22023';
   end if;
 
+  v_request_fingerprint := pg_catalog.encode(
+    pg_catalog.sha256(
+      pg_catalog.convert_to(
+        pg_catalog.jsonb_build_object(
+          'fingerprintVersion', 1,
+          'sourceRows', v_source_rows,
+          'seasonIdentity', pg_catalog.jsonb_build_object(
+            'seasonCode', v_season_code,
+            'seasonId', v_season_id
+          ),
+          'expectedDataVersion', v_expected_data_version,
+          'fileName', v_file_name
+        )::text,
+        'UTF8'
+      )
+    ),
+    'hex'
+  );
+
   insert into public.season_import_batches (
     request_id,
     season_id,
@@ -840,7 +950,8 @@ begin
     checksum,
     status,
     source_row_count,
-    diagnostics
+    diagnostics,
+    result
   )
   values (
     v_request_id,
@@ -854,7 +965,13 @@ begin
       else 'failed'
     end,
     v_source_row_count,
-    v_diagnostics
+    v_diagnostics,
+    pg_catalog.jsonb_build_object(
+      '_staging', pg_catalog.jsonb_build_object(
+        'fingerprintVersion', 1,
+        'requestFingerprint', v_request_fingerprint
+      )
+    )
   )
   on conflict (request_id) do nothing
   returning * into v_batch;
@@ -870,6 +987,9 @@ begin
         using errcode = '40001';
     end if;
 
+    v_persisted_request_fingerprint :=
+      v_batch.result #>> '{_staging,requestFingerprint}';
+
     select coalesce(
       pg_catalog.jsonb_agg(rows.row_data order by rows.row_index),
       '[]'::jsonb
@@ -883,7 +1003,13 @@ begin
         using errcode = '23505';
     end if;
 
+    if v_persisted_request_fingerprint is distinct from v_request_fingerprint then
+      raise exception 'Import requestId % was already used with a different payload', v_request_id
+        using errcode = '23505';
+    end if;
+
     if v_batch.season_code is distinct from v_season_code
+      or v_batch.season_id is distinct from v_season_id
       or v_batch.expected_data_version is distinct from v_expected_data_version
       or v_batch.file_name is distinct from v_file_name
       or v_persisted_source_rows is distinct from v_canonical_source_rows
@@ -922,6 +1048,8 @@ $$;
 revoke all on table public.season_import_batches from public, anon, authenticated;
 revoke all on table public.season_import_batch_rows from public, anon, authenticated;
 
+revoke execute on function public.preserve_season_import_batch_staging_metadata_v2()
+  from public, anon, authenticated;
 revoke execute on function public.stage_seasonal_import_v2(jsonb) from public;
 revoke execute on function public.stage_seasonal_import_v2(jsonb) from anon;
 grant execute on function public.stage_seasonal_import_v2(jsonb) to authenticated;
