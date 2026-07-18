@@ -20,7 +20,7 @@ function compileFixtureModules() {
   fs.mkdirSync(tempDir, { recursive: true });
   fs.writeFileSync(path.join(tempDir, 'package.json'), '{"type":"commonjs"}\n');
 
-  for (const name of ['types', 'importSeasonRules', 'iataSeason', 'flightPairIntegrity', 'parser', 'exporter', 'canonicalSeasonalRows', 'sourceRowPatterns', 'atomicSchedule', 'firestoreWritePlanner', 'importProgress', 'settingsRules', 'settingsPageActions', 'modHistorySizing', 'auditLog', 'detailedScheduleState', 'dailySchedule', 'dailyScheduleImport', 'dailyScheduleExport', 'checkinAllocation', 'checkInCounterSettings', 'gateAllocation', 'checkinPdfExport', 'gatePdfExport', 'seasonDataCache', 'seasonalLinkActions', 'nativeRuntime', 'serverAuthoritativeMode', 'nativeSeasonCatchup', 'nativeLocalSeasonStore', 'localSeasonStore', 'localSeasonSqlStore', 'seasonWorkspaceBootstrap', 'seasonChangeEvents', 'appSessionCleanup', 'exportSave', 'remoteStore', 'supabase', 'supabaseRelationalMappers', 'supabaseStore', 'seasonSync', 'seasonAutoSync', 'seasonalDisplayAggregator', 'routeCountry', 'dashboardAnalysis', 'dashboardAiShared', 'dashboardAiAnalysis', 'dashboardReportExport', 'persistenceSchema']) {
+  for (const name of ['types', 'importSeasonRules', 'iataSeason', 'flightPairIntegrity', 'parser', 'seasonalSourceRowValidation', 'exporter', 'canonicalSeasonalRows', 'sourceRowPatterns', 'atomicSchedule', 'firestoreWritePlanner', 'importProgress', 'settingsRules', 'settingsPageActions', 'modHistorySizing', 'auditLog', 'detailedScheduleState', 'dailySchedule', 'dailyScheduleImport', 'dailyScheduleExport', 'checkinAllocation', 'checkInCounterSettings', 'gateAllocation', 'checkinPdfExport', 'gatePdfExport', 'seasonDataCache', 'seasonalLinkActions', 'nativeRuntime', 'serverAuthoritativeMode', 'nativeSeasonCatchup', 'nativeLocalSeasonStore', 'localSeasonStore', 'localSeasonSqlStore', 'seasonWorkspaceBootstrap', 'seasonChangeEvents', 'appSessionCleanup', 'exportSave', 'remoteStore', 'supabase', 'supabaseRelationalMappers', 'supabaseStore', 'seasonSync', 'seasonAutoSync', 'seasonalDisplayAggregator', 'routeCountry', 'dashboardAnalysis', 'dashboardAiShared', 'dashboardAiAnalysis', 'dashboardReportExport', 'persistenceSchema']) {
     const sourcePath = name === 'dashboardAiShared'
       ? path.join(root, 'supabase', 'functions', '_shared', 'dashboardAiShared.ts')
       : path.join(root, 'src', 'lib', `${name}.ts`);
@@ -9488,8 +9488,10 @@ async function run() {
     `App UI must use dynamic viewport height (h-dvh) instead of h-screen, got ${fixedViewportViolations.slice(0, 12).map(({ relativePath, lineNumber }) => `${relativePath}:${lineNumber}`).join(', ')}`
   );
   assert(
-    seasonalPageSource.includes('if (selectedRecordIds.size === 0)') &&
-      seasonalPageSource.includes('Select flights to export') &&
+    seasonalPageSource.includes('const initialBlock = getSeasonalFileActionBlock({') &&
+      seasonalPageSource.includes('selectedCount: localSelection.matchedIds.length') &&
+      seasonalPageSource.includes("initialBlock.code === 'no-selection' ? 'Select flights to export'") &&
+      seasonalPageSource.includes('selectedRecordIds: selectedIds') &&
       !seasonalPageSource.includes('selectedRecordIds.size > 0 ? Array.from(selectedRecordIds) : undefined') &&
       !seasonalPageSource.includes('Export Updated Schedule'),
     'Seasonal canonical export must require selected flights; full export should happen only when the user selects all rows'
@@ -10671,14 +10673,30 @@ async function run() {
   const seasonalImportHandlerBody = seasonalImportHandlerStart >= 0 && seasonalImportHandlerEnd > seasonalImportHandlerStart
     ? seasonalPageSource.slice(seasonalImportHandlerStart, seasonalImportHandlerEnd)
     : '';
-  const seasonalImportButtonStart = seasonalPageSource.indexOf('onClick={() => fileInputRef.current?.click()}');
+  const seasonalImportClickStart = seasonalPageSource.indexOf('const handleImportClick = useCallback(() => {');
+  const seasonalImportClickEnd = seasonalPageSource.indexOf('const handleFile = useCallback', seasonalImportClickStart + 1);
+  const seasonalImportClickBody = seasonalImportClickStart >= 0 && seasonalImportClickEnd > seasonalImportClickStart
+    ? seasonalPageSource.slice(seasonalImportClickStart, seasonalImportClickEnd)
+    : '';
+  const seasonalImportButtonStart = seasonalPageSource.indexOf('onClick={handleImportClick}');
   const seasonalImportButtonBody = seasonalImportButtonStart >= 0
     ? seasonalPageSource.slice(Math.max(0, seasonalImportButtonStart - 300), seasonalImportButtonStart + 200)
     : '';
+  const seasonalFileActionBusyStart = seasonalPageSource.indexOf('const seasonalFileActionBusy = loading');
+  const seasonalFileActionBusyEnd = seasonalPageSource.indexOf(';', seasonalFileActionBusyStart + 1);
+  const seasonalFileActionBusyBody = seasonalFileActionBusyStart >= 0 && seasonalFileActionBusyEnd > seasonalFileActionBusyStart
+    ? seasonalPageSource.slice(seasonalFileActionBusyStart, seasonalFileActionBusyEnd)
+    : '';
   assert(
-    seasonalImportHandlerBody.includes('if (uploading || syncInProgress || fetchingServerData) return;') &&
-      seasonalImportHandlerBody.includes('fetchingServerData,') &&
-      seasonalImportButtonBody.includes('disabled={uploading || syncInProgress || fetchingServerData}'),
+    seasonalFileActionBusyBody.includes('|| syncInProgress') &&
+      seasonalFileActionBusyBody.includes('|| fetchingServerData') &&
+      seasonalImportClickBody.includes('const block = getSeasonalFileActionBlock({') &&
+      seasonalImportClickBody.includes('busy: isSeasonalFileActionBusyNow()') &&
+      seasonalImportClickBody.includes('fileInputRef.current?.click()') &&
+      seasonalImportHandlerBody.includes('const block = getSeasonalFileActionBlock({') &&
+      seasonalImportHandlerBody.includes('busy: isSeasonalFileActionBusyNow()') &&
+      seasonalImportHandlerBody.includes("const operation = beginSeasonalFileAction('import')") &&
+      seasonalImportButtonBody.includes('disabled={seasonalFileActionBusy || hasDraftChanges}'),
     'Seasonal import must be disabled and guarded while save or Fetch data is active so baseline replacement cannot race server reads'
   );
   const dailyImportHandlerStart = dailyPageSource.indexOf('const handleDailyImportFile = useCallback(async (file: File | null) => {');
@@ -10959,8 +10977,8 @@ async function run() {
   assert(
     [seasonalPageSource, detailedPageSource].every((source) =>
       source.includes("const syncInProgress = syncStatus.status === 'syncing';") &&
-      /<FetchServerUpdatesButton[\s\S]{0,260}disabled=\{syncInProgress\}/.test(source) &&
-      /<SyncActionButton[\s\S]{0,260}syncing=\{syncInProgress\}/.test(source) &&
+      /<FetchServerUpdatesButton[\s\S]{0,260}disabled=\{syncInProgress(?: \|\| seasonalFileActionActive)?\}/.test(source) &&
+      /<SyncActionButton[\s\S]{0,260}syncing=\{syncInProgress(?: \|\| seasonalFileActionActive)?\}/.test(source) &&
       !/<FetchServerUpdatesButton[\s\S]{0,260}disabled=\{syncing\}/.test(source) &&
       !/<SyncActionButton[\s\S]{0,260}syncing=\{syncing\}/.test(source) &&
       !/if \([^\n]+ \|\| syncing\) return/.test(source)
