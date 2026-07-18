@@ -87,22 +87,29 @@ export interface RemoteSeasonImportCounts {
 }
 
 export interface RemoteSeasonalImportInput {
+  requestId: string;
+  checksum: string;
   seasonId?: string | null;
   seasonCode: string;
-  season: Omit<Season, 'id'> | Season;
+  expectedDataVersion: number | null;
+  fileName: string;
+  uploadedAt: number;
   sourceRows: ParsedRow[];
-  flightRecords: FlightRecord[];
-  modificationDeleteRecordIds: string[];
   actor?: RemoteActor | null;
-  onProgress?: (label: string, written: number, total: number) => void;
 }
 
 export interface RemoteSeasonalImportResult {
+  batchId: string;
   seasonId: string;
+  seasonCode: string;
+  status: 'committed';
+  sourceRowCount: number;
+  flightRecordCount: number;
+  preservedOperationalCount: number;
+  removedImportedCount: number;
+  dataVersion: number;
   serverHighWater: number;
-  sourceRows: number;
-  flightRecords: number;
-  status: string;
+  checksum: string;
 }
 
 export interface RemoteDashboardSeasonData {

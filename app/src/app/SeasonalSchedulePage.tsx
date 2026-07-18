@@ -7,11 +7,9 @@ import { parseSeasonalSchedule, enrichRows } from '@/lib/parser';
 import {
   applySeasonalImportRemote,
   findSeasonByCode,
-  getCurrentRemoteActor,
-  getFlightRecords,
-  getModifications,
   getSeasons,
   loadSeasonWorkspaceWindow,
+  type RemoteSeasonalImportResult,
 } from '@/lib/remoteStore';
 import { validateFlightLegsForSeasonalExport } from '@/lib/exporter';
 import { buildCanonicalSeasonalRows, downloadCanonicalSeasonalExcel } from '@/lib/canonicalSeasonalRows';
@@ -21,15 +19,14 @@ import {
   revertFlightRecordHistoryList,
   revertModificationHistoryMap,
 } from '@/lib/detailedScheduleState';
-import {
-  buildImportBatchProgress,
-  buildImportProgress,
-  buildLoadProgress,
-  type ImportProgress,
-  type LoadProgress,
-} from '@/lib/importProgress';
+import { buildImportProgress, buildLoadProgress, type ImportProgress, type LoadProgress } from '@/lib/importProgress';
 import { buildSeasonDisplayLabel, buildSeasonNameFromFileName, getDirtyImportGuard } from '@/lib/importSeasonRules';
-import { buildSeasonalImportPatch, type SeasonalImportPatchStats } from '@/lib/seasonalImportPatch';
+import {
+  buildSeasonalImportCommittedRefreshFailure,
+  buildSeasonalImportV2Checksum,
+  deriveSeasonalImportV2RequestId,
+  normalizeSeasonalImportExpectedDataVersion,
+} from '@/lib/seasonalImportRpcContract';
 import {
   buildSeasonalAvailableRecordIds,
   createSeasonalFileActionController,
@@ -51,10 +48,7 @@ import {
   flattenRowsToFlightRecords,
   flightRecordsToLegs,
   linkFlightRecordPairs,
-  mergeDuplicateImportPeriods,
-  mergeDuplicateImportRecords,
   unlinkFlightRecords,
-  type DuplicateImportPeriod,
 } from '@/lib/atomicSchedule';
 import {
   buildSeasonalLinkCandidates,
@@ -138,16 +132,6 @@ function getLoadErrorMessage(error: unknown): string {
   return 'Could not load schedule data from the server.';
 }
 
-function formatDuplicateImportMessage(periods: DuplicateImportPeriod[]): string {
-  const limit = 20;
-  const lines = periods.slice(0, limit).map((period) => (
-    `${period.flightNumber} ${period.side}: ${period.effective} to ${period.discontinue} ` +
-    `(source rows ${period.rowIndexes.join(', ')}, ${period.duplicateDates} duplicate date${period.duplicateDates === 1 ? '' : 's'})`
-  ));
-  const extra = periods.length > limit ? `\n...and ${periods.length - limit} more duplicate period(s).` : '';
-  return `Import completed. Duplicate overlapping periods were merged:\n${lines.join('\n')}${extra}`;
-}
-
 function buildPatternRowsFromRecords(
   records: FlightRecord[],
   modifications: Map<string, FlightModification>
@@ -157,6 +141,35 @@ function buildPatternRowsFromRecords(
     console.warn('Canonical seasonal pattern validation failed', canonical.diagnostics);
   }
   return canonical.rows;
+}
+
+function buildCommittedSeasonFallback(input: {
+  existing: Season | null;
+  result: RemoteSeasonalImportResult;
+  sourceRows: ParsedRow[];
+  fileName: string;
+  uploadedAt: number;
+}): Season {
+  const starts = input.sourceRows.map((row) => row.effective).sort();
+  const ends = input.sourceRows.map((row) => row.discontinue).sort();
+  return {
+    id: input.result.seasonId,
+    seasonCode: input.result.seasonCode,
+    name: input.existing?.name ?? buildSeasonNameFromFileName(input.fileName, input.result.seasonCode),
+    fileName: input.fileName,
+    uploadedAt: input.uploadedAt,
+    effectiveStart: starts[0] ?? input.existing?.effectiveStart ?? '',
+    effectiveEnd: ends[ends.length - 1] ?? input.existing?.effectiveEnd ?? '',
+    totalLegs: input.result.flightRecordCount,
+    totalSourceRows: input.result.sourceRowCount,
+    dataVersion: input.result.dataVersion,
+    lastSyncedAt: input.uploadedAt,
+  };
+}
+
+function replaceSeasonInList(seasons: Season[], nextSeason: Season): Season[] {
+  const remaining = seasons.filter((season) => season.id !== nextSeason.id);
+  return [nextSeason, ...remaining];
 }
 
 function applyModificationsToLegs(
@@ -228,6 +241,7 @@ export default function HomePage() {
   const fetchServerDataRequestRef = useRef(0);
   const fileActionControllerRef = useRef(createSeasonalFileActionController());
   const latestActiveSeasonRef = useRef<Season | null>(null);
+  const lastCommittedImportRef = useRef<RemoteSeasonalImportResult | null>(null);
   const latestDraftStateRef = useRef<{
     value: SeasonalScheduleDraftState | null;
     revision: number;
@@ -1514,17 +1528,7 @@ export default function HomePage() {
         return;
       }
 
-      setUploadProgress(buildImportProgress('Calculating flight schedule', 18, `${parsedRows.length} source rows`));
-      const duplicateMerge = mergeDuplicateImportPeriods(parsedRows);
-      const rows = duplicateMerge.rows;
-      const recordDuplicateMerge = mergeDuplicateImportRecords(flattenRowsToFlightRecords(rows));
-      const duplicatePeriods = [
-        ...duplicateMerge.duplicatePeriods,
-        ...recordDuplicateMerge.duplicatePeriods,
-      ];
-      const importedRecords = recordDuplicateMerge.records;
-      assertNoDuplicateFlightNumbers(importedRecords);
-
+      const sourceRows = parsedRows;
       setUploadProgress(buildImportProgress('Checking local changes', 24));
       const existing = await findSeasonByCode(seasonCode);
       if (existing) {
@@ -1548,179 +1552,181 @@ export default function HomePage() {
       }
 
       const uploadedAt = Date.now();
-      let seasonRecords = importedRecords;
-      let recordsToWrite = importedRecords;
-      let affectedRecordIds = importedRecords.map((record) => record.id);
-      let modificationDeleteRecordIds = importedRecords.map((record) => record.id);
-      let patchStats: SeasonalImportPatchStats = {
-        imported: importedRecords.length,
-        added: importedRecords.length,
-        updated: 0,
-        deleted: 0,
-        unchanged: 0,
-        affected: importedRecords.length,
-      };
-
-      if (existing) {
-        setUploadProgress(buildImportProgress(`Loading current ${seasonCode} baseline`, 28));
-        const [currentRecords, currentMods] = await Promise.all([
-          getFlightRecords(existing.id),
-          getModifications(existing.id),
-        ]);
-        const patch = buildSeasonalImportPatch({
-          existingRecords: currentRecords,
-          existingModifications: currentMods,
-          importedRows: rows,
-          importedRecords,
-        });
-        seasonRecords = patch.mergedRecords;
-        recordsToWrite = patch.recordsToWrite;
-        affectedRecordIds = patch.affectedRecordIds;
-        modificationDeleteRecordIds = patch.modificationDeleteRecordIds;
-        patchStats = patch.stats;
-      }
-
-      const legs = flightRecordsToLegs(seasonRecords);
-      const dates = legs.map((l) => l.date).sort();
-      const seasonFields = {
+      const expectedDataVersion = normalizeSeasonalImportExpectedDataVersion(
+        existing?.id ?? null,
+        existing ? existing.dataVersion ?? null : 0,
+      );
+      setUploadProgress(buildImportProgress('Preparing source rows', 30, `${sourceRows.length} source rows`));
+      const checksum = await buildSeasonalImportV2Checksum(seasonCode, sourceRows);
+      const requestId = await deriveSeasonalImportV2RequestId({
+        seasonId: existing?.id ?? null,
         seasonCode,
-        name: buildSeasonNameFromFileName(file.name, seasonCode),
-        fileName: file.name,
-        uploadedAt,
-        effectiveStart: dates[0] || '',
-        effectiveEnd: dates[dates.length - 1] || '',
-        totalLegs: legs.length,
-        totalSourceRows: 0,
-        dataVersion: (existing?.dataVersion ?? 0) + 1,
-        lastSyncedAt: uploadedAt,
-      };
-      const actor = await getCurrentRemoteActor();
-      const commitLabel = existing ? `Patching season ${seasonCode}` : `Creating season ${seasonCode}`;
-      setUploadProgress(buildImportProgress(commitLabel, existing ? 32 : 28, existing ? `${affectedRecordIds.length} affected records` : undefined));
-      setUploadProgress(buildImportBatchProgress('Committing seasonal import', 0, seasonRecords.length, 35, 90));
+        expectedDataVersion,
+        checksum,
+      });
       const commitInvalidation = validateSeasonalFileAction(operation);
       if (commitInvalidation) {
         showSeasonalFileActionInvalidation('import', commitInvalidation);
         return;
       }
+      setUploadProgress(buildImportProgress('Committing seasonal import', 55, `${sourceRows.length} source rows`));
       const remoteImport = await applySeasonalImportRemote({
+        requestId,
+        checksum,
         seasonId: existing?.id ?? null,
         seasonCode,
-        season: existing ? { ...existing, ...seasonFields, id: existing.id } : seasonFields,
-        sourceRows: [],
-        flightRecords: seasonRecords,
-        modificationDeleteRecordIds,
-        actor,
-        onProgress: (_label, written, total) => {
-          setUploadProgress(buildImportBatchProgress('Committing seasonal import', written, total, 35, 90));
-        },
+        expectedDataVersion,
+        fileName: file.name,
+        uploadedAt,
+        sourceRows,
       });
+      lastCommittedImportRef.current = remoteImport;
       const seasonId = remoteImport.seasonId;
-      const nextSeason = existing
-        ? { ...existing, ...seasonFields, id: seasonId }
-        : { ...seasonFields, id: seasonId } as Season;
-      const verifiedCounts = {
-        sourceRows: remoteImport.sourceRows,
-        flightRecords: remoteImport.flightRecords,
-      };
-      setUploadProgress(buildImportProgress('Refreshing schedule', 94));
-      const refreshedWindow = await loadSeasonWorkspaceWindow({
-        seasonId,
-        dateFrom: debouncedFilters.dateFrom || null,
-        dateTo: debouncedFilters.dateTo || null,
-        resourceType: 'schedule',
-        limit: 100000,
-      });
-      if (!refreshedWindow) {
-        throw new Error('Server seasonal schedule window is unavailable after import.');
-      }
-      const refreshedRecords = refreshedWindow.records;
-      const refreshedModifications = refreshedWindow.modifications;
-      const patternRows = buildPatternRowsFromRecords(refreshedRecords, refreshedModifications);
-      const previousSeasons = getCachedSeasons() ?? seasons;
-      const nextSeasons = existing
-        ? previousSeasons.map((season) => season.id === seasonId ? nextSeason : season)
-        : [nextSeason, ...previousSeasons];
-      const applyInvalidation = validateSeasonalFileAction(operation);
-      if (applyInvalidation) {
-        showSeasonalFileActionInvalidation('import', applyInvalidation);
-        return;
-      }
-      setCachedSeasons(nextSeasons);
-      setCachedSeasonData(seasonId, { rows: patternRows, records: refreshedRecords, modifications: refreshedModifications, seasonDataVersion: nextSeason.dataVersion });
-      useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
-      useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-        seasonId,
-        season: nextSeason,
-        rows: patternRows,
-        records: refreshedRecords,
-        modifications: refreshedModifications,
-        syncMeta: refreshedWindow.syncMeta,
-        windowKey: buildSeasonalWindowKey({
+      let refreshedSeasons: Season[] | null = null;
+      try {
+        setUploadProgress(buildImportProgress('Refreshing schedule', 90));
+        refreshedSeasons = await getSeasons();
+        const refreshedWindow = await loadSeasonWorkspaceWindow({
+          seasonId,
           dateFrom: debouncedFilters.dateFrom || null,
           dateTo: debouncedFilters.dateTo || null,
-          flight: debouncedFilters.flight || null,
-          route: debouncedFilters.route || null,
-        }),
-      });
-      publishSeasonalWorkspaceChange(
-        seasonId,
-        refreshedWindow.syncMeta.localRevision,
-        affectedRecordIds,
-        refreshedWindow.syncMeta
-      );
-      void appendAuditLogEntry({
-        seasonId,
-        seasonCode,
-        module: 'import',
-        category: 'import',
-        operation: existing
-          ? `Patched season ${seasonCode}: ${patchStats.affected} affected records`
-          : `Imported season ${seasonCode}: ${seasonRecords.length} flight records`,
-        targetFlightIds: affectedRecordIds,
-        targetFlightLabels: Array.from(new Set(recordsToWrite.map((record) => `${record.airline}${record.flightNumber}`))).slice(0, 200),
-        deltas: [{
-          targetType: 'sync',
-          targetId: seasonId,
-          targetLabel: seasonCode,
-          field: 'importSummary',
-          before: null,
-          after: {
-            sourceRows: 0,
-            flightRecords: seasonRecords.length,
-            importedFlightRecords: importedRecords.length,
-            affectedFlightRecords: affectedRecordIds.length,
-            effectiveStart: nextSeason.effectiveStart,
-            effectiveEnd: nextSeason.effectiveEnd,
-            fileName: file.name,
+          resourceType: 'schedule',
+          limit: 100000,
+        });
+        if (!refreshedWindow) {
+          throw new Error('Server seasonal schedule window is unavailable after import.');
+        }
+        const nextSeason = refreshedSeasons.find((season) => season.id === seasonId);
+        if (!nextSeason) {
+          throw new Error(`Committed season ${seasonId} is missing from the authoritative season list.`);
+        }
+        const refreshedRecords = refreshedWindow.records;
+        const refreshedModifications = refreshedWindow.modifications;
+        const affectedRecordIds = refreshedRecords.map((record) => record.id);
+        const patternRows = buildPatternRowsFromRecords(refreshedRecords, refreshedModifications);
+        const nextSeasons = refreshedSeasons;
+        const applyInvalidation = validateSeasonalFileAction(operation);
+        if (applyInvalidation) {
+          showSeasonalFileActionInvalidation('import', applyInvalidation);
+          return;
+        }
+        setCachedSeasons(nextSeasons);
+        setCachedSeasonData(seasonId, {
+          rows: patternRows,
+          records: refreshedRecords,
+          modifications: refreshedModifications,
+          seasonDataVersion: nextSeason.dataVersion,
+        });
+        useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
+        useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+          seasonId,
+          season: nextSeason,
+          rows: patternRows,
+          records: refreshedRecords,
+          modifications: refreshedModifications,
+          syncMeta: refreshedWindow.syncMeta,
+          windowKey: buildSeasonalWindowKey({
+            dateFrom: debouncedFilters.dateFrom || null,
+            dateTo: debouncedFilters.dateTo || null,
+            flight: debouncedFilters.flight || null,
+            route: debouncedFilters.route || null,
+          }),
+        });
+        publishSeasonalWorkspaceChange(
+          seasonId,
+          remoteImport.serverHighWater,
+          affectedRecordIds,
+          refreshedWindow.syncMeta,
+        );
+        void appendAuditLogEntry({
+          seasonId,
+          seasonCode: remoteImport.seasonCode,
+          module: 'import',
+          category: 'import',
+          operation: `Imported season ${remoteImport.seasonCode}: ${remoteImport.flightRecordCount} flight records`,
+          targetFlightIds: affectedRecordIds,
+          targetFlightLabels: Array.from(new Set(
+            refreshedRecords.map((record) => `${record.airline}${record.flightNumber}`),
+          )).slice(0, 200),
+          deltas: [{
+            targetType: 'sync',
+            targetId: seasonId,
+            targetLabel: remoteImport.seasonCode,
+            field: 'importSummary',
+            before: null,
+            after: {
+              sourceRows: remoteImport.sourceRowCount,
+              flightRecords: remoteImport.flightRecordCount,
+              preservedOperationalRecords: remoteImport.preservedOperationalCount,
+              removedImportedRecords: remoteImport.removedImportedCount,
+              dataVersion: remoteImport.dataVersion,
+              fileName: file.name,
+              batchId: remoteImport.batchId,
+            },
+          }],
+          metadata: {
+            sourceRows: remoteImport.sourceRowCount,
+            flightRecords: remoteImport.flightRecordCount,
+            preservedOperationalRecords: remoteImport.preservedOperationalCount,
+            removedImportedRecords: remoteImport.removedImportedCount,
+            dataVersion: remoteImport.dataVersion,
+            serverHighWater: remoteImport.serverHighWater,
+            checksum: remoteImport.checksum,
+            batchId: remoteImport.batchId,
           },
-        }],
-        metadata: {
-          sourceRows: 0,
-          parsedRows: rows.length,
-          flightRecords: seasonRecords.length,
-          importedFlightRecords: importedRecords.length,
-          affectedFlightRecords: affectedRecordIds.length,
-          patchStats,
-          duplicatePeriods: duplicatePeriods.length,
-        },
-      });
-      const finalApplyInvalidation = validateSeasonalFileAction(operation);
-      if (finalApplyInvalidation) {
-        showSeasonalFileActionInvalidation('import', finalApplyInvalidation);
+        });
+        const finalApplyInvalidation = validateSeasonalFileAction(operation);
+        if (finalApplyInvalidation) {
+          showSeasonalFileActionInvalidation('import', finalApplyInvalidation);
+          return;
+        }
+        setSeasons(nextSeasons);
+        useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
+        setActiveSeason(nextSeason);
+        sessionStorage.setItem('activeSeasonId', seasonId);
+        applySeasonData(patternRows, refreshedRecords, refreshedModifications);
+        setSelectedRecordIds(new Set());
+        setDraftState(null);
+        setPage(0);
+        setUploadProgress(buildImportProgress(
+          'Import complete',
+          100,
+          `${remoteImport.sourceRowCount} source rows, ${remoteImport.flightRecordCount} flight records`,
+        ));
+        void showAlert({
+          title: 'Import Completed',
+          message:
+            `${remoteImport.sourceRowCount} source rows generated ${remoteImport.flightRecordCount} flight records. ` +
+            `${remoteImport.preservedOperationalCount} operational records preserved; ` +
+            `${remoteImport.removedImportedCount} prior imported records removed.`,
+          tone: 'success',
+        });
+      } catch (refreshError) {
+        const fallbackSeason = buildCommittedSeasonFallback({
+          existing,
+          result: remoteImport,
+          sourceRows,
+          fileName: file.name,
+          uploadedAt,
+        });
+        const committedSeason = refreshedSeasons?.find((season) => season.id === seasonId) ?? fallbackSeason;
+        const nextSeasons = replaceSeasonInList(
+          refreshedSeasons ?? getCachedSeasons() ?? seasons,
+          committedSeason,
+        );
+        try {
+          setCachedSeasons(nextSeasons);
+          useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
+          setSeasons(nextSeasons);
+        } catch (stateError) {
+          console.error('Could not retain committed season metadata after refresh failure:', stateError);
+        }
+        const failure = buildSeasonalImportCommittedRefreshFailure(
+          lastCommittedImportRef.current ?? remoteImport,
+          refreshError,
+        );
+        void showAlert({ title: failure.title, message: failure.message, tone: 'warning' });
         return;
-      }
-      setSeasons(nextSeasons);
-      useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
-      setActiveSeason(nextSeason);
-      sessionStorage.setItem('activeSeasonId', seasonId);
-      applySeasonData(patternRows, refreshedRecords, refreshedModifications);
-      setSelectedRecordIds(new Set());
-      setDraftState(null);
-      setPage(0);
-      setUploadProgress(buildImportProgress('Import complete', 100, `${verifiedCounts.flightRecords} flight records`));
-      if (duplicatePeriods.length > 0) {
-        void showAlert({ title: 'Import Completed', message: formatDuplicateImportMessage(duplicatePeriods), tone: 'warning' });
       }
     } catch (err) {
       console.error('Upload error:', err);

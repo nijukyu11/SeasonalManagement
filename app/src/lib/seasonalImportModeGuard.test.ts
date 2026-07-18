@@ -12,29 +12,82 @@ function requireSqlSection(source: string, pattern: RegExp, label: string): stri
   return section.replace(/\r\n/g, '\n');
 }
 
-test('main Seasonal import uses server-side transaction import and does not call direct remote write sequence', () => {
+test('main Seasonal import sends canonical source rows and never builds client atomic import arrays', () => {
   const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
-  assert.match(source, /buildSeasonalImportPatch/);
-  assert.match(source, /applySeasonalImportRemote\(/);
-  assert.match(source, /sourceRows: \[\]/);
-  assert.match(source, /totalSourceRows: 0/);
-  assert.doesNotMatch(source, /await clearSourceRows\(seasonId\)/);
-  assert.doesNotMatch(source, /await deleteModifications\(seasonId, modificationDeleteRecordIds\)/);
-  assert.doesNotMatch(source, /await batchWriteFlightRecords\(seasonId, recordsToWrite/);
-  assert.doesNotMatch(source, /clearSeasonBaseline/);
-  assert.doesNotMatch(source, /batchWriteSourceRows/);
+  const importStart = source.indexOf('const handleFile = useCallback');
+  const importEnd = source.indexOf('const handleRowDoubleClick', importStart);
+  const importSource = source.slice(importStart, importEnd);
+  const rpcStart = importSource.indexOf('applySeasonalImportRemote({');
+  const rpcEnd = importSource.indexOf('lastCommittedImportRef.current', rpcStart);
+  const rpcInputSource = importSource.slice(rpcStart, rpcEnd);
+
+  assert.match(importSource, /buildSeasonalImportV2Checksum\(seasonCode, sourceRows\)/);
+  assert.match(importSource, /deriveSeasonalImportV2RequestId\(/);
+  assert.match(importSource, /applySeasonalImportRemote\(\{[\s\S]*sourceRows/);
+  assert.match(importSource, /refreshedWindow\.records/);
+  assert.match(importSource, /refreshedWindow\.modifications/);
+  assert.doesNotMatch(importSource, /flattenRowsToFlightRecords/);
+  assert.doesNotMatch(importSource, /mergeDuplicateImportRecords/);
+  assert.doesNotMatch(importSource, /buildSeasonalImportPatch/);
+  assert.doesNotMatch(importSource, /modificationDeleteRecordIds/);
+  assert.doesNotMatch(rpcInputSource, /flightRecords\s*:/);
+  assert.doesNotMatch(importSource, /sourceRows:\s*\[\]/);
+  assert.doesNotMatch(importSource, /await clearSourceRows\(/);
+  assert.doesNotMatch(importSource, /await batchWriteFlightRecords\(/);
 });
 
-test('remote store exposes server-side seasonal import transaction contract', () => {
+test('remote store performs the exact stage-then-commit V2 RPC sequence without compatibility fallback', () => {
   const remoteStoreSource = readFileSync(join(root, 'lib', 'remoteStore.ts'), 'utf8');
   const supabaseStoreSource = readFileSync(join(root, 'lib', 'supabaseStore.ts'), 'utf8');
+  const methodStart = supabaseStoreSource.indexOf('async applySeasonalImportRemote');
+  const methodEnd = supabaseStoreSource.indexOf('async applySeasonServerMutationV1', methodStart);
+  const methodSource = supabaseStoreSource.slice(methodStart, methodEnd);
+  const stageCall = methodSource.indexOf("rpc('stage_seasonal_import_v2'");
+  const commitCall = methodSource.indexOf("rpc('commit_seasonal_import_v2'");
+  const payloadBody = methodSource.match(/const payload = \{([\s\S]*?)\n    \};/)?.[1];
+  assert.ok(payloadBody, 'the V2 p_import payload must be declared inline');
+  const payloadKeys = payloadBody.split(/\r?\n/).flatMap((line) => {
+    const match = line.trim().match(/^([A-Za-z][A-Za-z0-9]*)(?::|,)/);
+    return match ? [match[1]] : [];
+  });
+
   assert.match(remoteStoreSource, /interface RemoteSeasonalImportInput/);
   assert.match(remoteStoreSource, /applySeasonalImportRemote\(input: RemoteSeasonalImportInput\): Promise<RemoteSeasonalImportResult>/);
-  assert.match(supabaseStoreSource, /rpc\('apply_seasonal_import_remote'/);
-  assert.match(supabaseStoreSource, /p_import/);
-  assert.match(supabaseStoreSource, /p_payload/);
-  assert.match(supabaseStoreSource, /callSeasonalImportRpcRawPayload/);
-  assert.match(supabaseStoreSource, /\/rest\/v1\/rpc\/apply_seasonal_import_remote/);
+  assert.deepEqual(payloadKeys, [
+    'requestId',
+    'checksum',
+    'seasonId',
+    'seasonCode',
+    'expectedDataVersion',
+    'fileName',
+    'uploadedAt',
+    'sourceRows',
+  ]);
+  assert.ok(stageCall >= 0, 'stage_seasonal_import_v2 must be called');
+  assert.ok(commitCall > stageCall, 'commit_seasonal_import_v2 must run only after staging');
+  assert.match(methodSource, /p_import:\s*payload/);
+  assert.match(methodSource, /parseSeasonalImportV2StageResult/);
+  assert.match(methodSource, /p_batch_id:\s*staged\.batchId/);
+  assert.match(methodSource, /p_expected_data_version:\s*expectedDataVersion/);
+  assert.match(methodSource, /parseSeasonalImportV2Result/);
+  assert.doesNotMatch(methodSource, /\bactor\b/);
+  assert.doesNotMatch(methodSource, /flightRecords|flight_records|source_rows/);
+  assert.doesNotMatch(supabaseStoreSource, /callSeasonalImportRpcRawPayload/);
+  assert.doesNotMatch(supabaseStoreSource, /rpc\('apply_seasonal_import_remote'/);
+  assert.doesNotMatch(supabaseStoreSource, /\/rest\/v1\/rpc\/apply_seasonal_import_remote/);
+});
+
+test('committed seasonal import refresh failures have a dedicated non-retry UI branch', () => {
+  const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
+  const contractSource = readFileSync(join(root, 'lib', 'seasonalImportRpcContract.ts'), 'utf8');
+  const importStart = source.indexOf('const handleFile = useCallback');
+  const importEnd = source.indexOf('const handleRowDoubleClick', importStart);
+  const importSource = source.slice(importStart, importEnd);
+
+  assert.match(importSource, /buildSeasonalImportCommittedRefreshFailure/);
+  assert.match(contractSource, /Import committed, refresh failed/);
+  assert.match(importSource, /return;/);
+  assert.doesNotMatch(importSource, /retry.*commit|commit.*retry/i);
 });
 
 test('server workspace window uses paged server fallback for transient RPC fetch failures', () => {

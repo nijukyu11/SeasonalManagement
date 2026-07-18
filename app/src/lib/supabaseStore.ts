@@ -27,6 +27,11 @@ import type { SourceRowOperationPlan } from './sourceRowPatterns';
 import { validateOperationalSettings } from './settingsRules';
 import { serializeFlightModificationForPersistence } from './persistenceSchema';
 import {
+  normalizeSeasonalImportExpectedDataVersion,
+  parseSeasonalImportV2Result,
+  parseSeasonalImportV2StageResult,
+} from './seasonalImportRpcContract';
+import {
   fromFlightRecordRows,
   fromModHistoryRows,
   fromModificationRows,
@@ -153,17 +158,6 @@ type SeasonEventPageRpc = {
   has_more?: boolean | null;
   serverHighWater?: number | string | null;
   server_high_water?: number | string | null;
-};
-type SeasonalImportRpc = {
-  seasonId?: string | null;
-  season_id?: string | null;
-  serverHighWater?: number | string | null;
-  server_high_water?: number | string | null;
-  sourceRows?: number | string | null;
-  source_rows?: number | string | null;
-  flightRecords?: number | string | null;
-  flight_records?: number | string | null;
-  status?: string | null;
 };
 type ServerSeasonMutationRpc = {
   seasonId?: string | null;
@@ -378,21 +372,6 @@ function numberFromRpc(value: number | string | null | undefined, fallback = 0):
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
-function normalizeSeasonalImportResult(
-  result: SeasonalImportRpc | null,
-  fallback: { seasonId?: string | null; sourceRows: number; flightRecords: number }
-): RemoteSeasonalImportResult {
-  const seasonId = result?.seasonId ?? result?.season_id ?? fallback.seasonId;
-  if (!seasonId) throw new Error('apply seasonal import remote: response did not include seasonId');
-  return {
-    seasonId,
-    serverHighWater: numberFromRpc(result?.serverHighWater ?? result?.server_high_water),
-    sourceRows: numberFromRpc(result?.sourceRows ?? result?.source_rows, fallback.sourceRows),
-    flightRecords: numberFromRpc(result?.flightRecords ?? result?.flight_records, fallback.flightRecords),
-    status: result?.status ?? 'committed',
-  };
-}
-
 function normalizeServerSeasonMutationResult(result: ServerSeasonMutationRpc | null): ServerSeasonMutationResult {
   const seasonId = result?.seasonId ?? result?.season_id;
   if (!seasonId) throw new Error('apply season server mutation: response did not include seasonId');
@@ -406,62 +385,6 @@ function normalizeServerSeasonMutationResult(result: ServerSeasonMutationRpc | n
     appliedEvents: result?.appliedEvents ?? result?.applied_events ?? [],
     rejectedEvents: result?.rejectedEvents ?? result?.rejected_events ?? [],
   };
-}
-
-async function callSeasonalImportRpc(payload: JsonRecord): Promise<SeasonalImportRpc | null> {
-  try {
-    return assertOk(
-      await client().rpc('apply_seasonal_import_remote', { p_import: payload }),
-      'apply seasonal import remote'
-    ) as SeasonalImportRpc | null;
-  } catch (error) {
-    if (!isMissingRpcSignatureError(error)) throw error;
-  }
-  try {
-    return assertOk(
-      await client().rpc('apply_seasonal_import_remote', { p_payload: payload }),
-      'apply seasonal import remote'
-    ) as SeasonalImportRpc | null;
-  } catch (error) {
-    if (!isMissingRpcSignatureError(error)) throw error;
-  }
-  try {
-    return assertOk(
-      await client().rpc('apply_seasonal_import_remote', { payload }),
-      'apply seasonal import remote'
-    ) as SeasonalImportRpc | null;
-  } catch (error) {
-    if (!isMissingRpcSignatureError(error)) throw error;
-    return callSeasonalImportRpcRawPayload(payload);
-  }
-}
-
-async function callSeasonalImportRpcRawPayload(payload: JsonRecord): Promise<SeasonalImportRpc | null> {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !anonKey) throw new Error('Supabase is not configured for seasonal import RPC.');
-  const { data } = await client().auth.getSession();
-  const token = data.session?.access_token ?? anonKey;
-  const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc/apply_seasonal_import_remote`, {
-    method: 'POST',
-    headers: {
-      apikey: anonKey,
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-  const contentType = response.headers.get('content-type') ?? '';
-  const responsePayload = contentType.includes('application/json')
-    ? await response.json().catch(() => null)
-    : await response.text().catch(() => '');
-  if (!response.ok) {
-    const message = responsePayload && typeof responsePayload === 'object' && 'message' in responsePayload
-      ? String((responsePayload as { message?: unknown }).message ?? response.statusText)
-      : String(responsePayload || response.statusText);
-    throw new Error(`apply seasonal import remote: ${message}`);
-  }
-  return responsePayload as SeasonalImportRpc | null;
 }
 
 function snapshotArray<T>(value: T[] | null | undefined): T[] {
@@ -1177,28 +1100,38 @@ export const supabaseStore: RemoteStore = {
   },
 
   async applySeasonalImportRemote(input: RemoteSeasonalImportInput): Promise<RemoteSeasonalImportResult> {
-    const seasonId = input.seasonId ?? ('id' in input.season ? input.season.id : undefined);
-    const payload = stripUndefinedDeep({
-      seasonId,
-      season_id: seasonId,
+    const expectedDataVersion = normalizeSeasonalImportExpectedDataVersion(
+      input.seasonId,
+      input.expectedDataVersion,
+    );
+    const payload = {
+      requestId: input.requestId,
+      checksum: input.checksum,
+      seasonId: input.seasonId ?? null,
       seasonCode: input.seasonCode,
-      season_code: input.seasonCode,
-      season: input.season,
+      expectedDataVersion,
+      fileName: input.fileName,
+      uploadedAt: input.uploadedAt,
       sourceRows: input.sourceRows,
-      source_rows: input.sourceRows,
-      flightRecords: input.flightRecords,
-      flight_records: input.flightRecords,
-      modificationDeleteRecordIds: input.modificationDeleteRecordIds,
-      modification_delete_record_ids: input.modificationDeleteRecordIds,
-      actor: input.actor ?? null,
-    });
-    const result = await callSeasonalImportRpc(payload);
-    input.onProgress?.('Committing seasonal import', input.flightRecords.length, input.flightRecords.length);
-    return normalizeSeasonalImportResult(result, {
-      seasonId,
-      sourceRows: input.sourceRows.length,
-      flightRecords: input.flightRecords.length,
-    });
+    };
+    const staged = parseSeasonalImportV2StageResult(assertOk(
+      await client().rpc('stage_seasonal_import_v2', { p_import: payload }),
+      'stage seasonal import',
+    ));
+    const committed = parseSeasonalImportV2Result(assertOk(
+      await client().rpc('commit_seasonal_import_v2', {
+        p_batch_id: staged.batchId,
+        p_expected_data_version: expectedDataVersion,
+      }),
+      'commit seasonal import',
+    ));
+    if (committed.batchId !== staged.batchId) {
+      throw new Error('Seasonal import commit response.batchId does not match the staged batch.');
+    }
+    if (committed.checksum !== input.checksum) {
+      throw new Error('Seasonal import commit response.checksum does not match the request checksum.');
+    }
+    return committed;
   },
 
   async applySeasonServerMutationV1(payload: ServerSeasonMutationPayload): Promise<ServerSeasonMutationResult> {

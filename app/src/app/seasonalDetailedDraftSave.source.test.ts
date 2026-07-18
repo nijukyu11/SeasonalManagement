@@ -230,16 +230,17 @@ test('Seasonal selection is reset or reconciled at every snapshot boundary', () 
   );
 });
 
-test('Seasonal import rejects parser issues before calculating or committing records', () => {
+test('Seasonal import rejects parser issues before hashing or committing source rows', () => {
   const source = readSource('app/SeasonalSchedulePage.tsx');
   const importStart = source.indexOf('const handleFile = useCallback');
   const issueCheck = source.indexOf('issues.length > 0', importStart);
-  const calculation = source.indexOf('mergeDuplicateImportPeriods', importStart);
+  const hashing = source.indexOf('buildSeasonalImportV2Checksum', importStart);
   const commit = source.indexOf('applySeasonalImportRemote', importStart);
 
   assert.notEqual(issueCheck, -1, 'parser issues should be checked');
-  assert.ok(issueCheck < calculation);
+  assert.ok(issueCheck < hashing);
   assert.ok(issueCheck < commit);
+  assert.doesNotMatch(source.slice(importStart, commit), /flattenRowsToFlightRecords|mergeDuplicateImportRecords/);
   assert.doesNotMatch(source, /Discard local changes and re-import/);
   assert.doesNotMatch(source, /Sync first/);
 });

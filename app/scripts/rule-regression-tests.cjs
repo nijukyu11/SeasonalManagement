@@ -9537,6 +9537,9 @@ async function run() {
   const supabaseStoreSource = fs.existsSync(path.join(root, 'src', 'lib', 'supabaseStore.ts'))
     ? fs.readFileSync(path.join(root, 'src', 'lib', 'supabaseStore.ts'), 'utf8')
     : '';
+  const seasonalImportRpcContractSource = fs.existsSync(path.join(root, 'src', 'lib', 'seasonalImportRpcContract.ts'))
+    ? fs.readFileSync(path.join(root, 'src', 'lib', 'seasonalImportRpcContract.ts'), 'utf8')
+    : '';
   const nativeSeasonBootstrapSource = fs.existsSync(path.join(root, 'src', 'lib', 'nativeSeasonBootstrap.ts'))
     ? fs.readFileSync(path.join(root, 'src', 'lib', 'nativeSeasonBootstrap.ts'), 'utf8')
     : '';
@@ -10529,9 +10532,17 @@ async function run() {
       supabaseStoreSource.includes('.range(from, to)') &&
       supabaseStoreSource.includes('async function countRows') &&
       supabaseStoreSource.includes("select('*', { count: 'exact', head: true })") &&
-      supabaseStoreSource.includes("rpc('apply_seasonal_import_remote'") &&
-      supabaseStoreSource.includes('p_import') &&
-      supabaseStoreSource.includes('normalizeSeasonalImportResult') &&
+      supabaseStoreSource.includes("rpc('stage_seasonal_import_v2'") &&
+      supabaseStoreSource.includes("rpc('commit_seasonal_import_v2'") &&
+      supabaseStoreSource.includes('p_import: payload') &&
+      supabaseStoreSource.includes('p_batch_id: staged.batchId') &&
+      supabaseStoreSource.includes('p_expected_data_version: expectedDataVersion') &&
+      supabaseStoreSource.includes('parseSeasonalImportV2StageResult') &&
+      supabaseStoreSource.includes('parseSeasonalImportV2Result') &&
+      !supabaseStoreSource.includes('callSeasonalImportRpcRawPayload') &&
+      !supabaseStoreSource.includes("rpc('apply_seasonal_import_remote'") &&
+      seasonalImportRpcContractSource.includes('COMMITTED_RESULT_FIELDS') &&
+      seasonalImportRpcContractSource.includes('Number.isSafeInteger') &&
       remoteStoreSource.includes('applySeasonalImportRemote?') &&
       seasonalPageSource.includes('applySeasonalImportRemote') &&
       !seasonalPageSource.includes('await batchWriteFlightRecords(seasonId, recordsToWrite') &&
@@ -10549,8 +10560,12 @@ async function run() {
       [seasonalPageSource, detailedPageSource, dailyPageSource, dashboardPageSource, checkInPageSource, gatePageSource].every((source) =>
         source.includes('loadSeasonWorkspaceWindow') && !source.includes('queryNativeScheduleWindow') && !source.includes('queryNativeAllocationWindow')
       ) &&
-      seasonalPageSource.includes('sourceRows: []') &&
-      seasonalPageSource.includes('sourceRows: 0'),
+      seasonalPageSource.includes('buildSeasonalImportV2Checksum(seasonCode, sourceRows)') &&
+      seasonalPageSource.includes('sourceRows,') &&
+      seasonalPageSource.includes('remoteImport.sourceRowCount') &&
+      !seasonalPageSource.includes('sourceRows: []') &&
+      !seasonalPageSource.includes('flightRecords: seasonRecords') &&
+      !seasonalPageSource.includes('modificationDeleteRecordIds'),
     'Supabase large season reads must be paginated, imports must verify remote counts, and operational routes must use server windows without native fallback'
   );
   const supabaseInFilterBatchMatch = supabaseStoreSource.match(/const SUPABASE_IN_FILTER_BATCH_SIZE = (\d+)/);
@@ -10630,7 +10645,8 @@ async function run() {
       [seasonalPageSource, detailedPageSource, dailyPageSource, checkInPageSource, gatePageSource].every((source) =>
         source.includes('loadSeasonWorkspaceWindow') && !source.includes('queryNative') && !source.includes('ensureNativeSeasonBaseline')
       ) &&
-      seasonalPageSource.includes('sourceRows: 0') &&
+      seasonalPageSource.includes('sourceRows: remoteImport.sourceRowCount') &&
+      !seasonalPageSource.includes('sourceRows: 0') &&
       !seasonSyncProviderSource.includes('applySeasonEventRange') &&
       seasonSyncProviderSource.includes('subscribeToSeasonEvents') &&
       !seasonSyncProviderSource.includes('loadSeasonEventPage') &&
@@ -10829,7 +10845,9 @@ async function run() {
       seasonSyncSource.match(/nativeFullSaveReason: 'sync-baseline'/g)?.length >= 5 &&
       !seasonalPageSource.includes('importNativeSeasonSnapshot({') &&
       seasonalPageSource.includes('loadSeasonWorkspaceWindow({') &&
-      seasonalPageSource.includes('sourceRows: []') &&
+      seasonalPageSource.includes('buildSeasonalImportV2Checksum(seasonCode, sourceRows)') &&
+      seasonalPageSource.includes('applySeasonalImportRemote({') &&
+      !seasonalPageSource.includes('sourceRows: []') &&
       !seasonalPageSource.includes("nativeFullSaveReason: 'undo-reset'") &&
       detailedPageSource.includes('runNativeScheduleMutation') &&
       !detailedPageSource.includes("nativeFullSaveReason: 'undo-reset'") &&
