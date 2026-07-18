@@ -135,6 +135,38 @@ begin
     raise exception 'anon must not have execute on stage_seasonal_import_v2(jsonb)';
   end if;
 
+  if not has_function_privilege(
+    'authenticated',
+    'public.commit_seasonal_import_v2(uuid,integer)',
+    'EXECUTE'
+  ) then
+    raise exception 'authenticated must have execute on commit_seasonal_import_v2(uuid,integer)';
+  end if;
+
+  if has_function_privilege(
+    'anon',
+    'public.commit_seasonal_import_v2(uuid,integer)',
+    'EXECUTE'
+  ) then
+    raise exception 'anon must not have execute on commit_seasonal_import_v2(uuid,integer)';
+  end if;
+
+  if not exists (
+    select 1
+    from pg_proc procedures
+    join pg_namespace namespaces on namespaces.oid = procedures.pronamespace
+    join pg_language languages on languages.oid = procedures.prolang
+    where namespaces.nspname = 'public'
+      and procedures.proname = 'commit_seasonal_import_v2'
+      and pg_get_function_identity_arguments(procedures.oid) = 'p_batch_id uuid, p_expected_data_version integer'
+      and languages.lanname = 'plpgsql'
+      and procedures.prosecdef
+      and coalesce(array_to_string(procedures.proconfig, ','), '')
+        like '%search_path=pg_catalog, pg_temp%'
+  ) then
+    raise exception 'commit_seasonal_import_v2 must be hardened PL/pgSQL SECURITY DEFINER';
+  end if;
+
   if has_function_privilege(
     'authenticated',
     'public.preserve_season_import_batch_staging_metadata_v2()',
@@ -211,6 +243,7 @@ $$;
 do $$
 declare
   v_result jsonb;
+  v_commit jsonb;
 begin
   v_result := public.stage_seasonal_import_v2(jsonb_build_object(
     'requestId', '6beb1398-52a5-4340-93b8-bb0cb32094ec',
@@ -238,6 +271,49 @@ begin
   then
     raise exception 'authenticated RPC execute path failed: %', v_result;
   end if;
+
+  v_result := public.stage_seasonal_import_v2(jsonb_build_object(
+    'requestId', '4cce5d13-e658-4b3e-9bb9-9036bb28b3ad',
+    'checksum', 'authenticated-commit-path',
+    'seasonCode', 'AV2',
+    'expectedDataVersion', 0,
+    'fileName', 'authenticated-commit.xlsx',
+    'sourceRows', jsonb_build_array(jsonb_build_object(
+      'rowIndex', 1,
+      'effective', '2028-03-01',
+      'discontinue', '2028-03-01',
+      'airline', 'VN',
+      'aircraft', '321',
+      'daysOfWeek', jsonb_build_array(false, false, true, false, false, false, false),
+      'sta', '07:05',
+      'arrFlight', 'VN337',
+      'arrRoute', 'KIX'
+    ))
+  ));
+  perform set_config(
+    'request.jwt.claim.sub',
+    'd11b35f2-62b1-4310-b3ca-4d46762c79e8',
+    true
+  );
+  v_commit := public.commit_seasonal_import_v2(
+    (v_result->>'batchId')::uuid,
+    0
+  );
+
+  if v_commit->>'status' <> 'committed'
+    or v_commit->>'seasonCode' <> 'AV2'
+    or (v_commit->>'sourceRowCount')::integer <> 1
+    or (v_commit->>'flightRecordCount')::integer <> 1
+    or (v_commit->>'dataVersion')::integer <> 1
+  then
+    raise exception 'authenticated commit RPC execute path failed: %', v_commit;
+  end if;
+
+  perform set_config(
+    'request.jwt.claim.sub',
+    'a2a8ee9c-8e84-4cb7-aef6-358af42c3b31',
+    true
+  );
 end
 $$;
 
@@ -2707,8 +2783,36 @@ end
 $$;
 
 do $$
+declare
+  v_validated_batch_id uuid;
+  v_expected_data_version integer;
 begin
+  select batches.batch_id, batches.expected_data_version
+  into v_validated_batch_id, v_expected_data_version
+  from public.season_import_batches batches
+  where batches.status = 'validated'
+    and batches.expected_data_version is not null
+  order by batches.created_at
+  limit 1;
+
+  if v_validated_batch_id is null then
+    raise exception 'permission fixture could not find a validated batch';
+  end if;
+
   perform set_config('request.jwt.claim.sub', '99465540-43d7-47a2-a1f4-59946e96e36d', true);
+
+  begin
+    perform public.commit_seasonal_import_v2(
+      v_validated_batch_id,
+      v_expected_data_version
+    );
+    raise exception 'operator without seasonal.write committed a staged import';
+  exception
+    when insufficient_privilege then
+      if position('seasonal.write' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
 
   begin
     perform public.stage_seasonal_import_v2(jsonb_build_object(
@@ -2726,6 +2830,839 @@ begin
   end;
 
   perform set_config('request.jwt.claim.sub', 'a2a8ee9c-8e84-4cb7-aef6-358af42c3b31', true);
+end
+$$;
+
+create or replace function pg_temp.task5_source_row(
+  p_row_index integer,
+  p_scheduled_date text,
+  p_arr_flight text,
+  p_dep_flight text
+)
+returns jsonb
+language sql
+immutable
+as $$
+  select jsonb_build_object(
+    'rowIndex', p_row_index,
+    'effective', p_scheduled_date,
+    'discontinue', p_scheduled_date,
+    'airline', 'VN',
+    'aircraft', '321',
+    'daysOfWeek', jsonb_build_array(true, true, true, true, true, true, true),
+    'sta', case when p_arr_flight is null then null else '08:00' end,
+    'arrFlight', p_arr_flight,
+    'arrRoute', case when p_arr_flight is null then null else 'KIX' end,
+    'arrFlightCategory', case when p_arr_flight is null then null else 'J' end,
+    'arrCodeShares', null,
+    'arrIntDomInd', case when p_arr_flight is null then null else 'I' end,
+    'std', case when p_dep_flight is null then null else '09:00' end,
+    'depFlight', p_dep_flight,
+    'depRoute', case when p_dep_flight is null then null else 'ICN' end,
+    'depFlightCategory', case when p_dep_flight is null then null else 'J' end,
+    'depCodeShares', null,
+    'depIntDomInd', case when p_dep_flight is null then null else 'I' end
+  )
+$$;
+
+create or replace function pg_temp.task5_stage(
+  p_request_id uuid,
+  p_season_id text,
+  p_season_code text,
+  p_expected_data_version integer,
+  p_checksum text,
+  p_source_rows jsonb
+)
+returns jsonb
+language sql
+as $$
+  select public.stage_seasonal_import_v2(jsonb_build_object(
+    'requestId', p_request_id,
+    'checksum', p_checksum,
+    'seasonId', p_season_id,
+    'seasonCode', p_season_code,
+    'expectedDataVersion', p_expected_data_version,
+    'fileName', p_season_code || '-task5.xlsx',
+    'sourceRows', p_source_rows
+  ))
+$$;
+
+create or replace function pg_temp.task5_snapshot(
+  p_season_id text,
+  p_batch_id uuid
+)
+returns jsonb
+language sql
+stable
+as $$
+  select jsonb_build_object(
+    'season', (
+      select to_jsonb(seasons)
+      from public.seasons seasons
+      where seasons.id = p_season_id
+    ),
+    'sourceRows', coalesce((
+      select jsonb_agg(to_jsonb(rows) order by rows.row_index)
+      from public.season_source_rows rows
+      where rows.season_id = p_season_id
+    ), '[]'::jsonb),
+    'sourceRowDays', coalesce((
+      select jsonb_agg(to_jsonb(days) order by days.row_index, days.iso_dow)
+      from public.season_source_row_days days
+      where days.season_id = p_season_id
+    ), '[]'::jsonb),
+    'flightRecords', coalesce((
+      select jsonb_agg(to_jsonb(records) order by records.record_id)
+      from public.season_flight_records records
+      where records.season_id = p_season_id
+    ), '[]'::jsonb),
+    'flightRecordCounters', coalesce((
+      select jsonb_agg(to_jsonb(counters) order by counters.record_id, counters.counter_group, counters.item_index)
+      from public.season_flight_record_counters counters
+      join public.season_flight_records records on records.record_id = counters.record_id
+      where records.season_id = p_season_id
+    ), '[]'::jsonb),
+    'flightRecordWindows', coalesce((
+      select jsonb_agg(to_jsonb(windows) order by windows.record_id, windows.counter_key)
+      from public.season_flight_record_checkin_windows windows
+      join public.season_flight_records records on records.record_id = windows.record_id
+      where records.season_id = p_season_id
+    ), '[]'::jsonb),
+    'modifications', coalesce((
+      select jsonb_agg(to_jsonb(modifications) order by modifications.leg_id)
+      from public.season_modifications modifications
+      where modifications.season_id = p_season_id
+    ), '[]'::jsonb),
+    'modificationCounters', coalesce((
+      select jsonb_agg(to_jsonb(counters) order by counters.leg_id, counters.counter_group, counters.item_index)
+      from public.season_modification_counters counters
+      join public.season_modifications modifications on modifications.leg_id = counters.leg_id
+      where modifications.season_id = p_season_id
+    ), '[]'::jsonb),
+    'modificationWindows', coalesce((
+      select jsonb_agg(to_jsonb(windows) order by windows.leg_id, windows.counter_key)
+      from public.season_modification_checkin_windows windows
+      join public.season_modifications modifications on modifications.leg_id = windows.leg_id
+      where modifications.season_id = p_season_id
+    ), '[]'::jsonb),
+    'modificationAddedLegs', coalesce((
+      select jsonb_agg(to_jsonb(added_legs) order by added_legs.leg_id)
+      from public.season_modification_added_legs added_legs
+      where added_legs.season_id = p_season_id
+    ), '[]'::jsonb),
+    'changeEvents', coalesce((
+      select jsonb_agg(to_jsonb(events) order by events.server_seq)
+      from public.season_change_events events
+      where events.season_id = p_season_id
+    ), '[]'::jsonb),
+    'entityVersions', coalesce((
+      select jsonb_agg(to_jsonb(versions) order by versions.target_type, versions.target_id)
+      from public.season_entity_versions versions
+      where versions.season_id = p_season_id
+    ), '[]'::jsonb),
+    'batch', (
+      select to_jsonb(batches)
+      from public.season_import_batches batches
+      where batches.batch_id = p_batch_id
+    ),
+    'batchRows', coalesce((
+      select jsonb_agg(to_jsonb(rows) order by rows.row_index)
+      from public.season_import_batch_rows rows
+      where rows.batch_id = p_batch_id
+    ), '[]'::jsonb)
+  )
+$$;
+
+do $$
+declare
+  v_stage jsonb;
+begin
+  v_stage := pg_temp.task5_stage(
+    'f1597f36-ce4c-471e-b463-ac18c59124c3',
+    null,
+    'X57',
+    0,
+    'task5-invalid-batch',
+    jsonb_build_array(jsonb_build_object(
+      'rowIndex', 1,
+      'effective', '2026-10-25',
+      'discontinue', '2026-10-25',
+      'airline', '',
+      'aircraft', '321',
+      'daysOfWeek', jsonb_build_array(true, true, true, true, true, true, true),
+      'sta', '08:00',
+      'arrFlight', 'VN500',
+      'arrRoute', 'KIX'
+    ))
+  );
+
+  if v_stage->>'status' <> 'failed' then
+    raise exception 'invalid commit fixture was not staged as failed: %', v_stage;
+  end if;
+
+  begin
+    perform public.commit_seasonal_import_v2((v_stage->>'batchId')::uuid, 0);
+    raise exception 'failed import batch was committed';
+  exception
+    when data_exception then
+      if position('must be validated before commit' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+end
+$$;
+
+do $$
+declare
+  v_stage jsonb;
+  v_batch_id uuid;
+  v_before jsonb;
+  v_after jsonb;
+begin
+  insert into public.seasons (
+    id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+    total_legs, total_source_rows, data_version, last_synced_at
+  ) values (
+    'task5-stale-season', 'X51', 'Task 5 stale', 'before.xlsx', 1,
+    '2026-10-25', '2026-10-25', 0, 0, 4, 1
+  );
+
+  v_stage := pg_temp.task5_stage(
+    '1f6ed355-ce79-4f62-a4fd-ad1014cb2031',
+    'task5-stale-season',
+    'X51',
+    3,
+    'task5-stale',
+    jsonb_build_array(pg_temp.task5_source_row(1, '2026-10-25', 'VN501', null))
+  );
+  v_batch_id := (v_stage->>'batchId')::uuid;
+  v_before := pg_temp.task5_snapshot('task5-stale-season', v_batch_id);
+
+  begin
+    perform public.commit_seasonal_import_v2(v_batch_id, 3);
+    raise exception 'stale expectedDataVersion was not rejected';
+  exception
+    when serialization_failure then
+      if position('data version' in lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  v_after := pg_temp.task5_snapshot('task5-stale-season', v_batch_id);
+  if v_after is distinct from v_before then
+    raise exception 'stale commit changed Seasonal state: before=%, after=%', v_before, v_after;
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_stage jsonb;
+  v_batch_id uuid;
+  v_first jsonb;
+  v_second jsonb;
+  v_record record;
+  v_event_count integer;
+  v_version integer;
+  v_response_key_count integer;
+begin
+  insert into public.seasons (
+    id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+    total_legs, total_source_rows, data_version, last_synced_at
+  ) values (
+    'task5-rebase-season', 'X52', 'Task 5 rebase', 'before.xlsx', 10,
+    '2026-10-20', '2026-10-30', 4, 2, 7, 10
+  );
+
+  insert into public.season_source_rows (
+    season_id, row_index, effective, discontinue, airline, aircraft,
+    sta, arr_flight, arr_route
+  ) values (
+    'task5-rebase-season', 900, '2026-10-20', '2026-10-30', 'VN', '320',
+    '07:55', 'VN900', 'OLD'
+  );
+  insert into public.season_source_row_days values ('task5-rebase-season', 900, 1);
+
+  insert into public.season_flight_records (
+    season_id, record_id, link_id, type, airline, flight_number, raw_flight_number,
+    request_status_code, route, schedule, aircraft, category, code_shares, int_dom_ind,
+    pax, gate, stand, carousel, mct, fb, lb, bhs, ghs, date, scheduled_date,
+    scheduled_time, operational_date, iata_season_code, flight_series_id, day_of_week,
+    source_row_index, linked_source_row_index, link_type, pair_anchor_date,
+    linked_record_id, source_kind, source_side, status, turnaround_id
+  ) values
+  (
+    'task5-rebase-season', 'legacy-arr-id', 'legacy-turnaround', 'A', 'VN', 'VN501', '501',
+    'REQ', 'OLD-ARR', '07:55', '320', 'OLD', 'OLDCS', 'D',
+    123, 7, 8, 9, 'MCT', 'FB', 'LB', 'BHS', 'GHS', '2026-10-25', '2026-10-25',
+    '07:55', '2026-10-25', 'W26', 'SER_OLD_ARR', 0,
+    901, 902, 'sameday', '2026-10-25',
+    'legacy-dep-id', 'imported', 'ARR', 'active', 'legacy-turnaround'
+  ),
+  (
+    'task5-rebase-season', 'legacy-dep-id', 'legacy-turnaround', 'D', 'VN', 'VN502', '502',
+    null, 'OLD-DEP', '08:55', '320', 'OLD', null, 'D',
+    77, 17, 18, null, null, null, null, null, null, '2026-10-25', '2026-10-25',
+    '08:55', '2026-10-25', 'W26', 'SER_OLD_DEP', 0,
+    902, 901, 'sameday', '2026-10-25',
+    'legacy-arr-id', 'imported', 'DEP', 'active', 'legacy-turnaround'
+  ),
+  (
+    'task5-rebase-season', 'legacy-deleted-id', 'legacy-deleted-id', 'A', 'VN', 'VN503', '503',
+    null, 'OLD-503', '08:00', '320', 'OLD', null, null,
+    3, 4, 5, null, null, null, null, null, null, '2026-10-26', '2026-10-26',
+    '08:00', '2026-10-26', 'W26', 'SER_OLD_503', 1,
+    903, null, null, null,
+    null, 'imported', 'ARR', 'active', null
+  ),
+  (
+    'task5-rebase-season', 'legacy-omitted-id', 'legacy-omitted-id', 'A', 'VN', 'VN999', '999',
+    null, 'OLD-999', '08:00', '320', 'OLD', null, null,
+    4, 5, 6, null, null, null, null, null, null, '2026-10-27', '2026-10-27',
+    '08:00', '2026-10-27', 'W26', 'SER_OLD_999', 2,
+    904, null, null, null,
+    null, 'imported', 'ARR', 'active', null
+  ),
+  (
+    'task5-rebase-season', 'manual-added-id', 'manual-added-id', 'A', 'VN', 'VN777', '777',
+    null, 'MANUAL', '10:00', '321', 'J', null, 'I',
+    88, 20, 21, null, null, null, null, null, null, '2026-10-29', '2026-10-29',
+    '10:00', '2026-10-29', 'W26', 'SER_MANUAL', 4,
+    0, null, null, null,
+    null, 'added', 'ARR', 'active', null
+  );
+
+  insert into public.season_flight_record_counters
+    (record_id, counter_group, item_index, counter_value)
+  values ('legacy-arr-id', 'A', 0, '24');
+  insert into public.season_flight_record_checkin_windows
+    (record_id, counter_key, window_start, window_end)
+  values ('legacy-arr-id', '24', '05:00', '07:30');
+
+  insert into public.season_modifications (
+    season_id, leg_id, action, changed_fields, schedule, aircraft, route, code_shares,
+    pax, gate, stand, carousel, mct, fb, lb, bhs, ghs,
+    check_in_start, check_in_end, check_in_allocation_mode
+  ) values (
+    'task5-rebase-season', 'legacy-arr-id', 'modified',
+    array['schedule', 'aircraft', 'route', 'codeShares', 'pax', 'gate', 'counter',
+      'checkInStart', 'checkInEnd', 'checkInAllocationMode',
+      'checkInCounterWindows', 'mct'],
+    '06:00', '359', 'MOD-ROUTE', 'MOD-CS',
+    222, 12, null, null, 'MOD-MCT', null, null, null, null,
+    '04:30', '07:30', 'broken'
+  ), (
+    'task5-rebase-season', 'legacy-deleted-id', 'deleted',
+    array['schedule'], '06:30', null, null, null,
+    null, null, null, null, null, null, null, null, null,
+    null, null, null
+  ), (
+    'task5-rebase-season', 'legacy-omitted-id', 'modified',
+    array['gate'], null, null, null, null,
+    null, 30, null, null, null, null, null, null, null,
+    null, null, null
+  );
+  insert into public.season_modification_counters
+    (leg_id, counter_group, item_index, counter_value)
+  values ('legacy-arr-id', 'A', 0, '12');
+  insert into public.season_modification_checkin_windows
+    (leg_id, counter_key, window_start, window_end)
+  values ('legacy-arr-id', '12', '04:30', '07:30');
+
+  v_stage := pg_temp.task5_stage(
+    'ea0b20d6-11f4-4ca8-9fad-85ae28a590bd',
+    'task5-rebase-season',
+    'X52',
+    7,
+    'task5-rebase',
+    jsonb_build_array(
+      pg_temp.task5_source_row(10, '2026-10-25', 'VN501', 'VN502'),
+      pg_temp.task5_source_row(11, '2026-10-26', 'VN503', null),
+      pg_temp.task5_source_row(12, '2026-10-28', 'VN504', null)
+    )
+  );
+  v_batch_id := (v_stage->>'batchId')::uuid;
+  if (v_stage->>'status') <> 'validated'
+    or (v_stage->>'generatedRecordCount')::integer <> 4
+  then
+    raise exception 'Task 5 rebase fixture did not stage four records: %', v_stage;
+  end if;
+
+  v_first := public.commit_seasonal_import_v2(v_batch_id, 7);
+
+  select count(*) into v_response_key_count from jsonb_object_keys(v_first);
+  if v_response_key_count <> 11 or v_first ? '_staging' then
+    raise exception 'commit response contains unexpected keys: %', v_first;
+  end if;
+
+  if v_first->>'status' <> 'committed'
+    or v_first->>'seasonId' <> 'task5-rebase-season'
+    or v_first->>'seasonCode' <> 'X52'
+    or (v_first->>'sourceRowCount')::integer <> 3
+    or (v_first->>'flightRecordCount')::integer <> 4
+    or (v_first->>'preservedOperationalCount')::integer <> 3
+    or (v_first->>'removedImportedCount')::integer <> 1
+    or (v_first->>'dataVersion')::integer <> 8
+    or v_first->>'checksum' <> 'task5-rebase'
+  then
+    raise exception 'commit returned an unexpected rebase result: %', v_first;
+  end if;
+
+  select * into v_record
+  from public.season_flight_records records
+  where records.record_id = 'legacy-arr-id';
+  if not found
+    or v_record.season_id <> 'task5-rebase-season'
+    or v_record.route <> 'KIX'
+    or v_record.schedule <> '08:00'
+    or v_record.aircraft <> '321'
+    or v_record.category <> 'J'
+    or v_record.code_shares is not null
+    or v_record.int_dom_ind <> 'I'
+    or v_record.request_status_code <> 'REQ'
+    or v_record.pax <> 123
+    or v_record.gate <> 7
+    or v_record.stand <> 8
+    or v_record.carousel <> 9
+    or v_record.mct <> 'MCT'
+    or v_record.fb <> 'FB'
+    or v_record.lb <> 'LB'
+    or v_record.bhs <> 'BHS'
+    or v_record.ghs <> 'GHS'
+    or v_record.status <> 'active'
+    or v_record.action is not null
+    or v_record.linked_record_id <> 'legacy-dep-id'
+  then
+    raise exception 'matched ARR record did not preserve identity/operational state: %', to_jsonb(v_record);
+  end if;
+
+  select * into v_record
+  from public.season_flight_records records
+  where records.record_id = 'legacy-dep-id';
+  if not found or v_record.linked_record_id <> 'legacy-arr-id'
+    or v_record.turnaround_id is null
+    or v_record.link_id <> v_record.turnaround_id
+  then
+    raise exception 'matched DEP record did not rebase reciprocal links: %', to_jsonb(v_record);
+  end if;
+
+  if (select count(*) from public.season_flight_record_counters where record_id = 'legacy-arr-id') <> 1
+    or (select count(*) from public.season_flight_record_checkin_windows where record_id = 'legacy-arr-id') <> 1
+  then
+    raise exception 'matched record child operational rows were not preserved';
+  end if;
+
+  if exists (
+    select 1 from public.season_flight_records
+    where record_id = 'legacy-omitted-id'
+  ) or exists (
+    select 1 from public.season_modifications
+    where leg_id in ('legacy-omitted-id', 'legacy-deleted-id')
+  ) then
+    raise exception 'omitted imported record or source-owned/deleted modifications survived';
+  end if;
+
+  if not exists (
+    select 1 from public.season_flight_records
+    where record_id = 'legacy-deleted-id' and status = 'active' and action is null
+  ) then
+    raise exception 'deleted imported occurrence was not restored to baseline';
+  end if;
+
+  if not exists (
+    select 1 from public.season_flight_records
+    where record_id = 'manual-added-id' and source_kind = 'added'
+  ) then
+    raise exception 'manual added record was removed by re-import';
+  end if;
+
+  if not exists (
+    select 1
+    from public.season_modifications modifications
+    where modifications.leg_id = 'legacy-arr-id'
+      and modifications.action = 'modified'
+      and modifications.changed_fields = array[
+        'pax', 'gate', 'counter', 'checkInStart', 'checkInEnd',
+        'checkInAllocationMode', 'checkInCounterWindows', 'mct'
+      ]::text[]
+      and modifications.schedule is null
+      and modifications.aircraft is null
+      and modifications.route is null
+      and modifications.code_shares is null
+      and modifications.pax = 222
+      and modifications.gate = 12
+      and modifications.check_in_start = '04:30'
+      and modifications.check_in_end = '07:30'
+      and modifications.check_in_allocation_mode = 'broken'
+      and modifications.mct = 'MOD-MCT'
+  ) then
+    raise exception 'operational-only modification was not rebased with corrected changed_fields';
+  end if;
+
+  if (select count(*) from public.season_modification_counters where leg_id = 'legacy-arr-id') <> 1
+    or (select count(*) from public.season_modification_checkin_windows where leg_id = 'legacy-arr-id') <> 1
+  then
+    raise exception 'operational modification child rows were not preserved';
+  end if;
+
+  if not exists (
+    select 1
+    from public.seasons seasons
+    where seasons.id = 'task5-rebase-season'
+      and seasons.file_name = 'X52-task5.xlsx'
+      and seasons.effective_start = '2026-10-25'
+      and seasons.effective_end = '2026-10-28'
+      and seasons.total_legs = 4
+      and seasons.total_source_rows = 3
+      and seasons.data_version = 8
+      and seasons.last_synced_at is not null
+  ) then
+    raise exception 'season metadata was not updated from committed read-back counts';
+  end if;
+
+  select count(*) into v_event_count
+  from public.season_change_events events
+  where events.season_id = 'task5-rebase-season'
+    and events.target_type = 'seasonImport'
+    and events.op_id = v_batch_id::text;
+  if v_event_count <> 1 then
+    raise exception 'commit did not insert exactly one import event';
+  end if;
+
+  if (v_first->>'serverHighWater')::bigint is distinct from (
+    select events.server_seq
+    from public.season_change_events events
+    where events.season_id = 'task5-rebase-season'
+      and events.op_id = v_batch_id::text
+  ) then
+    raise exception 'serverHighWater does not equal the import event sequence';
+  end if;
+
+  if not exists (
+    select 1
+    from public.season_import_batches batches
+    where batches.batch_id = v_batch_id
+      and batches.status = 'committed'
+      and batches.season_id = 'task5-rebase-season'
+      and batches.committed_at is not null
+      and batches.result #>> '{_staging,targetSeasonId}' = 'task5-rebase-season'
+      and batches.result - '_staging' = v_first
+  ) then
+    raise exception 'committed batch did not preserve staging metadata and exact result';
+  end if;
+
+  select seasons.data_version into v_version
+  from public.seasons seasons where seasons.id = 'task5-rebase-season';
+  v_second := public.commit_seasonal_import_v2(v_batch_id, 7);
+  if v_second is distinct from v_first then
+    raise exception 'recommit did not return the original result: first=%, second=%', v_first, v_second;
+  end if;
+  if (select data_version from public.seasons where id = 'task5-rebase-season') <> v_version
+    or (select count(*) from public.season_change_events where season_id = 'task5-rebase-season') <> v_event_count
+  then
+    raise exception 'recommit duplicated version or event writes';
+  end if;
+end
+$$;
+
+do $$
+declare
+  v_stage jsonb;
+  v_batch_id uuid;
+  v_before jsonb;
+  v_after jsonb;
+begin
+  insert into public.seasons (
+    id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+    total_legs, total_source_rows, data_version
+  ) values (
+    'task5-collision-season', 'X53', 'Task 5 collision', '', 0, '', '', 1, 0, 1
+  );
+  insert into public.season_flight_records (
+    season_id, record_id, link_id, type, airline, flight_number, raw_flight_number,
+    route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+    operational_date, day_of_week, source_kind, source_side, status
+  ) values (
+    'task5-collision-season', 'task5-manual-collision', 'task5-manual-collision',
+    'D', 'VN', 'VN610', '610', 'MANUAL', '12:00', '321', 'J',
+    '2026-11-01', '2026-11-01', '12:00', '2026-11-01', 0,
+    'added', 'DEP', 'active'
+  );
+
+  v_stage := pg_temp.task5_stage(
+    '575494f4-feae-4272-84b9-f315ff4fae32',
+    'task5-collision-season',
+    'X53',
+    1,
+    'task5-added-collision',
+    jsonb_build_array(pg_temp.task5_source_row(1, '2026-11-01', 'VN610', null))
+  );
+  v_batch_id := (v_stage->>'batchId')::uuid;
+  v_before := pg_temp.task5_snapshot('task5-collision-season', v_batch_id);
+
+  begin
+    perform public.commit_seasonal_import_v2(v_batch_id, 1);
+    raise exception 'manual-added occurrence collision was not rejected';
+  exception
+    when unique_violation then
+      if position('manual added occurrence collision' in lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  v_after := pg_temp.task5_snapshot('task5-collision-season', v_batch_id);
+  if v_after is distinct from v_before then
+    raise exception 'manual collision changed Seasonal state: before=%, after=%', v_before, v_after;
+  end if;
+  if not exists (
+    select 1 from public.season_flight_records
+    where record_id = 'task5-manual-collision' and source_kind = 'added'
+  ) then
+    raise exception 'manual added record did not survive collision rollback';
+  end if;
+end
+$$;
+
+create or replace function pg_temp.task5_raise_import_event()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.season_id = 'task5-exception-season' then
+    raise exception 'task5 injected event failure';
+  end if;
+  return new;
+end
+$$;
+
+do $$
+declare
+  v_stage jsonb;
+  v_batch_id uuid;
+  v_before jsonb;
+  v_after jsonb;
+begin
+  insert into public.seasons (
+    id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+    total_legs, total_source_rows, data_version, last_synced_at
+  ) values (
+    'task5-exception-season', 'X54', 'Task 5 exception', 'old.xlsx', 11,
+    '2026-11-02', '2026-11-02', 1, 1, 2, 11
+  );
+  insert into public.season_source_rows (
+    season_id, row_index, effective, discontinue, airline, aircraft,
+    sta, arr_flight, arr_route
+  ) values (
+    'task5-exception-season', 1, '2026-11-02', '2026-11-02', 'VN', '320',
+    '07:00', 'VN620', 'OLD'
+  );
+  insert into public.season_source_row_days values ('task5-exception-season', 1, 1);
+  insert into public.season_flight_records (
+    season_id, record_id, link_id, type, airline, flight_number, raw_flight_number,
+    route, schedule, aircraft, category, gate, date, scheduled_date, scheduled_time,
+    operational_date, day_of_week, source_row_index, source_kind, source_side, status
+  ) values (
+    'task5-exception-season', 'task5-exception-record', 'task5-exception-record',
+    'A', 'VN', 'VN620', '620', 'OLD', '07:00', '320', 'OLD', 6,
+    '2026-11-02', '2026-11-02', '07:00', '2026-11-02', 1, 1,
+    'imported', 'ARR', 'active'
+  );
+  insert into public.season_modifications (
+    season_id, leg_id, action, changed_fields, route, gate
+  ) values (
+    'task5-exception-season', 'task5-exception-record', 'modified',
+    array['route', 'gate'], 'MOD', 14
+  );
+
+  v_stage := pg_temp.task5_stage(
+    '4b7d9f29-e23b-4cd8-9b3e-354c75c12af8',
+    'task5-exception-season',
+    'X54',
+    2,
+    'task5-injected-exception',
+    jsonb_build_array(pg_temp.task5_source_row(1, '2026-11-02', 'VN620', null))
+  );
+  v_batch_id := (v_stage->>'batchId')::uuid;
+
+  create trigger task5_raise_import_event
+  before insert on public.season_change_events
+  for each row execute function pg_temp.task5_raise_import_event();
+
+  v_before := pg_temp.task5_snapshot('task5-exception-season', v_batch_id);
+  begin
+    perform public.commit_seasonal_import_v2(v_batch_id, 2);
+    raise exception 'injected commit exception did not abort';
+  exception
+    when raise_exception then
+      if position('task5 injected event failure' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+  v_after := pg_temp.task5_snapshot('task5-exception-season', v_batch_id);
+  if v_after is distinct from v_before then
+    raise exception 'injected exception did not roll back every Seasonal write: before=%, after=%',
+      v_before, v_after;
+  end if;
+
+  drop trigger task5_raise_import_event on public.season_change_events;
+end
+$$;
+
+do $$
+declare
+  v_payload jsonb;
+  v_stage jsonb;
+  v_retry_stage jsonb;
+  v_batch_id uuid;
+  v_target_season_id text;
+  v_staged_record_ids text[];
+  v_committed_record_ids text[];
+  v_first jsonb;
+  v_second jsonb;
+begin
+  v_payload := jsonb_build_object(
+    'requestId', 'f62fce4e-5f8b-41bc-adc2-4a8dcde95a88',
+    'checksum', 'task5-new-season',
+    'seasonId', null,
+    'seasonCode', 'X55',
+    'expectedDataVersion', 0,
+    'fileName', 'X55-task5.xlsx',
+    'sourceRows', jsonb_build_array(
+      pg_temp.task5_source_row(1, '2026-11-03', 'VN630', 'VN631')
+    )
+  );
+  v_stage := public.stage_seasonal_import_v2(v_payload);
+  v_batch_id := (v_stage->>'batchId')::uuid;
+
+  select batches.result #>> '{_staging,targetSeasonId}'
+  into v_target_season_id
+  from public.season_import_batches batches
+  where batches.batch_id = v_batch_id;
+  select array_agg(generated.record_id order by generated.record_id)
+  into v_staged_record_ids
+  from public.generate_seasonal_import_records_v2(v_batch_id) generated;
+
+  if v_target_season_id is null or cardinality(v_staged_record_ids) <> 2 then
+    raise exception 'new-season staging identity fixture is invalid';
+  end if;
+
+  v_first := public.commit_seasonal_import_v2(v_batch_id, 0);
+  if v_first->>'seasonId' <> v_target_season_id
+    or (v_first->>'dataVersion')::integer <> 1
+  then
+    raise exception 'new-season commit did not use reserved targetSeasonId/version: %', v_first;
+  end if;
+
+  select array_agg(records.record_id order by records.record_id)
+  into v_committed_record_ids
+  from public.season_flight_records records
+  where records.season_id = v_target_season_id
+    and records.source_kind = 'imported';
+  if v_committed_record_ids is distinct from v_staged_record_ids then
+    raise exception 'new-season committed IDs drifted from staging: staged=%, committed=%',
+      v_staged_record_ids, v_committed_record_ids;
+  end if;
+
+  if not exists (
+    select 1 from public.seasons seasons
+    where seasons.id = v_target_season_id
+      and seasons.season_code = 'X55'
+      and seasons.data_version = 1
+  ) or not exists (
+    select 1 from public.season_import_batches batches
+    where batches.batch_id = v_batch_id
+      and batches.season_id = v_target_season_id
+      and batches.result #>> '{_staging,targetSeasonId}' = v_target_season_id
+  ) then
+    raise exception 'new season or committed batch lost immutable target identity';
+  end if;
+
+  v_retry_stage := public.stage_seasonal_import_v2(v_payload);
+  v_second := public.commit_seasonal_import_v2(v_batch_id, 0);
+  if v_retry_stage->>'batchId' <> v_batch_id::text
+    or v_retry_stage->>'status' <> 'committed'
+    or v_second is distinct from v_first
+  then
+    raise exception 'new-season stage/commit retry was not idempotent';
+  end if;
+end
+$$;
+
+create or replace function pg_temp.task5_suppress_source_row()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.season_id = 'task5-readback-season' then
+    return null;
+  end if;
+  return new;
+end
+$$;
+
+do $$
+declare
+  v_stage jsonb;
+  v_batch_id uuid;
+  v_before jsonb;
+  v_after jsonb;
+begin
+  insert into public.seasons (
+    id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+    total_legs, total_source_rows, data_version
+  ) values (
+    'task5-readback-season', 'X56', 'Task 5 readback', 'old.xlsx', 0,
+    '2026-11-04', '2026-11-04', 1, 1, 2
+  );
+  insert into public.season_source_rows (
+    season_id, row_index, effective, discontinue, airline, aircraft,
+    sta, arr_flight, arr_route
+  ) values (
+    'task5-readback-season', 1, '2026-11-04', '2026-11-04', 'VN', '320',
+    '07:00', 'VN640', 'OLD'
+  );
+  insert into public.season_source_row_days values ('task5-readback-season', 1, 3);
+  insert into public.season_flight_records (
+    season_id, record_id, link_id, type, airline, flight_number, raw_flight_number,
+    route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+    operational_date, day_of_week, source_row_index, source_kind, source_side, status
+  ) values (
+    'task5-readback-season', 'task5-readback-record', 'task5-readback-record',
+    'A', 'VN', 'VN640', '640', 'OLD', '07:00', '320', 'OLD',
+    '2026-11-04', '2026-11-04', '07:00', '2026-11-04', 3, 1,
+    'imported', 'ARR', 'active'
+  );
+
+  v_stage := pg_temp.task5_stage(
+    'ec3a56a6-a2cf-488a-b119-425929e98e83',
+    'task5-readback-season',
+    'X56',
+    2,
+    'task5-readback-mismatch',
+    jsonb_build_array(pg_temp.task5_source_row(1, '2026-11-04', 'VN640', null))
+  );
+  v_batch_id := (v_stage->>'batchId')::uuid;
+
+  create trigger task5_suppress_source_row
+  before insert on public.season_source_rows
+  for each row execute function pg_temp.task5_suppress_source_row();
+
+  v_before := pg_temp.task5_snapshot('task5-readback-season', v_batch_id);
+  begin
+    perform public.commit_seasonal_import_v2(v_batch_id, 2);
+    raise exception 'read-back source count mismatch returned false success';
+  exception
+    when raise_exception then
+      if position('read-back source row count mismatch' in lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+  v_after := pg_temp.task5_snapshot('task5-readback-season', v_batch_id);
+  if v_after is distinct from v_before then
+    raise exception 'read-back mismatch did not roll back every Seasonal write';
+  end if;
+
+  drop trigger task5_suppress_source_row on public.season_source_rows;
 end
 $$;
 

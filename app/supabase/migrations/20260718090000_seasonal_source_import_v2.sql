@@ -2176,6 +2176,932 @@ begin
 end;
 $$;
 
+create or replace function public.commit_seasonal_import_v2(
+  p_batch_id uuid,
+  p_expected_data_version integer
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_batch public.season_import_batches%rowtype;
+  v_season public.seasons%rowtype;
+  v_target_season_id text;
+  v_target_season_code text;
+  v_season_code_match_count integer := 0;
+  v_season_code_match_id text;
+  v_season_exists boolean := false;
+  v_current_data_version integer;
+  v_next_data_version integer;
+  v_generated_record_count integer := 0;
+  v_source_row_count integer := 0;
+  v_flight_record_count integer := 0;
+  v_preserved_operational_count integer := 0;
+  v_removed_imported_count integer := 0;
+  v_effective_start text;
+  v_effective_end text;
+  v_now_ms bigint;
+  v_server_high_water bigint;
+  v_collision_occurrence_key text;
+  v_collision_record_id text;
+  v_ambiguous_occurrence_key text;
+  v_conflicting_record_id text;
+  v_result jsonb;
+begin
+  if not public.app_operator_has_permission('seasonal.write') then
+    raise exception 'Missing required permission: seasonal.write'
+      using errcode = '42501';
+  end if;
+
+  if p_batch_id is null then
+    raise exception 'p_batch_id is required'
+      using errcode = '22023';
+  end if;
+
+  select batches.*
+  into v_batch
+  from public.season_import_batches batches
+  where batches.batch_id = p_batch_id
+  for update;
+
+  if not found then
+    raise exception 'Seasonal import batch % was not found', p_batch_id
+      using errcode = '22023';
+  end if;
+
+  if v_batch.status = 'committed' then
+    if v_batch.result is null
+      or v_batch.result->>'status' is distinct from 'committed'
+    then
+      raise exception 'Committed seasonal import batch % is missing its persisted result', p_batch_id
+        using errcode = 'XX000';
+    end if;
+
+    return v_batch.result - '_staging';
+  end if;
+
+  if v_batch.status <> 'validated' then
+    raise exception 'Seasonal import batch % must be validated before commit; current status is %',
+      p_batch_id,
+      v_batch.status
+      using errcode = '22023';
+  end if;
+
+  if pg_catalog.jsonb_typeof(v_batch.diagnostics) is distinct from 'array'
+    or pg_catalog.jsonb_array_length(v_batch.diagnostics) <> 0
+  then
+    raise exception 'Seasonal import batch % contains blocking diagnostics', p_batch_id
+      using errcode = '22023';
+  end if;
+
+  v_target_season_id := nullif(
+    v_batch.result #>> '{_staging,targetSeasonId}',
+    ''
+  );
+  v_target_season_code := pg_catalog.upper(pg_catalog.btrim(v_batch.season_code));
+
+  if v_target_season_id is null then
+    raise exception 'Seasonal import batch % is missing immutable _staging.targetSeasonId', p_batch_id
+      using errcode = '22023';
+  end if;
+
+  if v_target_season_code = '' then
+    raise exception 'Seasonal import batch % is missing seasonCode', p_batch_id
+      using errcode = '22023';
+  end if;
+
+  if p_expected_data_version is null or p_expected_data_version < 0 then
+    raise exception 'p_expected_data_version must be a non-negative integer'
+      using errcode = '22023';
+  end if;
+
+  if v_batch.expected_data_version is null then
+    raise exception 'Seasonal import batch % is missing an explicit expectedDataVersion', p_batch_id
+      using errcode = '22023';
+  end if;
+
+  if p_expected_data_version is distinct from v_batch.expected_data_version then
+    raise exception 'Commit expectedDataVersion % does not match staged version % for batch %',
+      p_expected_data_version,
+      v_batch.expected_data_version,
+      p_batch_id
+      using errcode = '22023';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(v_target_season_id, 0)
+  );
+
+  select seasons.*
+  into v_season
+  from public.seasons seasons
+  where seasons.id = v_target_season_id
+  for update;
+  v_season_exists := found;
+
+  perform 1
+  from public.seasons seasons
+  where pg_catalog.upper(pg_catalog.btrim(seasons.season_code)) = v_target_season_code
+  for update;
+
+  select
+    pg_catalog.count(*)::integer,
+    pg_catalog.min(seasons.id)
+  into v_season_code_match_count, v_season_code_match_id
+  from public.seasons seasons
+  where pg_catalog.upper(pg_catalog.btrim(seasons.season_code)) = v_target_season_code;
+
+  if v_season_code_match_count > 1 then
+    raise exception 'Ambiguous seasonCode % matched % existing seasons',
+      v_target_season_code,
+      v_season_code_match_count
+      using errcode = '21000';
+  end if;
+
+  if v_season_exists then
+    if pg_catalog.upper(pg_catalog.btrim(v_season.season_code))
+        is distinct from v_target_season_code
+      or v_season_code_match_count <> 1
+      or v_season_code_match_id is distinct from v_target_season_id
+    then
+      raise exception 'Reserved target season % does not match seasonCode %',
+        v_target_season_id,
+        v_target_season_code
+        using errcode = '23505';
+    end if;
+
+    if v_batch.season_id is not null
+      and v_batch.season_id is distinct from v_target_season_id
+    then
+      raise exception 'Batch season identity % does not match reserved target %',
+        v_batch.season_id,
+        v_target_season_id
+        using errcode = '23505';
+    end if;
+
+    v_current_data_version := v_season.data_version;
+  else
+    if v_batch.season_id is not null then
+      raise exception 'Existing batch season % no longer exists', v_batch.season_id
+        using errcode = '23503';
+    end if;
+
+    if v_season_code_match_count <> 0 then
+      raise exception 'seasonCode % belongs to season %, not reserved target %',
+        v_target_season_code,
+        v_season_code_match_id,
+        v_target_season_id
+        using errcode = '23505';
+    end if;
+
+    v_current_data_version := 0;
+  end if;
+
+  if p_expected_data_version <> v_current_data_version then
+    raise exception 'Stale seasonal data version for %: expected %, current %',
+      v_target_season_id,
+      p_expected_data_version,
+      v_current_data_version
+      using errcode = '40001';
+  end if;
+
+  if not v_season_exists then
+    if p_expected_data_version <> 0 then
+      raise exception 'New season % must commit from expectedDataVersion 0',
+        v_target_season_id
+        using errcode = '40001';
+    end if;
+
+    insert into public.seasons (
+      id,
+      season_code,
+      name,
+      file_name,
+      uploaded_at,
+      effective_start,
+      effective_end,
+      total_legs,
+      total_source_rows,
+      data_version,
+      last_synced_at
+    ) values (
+      v_target_season_id,
+      v_target_season_code,
+      v_target_season_code,
+      '',
+      0,
+      '',
+      '',
+      0,
+      0,
+      0,
+      null
+    );
+  end if;
+
+  drop table if exists pg_temp.seasonal_import_commit_records_v2;
+  drop table if exists pg_temp.seasonal_import_commit_existing_v2;
+  drop table if exists pg_temp.seasonal_import_commit_matches_v2;
+  drop table if exists pg_temp.seasonal_import_commit_old_records_v2;
+
+  create temporary table seasonal_import_commit_records_v2
+  on commit drop
+  as
+  select
+    generated.record_id as generated_record_id,
+    generated.occurrence_key,
+    generated.link_id,
+    generated.type,
+    generated.airline,
+    generated.flight_number,
+    generated.raw_flight_number,
+    generated.route,
+    generated.schedule,
+    generated.aircraft,
+    generated.category,
+    generated.code_shares,
+    generated.int_dom_ind,
+    generated.scheduled_date,
+    generated.operational_date,
+    generated.day_of_week,
+    generated.source_row_index,
+    generated.linked_source_row_index,
+    generated.link_type,
+    generated.pair_anchor_date,
+    generated.linked_record_id,
+    generated.turnaround_id,
+    generated.record_id as final_record_id,
+    null::text as matched_record_id
+  from public.generate_seasonal_import_records_v2(p_batch_id) generated;
+
+  create unique index seasonal_import_commit_occurrence_v2
+    on pg_temp.seasonal_import_commit_records_v2 (occurrence_key);
+  create unique index seasonal_import_commit_generated_id_v2
+    on pg_temp.seasonal_import_commit_records_v2 (generated_record_id);
+
+  select pg_catalog.count(*)::integer
+  into v_generated_record_count
+  from pg_temp.seasonal_import_commit_records_v2;
+
+  if v_generated_record_count = 0
+    or v_generated_record_count <> v_batch.generated_record_count
+  then
+    raise exception 'Generated record count mismatch for batch %: staged %, materialized %',
+      p_batch_id,
+      v_batch.generated_record_count,
+      v_generated_record_count
+      using errcode = 'P0001';
+  end if;
+
+  with manual_added as (
+    select
+      records.record_id,
+      coalesce(nullif(records.scheduled_date, ''), records.date) as scheduled_date,
+      records.airline,
+      coalesce(nullif(records.flight_number, ''), records.raw_flight_number) as raw_flight_number
+    from public.season_flight_records records
+    where records.season_id = v_target_season_id
+      and records.source_kind = 'added'
+      and records.status = 'active'
+    union all
+    select
+      added_legs.record_id,
+      coalesce(nullif(added_legs.scheduled_date, ''), added_legs.date),
+      added_legs.airline,
+      coalesce(nullif(added_legs.flight_number, ''), added_legs.raw_flight_number)
+    from public.season_modification_added_legs added_legs
+    join public.season_modifications modifications
+      on modifications.leg_id = added_legs.leg_id
+      and modifications.season_id = added_legs.season_id
+    where added_legs.season_id = v_target_season_id
+      and added_legs.source_kind = 'added'
+      and added_legs.status = 'active'
+      and modifications.action = 'added'
+  ), normalized_manual_added as (
+    select
+      manual_added.record_id,
+      v_target_season_id
+        || '|'
+        || manual_added.scheduled_date
+        || '|'
+        || pg_catalog.upper(pg_catalog.btrim(manual_added.airline))
+        || '|'
+        || normalized.flight_number as occurrence_key
+    from manual_added
+    cross join lateral public.normalize_seasonal_flight_number_v2(
+      manual_added.airline,
+      manual_added.raw_flight_number
+    ) normalized
+  )
+  select generated.occurrence_key, manual.record_id
+  into v_collision_occurrence_key, v_collision_record_id
+  from pg_temp.seasonal_import_commit_records_v2 generated
+  join normalized_manual_added manual
+    on manual.occurrence_key = generated.occurrence_key
+  order by generated.occurrence_key, manual.record_id
+  limit 1;
+
+  if found then
+    raise exception 'Manual added occurrence collision for % with record %',
+      v_collision_occurrence_key,
+      v_collision_record_id
+      using errcode = '23505';
+  end if;
+
+  create temporary table seasonal_import_commit_existing_v2
+  on commit drop
+  as
+  select
+    records.record_id,
+    records.type,
+    records.status,
+    coalesce(nullif(records.scheduled_date, ''), records.date) as scheduled_date,
+    pg_catalog.upper(pg_catalog.btrim(records.airline)) as airline,
+    normalized.flight_number
+  from public.season_flight_records records
+  cross join lateral public.normalize_seasonal_flight_number_v2(
+    records.airline,
+    coalesce(nullif(records.flight_number, ''), records.raw_flight_number)
+  ) normalized
+  where records.season_id = v_target_season_id
+    and records.source_kind = 'imported';
+
+  create unique index seasonal_import_commit_existing_id_v2
+    on pg_temp.seasonal_import_commit_existing_v2 (record_id);
+  create index seasonal_import_commit_existing_identity_v2
+    on pg_temp.seasonal_import_commit_existing_v2 (
+      scheduled_date,
+      airline,
+      flight_number,
+      type
+    );
+
+  select generated.occurrence_key
+  into v_ambiguous_occurrence_key
+  from pg_temp.seasonal_import_commit_records_v2 generated
+  join pg_temp.seasonal_import_commit_existing_v2 existing
+    on existing.scheduled_date = generated.scheduled_date
+    and existing.airline = generated.airline
+    and existing.flight_number = generated.flight_number
+    and existing.type = generated.type
+  group by generated.generated_record_id, generated.occurrence_key
+  having pg_catalog.count(*) > 1
+    or pg_catalog.count(*) filter (where existing.status = 'active') > 1
+  order by generated.occurrence_key
+  limit 1;
+
+  if found then
+    raise exception 'Ambiguous existing imported occurrence % has multiple matching records',
+      v_ambiguous_occurrence_key
+      using errcode = '21000';
+  end if;
+
+  create temporary table seasonal_import_commit_matches_v2
+  on commit drop
+  as
+  select
+    generated.generated_record_id,
+    pg_catalog.min(existing.record_id) as matched_record_id
+  from pg_temp.seasonal_import_commit_records_v2 generated
+  join pg_temp.seasonal_import_commit_existing_v2 existing
+    on existing.scheduled_date = generated.scheduled_date
+    and existing.airline = generated.airline
+    and existing.flight_number = generated.flight_number
+    and existing.type = generated.type
+  group by generated.generated_record_id;
+
+  update pg_temp.seasonal_import_commit_records_v2 generated
+  set
+    matched_record_id = matches.matched_record_id,
+    final_record_id = matches.matched_record_id
+  from pg_temp.seasonal_import_commit_matches_v2 matches
+  where matches.generated_record_id = generated.generated_record_id;
+
+  create unique index seasonal_import_commit_final_id_v2
+    on pg_temp.seasonal_import_commit_records_v2 (final_record_id);
+
+  select records.record_id
+  into v_conflicting_record_id
+  from pg_temp.seasonal_import_commit_records_v2 generated
+  join public.season_flight_records records
+    on records.record_id = generated.final_record_id
+  where records.season_id is distinct from v_target_season_id
+    or records.source_kind <> 'imported'
+  order by records.record_id
+  limit 1;
+
+  if found then
+    raise exception 'Generated record ID % already belongs to another season',
+      v_conflicting_record_id
+      using errcode = '23505';
+  end if;
+
+  if exists (
+    select 1
+    from pg_temp.seasonal_import_commit_records_v2 generated
+    left join pg_temp.seasonal_import_commit_records_v2 counterpart
+      on counterpart.generated_record_id = generated.linked_record_id
+    where generated.linked_record_id is not null
+      and counterpart.generated_record_id is null
+  ) then
+    raise exception 'Generated import contains an unresolved linked record'
+      using errcode = 'P0001';
+  end if;
+
+  create temporary table seasonal_import_commit_old_records_v2
+  on commit drop
+  as
+  select existing.record_id
+  from pg_temp.seasonal_import_commit_existing_v2 existing;
+
+  create unique index seasonal_import_commit_old_record_id_v2
+    on pg_temp.seasonal_import_commit_old_records_v2 (record_id);
+
+  select pg_catalog.count(*)::integer
+  into v_preserved_operational_count
+  from pg_temp.seasonal_import_commit_records_v2 generated
+  where generated.matched_record_id is not null;
+
+  select pg_catalog.count(*)::integer
+  into v_removed_imported_count
+  from pg_temp.seasonal_import_commit_old_records_v2 old_records
+  where not exists (
+    select 1
+    from pg_temp.seasonal_import_commit_records_v2 generated
+    where generated.final_record_id = old_records.record_id
+  );
+
+  update public.season_modifications modifications
+  set
+    action = 'modified',
+    changed_fields = array(
+      select allowed.field_name
+      from pg_catalog.unnest(array[
+        'pax',
+        'gate',
+        'stand',
+        'counter',
+        'checkInStart',
+        'checkInEnd',
+        'checkInAllocationMode',
+        'checkInCounterWindows',
+        'carousel',
+        'mct',
+        'fb',
+        'lb',
+        'bhs',
+        'ghs'
+      ]::text[]) with ordinality allowed(field_name, field_order)
+      where allowed.field_name = any(modifications.changed_fields)
+      order by allowed.field_order
+    ),
+    schedule = null,
+    aircraft = null,
+    route = null,
+    code_shares = null
+  where modifications.season_id = v_target_season_id
+    and modifications.action = 'modified'
+    and exists (
+      select 1
+      from pg_temp.seasonal_import_commit_records_v2 generated
+      where generated.final_record_id = modifications.leg_id
+        and generated.matched_record_id is not null
+    );
+
+  delete from public.season_modifications modifications
+  where modifications.season_id = v_target_season_id
+    and exists (
+      select 1
+      from pg_temp.seasonal_import_commit_old_records_v2 old_records
+      where old_records.record_id = modifications.leg_id
+    )
+    and (
+      not exists (
+        select 1
+        from pg_temp.seasonal_import_commit_records_v2 generated
+        where generated.final_record_id = modifications.leg_id
+          and generated.matched_record_id is not null
+      )
+      or modifications.action <> 'modified'
+      or pg_catalog.cardinality(modifications.changed_fields) = 0
+    );
+
+  delete from public.season_modification_counters counters
+  using public.season_modifications modifications
+  where modifications.leg_id = counters.leg_id
+    and modifications.season_id = v_target_season_id
+    and exists (
+      select 1
+      from pg_temp.seasonal_import_commit_old_records_v2 old_records
+      where old_records.record_id = modifications.leg_id
+    )
+    and not ('counter' = any(modifications.changed_fields));
+
+  delete from public.season_modification_checkin_windows windows
+  using public.season_modifications modifications
+  where modifications.leg_id = windows.leg_id
+    and modifications.season_id = v_target_season_id
+    and exists (
+      select 1
+      from pg_temp.seasonal_import_commit_old_records_v2 old_records
+      where old_records.record_id = modifications.leg_id
+    )
+    and not ('checkInCounterWindows' = any(modifications.changed_fields));
+
+  delete from public.season_modification_added_legs added_legs
+  where added_legs.season_id = v_target_season_id
+    and exists (
+      select 1
+      from pg_temp.seasonal_import_commit_old_records_v2 old_records
+      where old_records.record_id = added_legs.leg_id
+    );
+
+  delete from public.season_flight_records records
+  where records.season_id = v_target_season_id
+    and records.source_kind = 'imported'
+    and exists (
+      select 1
+      from pg_temp.seasonal_import_commit_old_records_v2 old_records
+      where old_records.record_id = records.record_id
+    )
+    and not exists (
+      select 1
+      from pg_temp.seasonal_import_commit_records_v2 generated
+      where generated.final_record_id = records.record_id
+    );
+
+  insert into public.season_flight_records (
+    season_id,
+    record_id,
+    link_id,
+    type,
+    airline,
+    flight_number,
+    raw_flight_number,
+    request_status_code,
+    route,
+    schedule,
+    aircraft,
+    category,
+    code_shares,
+    int_dom_ind,
+    pax,
+    gate,
+    stand,
+    carousel,
+    mct,
+    fb,
+    lb,
+    bhs,
+    ghs,
+    date,
+    scheduled_date,
+    scheduled_time,
+    operational_date,
+    iata_season_code,
+    flight_series_id,
+    day_of_week,
+    action,
+    source_row_index,
+    linked_source_row_index,
+    link_type,
+    pair_anchor_date,
+    linked_record_id,
+    source_kind,
+    source_side,
+    status,
+    turnaround_id
+  )
+  select
+    v_target_season_id,
+    generated.final_record_id,
+    coalesce(generated.turnaround_id, generated.final_record_id),
+    generated.type,
+    generated.airline,
+    generated.flight_number,
+    generated.raw_flight_number,
+    existing.request_status_code,
+    generated.route,
+    generated.schedule,
+    generated.aircraft,
+    generated.category,
+    generated.code_shares,
+    generated.int_dom_ind,
+    existing.pax,
+    existing.gate,
+    existing.stand,
+    existing.carousel,
+    existing.mct,
+    existing.fb,
+    existing.lb,
+    existing.bhs,
+    existing.ghs,
+    generated.scheduled_date,
+    generated.scheduled_date,
+    generated.schedule,
+    generated.operational_date,
+    v_target_season_code,
+    'SER_'
+      || pg_catalog.regexp_replace(generated.type, '[^A-Z0-9]+', '_', 'g')
+      || '_'
+      || pg_catalog.regexp_replace(generated.airline, '[^A-Z0-9]+', '_', 'g')
+      || '_'
+      || pg_catalog.regexp_replace(generated.flight_number, '[^A-Z0-9]+', '_', 'g')
+      || '_'
+      || pg_catalog.regexp_replace(generated.route, '[^A-Z0-9]+', '_', 'g'),
+    generated.day_of_week,
+    null,
+    generated.source_row_index,
+    generated.linked_source_row_index,
+    generated.link_type,
+    generated.pair_anchor_date,
+    counterpart.final_record_id,
+    'imported',
+    case when generated.type = 'D' then 'DEP' else 'ARR' end,
+    'active',
+    generated.turnaround_id
+  from pg_temp.seasonal_import_commit_records_v2 generated
+  left join public.season_flight_records existing
+    on existing.record_id = generated.final_record_id
+    and existing.season_id = v_target_season_id
+    and existing.source_kind = 'imported'
+  left join pg_temp.seasonal_import_commit_records_v2 counterpart
+    on counterpart.generated_record_id = generated.linked_record_id
+  on conflict (record_id) do update set
+    season_id = excluded.season_id,
+    link_id = excluded.link_id,
+    type = excluded.type,
+    airline = excluded.airline,
+    flight_number = excluded.flight_number,
+    raw_flight_number = excluded.raw_flight_number,
+    request_status_code = excluded.request_status_code,
+    route = excluded.route,
+    schedule = excluded.schedule,
+    aircraft = excluded.aircraft,
+    category = excluded.category,
+    code_shares = excluded.code_shares,
+    int_dom_ind = excluded.int_dom_ind,
+    pax = excluded.pax,
+    gate = excluded.gate,
+    stand = excluded.stand,
+    carousel = excluded.carousel,
+    mct = excluded.mct,
+    fb = excluded.fb,
+    lb = excluded.lb,
+    bhs = excluded.bhs,
+    ghs = excluded.ghs,
+    date = excluded.date,
+    scheduled_date = excluded.scheduled_date,
+    scheduled_time = excluded.scheduled_time,
+    operational_date = excluded.operational_date,
+    iata_season_code = excluded.iata_season_code,
+    flight_series_id = excluded.flight_series_id,
+    day_of_week = excluded.day_of_week,
+    action = excluded.action,
+    source_row_index = excluded.source_row_index,
+    linked_source_row_index = excluded.linked_source_row_index,
+    link_type = excluded.link_type,
+    pair_anchor_date = excluded.pair_anchor_date,
+    linked_record_id = excluded.linked_record_id,
+    source_kind = excluded.source_kind,
+    source_side = excluded.source_side,
+    status = excluded.status,
+    turnaround_id = excluded.turnaround_id;
+
+  delete from public.season_source_rows source_rows
+  where source_rows.season_id = v_target_season_id;
+
+  insert into public.season_source_rows (
+    season_id,
+    row_index,
+    effective,
+    discontinue,
+    airline,
+    aircraft,
+    sta,
+    arr_flight,
+    arr_route,
+    arr_category,
+    arr_code_shares,
+    arr_int_dom_ind,
+    std,
+    dep_flight,
+    dep_route,
+    dep_category,
+    dep_code_shares,
+    dep_int_dom_ind,
+    overnight_link_row_index,
+    link_type
+  )
+  select
+    v_target_season_id,
+    (batch_rows.row_data->>'rowIndex')::integer,
+    batch_rows.row_data->>'effective',
+    batch_rows.row_data->>'discontinue',
+    batch_rows.row_data->>'airline',
+    batch_rows.row_data->>'aircraft',
+    batch_rows.row_data->>'sta',
+    batch_rows.row_data->>'arrFlight',
+    batch_rows.row_data->>'arrRoute',
+    batch_rows.row_data->>'arrFlightCategory',
+    batch_rows.row_data->>'arrCodeShares',
+    batch_rows.row_data->>'arrIntDomInd',
+    batch_rows.row_data->>'std',
+    batch_rows.row_data->>'depFlight',
+    batch_rows.row_data->>'depRoute',
+    batch_rows.row_data->>'depFlightCategory',
+    batch_rows.row_data->>'depCodeShares',
+    batch_rows.row_data->>'depIntDomInd',
+    nullif(batch_rows.row_data->>'overnightLinkRowIndex', '')::integer,
+    nullif(batch_rows.row_data->>'linkType', '')
+  from public.season_import_batch_rows batch_rows
+  where batch_rows.batch_id = p_batch_id;
+
+  select pg_catalog.count(*)::integer
+  into v_source_row_count
+  from public.season_source_rows source_rows
+  where source_rows.season_id = v_target_season_id;
+
+  if v_source_row_count <> v_batch.source_row_count then
+    raise exception 'Read-back source row count mismatch for batch %: staged %, committed %',
+      p_batch_id,
+      v_batch.source_row_count,
+      v_source_row_count
+      using errcode = 'P0001';
+  end if;
+
+  insert into public.season_source_row_days (
+    season_id,
+    row_index,
+    iso_dow
+  )
+  select
+    v_target_season_id,
+    (batch_rows.row_data->>'rowIndex')::integer,
+    days.ordinality::integer
+  from public.season_import_batch_rows batch_rows
+  cross join lateral pg_catalog.jsonb_array_elements(
+    batch_rows.row_data->'daysOfWeek'
+  ) with ordinality days(day_value, ordinality)
+  where batch_rows.batch_id = p_batch_id
+    and (days.day_value #>> '{}')::boolean;
+
+  select
+    pg_catalog.count(*)::integer,
+    pg_catalog.min(source_rows.effective),
+    pg_catalog.max(source_rows.discontinue)
+  into v_source_row_count, v_effective_start, v_effective_end
+  from public.season_source_rows source_rows
+  where source_rows.season_id = v_target_season_id;
+
+  select pg_catalog.count(*)::integer
+  into v_flight_record_count
+  from public.season_flight_records records
+  where records.season_id = v_target_season_id
+    and records.source_kind = 'imported';
+
+  if v_source_row_count <> v_batch.source_row_count then
+    raise exception 'Read-back source row count mismatch for batch %: staged %, committed %',
+      p_batch_id,
+      v_batch.source_row_count,
+      v_source_row_count
+      using errcode = 'P0001';
+  end if;
+
+  if v_flight_record_count <> v_batch.generated_record_count
+    or v_flight_record_count <> v_generated_record_count
+  then
+    raise exception 'Read-back imported flight record count mismatch for batch %: staged %, generated %, committed %',
+      p_batch_id,
+      v_batch.generated_record_count,
+      v_generated_record_count,
+      v_flight_record_count
+      using errcode = 'P0001';
+  end if;
+
+  v_now_ms := pg_catalog.floor(
+    extract(epoch from pg_catalog.clock_timestamp()) * 1000
+  )::bigint;
+  v_next_data_version := v_current_data_version + 1;
+
+  update public.seasons seasons
+  set
+    season_code = v_target_season_code,
+    file_name = v_batch.file_name,
+    uploaded_at = v_now_ms,
+    effective_start = coalesce(v_effective_start, ''),
+    effective_end = coalesce(v_effective_end, ''),
+    total_legs = v_flight_record_count,
+    total_source_rows = v_source_row_count,
+    data_version = v_next_data_version,
+    last_synced_at = v_now_ms
+  where seasons.id = v_target_season_id
+    and seasons.data_version = v_current_data_version;
+
+  if not found then
+    raise exception 'Season % changed while committing batch %',
+      v_target_season_id,
+      p_batch_id
+      using errcode = '40001';
+  end if;
+
+  insert into public.season_change_events (
+    event_id,
+    season_id,
+    client_id,
+    op_id,
+    actor_user_id,
+    target_type,
+    target_id,
+    changed_fields,
+    op_payload
+  ) values (
+    'seasonal-import-v2:' || p_batch_id::text,
+    v_target_season_id,
+    'seasonal-import-v2',
+    p_batch_id::text,
+    auth.uid(),
+    'seasonImport',
+    v_target_season_id,
+    array['sourceRows', 'flightRecords', 'modifications', 'seasonMetadata'],
+    pg_catalog.jsonb_build_object(
+      'kind', 'commit_seasonal_import_v2',
+      'batchId', p_batch_id,
+      'seasonId', v_target_season_id,
+      'seasonCode', v_target_season_code,
+      'sourceRowCount', v_source_row_count,
+      'flightRecordCount', v_flight_record_count,
+      'preservedOperationalCount', v_preserved_operational_count,
+      'removedImportedCount', v_removed_imported_count,
+      'dataVersion', v_next_data_version,
+      'checksum', v_batch.checksum
+    )
+  )
+  returning server_seq into v_server_high_water;
+
+  insert into public.season_entity_versions (
+    season_id,
+    target_type,
+    target_id,
+    entity_version,
+    field_versions,
+    updated_by,
+    updated_at
+  ) values (
+    v_target_season_id,
+    'seasonImport',
+    v_target_season_id,
+    v_server_high_water,
+    pg_catalog.jsonb_build_object(
+      'sourceRows', v_server_high_water,
+      'flightRecords', v_server_high_water,
+      'modifications', v_server_high_water,
+      'seasonMetadata', v_server_high_water
+    ),
+    auth.uid(),
+    pg_catalog.now()
+  )
+  on conflict (season_id, target_type, target_id) do update set
+    entity_version = public.season_entity_versions.entity_version + 1,
+    field_versions = excluded.field_versions,
+    updated_by = excluded.updated_by,
+    updated_at = excluded.updated_at;
+
+  v_result := pg_catalog.jsonb_build_object(
+    'batchId', p_batch_id,
+    'seasonId', v_target_season_id,
+    'seasonCode', v_target_season_code,
+    'status', 'committed',
+    'sourceRowCount', v_source_row_count,
+    'flightRecordCount', v_flight_record_count,
+    'preservedOperationalCount', v_preserved_operational_count,
+    'removedImportedCount', v_removed_imported_count,
+    'dataVersion', v_next_data_version,
+    'serverHighWater', v_server_high_water,
+    'checksum', v_batch.checksum
+  );
+
+  update public.season_import_batches batches
+  set
+    season_id = v_target_season_id,
+    status = 'committed',
+    generated_record_count = v_flight_record_count,
+    result = v_result,
+    committed_at = pg_catalog.now()
+  where batches.batch_id = p_batch_id
+    and batches.status = 'validated';
+
+  if not found then
+    raise exception 'Seasonal import batch % changed before commit receipt was persisted', p_batch_id
+      using errcode = '40001';
+  end if;
+
+  return v_result;
+end;
+$$;
+
 revoke all on table public.season_import_batches from public, anon, authenticated;
 revoke all on table public.season_import_batch_rows from public, anon, authenticated;
 
@@ -2198,3 +3124,6 @@ revoke execute on function public.seasonal_import_generation_diagnostics_v2(uuid
 revoke execute on function public.stage_seasonal_import_v2(jsonb) from public;
 revoke execute on function public.stage_seasonal_import_v2(jsonb) from anon;
 grant execute on function public.stage_seasonal_import_v2(jsonb) to authenticated;
+revoke execute on function public.commit_seasonal_import_v2(uuid, integer) from public;
+revoke execute on function public.commit_seasonal_import_v2(uuid, integer) from anon;
+grant execute on function public.commit_seasonal_import_v2(uuid, integer) to authenticated;
