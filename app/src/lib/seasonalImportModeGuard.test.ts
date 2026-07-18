@@ -136,12 +136,41 @@ test('seasonal source import V2 stages canonical rows behind a permissioned RPC'
     assert.match(source, /revoke all on table public\.season_import_batch_rows from public, anon, authenticated/);
     assert.match(source, /grant execute on function public\.stage_seasonal_import_v2\(jsonb\) to authenticated/);
     assert.match(stageFunctionSource, /public\.app_operator_has_permission\('seasonal\.write'\)/);
+    assert.match(stageFunctionSource, /set search_path = pg_catalog, pg_temp/);
     assert.match(stageFunctionSource, /on conflict \(request_id\) do nothing/);
+    assert.match(stageFunctionSource, /jsonb_agg\(rows\.row_data order by rows\.row_index\)/);
+    assert.match(stageFunctionSource, /v_persisted_source_rows is distinct from v_canonical_source_rows/);
+    assert.match(stageFunctionSource, /duplicate-row-index/);
+    assert.match(stageFunctionSource, /Ambiguous seasonCode/);
+    assert.match(stageFunctionSource, /jsonb_array_length\(v_source_rows\) > 100000/);
+    assert.match(stageFunctionSource, /char_length\(v_checksum\) > 256/);
+    assert.match(stageFunctionSource, /char_length\(v_file_name\) > 1024/);
     assert.match(
       stageFunctionSource,
       /insert into public\.season_import_batch_rows[\s\S]*select[\s\S]*jsonb_array_elements\([\s\S]*with ordinality/i
     );
+    assert.doesNotMatch(stageFunctionSource, /\bto_date\s*\(/i);
+    assert.doesNotMatch(stageFunctionSource, /v_batch\.created_by is distinct from auth\.uid\(\)/);
     assert.doesNotMatch(stageFunctionSource, /flightRecords/);
     assert.doesNotMatch(stageFunctionSource, /for\s+v_record\s+in\s+select.*jsonb_array_elements/is);
   }
+});
+
+test('seasonal source import V2 SQL suite preserves runtime regression fixtures', () => {
+  const sqlTestSource = readFileSync(
+    join(root, '..', 'supabase', 'tests', 'seasonal_source_import_v2.sql'),
+    'utf8'
+  );
+
+  assert.match(sqlTestSource, /^begin;/);
+  assert.match(sqlTestSource, /set local role authenticated/);
+  assert.match(sqlTestSource, /2026-02-31/);
+  assert.match(sqlTestSource, /2026-04-31/);
+  assert.match(sqlTestSource, /2028-02-29/);
+  assert.match(sqlTestSource, /strict-canonical-json-types/);
+  assert.match(sqlTestSource, /duplicate-logical-row-index/);
+  assert.match(sqlTestSource, /same-checksum retry with changed sourceRows was not rejected/);
+  assert.match(sqlTestSource, /sourceRows exceeds maximum of 100000 rows/);
+  assert.match(sqlTestSource, /Ambiguous seasonCode/);
+  assert.match(sqlTestSource, /rollback;\s*$/);
 });
