@@ -3,8 +3,8 @@
 /** Raw row parsed from the seasonal schedule Excel file */
 export interface ParsedRow {
   rowIndex: number;
-  effective: string;       // e.g., "29-Mar-26"
-  discontinue: string;     // e.g., "24-Oct-26"
+  effective: string;       // ISO date, e.g., "2026-03-29"
+  discontinue: string;     // ISO date, e.g., "2026-10-24"
   airline: string;         // e.g., "VJ"
   aircraft: string;        // e.g., "321"
   daysOfWeek: boolean[];   // [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
@@ -386,8 +386,29 @@ export interface PatternGroup {
   linkType?: 'overnight' | 'sameday' | null;
 }
 
-/** Parse result with season code */
+export type SeasonalSourceRowIssueCode =
+  | 'missing-header'
+  | 'invalid-effective-date'
+  | 'invalid-discontinue-date'
+  | 'reversed-date-range'
+  | 'invalid-time'
+  | 'invalid-day-value'
+  | 'no-operating-days'
+  | 'missing-airline'
+  | 'missing-aircraft'
+  | 'incomplete-flight-side'
+  | 'no-flight-side';
+
+export interface SeasonalSourceRowIssue {
+  code: SeasonalSourceRowIssueCode;
+  rowIndex: number | null;
+  column: string | null;
+  message: string;
+}
+
+/** Parse result with season code and blocking source-row diagnostics. */
 export interface ParseResult {
   seasonCode: string;
   rows: ParsedRow[];
+  issues: SeasonalSourceRowIssue[];
 }

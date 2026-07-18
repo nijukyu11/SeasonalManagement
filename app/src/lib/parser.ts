@@ -1,6 +1,20 @@
 import * as XLSX from 'xlsx';
-import type { ParsedRow, CleanedFlight, FlightLeg, ParseResult, DisplayRow } from './types';
+import type {
+  ParsedRow,
+  CleanedFlight,
+  FlightLeg,
+  ParseResult,
+  DisplayRow,
+  SeasonalSourceRowIssue,
+} from './types';
 import { normalizeSeasonSheetName } from './importSeasonRules.ts';
+import {
+  normalizeSeasonalDate,
+  normalizeSeasonalDay,
+  normalizeSeasonalTime,
+  REQUIRED_SEASONAL_HEADERS,
+  validateSeasonalSourceRow,
+} from './seasonalSourceRowValidation.ts';
 
 // ─── Excel Column Mapping ──────────────────────────────────────
 // Columns from DAD_SeasonalS26.xlsx:
@@ -13,65 +27,40 @@ import { normalizeSeasonSheetName } from './importSeasonRules.ts';
 // ─── Date Parsing ──────────────────────────────────────────────
 
 const MONTHS: Record<string, number> = {
-  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
-  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+  JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5,
+  JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11,
 };
 
 /**
- * Parse date strings like "29-Mar-26", "29-Mar", or Excel serial numbers.
- * Assumes 2-digit years map to 2000s. Missing year defaults to seasonYear.
+ * Read canonical dates while retaining support for legacy values without a year.
  */
 function parseDate(raw: string | number | undefined, seasonYear: number): Date | null {
   if (raw == null || raw === '') return null;
 
-  // Handle Excel serial number
-  if (typeof raw === 'number') {
-    const d = XLSX.SSF.parse_date_code(raw);
-    return new Date(d.y, d.m - 1, d.d);
+  const normalized = normalizeSeasonalDate(raw);
+  if (normalized) {
+    const [year, month, day] = normalized.split('-').map(Number);
+    return new Date(year, month - 1, day);
   }
 
-  const str = String(raw).trim();
+  if (typeof raw !== 'string') return null;
 
-  // "29-Mar-26" or "29-Mar"
-  const parts = str.split('-');
-  if (parts.length < 2) return null;
+  const match = raw.trim().match(/^(\d{1,2})-([A-Za-z]{3})$/);
+  if (!match) return null;
+  const day = Number(match[1]);
+  const month = MONTHS[match[2].toUpperCase()];
+  if (month == null) return null;
 
-  const day = parseInt(parts[0], 10);
-  const month = MONTHS[parts[1]];
-  if (month === undefined || isNaN(day)) return null;
-
-  let year: number;
-  if (parts.length >= 3) {
-    const rawYear = parseInt(parts[2], 10);
-    year = rawYear < 100 ? 2000 + rawYear : rawYear;
-  } else {
-    year = seasonYear;
+  const date = new Date(seasonYear, month, day);
+  if (
+    date.getFullYear() !== seasonYear
+    || date.getMonth() !== month
+    || date.getDate() !== day
+  ) {
+    return null;
   }
 
-  return new Date(year, month, day);
-}
-
-/**
- * Parse time string like "14:30" or Excel fraction (0.604...) to "HH:MM".
- */
-function parseTime(raw: string | number | undefined): string | null {
-  if (raw == null || raw === '') return null;
-
-  if (typeof raw === 'number') {
-    // Excel time fraction: 0.5 = 12:00
-    const totalMinutes = Math.round(raw * 24 * 60);
-    const h = Math.floor(totalMinutes / 60) % 24;
-    const m = totalMinutes % 60;
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-  }
-
-  const str = String(raw).trim();
-  // Already "H:MM" or "HH:MM"
-  const match = str.match(/^(\d{1,2}):(\d{2})$/);
-  if (match) {
-    return `${match[1].padStart(2, '0')}:${match[2]}`;
-  }
-  return str;
+  return date;
 }
 
 // ─── Flight Number Cleaning ────────────────────────────────────
@@ -122,6 +111,27 @@ export function parseSeasonalSchedule(workbook: XLSX.WorkBook): ParseResult {
   const seasonCode = normalizeSeasonSheetName(sheetName);
   const sheet = workbook.Sheets[sheetName];
 
+  const headerRows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+    header: 1,
+    defval: '',
+    raw: true,
+    blankrows: false,
+  });
+  const sourceHeaders = new Set(
+    (headerRows[0] ?? []).map((header) => String(header ?? '').trim()),
+  );
+  const missingHeaderIssues: SeasonalSourceRowIssue[] = REQUIRED_SEASONAL_HEADERS
+    .filter((header) => !sourceHeaders.has(header))
+    .map((header) => ({
+      code: 'missing-header',
+      rowIndex: null,
+      column: header,
+      message: `Missing required seasonal header: ${header}.`,
+    }));
+  if (missingHeaderIssues.length > 0) {
+    return { seasonCode, rows: [], issues: missingHeaderIssues };
+  }
+
   // Read as JSON with header row
   const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
     defval: '',
@@ -129,37 +139,36 @@ export function parseSeasonalSchedule(workbook: XLSX.WorkBook): ParseResult {
   });
 
   const rows: ParsedRow[] = [];
+  const issues: SeasonalSourceRowIssue[] = [];
 
   for (let i = 0; i < rawRows.length; i++) {
     const r = rawRows[i];
+    if (!sourceRowHasContent(r)) continue;
 
-    // Skip empty rows
-    const airline = normalizeRequiredUpperText(r['Airline']);
-    if (!airline) continue;
-
-    const row: ParsedRow = {
+    // Preserve raw date, time, and day values until validation can diagnose them.
+    const candidate: ParsedRow = {
       rowIndex: i + 1, // 1-indexed (header is row 0)
       effective: r['Effective'] as string,
       discontinue: r['Discontinue'] as string,
-      airline,
+      airline: normalizeRequiredUpperText(r['Airline']),
       aircraft: normalizeRequiredUpperText(r['Aircraft']),
       daysOfWeek: [
-        numToBool(r['Mon']),
-        numToBool(r['Tue']),
-        numToBool(r['Wed']),
-        numToBool(r['Thu']),
-        numToBool(r['Fri']),
-        numToBool(r['Sat']),
-        numToBool(r['Sun']),
-      ],
-      sta: parseTime(r['STA'] as string | number | undefined),
+        r['Mon'],
+        r['Tue'],
+        r['Wed'],
+        r['Thu'],
+        r['Fri'],
+        r['Sat'],
+        r['Sun'],
+      ] as boolean[],
+      sta: r['STA'] as string | null,
       arrFlight: upperOrNull(r['ARRFlight']),
       arrFlightType: upperOrNull(r['ARRFlightType']),
       arrRoute: upperOrNull(r['ARRRoute']),
       arrFlightCategory: upperOrNull(r['ARRFlightCategory']),
       arrCodeShares: upperOrNull(r['ARRCodeShares']),
       arrIntDomInd: upperOrNull(r['ARRIntDomInd']),
-      std: parseTime(r['STD'] as string | number | undefined),
+      std: r['STD'] as string | null,
       depFlight: upperOrNull(r['DEPFlight']),
       depFlightType: upperOrNull(r['DEPFlightType']),
       depRoute: upperOrNull(r['DEPRoute']),
@@ -168,10 +177,22 @@ export function parseSeasonalSchedule(workbook: XLSX.WorkBook): ParseResult {
       depIntDomInd: upperOrNull(r['DEPIntDomInd']),
     };
 
+    const rowIssues = validateSeasonalSourceRow(candidate);
+    issues.push(...rowIssues);
+    if (rowIssues.length > 0) continue;
+
+    const row: ParsedRow = {
+      ...candidate,
+      effective: normalizeSeasonalDate(candidate.effective)!,
+      discontinue: normalizeSeasonalDate(candidate.discontinue)!,
+      daysOfWeek: candidate.daysOfWeek.map((day) => normalizeSeasonalDay(day).value),
+      sta: normalizeSeasonalTime(candidate.sta),
+      std: normalizeSeasonalTime(candidate.std),
+    };
     rows.push(row);
   }
 
-  return { seasonCode, rows };
+  return { seasonCode, rows, issues };
 }
 
 /**
@@ -459,12 +480,6 @@ export function detectOvernightPairs(rows: ParsedRow[]): OvernightPair[] {
 
 // ─── Helpers ───────────────────────────────────────────────────
 
-function numToBool(val: unknown): boolean {
-  if (typeof val === 'number') return val !== 0;
-  if (typeof val === 'string') return val.trim() === '1';
-  return false;
-}
-
 function emptyToNull(val: unknown): string | null {
   if (val == null) return null;
   const s = String(val).trim();
@@ -479,6 +494,12 @@ function normalizeRequiredUpperText(val: unknown): string {
   return String(val ?? '').trim().toUpperCase();
 }
 
+function sourceRowHasContent(row: Record<string, unknown>): boolean {
+  return Object.values(row).some((value) => (
+    value != null && (typeof value !== 'string' || value.trim() !== '')
+  ));
+}
+
 function formatDate(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -487,18 +508,8 @@ function formatDate(d: Date): string {
 }
 
 function guessSeasonYear(effective: string | number | undefined): number {
-  if (effective == null || effective === '') return new Date().getFullYear();
-
-  if (typeof effective === 'number') {
-    const d = XLSX.SSF.parse_date_code(effective);
-    return d.y;
-  }
-
-  const parts = String(effective).split('-');
-  if (parts.length >= 3) {
-    const yr = parseInt(parts[2], 10);
-    return yr < 100 ? 2000 + yr : yr;
-  }
+  const normalized = normalizeSeasonalDate(effective);
+  if (normalized) return Number(normalized.slice(0, 4));
 
   return new Date().getFullYear();
 }
