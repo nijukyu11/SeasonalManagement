@@ -74,6 +74,17 @@ function pairDiagnostics(resolution) {
   };
 }
 
+export function assertEmptyPairDiagnostics(diagnostics, label) {
+  for (const field of [
+    'unresolvedPairCount',
+    'ambiguousPairCount',
+    'nonReciprocalPairCount',
+    'missingCounterpartCount',
+  ]) {
+    assert.equal(diagnostics[field], 0, `${label} ${field} must be zero`);
+  }
+}
+
 function pairSignature(pair) {
   const linkType = inferLinkedPairType(pair.arrival, pair.departure);
   const anchorDate = pairAnchorForLinkedLegs(pair.arrival, pair.departure, linkType);
@@ -167,6 +178,7 @@ async function verifySeasonRoundTrip(client, userId, seasonCode) {
   assert.equal(canonical.effectiveLegs.length, fixtureData.fixture.verification.expectedGeneratedCount);
   const preExportPairResolution = resolveSeasonalPairs(canonical.effectiveLegs);
   const preExportPairDiagnostics = pairDiagnostics(preExportPairResolution);
+  assertEmptyPairDiagnostics(preExportPairDiagnostics, `${seasonCode} baseline`);
   const preExportPairingTopology = pairingTopology(canonical.effectiveLegs, preExportPairResolution);
   assertNoDuplicateKeys(canonical.effectiveLegs, `${seasonCode} effective snapshot`);
 
@@ -269,6 +281,7 @@ async function verifySeasonRoundTrip(client, userId, seasonCode) {
   );
   const postReimportPairResolution = resolveSeasonalPairs(reimportEffectiveLegs);
   const postReimportPairDiagnostics = pairDiagnostics(postReimportPairResolution);
+  assertEmptyPairDiagnostics(postReimportPairDiagnostics, `${seasonCode} re-import`);
   const postReimportPairingTopology = pairingTopology(reimportEffectiveLegs, postReimportPairResolution);
   assert.deepEqual(
     postReimportPairDiagnostics,

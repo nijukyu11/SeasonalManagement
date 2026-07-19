@@ -299,6 +299,11 @@ again exited `0` in 11.1 seconds through the temporary executable wrapper and
 repeated the SQL and true multi-session coverage before the corrected W26 load
 and S26/W26 round-trip harnesses ran.
 
+Final pair-diagnostic gap closure used a third disposable PostgreSQL 17.6
+database, `seasonal_task11_finalpair_20260719_130607_fda16e`. The package
+command exited `0` in 9.8 seconds and again completed the SQL and multi-session
+suite before the final S26/W26 round-trip.
+
 ## Load and Fault Metrics
 
 The W26 load harness ran against PostgreSQL 17.6 with a clean test season and
@@ -348,8 +353,8 @@ respectively). The corrected W26 load/fault command exited `0` in 27.5 seconds.
 
 | Season | Original committed season ID | Authoritative reimport season ID |
 |---|---|---|
-| S26 | `season-b13d6572-6ed8-47a8-897d-b02b3e0710f1` | `season-58f38653-50d3-46b8-baa7-baa133256bd6` |
-| W26 | `season-716e92d0-61ba-4eb9-966b-93d8f84f0462` | `season-6adddf36-58e7-40ec-a583-9fd707b1de33` |
+| S26 | `season-96b219c9-f4de-43cf-baf3-5551f85b4e67` | `season-3db9982b-f56f-43e7-b7a8-47f93c9b19b8` |
+| W26 | `season-80daaef2-fbbb-44b7-b878-0e38b690691b` | `season-95cf79d1-620a-48b3-a416-c07cf60de951` |
 
 Each path staged and committed into an isolated season, fetched a versioned
 export snapshot, built canonical rows and an in-memory workbook, strict-parsed
@@ -363,14 +368,22 @@ record counts before cleanup.
 
 The harness then fetched a versioned snapshot from the committed reimport
 target, ran `materializeEffectiveSeasonalLegs`, and passed those effective legs
-to the shared `resolveSeasonalPairs`. For both fixtures the measured post-
-reimport diagnostics were unresolved `0`, ambiguous `0`, nonreciprocal `0`,
-and missing counterpart `0`. Sorted operational pair signatures, per-pair
-turnaround cardinality, turnaround group count, and complete occurrence
-signatures matched the pre-export canonical data. Neither authoritative
-snapshot was truncated; neither workbook was empty; missing, extra, duplicate,
-and count deltas were zero. The corrected two-season round-trip command exited
-`0` in 155.9 seconds. The harnesses do not read production rows or SQLite.
+to the shared `resolveSeasonalPairs`. `assertEmptyPairDiagnostics` is invoked
+independently for the baseline and reimport results before their equality is
+checked. Each invocation explicitly requires unresolved, ambiguous,
+nonreciprocal, and missing-counterpart counts to equal zero, so identical dirty
+states cannot pass. For both fixtures all eight explicit baseline/reimport
+checks measured zero. Sorted operational pair signatures, per-pair turnaround
+cardinality, turnaround group count, and complete occurrence signatures still
+matched the pre-export canonical data. Neither authoritative snapshot was
+truncated; neither workbook was empty; missing, extra, duplicate, and count
+deltas were zero. The final two-season round-trip command exited `0` in
+224.8 seconds. The harnesses do not read production rows or SQLite.
+
+A local negative test constructs identical baseline and reimport diagnostic
+objects with one nonzero field at a time. Equality succeeds by construction,
+while both explicit empty assertions reject each of the four fields. This test
+passed and is included in the focused count below.
 
 ## Production Read-Only Comparison and Task 12 Blocker
 
@@ -399,7 +412,8 @@ RPCs, zero import-batch tables, and no migration metadata table. No Task 11
 migration or mutation was applied to production. The follow-up reran the W26
 fingerprint and RPC-count checks in a read-only transaction after its real
 PostgreSQL harnesses; the fingerprint still matched and the RPC count remained
-zero.
+zero. The final pair-diagnostic run repeated the same read-only checks with the
+same fingerprint and zero Task 11 RPCs.
 
 ## Cleanup Evidence
 
@@ -419,11 +433,18 @@ zero.
 - The verified follow-up tunnel PID 16740 was stopped, port 55433 had zero
   listeners, and all ten follow-up wrapper, askpass, secret, marker, and log
   items were deleted. A final local check found zero Task 11 temporary items.
+- Final pair-diagnostic database
+  `seasonal_task11_finalpair_20260719_130607_fda16e` contained zero seasons,
+  batches, and test operators before drop. `DROP DATABASE` succeeded and
+  `pg_database` returned zero rows. Tunnel PID 8308 was stopped, port 55434 had
+  zero listeners, all nine final wrapper/askpass/secret/log/marker items were
+  deleted, and the all-Task-11 temporary-item count was zero.
 
 ## Final Verification Matrix
 
 - Focused parser/import/export/selection/pairing/recovery/snapshot tests:
-  89 passed, 0 failed in 687 ms.
+  90 passed, 0 failed in 983 ms, including the identical-nonzero diagnostic
+  rejection test.
 - `npm run test:rules`: passed.
 - `npx tsc --noEmit --pretty false`: passed.
 - Targeted ESLint, including all three Task 11 scripts and the concurrency
