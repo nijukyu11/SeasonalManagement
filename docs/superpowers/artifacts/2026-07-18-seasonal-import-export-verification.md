@@ -978,3 +978,34 @@ request line identifies the unrelated periodic
 `get_season_schedule_allocation_window_v1` RPC from the installed client. It is
 not a Seasonal V2 import/export request and matches the previously observed
 allocation-window timeout series.
+
+### Signed updater publication
+
+Release commit `55fec9af48d5d03058e3b69c72bebae74ab81b74` was pushed as a
+fast-forward update to `main` together with annotated tag `app-v0.1.11` in one
+atomic push. The tag dereferences to that exact commit. GitHub Actions run
+`29700637404` completed successfully, including runtime-variable validation,
+updater tests, rule regressions, Python agent tests, signed Tauri build, and
+release publication.
+
+GitHub Release `Seasonal Management 0.1.11` was published at
+`2026-07-19 19:39:58 UTC` as a non-draft, non-prerelease release:
+
+| Published asset | Bytes | SHA-256 |
+|---|---:|---|
+| `latest.json` | 756 | `98370917a3b65d8217d27c641898cba8244c7bbf565ecdf80d8943735a7b4e55` |
+| `SeasonalManagement_0.1.11_x64-setup.exe` | 22,601,395 | `b1e31f5b7a302a88f5650ef613f453888d14e96a75c006056a84dc88663278f1` |
+| `SeasonalManagement_0.1.11_x64-setup.exe.sig` | 432 | `ad2071f85fce7aad30afab1e57a3c2c7eccff6cf231dd77b3be6b5a66be822a2` |
+
+The assets were downloaded independently after publication and reproduced the
+GitHub digests above. `latest.json` reports version `0.1.11`, contains only the
+`windows-x86_64` platform, points to the exact `app-v0.1.11` installer URL, and
+contains a 432-character signature byte-for-byte equal to the detached `.sig`
+asset. The configured public latest endpoint returned HTTP 200 with the same
+756-byte manifest and SHA-256, so existing clients can discover the release
+without GitHub authentication.
+
+The signed installer and detached signature were copied to the local Downloads
+folder for clean-machine/user acceptance. Publication is complete; installed
+upgrade and native import/export UX acceptance remain deliberately separate,
+and V1 execute permission is still retained until that acceptance passes.
