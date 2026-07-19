@@ -363,6 +363,26 @@ Behavioral mock coverage proves the injected second-operator failure orders
 with zero persisted rows and no exposed principal IDs. The success case proves
 ten inserts, `COMMIT`, ID exposure, cleanup, and `end` in that order.
 
+## Tracked Concurrency Contract Follow-Up
+
+The broader seasonal import/export suite exposed one final tracked-test failure:
+124 tests passed and one failed because `seasonalImportModeGuard.test.ts`
+still required the `SEASONAL_TEST_TEMP_DB` literal in the concurrency harness.
+That environment rule had already moved behind the shared
+`seasonal-test-database-guard.mjs` boundary, so the assertion no longer
+described the runtime contract.
+
+The tracked contract now verifies that the concurrency harness imports
+`parseDisposableDatabaseConfig` and `verifyDatabaseIdentityOrClose` from the
+shared guard, delegates environment validation through
+`parseDisposableDatabaseConfig(process.env)`, and performs the live connected
+database identity check through the shared helper before test DDL. Dedicated
+shared-guard behavioral tests remain responsible for the temporary-database
+flag, localhost restriction, disposable namespace, and exact live identity.
+The tracked suite passed 19 of 19 tests in 166 ms after the correction, and the
+same broader 16-file seasonal import/export command passed all 125 tests in
+900 ms.
+
 ## Load and Fault Metrics
 
 The W26 load harness ran against PostgreSQL 17.6 with a clean test season and
@@ -536,10 +556,14 @@ same fingerprint and zero Task 11 RPCs.
 ## Final Verification Matrix
 
 - Focused parser/import/export/selection/pairing/recovery/snapshot and quality
-  regression tests: 110 passed, 0 failed in 953 ms. This includes the
+  regression tests: 110 passed, 0 failed in 1,112 ms. This includes the
   identical-nonzero diagnostic rejection plus exact identity, no-schema-on-
   mismatch, concurrency entry guard, principal creation rollback/commit,
   atomic cleanup rollback, and client-close cases.
+- Broader 16-file seasonal import/export regression command: 125 passed, 0
+  failed in 900 ms. Its immediately preceding RED run was 124 passed and 1
+  failed at the obsolete concurrency source-literal assertion; the corrected
+  tracked suite itself passed 19 of 19 tests in 166 ms.
 - `npm run test:rules`: passed.
 - `npx tsc --noEmit --pretty false`: passed.
 - Targeted ESLint, including all four Task 11 runtime scripts/harnesses, the
@@ -578,6 +602,11 @@ same fingerprint and zero Task 11 RPCs.
   diff, UTF-8, mojibake, secret, external-host, personal-path,
   trailing-whitespace, and fixture-boundary scans covered that exact set and
   the cumulative 13-file Task 11 boundary with zero findings.
+- The final tracked-test follow-up modifies exactly two files: the tracked
+  Seasonal import mode guard test and this verification artifact. It requires
+  no remote database run and performs no production mutation. Final diff,
+  strict UTF-8, mojibake, secret, external-host, and personal-path scans covered
+  exactly those two files with zero findings.
 - Fixture-boundary verification found zero `flightRecords`, `record_id`, or
   `seasonId` keys in either JSON, and zero `.xls` or `.xlsx` files in the Task
   11 Git changes. Both JSON source-row byte counts and SHA-256 values matched

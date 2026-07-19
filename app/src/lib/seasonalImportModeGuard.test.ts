@@ -582,7 +582,22 @@ test('seasonal source import V2 tracks a bounded real-PostgreSQL concurrency har
   assert.match(concurrencySource, /const SCENARIO_TIMEOUT_MS = HARD_TIMEOUT_MS - CLEANUP_RESERVE_MS/);
   assert.match(concurrencySource, /hardDeadline = harnessStartedAt \+ HARD_TIMEOUT_MS/);
   assert.match(concurrencySource, /hardDeadline - Date\.now\(\)/);
-  assert.match(concurrencySource, /SEASONAL_TEST_TEMP_DB/);
+  assert.match(
+    concurrencySource,
+    /import\s*\{\s*parseDisposableDatabaseConfig,\s*verifyDatabaseIdentityOrClose,?\s*\}\s*from\s*['"]\.\.\/\.\.\/scripts\/seasonal-test-database-guard\.mjs['"];/
+  );
+  assert.match(
+    concurrencySource,
+    /const databaseConfig = parseDisposableDatabaseConfig\(process\.env\);/
+  );
+  assert.match(
+    concurrencySource,
+    /const expectedDatabaseName = databaseConfig\.databaseName;/
+  );
+  assert.match(
+    concurrencySource,
+    /await verifyDatabaseIdentityOrClose\(janitor\.client, expectedDatabaseName\);/
+  );
   assert.match(concurrencySource, /PGlite cannot prove multi-session locking/);
   assert.match(concurrencySource, /season lookup race/);
   assert.match(concurrencySource, /AbortController/);
