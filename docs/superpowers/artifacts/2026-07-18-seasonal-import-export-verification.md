@@ -341,6 +341,28 @@ and concurrency harness require `SEASONAL_TEST_TEMP_DB=1`, localhost, and the
 database before any test DDL or row operation and closes the client on a
 mismatch.
 
+## Principal Creation P2 Follow-Up
+
+The final P2 regression was RED because `createTestPrincipals` issued each
+auth-user, operator, and permission insert independently. An injected failure
+at the second operator insert left six mock rows persisted, emitted no
+`ROLLBACK`, and the successful path emitted no `COMMIT`. The outer lifecycle
+still called `client.end()`, but it could not run identity-based cleanup because
+the principal IDs had correctly not escaped the rejected promise.
+
+The complete two-user creation sequence now runs through the existing
+transaction helper. Both UUIDs are generated before `BEGIN` for use by the
+inserts, but the principal object is returned only after all ten inserts and
+`COMMIT` succeed. Mid-creation failure rolls back every pending auth, operator,
+and permission row. Existing aggregate semantics remain intact when an
+operation and rollback both fail, and the outer lifecycle still attempts
+cleanup and `client.end()` while preserving all primary/cleanup/end errors.
+
+Behavioral mock coverage proves the injected second-operator failure orders
+`BEGIN`, six successful inserts, the failing insert, `ROLLBACK`, and `end`,
+with zero persisted rows and no exposed principal IDs. The success case proves
+ten inserts, `COMMIT`, ID exposure, cleanup, and `end` in that order.
+
 ## Load and Fault Metrics
 
 The W26 load harness ran against PostgreSQL 17.6 with a clean test season and
@@ -349,10 +371,10 @@ batch:
 | Metric | Result |
 |---|---:|
 | Canonical request bytes | 60,896 |
-| Client parse | 34.87 ms |
-| Stage | 2,938.89 ms |
-| Preview | 2,704.34 ms |
-| Commit | 14,561.96 ms |
+| Client parse | 59.89 ms |
+| Stage | 2,923.90 ms |
+| Preview | 2,704.29 ms |
+| Commit | 14,442.29 ms |
 | Generated occurrences | 26,370 |
 | Duplicate occurrences | 0 |
 
@@ -379,7 +401,7 @@ restage or recommit. The receipt contained no source rows, workbook bytes,
 filename, or upload payload. This claim is receipt-scoped; normal server
 staging still persists canonical source rows by design. Owner, cross-mode, and
 version conflicts remained fail-closed (`42501`, `23505`, and version conflict
-respectively). The latest corrected W26 load/fault command exited `0` in 27.21
+respectively). The latest corrected W26 load/fault command exited `0` in 27.39
 seconds.
 
 Harness cleanup now runs season, batch, operator, permission, and user cleanup
@@ -499,25 +521,38 @@ same fingerprint and zero Task 11 RPCs.
   only for exact identity/catalog checks and creation/drop of the disposable
   database. No schema, migration, fixture DDL, or fixture DML ran in production
   `postgres/public`.
+- Principal-creation smoke database
+  `seasonal_task11_principals_1784471538421_21d3ae` required exact admin,
+  disposable, tunnel, and Node database identities before package DDL. The
+  package DB/concurrency command exited `0` in 15.58 seconds, then the real W26
+  load/fault command exited `0` in 27.39 seconds using transactional principal
+  setup. Residue was exactly `0|0|0|0|0|0|0` for seasons, batches, batch rows,
+  source rows, flight records, operators, and auth users. Cleanup revalidated
+  admin database `postgres`, dropped the disposable database, observed zero
+  `pg_database` rows, stopped verified tunnel PID 10656, and left zero
+  listeners, matching SSH processes, wrappers, askpass files, credentials, or
+  temporary items. It did not run production schema or fixture mutations.
 
 ## Final Verification Matrix
 
 - Focused parser/import/export/selection/pairing/recovery/snapshot and quality
-  regression tests: 108 passed, 0 failed in 1,101 ms. This includes the
+  regression tests: 110 passed, 0 failed in 953 ms. This includes the
   identical-nonzero diagnostic rejection plus exact identity, no-schema-on-
-  mismatch, concurrency entry guard, atomic rollback, and client-close cases.
+  mismatch, concurrency entry guard, principal creation rollback/commit,
+  atomic cleanup rollback, and client-close cases.
 - `npm run test:rules`: passed.
 - `npx tsc --noEmit --pretty false`: passed.
 - Targeted ESLint, including all four Task 11 runtime scripts/harnesses, the
   shared database guard, and both quality regression files: passed.
 - `node --check` for those seven JavaScript files: passed.
 - `npm run test:seasonal-import-sql`: passed on PGlite; tracked migration ran
-  twice in 4,375 ms.
+  twice in 3,470 ms.
 - `npm run test:seasonal-schema-twice`: passed; full schema ran twice.
-- `npm run test:seasonal-import-v2-db`: passed on real PostgreSQL in 14.42
-  seconds through the temporary executable wrapper, including concurrency.
-- `npm run test:seasonal-import-v2-load`: passed on real PostgreSQL in 27.21
-  seconds with the metrics above.
+- `npm run test:seasonal-import-v2-db`: latest real PostgreSQL smoke passed in
+  15.58 seconds through the temporary executable wrapper, including
+  concurrency.
+- `npm run test:seasonal-import-v2-load`: latest real PostgreSQL smoke passed
+  in 27.39 seconds with the metrics above.
 - `npm run test:seasonal-roundtrip`: passed for real S26 and W26 fixtures in
   238.36 seconds.
 - `npm run build`: passed in 57.54 seconds with Next.js 16.2.4; compilation
@@ -538,6 +573,11 @@ same fingerprint and zero Task 11 RPCs.
   shared DB guard, load harness, cleanup regression, round-trip harness,
   concurrency harness, and this verification artifact. No package metadata,
   fixture, migration, schema, production repair, or release file changed.
+- The principal-creation P2 follow-up modifies exactly three files: the load
+  harness, cleanup regression, and this verification artifact. Final syntax,
+  diff, UTF-8, mojibake, secret, external-host, personal-path,
+  trailing-whitespace, and fixture-boundary scans covered that exact set and
+  the cumulative 13-file Task 11 boundary with zero findings.
 - Fixture-boundary verification found zero `flightRecords`, `record_id`, or
   `seasonId` keys in either JSON, and zero `.xls` or `.xlsx` files in the Task
   11 Git changes. Both JSON source-row byte counts and SHA-256 values matched

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   cleanupTestPrincipals,
+  createTestPrincipals,
   removeBatchAndSeason,
   runWithCleanupAndClose,
 } from './seasonal-import-v2-load-test.mjs';
@@ -47,6 +48,129 @@ function createMockClient({ failSeasonDelete = false, failEnd = false } = {}) {
     },
   };
 }
+
+function createPrincipalMockClient({ failOnInsert = null } = {}) {
+  const calls = [];
+  const persistedRows = [];
+  let pendingRows = [];
+  let transactionOpen = false;
+  let insertCount = 0;
+
+  return {
+    calls,
+    persistedRows,
+    async query(sql) {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase();
+      if (normalized === 'begin') {
+        calls.push('begin');
+        transactionOpen = true;
+        return { rows: [] };
+      }
+      if (normalized === 'commit') {
+        calls.push('commit');
+        persistedRows.push(...pendingRows);
+        pendingRows = [];
+        transactionOpen = false;
+        return { rows: [] };
+      }
+      if (normalized === 'rollback') {
+        calls.push('rollback');
+        pendingRows = [];
+        transactionOpen = false;
+        return { rows: [] };
+      }
+
+      let insertKind;
+      if (normalized.startsWith('insert into auth.users')) insertKind = 'insert-auth';
+      if (normalized.startsWith('insert into public.app_operators')) insertKind = 'insert-operator';
+      if (normalized.startsWith('insert into public.app_operator_permission_overrides')) {
+        insertKind = 'insert-permission';
+      }
+      if (!insertKind) throw new Error(`Unexpected principal query: ${normalized}`);
+
+      calls.push(insertKind);
+      insertCount += 1;
+      if (insertCount === failOnInsert) throw new Error('mock principal creation failed');
+      if (transactionOpen) pendingRows.push(insertKind);
+      else persistedRows.push(insertKind);
+      return { rows: [] };
+    },
+    async end() {
+      calls.push('end');
+    },
+  };
+}
+
+test('mid-creation failure rolls back partial principals and still closes', async () => {
+  const client = createPrincipalMockClient({ failOnInsert: 7 });
+  let principals;
+  let cleanupCalls = 0;
+
+  await assert.rejects(
+    runWithCleanupAndClose({
+      run: async () => {
+        principals = await createTestPrincipals(client);
+      },
+      cleanup: async () => {
+        if (principals) cleanupCalls += 1;
+      },
+      close: () => client.end(),
+    }),
+    /mock principal creation failed/,
+  );
+
+  assert.equal(principals, undefined, 'principal IDs must not escape a failed transaction');
+  assert.equal(cleanupCalls, 0, 'cleanup cannot identify principals before a successful commit');
+  assert.equal(client.persistedRows.length, 0, 'rollback must leave no partial principal row');
+  assert.deepEqual(client.calls, [
+    'begin',
+    'insert-auth',
+    'insert-operator',
+    'insert-permission',
+    'insert-permission',
+    'insert-permission',
+    'insert-auth',
+    'insert-operator',
+    'rollback',
+    'end',
+  ]);
+});
+
+test('successful principal creation commits before IDs escape and client closes', async () => {
+  const client = createPrincipalMockClient();
+  let principals;
+  await runWithCleanupAndClose({
+    run: async () => {
+      principals = await createTestPrincipals(client);
+    },
+    cleanup: async () => {
+      assert.equal(client.calls.at(-1), 'commit');
+      client.calls.push('cleanup');
+    },
+    close: () => client.end(),
+  });
+
+  assert.match(principals.primaryUserId, /^[0-9a-f-]{36}$/);
+  assert.match(principals.secondaryUserId, /^[0-9a-f-]{36}$/);
+  assert.notEqual(principals.primaryUserId, principals.secondaryUserId);
+  assert.equal(client.persistedRows.length, 10);
+  assert.deepEqual(client.calls, [
+    'begin',
+    'insert-auth',
+    'insert-operator',
+    'insert-permission',
+    'insert-permission',
+    'insert-permission',
+    'insert-auth',
+    'insert-operator',
+    'insert-permission',
+    'insert-permission',
+    'insert-permission',
+    'commit',
+    'cleanup',
+    'end',
+  ]);
+});
 
 test('principal cleanup rolls back and closes when season deletion fails', async () => {
   const client = createMockClient({ failSeasonDelete: true });

@@ -315,29 +315,31 @@ export async function authenticatedQuery(client, userId, text, params = []) {
 export async function createTestPrincipals(client) {
   const primaryUserId = randomUUID();
   const secondaryUserId = randomUUID();
-  for (const [userId, label] of [[primaryUserId, 'primary'], [secondaryUserId, 'secondary']]) {
-    const email = `seasonal-task11-${label}-${userId}@example.invalid`;
-    await client.query(
-      `insert into auth.users (
-         id, aud, role, email, encrypted_password, email_confirmed_at,
-         raw_app_meta_data, raw_user_meta_data, created_at, updated_at
-       ) values ($1, 'authenticated', 'authenticated', $2, '', now(),
-         '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb, now(), now())`,
-      [userId, email],
-    );
-    await client.query(
-      `insert into public.app_operators (user_id, email, username, display_name)
-       values ($1, $2, $3, $4)`,
-      [userId, email, `task11_${label}_${userId.replaceAll('-', '')}`, `Task 11 ${label}`],
-    );
-    for (const permission of ['seasonal.write', 'seasonal.read', 'season.repair']) {
+  await runInTransaction(client, async () => {
+    for (const [userId, label] of [[primaryUserId, 'primary'], [secondaryUserId, 'secondary']]) {
+      const email = `seasonal-task11-${label}-${userId}@example.invalid`;
       await client.query(
-        `insert into public.app_operator_permission_overrides (user_id, permission_key, effect)
-         values ($1, $2, 'allow')`,
-        [userId, permission],
+        `insert into auth.users (
+           id, aud, role, email, encrypted_password, email_confirmed_at,
+           raw_app_meta_data, raw_user_meta_data, created_at, updated_at
+         ) values ($1, 'authenticated', 'authenticated', $2, '', now(),
+           '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb, now(), now())`,
+        [userId, email],
       );
+      await client.query(
+        `insert into public.app_operators (user_id, email, username, display_name)
+         values ($1, $2, $3, $4)`,
+        [userId, email, `task11_${label}_${userId.replaceAll('-', '')}`, `Task 11 ${label}`],
+      );
+      for (const permission of ['seasonal.write', 'seasonal.read', 'season.repair']) {
+        await client.query(
+          `insert into public.app_operator_permission_overrides (user_id, permission_key, effect)
+           values ($1, $2, 'allow')`,
+          [userId, permission],
+        );
+      }
     }
-  }
+  });
   return { primaryUserId, secondaryUserId };
 }
 
