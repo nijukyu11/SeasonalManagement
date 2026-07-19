@@ -610,6 +610,7 @@ select
   target.schedule as target_schedule,
   target.aircraft as target_aircraft,
   target.category as target_category,
+  target.flight_series_id as target_flight_series_id,
   target.source_row_index as target_source_row_index,
   target.linked_source_row_index as target_linked_source_row_index,
   target.link_type as target_link_type,
@@ -626,6 +627,7 @@ select
   counterpart.schedule as counterpart_schedule,
   counterpart.aircraft as counterpart_aircraft,
   counterpart.category as counterpart_category,
+  counterpart.flight_series_id as counterpart_flight_series_id,
   counterpart.source_kind as counterpart_source_kind,
   counterpart.status as counterpart_status,
   counterpart.action as counterpart_action,
@@ -753,6 +755,8 @@ begin
       or proof.counterpart_source_kind is distinct from 'imported'
       or proof.counterpart_status is distinct from 'active'
       or proof.counterpart_action is not null
+      or proof.target_flight_series_id is distinct from 'SER_D_SQ_SQ173_NONE'
+      or proof.counterpart_flight_series_id is distinct from 'SER_A_SQ_SQ174_SIN'
       or proof.target_linked_record_id is distinct from proof.counterpart_record_id
       or proof.counterpart_linked_record_id is distinct from proof.target_record_id
       or proof.target_to_counterpart_reference_count <> 1
@@ -1124,18 +1128,28 @@ begin
 end;
 $$;
 
-\echo 'REPAIR 10 - fill only verified W26 SQ173 routes from reciprocal SQ174'
+\echo 'REPAIR 10 - fill verified W26 SQ173 routes and route-derived series IDs'
 do $$
 declare
   v_count bigint;
 begin
   update public.season_flight_records target
-  set route = proof.counterpart_route
+  set
+    route = proof.counterpart_route,
+    flight_series_id = 'SER_'
+      || pg_catalog.regexp_replace(target.type, '[^A-Z0-9]+', '_', 'g')
+      || '_'
+      || pg_catalog.regexp_replace(target.airline, '[^A-Z0-9]+', '_', 'g')
+      || '_'
+      || pg_catalog.regexp_replace(target.flight_number, '[^A-Z0-9]+', '_', 'g')
+      || '_'
+      || pg_catalog.regexp_replace(proof.counterpart_route, '[^A-Z0-9]+', '_', 'g')
   from task9_w26_sq173_route_repair proof
   where target.season_id = proof.season_id
     and target.record_id = proof.target_record_id
     and target.route = proof.target_route
     and pg_catalog.btrim(target.route) = ''
+    and target.flight_series_id = proof.target_flight_series_id
     and target.linked_record_id = proof.counterpart_record_id
     and target.turnaround_id = proof.target_turnaround_id
     and proof.counterpart_route = 'SIN';
@@ -1162,17 +1176,33 @@ where id in (
 -- constraints already deployed; Task 12 must rerun after additive deployment.
 set constraints all immediate;
 
--- The active imported occurrence index is intentionally created only after
--- the additive Task 12 migration has installed the scalar canonicalizer. The
--- Task 9 dry-run runs against the current schema and therefore reports defer.
+-- Production apply is permitted only after the additive Task 12 migration has
+-- installed the finalizer. Missing or invalid finalizer state is fail-closed.
 do $$
 begin
   if pg_catalog.to_regprocedure(
     'public.finalize_seasonal_occurrence_constraints_v2()'
-  ) is not null then
-    perform public.finalize_seasonal_occurrence_constraints_v2();
-  else
-    raise notice 'Occurrence unique index deferred until additive Task 12 migration is installed';
+  ) is null then
+    raise exception 'Task 12 occurrence finalizer is missing; additive migration is required before repair';
+  end if;
+
+  perform public.finalize_seasonal_occurrence_constraints_v2();
+
+  if pg_catalog.to_regclass(
+      'public.season_flight_records_active_imported_occurrence_v2_key'
+    ) is null
+    or not exists (
+      select 1
+      from pg_catalog.pg_index indexes
+      where indexes.indexrelid = pg_catalog.to_regclass(
+        'public.season_flight_records_active_imported_occurrence_v2_key'
+      )
+        and indexes.indisunique
+        and indexes.indisvalid
+        and indexes.indisready
+    )
+  then
+    raise exception 'Task 12 occurrence finalizer did not create a valid ready unique index';
   end if;
 end;
 $$;
@@ -1239,6 +1269,7 @@ begin
     and target.action is null
     and target.type = 'D'
     and target.route = 'SIN'
+    and target.flight_series_id = 'SER_D_SQ_SQ173_SIN'
     and target.route = counterpart.route
     and target.linked_record_id = counterpart.record_id
     and counterpart.linked_record_id = target.record_id
@@ -1611,6 +1642,81 @@ begin
     raise exception 'W25 legacy source_kind changed unexpectedly: % added rows', v_count;
   end if;
 
+  select count(*) into v_count
+  from public.season_flight_records
+  where season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6';
+  if v_count <> 26180 then
+    raise exception 'Expected 26180 total S26 records after repair, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_flight_records
+  where season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+    and source_kind = 'imported'
+    and status = 'active'
+    and action is distinct from 'deleted';
+  if v_count <> 26063 then
+    raise exception 'Expected 26063 active imported S26 records after repair, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_modifications
+  where season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6';
+  if v_count <> 1424 then
+    raise exception 'Expected 1424 S26 modifications after repair, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_flight_records
+  where season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451';
+  if v_count <> 8165 then
+    raise exception 'Expected 8165 total W25 records after repair, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_modifications
+  where season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451';
+  if v_count <> 25 then
+    raise exception 'Expected 25 W25 modifications after repair, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_flight_records
+  where season_id = 'season-f77c5ea9-be54-4615-ab0a-d83062b9b854';
+  if v_count <> 26641 then
+    raise exception 'Expected 26641 total W26 records after repair, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_flight_records
+  where season_id = 'season-f77c5ea9-be54-4615-ab0a-d83062b9b854'
+    and source_kind = 'imported'
+    and status = 'active'
+    and action is distinct from 'deleted';
+  if v_count <> 26598 then
+    raise exception 'Expected 26598 active imported W26 records after repair, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_modifications
+  where season_id = 'season-f77c5ea9-be54-4615-ab0a-d83062b9b854';
+  if v_count <> 627 then
+    raise exception 'Expected 627 W26 modifications after repair, found %', v_count;
+  end if;
+
+  if not exists (
+    select 1
+    from pg_catalog.pg_index indexes
+    where indexes.indexrelid = pg_catalog.to_regclass(
+      'public.season_flight_records_active_imported_occurrence_v2_key'
+    )
+      and indexes.indisunique
+      and indexes.indisvalid
+      and indexes.indisready
+  ) then
+    raise exception 'Expected valid ready active imported occurrence unique index after repair';
+  end if;
+
   if not exists (
     select 1 from public.seasons
     where id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
@@ -1654,6 +1760,19 @@ select
         raw_flight_number
       ) = 'SQ173'
       and route = 'SIN') as w26_sq173_routes_after,
+  (select count(*) from public.season_flight_records
+    where season_id = 'season-f77c5ea9-be54-4615-ab0a-d83062b9b854'
+      and source_kind = 'imported'
+      and status = 'active'
+      and action is null
+      and type = 'D'
+      and public.seasonal_occurrence_airline_v2(airline) = 'SQ'
+      and public.seasonal_occurrence_flight_number_v2(
+        airline,
+        flight_number,
+        raw_flight_number
+      ) = 'SQ173'
+      and flight_series_id = 'SER_D_SQ_SQ173_SIN') as w26_sq173_series_after,
   (select value from task9_repair_metrics
     where metric = 's26_pr585_pr586_effective_hash') as effective_pr_hash_preserved;
 

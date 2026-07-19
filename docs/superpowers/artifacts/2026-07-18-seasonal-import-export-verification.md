@@ -697,7 +697,11 @@ records: the original 13 S26/W25 repair records plus 154 SQ173 targets and 154
 SQ174 counterparts. It also backs up exactly 9 modifications and 23
 modification-counter rows, with exact zero assertions for the other child
 tables. The route update copies `counterpart_route` only for the verified 154
-targets and asserts an update count of 154.
+targets and derives `flight_series_id` with the same
+`SER_<type>_<airline>_<flight>_<route>` expression used by the V2 commit. The
+precondition requires all targets to have `SER_D_SQ_SQ173_NONE` and all
+counterparts to have `SER_A_SQ_SQ174_SIN`; the postcondition requires all 154
+targets to have `SER_D_SQ_SQ173_SIN`. The combined update count must be 154.
 
 ### Production-derived post-repair shadows
 
@@ -767,12 +771,32 @@ returned zero before the corrected materialized comparator ran.
 ### Repair dry-run and log review
 
 The final repair dry-run reached zero blocking findings inside the transaction.
-It produced the expected simulated versions S26 16,573, W25 8,228, and W26 396;
-S26 had 26,180 total records and 1,424 modifications, W25 retained 8,165 total
-records, W26 retained 26,641 total records, and exactly 154 SQ173 routes were
-`SIN`. The effective PR585/PR586 hash remained
+It produced the expected simulated versions S26 16,573, W25 8,228, and W26 396.
+S26 had 26,180 total records, 26,063 active imported records, and 1,424
+modifications. W25 retained 8,165 total records and 25 modifications. W26
+retained 26,641 total records, 26,598 active imported records, and 627
+modifications. Exactly 154 SQ173 routes were `SIN` and the same 154 records had
+`flight_series_id=SER_D_SQ_SQ173_SIN`. These totals are executable assertions,
+not only informational output. The effective PR585/PR586 hash remained
 `478ad5ba37d374861ed9cb0e82639d64`. The finalizer index was created only inside
 the transaction and disappeared on rollback.
+
+The first independent spec review of commit `f560c87` rejected three gaps: a
+missing finalizer produced only a notice, the route repair did not synchronize
+the route-derived series ID, and final total counts were not commit-blocking
+assertions. The follow-up makes all three fail-closed:
+
+- A missing finalizer now raises an exception. After calling it, the repair
+  requires the occurrence index to exist and be unique, valid, and ready.
+- The 154 route updates also derive and verify the V2-compatible series ID.
+- Exact S26, W25, and W26 total record, active imported, modification, version,
+  route, series, and finalizer states are asserted before the final output.
+
+The corrected production dry-run completed in 42.2 seconds, reached zero
+blocking categories, printed 154 repaired routes and 154 repaired series IDs,
+and rolled back. Its immediate cleanup check found zero task sessions, backup
+tables, and finalizer indexes. Production still contained all 154 original
+empty-route/`SER_D_SQ_SQ173_NONE` rows and zero persisted repaired series rows.
 
 Kong, PostgREST, and PostgreSQL logs were reviewed from the additive deploy
 through the corrected shadows. No HTTP call to a V2 stage, preview, or commit
