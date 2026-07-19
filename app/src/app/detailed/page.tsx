@@ -19,6 +19,7 @@ import {
   buildCanonicalAddedFlightRecords,
   buildFlightRecordHistoryEntry,
   buildDetailedScheduleQueryWindow,
+  buildDetailedTransferPairContext,
   buildDetailedTransferModifications,
   buildOvernightCompanionMap,
   buildSpatialCalendarDateSelection,
@@ -40,7 +41,6 @@ import { filterUiUndoEntriesForSession, trimUiUndoEntries } from '@/lib/uiUndoMe
 import { appendAuditLogEntry, createFlightActionAuditFromHistory } from '@/lib/auditLog';
 import { withScheduleNotificationPayload } from '@/lib/scheduleNotifications';
 import { resolveLinkedDeletionTargets } from '@/lib/pairDeletion';
-import { resolveSeasonalPairs } from '@/lib/seasonalPairing';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
 import { saveWorkbookAsXlsx } from '@/lib/exportSave';
 import type { Season, FlightLeg, FlightModification, ModHistoryEntry, FlightRecord } from '@/lib/types';
@@ -1402,7 +1402,7 @@ function DetailedScheduleContent() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
         if (copiedLeg && sweepSelectedDates.length > 0) {
           try {
-            const pairResolution = resolveSeasonalPairs(allLegs);
+            const transferPairContext = buildDetailedTransferPairContext(allLegs);
             const newMods: FlightModification[] = [];
 
             sweepSelectedDates.forEach(targetDate => {
@@ -1412,7 +1412,7 @@ function DetailedScheduleContent() {
                 allLegs,
                 targetDate,
                 mode: 'copy',
-                pairResolution,
+                pairContext: transferPairContext,
               }));
             });
 

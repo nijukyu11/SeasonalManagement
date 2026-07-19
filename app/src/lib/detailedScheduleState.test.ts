@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import {
   buildCanonicalAddedFlightRecords,
+  buildDetailedTransferPairContext,
   buildDetailedTransferModifications,
   buildOvernightCompanionMap,
 } from './detailedScheduleState.ts';
@@ -230,6 +231,104 @@ test('buildDetailedTransferModifications surfaces a pair issue instead of moving
     }),
     /Cannot move paired flight.*no unique active counterpart/i,
   );
+});
+
+test('buildDetailedTransferModifications rejects a pair context from another allLegs snapshot', () => {
+  const arr = leg({ id: 'snapshot-arr', type: 'A', linkedRecordId: 'snapshot-dep' });
+  const dep = leg({ id: 'snapshot-dep', type: 'D', linkedRecordId: 'snapshot-arr' });
+  const originalSnapshot = [arr, dep];
+  const currentSnapshot = [...originalSnapshot];
+  const pairContext = buildDetailedTransferPairContext(originalSnapshot);
+
+  assert.throws(
+    () => buildDetailedTransferModifications({
+      sourceLeg: arr,
+      visibleLegs: currentSnapshot,
+      allLegs: currentSnapshot,
+      targetDate: '2026-05-28',
+      mode: 'copy',
+      idSeed: 'stale-context',
+      pairContext,
+    }),
+    /current allLegs snapshot/i,
+  );
+});
+
+test('buildDetailedTransferModifications preserves pair issues from a precomputed context', () => {
+  const orphan = leg({ id: 'context-orphan', type: 'A', turnaroundId: 'context-missing-turnaround' });
+  const allLegs = [orphan];
+  const pairContext = buildDetailedTransferPairContext(allLegs);
+
+  assert.throws(
+    () => buildDetailedTransferModifications({
+      sourceLeg: orphan,
+      visibleLegs: allLegs,
+      allLegs,
+      targetDate: '2026-05-28',
+      mode: 'copy',
+      idSeed: 'context-orphan',
+      pairContext,
+    }),
+    /Cannot copy paired flight.*no unique active counterpart/i,
+  );
+});
+
+test('one immutable transfer context handles 57k legs across 365 dates without rescanning allLegs', { timeout: 30_000 }, (t) => {
+  const allLegs: FlightLeg[] = [];
+  const pairCount = 28_500;
+  for (let index = 0; index < pairCount; index += 1) {
+    const arrId = `context-arr-${index}`;
+    const depId = `context-dep-${index}`;
+    const linkId = `context-link-${index}`;
+    allLegs.push(
+      leg({ id: arrId, linkId, type: 'A', linkedRecordId: depId, sourceRowIndex: index }),
+      leg({ id: depId, linkId, type: 'D', linkedRecordId: arrId, sourceRowIndex: index }),
+    );
+  }
+
+  const startedAt = performance.now();
+  const pairContext = buildDetailedTransferPairContext(allLegs);
+  const contextElapsedMs = performance.now() - startedAt;
+  assert.equal(Object.isFrozen(pairContext), true);
+  assert.equal(pairContext.legsById.size, 57_000);
+
+  Object.defineProperties(allLegs, {
+    some: {
+      configurable: true,
+      value: () => { throw new Error('allLegs.some must not run with a transfer pair context'); },
+    },
+    [Symbol.iterator]: {
+      configurable: true,
+      value: () => { throw new Error('allLegs must not be iterated with a transfer pair context'); },
+    },
+  });
+
+  const transferStartedAt = performance.now();
+  let addedCount = 0;
+  try {
+    for (let day = 0; day < 365; day += 1) {
+      const targetDate = new Date(Date.UTC(2027, 0, day + 1)).toISOString().slice(0, 10);
+      const modifications = buildDetailedTransferModifications({
+        sourceLeg: allLegs[0],
+        visibleLegs: [],
+        allLegs,
+        targetDate,
+        mode: 'copy',
+        idSeed: `context-${day}`,
+        pairContext,
+      });
+      addedCount += modifications.filter((entry) => entry.action === 'added').length;
+    }
+  } finally {
+    Reflect.deleteProperty(allLegs, 'some');
+    Reflect.deleteProperty(allLegs, Symbol.iterator);
+  }
+  const transferElapsedMs = performance.now() - transferStartedAt;
+  const totalElapsedMs = performance.now() - startedAt;
+
+  assert.equal(addedCount, 730);
+  assert.ok(totalElapsedMs < 15_000, `expected bounded 57k/365 transfer work, took ${totalElapsedMs.toFixed(1)}ms`);
+  t.diagnostic(`57k context ${contextElapsedMs.toFixed(1)}ms; 365 transfers ${transferElapsedMs.toFixed(1)}ms`);
 });
 
 test('buildOvernightCompanionMap resolves a legacy turnaround pair with distinct link IDs', () => {

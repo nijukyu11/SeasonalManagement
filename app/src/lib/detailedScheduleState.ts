@@ -458,6 +458,25 @@ export function buildDetailedScheduleQueryWindow(input: {
 
 export type DetailedTransferMode = 'copy' | 'move';
 
+export interface DetailedTransferPairContext {
+  readonly allLegsSnapshot: readonly FlightLeg[];
+  readonly snapshotLength: number;
+  readonly pairResolution: SeasonalPairResolution;
+  readonly legsById: ReadonlyMap<string, FlightLeg>;
+}
+
+export function buildDetailedTransferPairContext(allLegs: FlightLeg[]): DetailedTransferPairContext {
+  const legsById = new Map<string, FlightLeg>();
+  for (const leg of allLegs) legsById.set(leg.id, leg);
+
+  return Object.freeze({
+    allLegsSnapshot: allLegs,
+    snapshotLength: allLegs.length,
+    pairResolution: resolveSeasonalPairs(allLegs),
+    legsById,
+  });
+}
+
 export interface DetailedTransferInput {
   sourceLeg: FlightLeg;
   visibleLegs: FlightLeg[];
@@ -465,6 +484,8 @@ export interface DetailedTransferInput {
   targetDate: string;
   mode: DetailedTransferMode;
   idSeed?: string;
+  pairContext?: DetailedTransferPairContext;
+  /** @deprecated Prefer pairContext so resolution and indexes are reused together. */
   pairResolution?: SeasonalPairResolution;
 }
 
@@ -537,16 +558,37 @@ export function buildDetailedTransferModifications(input: DetailedTransferInput)
   const seed = input.idSeed ?? `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
   let sequence = 0;
   const nextId = (prefix: string) => `${prefix}_${seed}_${sequence++}`;
-  const resolutionLegs = input.allLegs.some((leg) => leg.id === input.sourceLeg.id)
-    ? input.allLegs
-    : [...input.allLegs, input.sourceLeg];
-  const resolution = input.pairResolution ?? resolveSeasonalPairs(resolutionLegs);
-  const counterpartId = resolution.byLegId.get(input.sourceLeg.id);
-  const byId = new Map(resolutionLegs.map((leg) => [leg.id, leg]));
-  const counterpart = counterpartId ? byId.get(counterpartId) ?? null : null;
+  let sourceLeg = input.sourceLeg;
+  let resolution: SeasonalPairResolution;
+  let legsById: ReadonlyMap<string, FlightLeg>;
+
+  if (input.pairContext) {
+    if (
+      input.pairContext.allLegsSnapshot !== input.allLegs ||
+      input.pairContext.snapshotLength !== input.allLegs.length
+    ) {
+      throw new Error('Detailed transfer pair context does not match the current allLegs snapshot.');
+    }
+    const indexedSourceLeg = input.pairContext.legsById.get(input.sourceLeg.id);
+    if (!indexedSourceLeg) {
+      throw new Error(`Detailed transfer pair context does not contain source leg ${input.sourceLeg.id}.`);
+    }
+    sourceLeg = indexedSourceLeg;
+    resolution = input.pairContext.pairResolution;
+    legsById = input.pairContext.legsById;
+  } else {
+    const resolutionLegs = input.allLegs.some((leg) => leg.id === input.sourceLeg.id)
+      ? input.allLegs
+      : [...input.allLegs, input.sourceLeg];
+    resolution = input.pairResolution ?? resolveSeasonalPairs(resolutionLegs);
+    legsById = new Map(resolutionLegs.map((leg) => [leg.id, leg]));
+  }
+
+  const counterpartId = resolution.byLegId.get(sourceLeg.id);
+  const counterpart = counterpartId ? legsById.get(counterpartId) ?? null : null;
 
   if (!counterpart) {
-    const pairIssue = resolution.issues.find((issue) => issue.legId === input.sourceLeg.id);
+    const pairIssue = resolution.issues.find((issue) => issue.legId === sourceLeg.id);
     if (pairIssue) {
       throw new Error(`Cannot ${input.mode} paired flight: ${pairIssue.message}`);
     }
@@ -554,18 +596,18 @@ export function buildDetailedTransferModifications(input: DetailedTransferInput)
     const mods: FlightModification[] = [{
       legId: newId,
       action: 'added',
-      addedLeg: transferredSingleLeg(input.sourceLeg, input.targetDate, newId),
+      addedLeg: transferredSingleLeg(sourceLeg, input.targetDate, newId),
     }];
-    if (input.mode === 'move') mods.push({ legId: input.sourceLeg.id, action: 'deleted' });
+    if (input.mode === 'move') mods.push({ legId: sourceLeg.id, action: 'deleted' });
     return mods;
   }
 
-  const sourcePair = input.sourceLeg.type === 'A'
-    ? { arr: input.sourceLeg, dep: counterpart }
-    : { arr: counterpart, dep: input.sourceLeg };
+  const sourcePair = sourceLeg.type === 'A'
+    ? { arr: sourceLeg, dep: counterpart }
+    : { arr: counterpart, dep: sourceLeg };
 
   const linkType = inferLinkedPairType(sourcePair.arr, sourcePair.dep);
-  const pairAnchorDate = targetAnchorDateForTransfer(input.sourceLeg, input.targetDate, linkType);
+  const pairAnchorDate = targetAnchorDateForTransfer(sourceLeg, input.targetDate, linkType);
   const sharedLinkId = nextId('L_NEW');
   const arrId = nextId('F_NEW');
   const depId = nextId('F_NEW');
