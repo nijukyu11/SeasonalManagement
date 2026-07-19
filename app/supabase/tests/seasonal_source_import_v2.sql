@@ -4794,14 +4794,15 @@ begin
         ))
         or (tables.relname = 'season_modifications' and triggers.tgname in (
           'guard_seasonal_added_modification_v2',
-          'enforce_seasonal_added_modification_parent_v2'
+          'enforce_seasonal_added_modification_parent_v2',
+          'enforce_seasonal_effective_base_visibility_v2'
         ))
         or (tables.relname = 'season_flight_records' and triggers.tgname =
-          'guard_seasonal_imported_base_occurrence_v2')
+          'guard_seasonal_effective_base_occurrence_v2')
       )
       and not triggers.tgisinternal
     group by namespaces.nspname
-    having count(*) = 5
+    having count(*) = 6
   ) then
     raise exception 'Task 9 manual-added occurrence guard triggers are incomplete';
   end if;
@@ -4867,6 +4868,254 @@ begin
 end
 $$;
 
+rollback;
+
+-- Task 9 P1 follow-up: cross-table uniqueness must use final effective state.
+begin;
+
+insert into public.seasons (
+  id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+  total_legs, total_source_rows, data_version
+) values
+  (
+    'task9-overlay-season-a', 'T9OA', 'Task 9 overlay A', '', 0,
+    '2027-02-01', '2027-02-28', 1, 0, 1
+  ),
+  (
+    'task9-overlay-season-b', 'T9OB', 'Task 9 overlay B', '', 0,
+    '2027-02-01', '2027-02-28', 1, 0, 1
+  );
+
+insert into public.season_flight_records (
+  season_id, record_id, link_id, type, airline, flight_number,
+  raw_flight_number, route, schedule, aircraft, category, date,
+  scheduled_date, scheduled_time, operational_date, day_of_week,
+  source_kind, source_side, status
+) values
+  ('task9-overlay-season-a', 'task9-overlay-transition-base', 'task9-overlay-transition-base',
+   'A', 'WJ', 'WJ201', '201', 'ICN', '08:00', '321', 'J', '2027-02-01',
+   '2027-02-01', '08:00', '2027-02-01', 1, 'imported', 'ARR', 'active'),
+  ('task9-overlay-season-a', 'task9-overlay-delete-base', 'task9-overlay-delete-base',
+   'A', 'WJ', 'WJ202', '202', 'ICN', '08:10', '321', 'J', '2027-02-02',
+   '2027-02-02', '08:10', '2027-02-02', 2, 'imported', 'ARR', 'active'),
+  ('task9-overlay-season-a', 'task9-overlay-move-base', 'task9-overlay-move-base',
+   'A', 'WJ', 'WJ203', '203', 'ICN', '08:20', '321', 'J', '2027-02-03',
+   '2027-02-03', '08:20', '2027-02-03', 3, 'imported', 'ARR', 'active'),
+  ('task9-overlay-season-a', 'task9-overlay-coordinated-base', 'task9-overlay-coordinated-base',
+   'A', 'WJ', 'WJ204', '204', 'ICN', '08:30', '321', 'J', '2027-02-04',
+   '2027-02-04', '08:30', '2027-02-04', 4, 'imported', 'ARR', 'active'),
+  ('task9-overlay-season-b', 'task9-overlay-move-target', 'task9-overlay-move-target',
+   'A', 'WJ', 'WJ299', '299', 'ICN', '08:40', '321', 'J', '2027-02-05',
+   '2027-02-05', '08:40', '2027-02-05', 5, 'imported', 'ARR', 'active'),
+  ('task9-overlay-season-a', 'task9-legacy-manual-insert-base', 'task9-legacy-manual-insert-base',
+   'D', 'WJ', 'WJ301', '301', 'ICN', '09:00', '321', 'J', '2027-02-10',
+   '2027-02-10', '09:00', '2027-02-10', 3, 'added', 'DEP', 'active'),
+  ('task9-overlay-season-a', 'task9-legacy-manual-update-base', 'task9-legacy-manual-update-base',
+   'D', 'WJ', 'WJ302', '302', 'ICN', '09:10', '321', 'J', '2027-02-11',
+   '2027-02-11', '09:10', '2027-02-11', 4, 'added', 'DEP', 'active'),
+  ('task9-overlay-season-a', 'task9-legacy-base-update-source', 'task9-legacy-base-update-source',
+   'D', 'WJ', 'WJ399', '399', 'ICN', '09:20', '321', 'J', '2027-02-12',
+   '2027-02-12', '09:20', '2027-02-12', 5, 'added', 'DEP', 'active'),
+  ('task9-overlay-season-a', 'task9-legacy-valid-base', 'task9-legacy-valid-base',
+   'D', 'WJ', 'WJ305', '305', 'ICN', '09:30', '321', 'J', '2027-02-13',
+   '2027-02-13', '09:30', '2027-02-13', 6, 'added', 'DEP', 'active');
+
+insert into public.season_modifications (season_id, leg_id, action, changed_fields)
+values
+  ('task9-overlay-season-a', 'task9-overlay-transition-base', 'deleted', '{}'),
+  ('task9-overlay-season-a', 'task9-overlay-delete-base', 'deleted', '{}'),
+  ('task9-overlay-season-a', 'task9-overlay-move-base', 'deleted', '{}'),
+  ('task9-overlay-season-a', 'task9-overlay-coordinated-base', 'deleted', '{}'),
+  ('task9-overlay-season-a', 'task9-overlay-transition-manual', 'added', array['addedLeg']),
+  ('task9-overlay-season-a', 'task9-overlay-delete-manual', 'added', array['addedLeg']),
+  ('task9-overlay-season-a', 'task9-overlay-move-manual', 'added', array['addedLeg']),
+  ('task9-overlay-season-a', 'task9-overlay-coordinated-manual', 'added', array['addedLeg']),
+  ('task9-overlay-season-a', 'task9-legacy-manual-update', 'added', array['addedLeg']),
+  ('task9-overlay-season-a', 'task9-legacy-base-insert-manual', 'added', array['addedLeg']),
+  ('task9-overlay-season-a', 'task9-legacy-base-update-manual', 'added', array['addedLeg']),
+  ('task9-overlay-season-a', 'task9-legacy-valid-manual', 'added', array['addedLeg']);
+
+insert into public.season_modification_added_legs (
+  season_id, leg_id, record_id, type, airline, flight_number,
+  raw_flight_number, route, schedule, aircraft, category, date,
+  scheduled_date, scheduled_time, operational_date, day_of_week,
+  action, source_kind, source_side, status
+) values
+  ('task9-overlay-season-a', 'task9-overlay-transition-manual', 'task9-overlay-transition-manual',
+   'A', 'WJ', 'WJ201', '201', 'ICN', '10:00', '321', 'J', '2027-02-01',
+   '2027-02-01', '10:00', '2027-02-01', 1, 'added', 'added', 'ARR', 'active'),
+  ('task9-overlay-season-a', 'task9-overlay-delete-manual', 'task9-overlay-delete-manual',
+   'A', 'WJ', 'WJ202', '202', 'ICN', '10:10', '321', 'J', '2027-02-02',
+   '2027-02-02', '10:10', '2027-02-02', 2, 'added', 'added', 'ARR', 'active'),
+  ('task9-overlay-season-a', 'task9-overlay-move-manual', 'task9-overlay-move-manual',
+   'A', 'WJ', 'WJ203', '203', 'ICN', '10:20', '321', 'J', '2027-02-03',
+   '2027-02-03', '10:20', '2027-02-03', 3, 'added', 'added', 'ARR', 'active'),
+  ('task9-overlay-season-a', 'task9-overlay-coordinated-manual', 'task9-overlay-coordinated-manual',
+   'A', 'WJ', 'WJ204', '204', 'ICN', '10:30', '321', 'J', '2027-02-04',
+   '2027-02-04', '10:30', '2027-02-04', 4, 'added', 'added', 'ARR', 'active'),
+  ('task9-overlay-season-a', 'task9-legacy-manual-update', 'task9-legacy-manual-update',
+   'D', 'WJ', 'WJ392', '392', 'ICN', '10:40', '321', 'J', '2027-02-11',
+   '2027-02-11', '10:40', '2027-02-11', 4, 'added', 'added', 'DEP', 'active'),
+  ('task9-overlay-season-a', 'task9-legacy-base-insert-manual', 'task9-legacy-base-insert-manual',
+   'D', 'WJ', 'WJ303', '303', 'ICN', '10:50', '321', 'J', '2027-02-12',
+   '2027-02-12', '10:50', '2027-02-12', 5, 'added', 'added', 'DEP', 'active'),
+  ('task9-overlay-season-a', 'task9-legacy-base-update-manual', 'task9-legacy-base-update-manual',
+   'D', 'WJ', 'WJ304', '304', 'ICN', '11:00', '321', 'J', '2027-02-12',
+   '2027-02-12', '11:00', '2027-02-12', 5, 'added', 'added', 'DEP', 'active'),
+  ('task9-overlay-season-a', 'task9-legacy-valid-manual', 'task9-legacy-valid-manual',
+   'D', 'WJ', 'WJ306', '306', 'ICN', '11:10', '321', 'J', '2027-02-13',
+   '2027-02-13', '11:10', '2027-02-13', 6, 'added', 'added', 'DEP', 'active');
+
+set constraints all immediate;
+set constraints all deferred;
+
+do $$
+begin
+  begin
+    update public.season_modifications
+    set action = 'modified'
+    where leg_id = 'task9-overlay-transition-base';
+    set constraints all immediate;
+    raise exception 'deleted-to-modified overlay exposure was accepted';
+  exception
+    when unique_violation then
+      if position('effective base occurrence collision' in pg_catalog.lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  begin
+    delete from public.season_modifications
+    where leg_id = 'task9-overlay-delete-base';
+    set constraints all immediate;
+    raise exception 'overlay delete exposure was accepted';
+  exception
+    when unique_violation then
+      if position('effective base occurrence collision' in pg_catalog.lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  begin
+    update public.season_modifications
+    set season_id = 'task9-overlay-season-b',
+        leg_id = 'task9-overlay-move-target'
+    where leg_id = 'task9-overlay-move-base';
+    set constraints all immediate;
+    raise exception 'overlay leg and season move exposure was accepted';
+  exception
+    when unique_violation then
+      if position('effective base occurrence collision' in pg_catalog.lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  update public.season_modifications
+  set action = 'modified'
+  where leg_id = 'task9-overlay-coordinated-base';
+  delete from public.season_modifications
+  where leg_id = 'task9-overlay-coordinated-manual';
+  set constraints all immediate;
+
+  if exists (
+    select 1
+    from public.season_modification_added_legs
+    where leg_id = 'task9-overlay-coordinated-manual'
+  ) then
+    raise exception 'coordinated manual removal did not cascade its child';
+  end if;
+
+  set constraints all deferred;
+
+  begin
+    insert into public.season_modifications (season_id, leg_id, action, changed_fields)
+    values (
+      'task9-overlay-season-a', 'task9-legacy-manual-insert',
+      'added', array['addedLeg']
+    );
+    insert into public.season_modification_added_legs (
+      season_id, leg_id, record_id, type, airline, flight_number,
+      raw_flight_number, route, schedule, aircraft, category, date,
+      scheduled_date, scheduled_time, operational_date, day_of_week,
+      action, source_kind, source_side, status
+    ) values (
+      'task9-overlay-season-a', 'task9-legacy-manual-insert',
+      'task9-legacy-manual-insert', 'D', 'WJ', 'WJ301', '301', 'ICN',
+      '12:00', '321', 'J', '2027-02-10', '2027-02-10', '12:00',
+      '2027-02-10', 3, 'added', 'added', 'DEP', 'active'
+    );
+    set constraints all immediate;
+    raise exception 'manual insert after legacy base was accepted';
+  exception
+    when unique_violation then
+      if position('manual added occurrence collision' in pg_catalog.lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  begin
+    update public.season_modification_added_legs
+    set flight_number = 'WJ302', raw_flight_number = '302'
+    where leg_id = 'task9-legacy-manual-update';
+    set constraints all immediate;
+    raise exception 'manual update after legacy base was accepted';
+  exception
+    when unique_violation then
+      if position('manual added occurrence collision' in pg_catalog.lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  begin
+    insert into public.season_flight_records (
+      season_id, record_id, link_id, type, airline, flight_number,
+      raw_flight_number, route, schedule, aircraft, category, date,
+      scheduled_date, scheduled_time, operational_date, day_of_week,
+      source_kind, source_side, status
+    ) values (
+      'task9-overlay-season-a', 'task9-legacy-base-insert', 'task9-legacy-base-insert',
+      'D', 'WJ', 'WJ303', '303', 'ICN', '12:10', '321', 'J', '2027-02-12',
+      '2027-02-12', '12:10', '2027-02-12', 5, 'added', 'DEP', 'active'
+    );
+    set constraints all immediate;
+    raise exception 'legacy base insert after manual was accepted';
+  exception
+    when unique_violation then
+      if position('effective base occurrence collision' in pg_catalog.lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  begin
+    update public.season_flight_records
+    set flight_number = 'WJ304', raw_flight_number = '304'
+    where record_id = 'task9-legacy-base-update-source';
+    set constraints all immediate;
+    raise exception 'legacy base update after manual was accepted';
+  exception
+    when unique_violation then
+      if position('effective base occurrence collision' in pg_catalog.lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  if not exists (
+    select 1
+    from public.season_flight_records
+    where record_id = 'task9-legacy-valid-base'
+      and source_kind = 'added'
+  ) or not exists (
+    select 1
+    from public.season_modification_added_legs
+    where leg_id = 'task9-legacy-valid-manual'
+      and flight_number = 'WJ306'
+  ) then
+    raise exception 'valid non-colliding legacy/manual fixtures did not persist';
+  end if;
+end
+$$;
+
+set constraints all immediate;
 rollback;
 
 -- Isolate deferred-constraint coverage from the intentionally malformed Task 5
@@ -5123,7 +5372,7 @@ begin
     raise exception 'reverse base insert collision was accepted';
   exception
     when unique_violation then
-      if position('imported base occurrence collision' in pg_catalog.lower(sqlerrm)) = 0 then
+      if position('effective base occurrence collision' in pg_catalog.lower(sqlerrm)) = 0 then
         raise;
       end if;
   end;
@@ -5160,7 +5409,7 @@ begin
     raise exception 'reverse base update collision was accepted';
   exception
     when unique_violation then
-      if position('imported base occurrence collision' in pg_catalog.lower(sqlerrm)) = 0 then
+      if position('effective base occurrence collision' in pg_catalog.lower(sqlerrm)) = 0 then
         raise;
       end if;
   end;

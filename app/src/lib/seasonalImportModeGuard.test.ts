@@ -327,6 +327,67 @@ test('seasonal source import V2 SQL suite preserves runtime regression fixtures'
   assert.match(sqlTestSource, /rollback;\s*$/);
 });
 
+test('Task 9 repair takes V2 season locks before the mutable table graph', () => {
+  const repairSource = readFileSync(
+    join(
+      root,
+      '..',
+      '..',
+      'docs',
+      'superpowers',
+      'artifacts',
+      '2026-07-18-seasonal-import-export-repair.sql'
+    ),
+    'utf8'
+  ).replace(/\r\n/g, '\n');
+  const migrationSource = readFileSync(
+    join(root, '..', 'supabase', 'migrations', '20260718090000_seasonal_source_import_v2.sql'),
+    'utf8'
+  ).replace(/\r\n/g, '\n');
+  const commitFunction = requireSqlSection(
+    migrationSource,
+    /create or replace function public\.commit_seasonal_import_v2\([\s\S]*?\n\$\$;/i,
+    'commit_seasonal_import_v2 function'
+  );
+  const advisorySection = requireSqlSection(
+    repairSource,
+    /do \$\$\ndeclare\n  v_season_id text;[\s\S]*?\n\$\$;/,
+    'Task 9 advisory lock section'
+  );
+  const advisoryLock = repairSource.indexOf('perform pg_catalog.pg_advisory_xact_lock(');
+  const seasonRowLock = repairSource.indexOf('order by id\nfor update;');
+  const firstTableLock = repairSource.indexOf(
+    'lock table public.seasons in share row exclusive mode;'
+  );
+  const fingerprint = repairSource.indexOf(
+    'create temporary table task9_locked_season_state on commit drop as'
+  );
+
+  assert.match(
+    advisorySection,
+    /for v_season_id in[\s\S]*order by season_id[\s\S]*pg_advisory_xact_lock\(\s*pg_catalog\.hashtextextended\(v_season_id, 0\)\s*\)/
+  );
+  assert.match(
+    commitFunction,
+    /pg_advisory_xact_lock\(\s*pg_catalog\.hashtextextended\(v_target_season_id, 0\)\s*\)/
+  );
+  assert.deepEqual(
+    [...advisorySection.matchAll(/'((?:season-)[^']+)'::text/g)].map((match) => match[1]),
+    [
+      'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+      'season-f77c5ea9-be54-4615-ab0a-d83062b9b854',
+      'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451',
+    ]
+  );
+  assert.ok(advisoryLock >= 0, 'repair must acquire per-season advisory locks');
+  assert.ok(seasonRowLock > advisoryLock, 'season rows must lock after advisory locks');
+  assert.ok(firstTableLock > seasonRowLock, 'table graph must lock after season rows');
+  assert.ok(fingerprint > firstTableLock, 'fingerprints must run after every lock layer');
+  assert.match(repairSource, /lock_timeout is per lock wait/i);
+  assert.match(repairSource, /statement_timeout is per statement/i);
+  assert.match(repairSource, /operator must monitor total wall time/i);
+});
+
 test('seasonal export V2 uses one strict permissioned full snapshot in migration and schema', () => {
   const migrationSource = readFileSync(
     join(root, '..', 'supabase', 'migrations', '20260718090000_seasonal_source_import_v2.sql'),

@@ -15,9 +15,46 @@ begin;
 set local statement_timeout = '120s';
 set local lock_timeout = '10s';
 
+-- Match commit_seasonal_import_v2 exactly: advisory key is
+-- hashtextextended(season_id, 0). Acquire every key in lexical season-ID order
+-- before waiting for season rows or taking any table-level maintenance lock.
+do $$
+declare
+  v_season_id text;
+begin
+  for v_season_id in
+    select requested.season_id
+    from (values
+      ('season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'::text),
+      ('season-f77c5ea9-be54-4615-ab0a-d83062b9b854'::text),
+      ('season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'::text)
+    ) requested(season_id)
+    order by season_id
+  loop
+    perform pg_catalog.pg_advisory_xact_lock(
+      pg_catalog.hashtextextended(v_season_id, 0)
+    );
+  end loop;
+end;
+$$;
+
+-- Lock the same target season rows used by V2 commit, again in lexical ID
+-- order, before taking the broader mutable-table graph locks.
+select id, season_code, data_version
+from public.seasons
+where id in (
+  'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+  'season-f77c5ea9-be54-4615-ab0a-d83062b9b854',
+  'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+)
+order by id
+for update;
+
 -- Block INSERT/UPDATE/DELETE across the complete audited seasonal FK graph
 -- while allowing ordinary SELECT readers. The order is fixed and parent-first
--- for every Task 9 run. lock_timeout keeps the maintenance window bounded.
+-- for every Task 9 run. lock_timeout is per lock wait.
+-- statement_timeout is per statement; neither bounds the full transaction.
+-- The operator must monitor total wall time and cancel at the approved threshold.
 lock table public.seasons in share row exclusive mode;
 lock table public.season_source_rows in share row exclusive mode;
 lock table public.season_source_row_days in share row exclusive mode;
@@ -48,18 +85,6 @@ begin
   end if;
 end;
 $$;
-
--- Retain the prior W26 race fix: lock all three audited season rows together
--- in deterministic lexical ID order before fingerprints and backups.
-select id, season_code, data_version
-from public.seasons
-where id in (
-  'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
-  'season-f77c5ea9-be54-4615-ab0a-d83062b9b854',
-  'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
-)
-order by id
-for update;
 
 create temporary table task9_locked_season_state on commit drop as
 select

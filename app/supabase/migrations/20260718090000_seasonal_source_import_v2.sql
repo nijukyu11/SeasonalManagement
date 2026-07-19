@@ -3554,7 +3554,6 @@ begin
       and records.status = 'active'
       and records.action is distinct from 'deleted'
       and modifications.action is distinct from 'deleted'
-      and records.source_kind = 'imported'
       and public.seasonal_occurrence_date_v2(records.date) = v_date
       and public.seasonal_occurrence_airline_v2(records.airline) = v_airline
       and public.seasonal_occurrence_flight_number_v2(
@@ -3606,7 +3605,7 @@ begin
 end;
 $$;
 
-create or replace function public.assert_seasonal_imported_base_occurrence_v2(
+create or replace function public.assert_seasonal_effective_base_occurrence_v2(
   p_season_id text,
   p_record_id text,
   p_date text,
@@ -3630,7 +3629,7 @@ declare
   v_conflicting_record_id text;
 begin
   if v_date is null or v_date = '' or v_airline = '' or v_flight_number = '' then
-    raise exception 'Imported base record % has no canonical occurrence identity', p_record_id
+    raise exception 'Effective base record % has no canonical occurrence identity', p_record_id
       using errcode = '22023';
   end if;
 
@@ -3668,12 +3667,57 @@ begin
   limit 1;
 
   if v_conflicting_record_id is not null then
-    raise exception 'Imported base occurrence collision for %|%|% with manual record %',
+    raise exception 'Effective base occurrence collision for %|%|% with manual record %',
       v_date,
       v_airline,
       v_flight_number,
       v_conflicting_record_id
       using errcode = '23505';
+  end if;
+end;
+$$;
+
+create or replace function public.assert_seasonal_effective_base_state_v2(
+  p_season_id text,
+  p_record_id text
+)
+returns void
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_record public.season_flight_records%rowtype;
+  v_overlay_action text;
+begin
+  select records.*
+  into v_record
+  from public.season_flight_records records
+  where records.season_id = p_season_id
+    and records.record_id = p_record_id;
+
+  if not found then
+    return;
+  end if;
+
+  select modifications.action
+  into v_overlay_action
+  from public.season_modifications modifications
+  where modifications.season_id = p_season_id
+    and modifications.leg_id = p_record_id;
+
+  if v_record.status = 'active'
+    and v_record.action is distinct from 'deleted'
+    and v_overlay_action is distinct from 'deleted'
+  then
+    perform public.assert_seasonal_effective_base_occurrence_v2(
+      v_record.season_id,
+      v_record.record_id,
+      v_record.date,
+      v_record.airline,
+      v_record.flight_number,
+      v_record.raw_flight_number
+    );
   end if;
 end;
 $$;
@@ -3853,18 +3897,24 @@ begin
 end;
 $$;
 
-create or replace function public.guard_seasonal_imported_base_occurrence_v2()
+create or replace function public.guard_seasonal_effective_base_occurrence_v2()
 returns trigger
 language plpgsql
 security definer
 set search_path = pg_catalog, pg_temp
 as $$
 begin
-  if new.source_kind = 'imported'
-    and new.status = 'active'
+  if new.status = 'active'
     and new.action is distinct from 'deleted'
+    and not exists (
+      select 1
+      from public.season_modifications modifications
+      where modifications.season_id = new.season_id
+        and modifications.leg_id = new.record_id
+        and modifications.action = 'deleted'
+    )
   then
-    perform public.assert_seasonal_imported_base_occurrence_v2(
+    perform public.assert_seasonal_effective_base_occurrence_v2(
       new.season_id,
       new.record_id,
       new.date,
@@ -3874,6 +3924,39 @@ begin
     );
   end if;
   return new;
+end;
+$$;
+
+create or replace function public.enforce_seasonal_effective_base_visibility_v2()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+begin
+  if tg_op in ('UPDATE', 'DELETE') then
+    perform public.assert_seasonal_effective_base_state_v2(
+      old.season_id,
+      old.leg_id
+    );
+  end if;
+
+  if tg_op = 'INSERT'
+    or (
+      tg_op = 'UPDATE'
+      and (
+        new.season_id is distinct from old.season_id
+        or new.leg_id is distinct from old.leg_id
+      )
+    )
+  then
+    perform public.assert_seasonal_effective_base_state_v2(
+      new.season_id,
+      new.leg_id
+    );
+  end if;
+
+  return null;
 end;
 $$;
 
@@ -3928,13 +4011,15 @@ execute function public.guard_seasonal_added_modification_v2();
 
 drop trigger if exists guard_seasonal_imported_base_occurrence_v2
   on public.season_flight_records;
-create trigger guard_seasonal_imported_base_occurrence_v2
+drop trigger if exists guard_seasonal_effective_base_occurrence_v2
+  on public.season_flight_records;
+create trigger guard_seasonal_effective_base_occurrence_v2
 before insert or update of
   season_id, record_id, date, airline, flight_number, raw_flight_number,
   action, source_kind, status
 on public.season_flight_records
 for each row
-execute function public.guard_seasonal_imported_base_occurrence_v2();
+execute function public.guard_seasonal_effective_base_occurrence_v2();
 
 drop trigger if exists enforce_seasonal_added_modification_parent_v2
   on public.season_modifications;
@@ -3953,6 +4038,15 @@ on public.season_modification_added_legs
 deferrable initially deferred
 for each row
 execute function public.enforce_seasonal_added_modification_v2();
+
+drop trigger if exists enforce_seasonal_effective_base_visibility_v2
+  on public.season_modifications;
+create constraint trigger enforce_seasonal_effective_base_visibility_v2
+after insert or update or delete
+on public.season_modifications
+deferrable initially deferred
+for each row
+execute function public.enforce_seasonal_effective_base_visibility_v2();
 
 create or replace function public.finalize_seasonal_occurrence_constraints_v2()
 returns void
@@ -4016,7 +4110,9 @@ revoke execute on function public.is_seasonal_added_leg_final_state_v2(
 ) from public, anon, authenticated;
 revoke execute on function public.assert_seasonal_manual_added_occurrence_v2(text, text, text, text, text, text)
   from public, anon, authenticated;
-revoke execute on function public.assert_seasonal_imported_base_occurrence_v2(text, text, text, text, text, text)
+revoke execute on function public.assert_seasonal_effective_base_occurrence_v2(text, text, text, text, text, text)
+  from public, anon, authenticated;
+revoke execute on function public.assert_seasonal_effective_base_state_v2(text, text)
   from public, anon, authenticated;
 revoke execute on function public.assert_seasonal_added_modification_state_v2(text, text)
   from public, anon, authenticated;
@@ -4024,9 +4120,11 @@ revoke execute on function public.guard_seasonal_manual_added_occurrence_v2()
   from public, anon, authenticated;
 revoke execute on function public.guard_seasonal_added_modification_v2()
   from public, anon, authenticated;
-revoke execute on function public.guard_seasonal_imported_base_occurrence_v2()
+revoke execute on function public.guard_seasonal_effective_base_occurrence_v2()
   from public, anon, authenticated;
 revoke execute on function public.enforce_seasonal_added_modification_v2()
+  from public, anon, authenticated;
+revoke execute on function public.enforce_seasonal_effective_base_visibility_v2()
   from public, anon, authenticated;
 revoke execute on function public.finalize_seasonal_occurrence_constraints_v2()
   from public, anon, authenticated;
