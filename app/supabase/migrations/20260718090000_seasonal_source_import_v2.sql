@@ -980,6 +980,7 @@ declare
   v_request_id uuid;
   v_request_id_text text;
   v_checksum text;
+  v_import_mode text;
   v_season_code text;
   v_requested_season_id text;
   v_season_id text;
@@ -1009,11 +1010,6 @@ declare
   v_max_generated_atomic_count constant bigint := 100000;
   v_batch public.season_import_batches%rowtype;
 begin
-  if not public.app_operator_has_permission('seasonal.write') then
-    raise exception 'Missing required permission: seasonal.write'
-      using errcode = '42501';
-  end if;
-
   if p_import is null or pg_catalog.jsonb_typeof(p_import) <> 'object' then
     raise exception 'p_import must be a JSON object'
       using errcode = '22023';
@@ -1039,6 +1035,13 @@ begin
       using errcode = '22023';
   end if;
 
+  if p_import ? 'mode'
+    and pg_catalog.jsonb_typeof(p_import->'mode') not in ('string', 'null')
+  then
+    raise exception 'mode must be standard or repair'
+      using errcode = '22023';
+  end if;
+
   if p_import ? 'seasonId'
     and pg_catalog.jsonb_typeof(p_import->'seasonId') not in ('string', 'null')
   then
@@ -1055,10 +1058,29 @@ begin
 
   v_request_id_text := nullif(pg_catalog.btrim(p_import->>'requestId'), '');
   v_checksum := nullif(pg_catalog.btrim(p_import->>'checksum'), '');
+  v_import_mode := coalesce(
+    nullif(pg_catalog.lower(pg_catalog.btrim(p_import->>'mode')), ''),
+    'standard'
+  );
   v_season_code := nullif(pg_catalog.upper(pg_catalog.btrim(p_import->>'seasonCode')), '');
   v_requested_season_id := nullif(pg_catalog.btrim(p_import->>'seasonId'), '');
   v_file_name := coalesce(p_import->>'fileName', '');
   v_source_rows := p_import->'sourceRows';
+
+  if v_import_mode not in ('standard', 'repair') then
+    raise exception 'mode must be standard or repair'
+      using errcode = '22023';
+  end if;
+
+  if v_import_mode = 'repair' then
+    if not public.app_operator_has_permission('season.repair') then
+      raise exception 'Missing required permission: season.repair'
+        using errcode = '42501';
+    end if;
+  elsif not public.app_operator_has_permission('seasonal.write') then
+    raise exception 'Missing required permission: seasonal.write'
+      using errcode = '42501';
+  end if;
 
   if v_request_id_text is null then
     raise exception 'requestId is required'
@@ -1919,7 +1941,8 @@ begin
     pg_catalog.sha256(
       pg_catalog.convert_to(
         pg_catalog.jsonb_build_object(
-          'fingerprintVersion', 2,
+          'fingerprintVersion', 3,
+          'importMode', v_import_mode,
           'sourceRows', v_source_rows,
           'seasonIdentity', pg_catalog.jsonb_build_object(
             'seasonCode', v_season_code,
@@ -1962,7 +1985,8 @@ begin
     v_diagnostics,
     pg_catalog.jsonb_build_object(
       '_staging', pg_catalog.jsonb_build_object(
-        'fingerprintVersion', 2,
+        'fingerprintVersion', 3,
+        'importMode', v_import_mode,
         'requestFingerprint', v_request_fingerprint,
         'targetSeasonId', v_target_season_id
       )
@@ -2022,7 +2046,8 @@ begin
       pg_catalog.sha256(
         pg_catalog.convert_to(
           pg_catalog.jsonb_build_object(
-            'fingerprintVersion', 2,
+            'fingerprintVersion', 3,
+            'importMode', v_import_mode,
             'sourceRows', v_source_rows,
             'seasonIdentity', pg_catalog.jsonb_build_object(
               'seasonCode', v_season_code,
@@ -2215,8 +2240,11 @@ declare
   v_ambiguous_occurrence_key text;
   v_conflicting_record_id text;
   v_result jsonb;
+  v_import_mode text;
 begin
-  if not public.app_operator_has_permission('seasonal.write') then
+  if not public.app_operator_has_permission('seasonal.write')
+    and not public.app_operator_has_permission('season.repair')
+  then
     raise exception 'Missing required permission: seasonal.write'
       using errcode = '42501';
   end if;
@@ -2236,6 +2264,25 @@ begin
   if not found then
     raise exception 'Seasonal import request is not available to the current operator'
       using errcode = '42501';
+  end if;
+
+  v_import_mode := coalesce(
+    nullif(pg_catalog.lower(pg_catalog.btrim(v_batch.result #>> '{_staging,importMode}')), ''),
+    'standard'
+  );
+  if v_import_mode = 'repair' then
+    if not public.app_operator_has_permission('season.repair') then
+      raise exception 'Missing required permission: season.repair'
+        using errcode = '42501';
+    end if;
+  elsif v_import_mode = 'standard' then
+    if not public.app_operator_has_permission('seasonal.write') then
+      raise exception 'Missing required permission: seasonal.write'
+        using errcode = '42501';
+    end if;
+  else
+    raise exception 'Seasonal import batch % has invalid importMode %', p_batch_id, v_import_mode
+      using errcode = '22023';
   end if;
 
   if v_batch.status = 'committed' then

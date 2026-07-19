@@ -7,7 +7,6 @@ import type {
   Season,
 } from './types';
 import type { AuditDeltaChunk, AuditLogEntry, AuditSession } from './auditLog';
-import type { SourceRowOperationPlan } from './sourceRowPatterns';
 import type { LocalEntityVersionMap, LocalPendingOp, LocalSyncMeta } from './localSeasonStore';
 import type { SeasonChangeEvent } from './seasonChangeEvents';
 import { isSupabaseConfigured } from './supabase';
@@ -85,14 +84,7 @@ export interface RemoteScheduleNotificationFlushResult {
   deliveryIds: string[];
 }
 
-export interface RemoteSeasonImportCounts {
-  sourceRows: number;
-  flightRecords: number;
-}
-
-export interface RemoteSeasonalImportInput extends SeasonalImportV2RpcAttempt {
-  actor?: RemoteActor | null;
-}
+export type RemoteSeasonalImportInput = SeasonalImportV2RpcAttempt;
 
 export type RemoteSeasonalImportResult = SeasonalImportV2CommittedResult;
 
@@ -166,16 +158,8 @@ export interface RemoteStore {
   getAuditSessions(maxSessions?: number): Promise<AuditSession[]>;
   getAuditLogEntries(sessionId: string, maxEntries?: number): Promise<AuditLogEntry[]>;
   getAuditDeltaChunks(sessionId: string, entryId: string): Promise<AuditDeltaChunk[]>;
-  clearFlightRecords(seasonId: string): Promise<void>;
-  clearSourceRows(seasonId: string): Promise<void>;
-  clearModifications(seasonId: string): Promise<void>;
-  clearModHistory(seasonId: string): Promise<void>;
-  clearSeasonBaseline(seasonId: string): Promise<void>;
-  batchWriteSourceRows(seasonId: string, rows: ParsedRow[], onProgress?: (written: number, total: number) => void): Promise<void>;
   getSourceRows(seasonId: string): Promise<ParsedRow[]>;
-  batchWriteFlightRecords(seasonId: string, records: FlightRecord[], onProgress?: (written: number, total: number) => void): Promise<void>;
   applySeasonalImportRemote?(input: RemoteSeasonalImportInput): Promise<RemoteSeasonalImportResult>;
-  verifySeasonImportCounts?(seasonId: string, expected: RemoteSeasonImportCounts): Promise<RemoteSeasonImportCounts>;
   getFlightRecords(seasonId: string): Promise<FlightRecord[]>;
   getSeasonalExportSnapshot?(
     input: RemoteSeasonalExportSnapshotInput
@@ -186,13 +170,6 @@ export interface RemoteStore {
     seasonId: string,
     options?: { modHistoryLimit?: number; transport?: 'auto' | 'rpc' | 'paged' }
   ): Promise<RemoteSeasonWorkspaceSnapshot | null>;
-  addSourceRow(seasonId: string, row: Omit<ParsedRow, 'rowIndex'>): Promise<ParsedRow>;
-  deleteSourceRow(seasonId: string, rowIndex: number, linkedRowIndex?: number): Promise<void>;
-  linkSourceRows(seasonId: string, rowIndexA: number, rowIndexB: number, linkType?: 'overnight' | 'sameday'): Promise<void>;
-  mergeSameDaySourceRows(seasonId: string, rowIndexA: number, rowIndexB: number): Promise<void>;
-  unlinkSourceRows(seasonId: string, rowIndexA: number, rowIndexB: number): Promise<void>;
-  splitSourceRowTurnaround(seasonId: string, rowIndex: number): Promise<number>;
-  applySourceRowOperationPlan(seasonId: string, plan: SourceRowOperationPlan): Promise<void>;
   getModifications(seasonId: string): Promise<Map<string, FlightModification>>;
   saveModification(seasonId: string, legId: string, mod: FlightModification): Promise<void>;
   saveModifications(seasonId: string, mods: FlightModification[]): Promise<void>;
@@ -314,31 +291,8 @@ export async function getAuditLogEntries(sessionId: string, maxEntries?: number)
 export async function getAuditDeltaChunks(sessionId: string, entryId: string): Promise<AuditDeltaChunk[]> {
   return (await getRemoteStore()).getAuditDeltaChunks(sessionId, entryId);
 }
-export async function clearFlightRecords(seasonId: string): Promise<void> {
-  return (await getRemoteStore()).clearFlightRecords(seasonId);
-}
-export async function clearSourceRows(seasonId: string): Promise<void> {
-  return (await getRemoteStore()).clearSourceRows(seasonId);
-}
-export async function clearModifications(seasonId: string): Promise<void> {
-  return (await getRemoteStore()).clearModifications(seasonId);
-}
-export async function clearModHistory(seasonId: string): Promise<void> {
-  return (await getRemoteStore()).clearModHistory(seasonId);
-}
-export async function clearSeasonBaseline(seasonId: string): Promise<void> {
-  return (await getRemoteStore()).clearSeasonBaseline(seasonId);
-}
-export async function batchWriteSourceRows(_seasonId: string, rows: ParsedRow[], onProgress?: (written: number, total: number) => void): Promise<void> {
-  void _seasonId;
-  onProgress?.(rows.length, rows.length);
-}
-export async function getSourceRows(_seasonId: string): Promise<ParsedRow[]> {
-  void _seasonId;
-  return [];
-}
-export async function batchWriteFlightRecords(seasonId: string, records: FlightRecord[], onProgress?: (written: number, total: number) => void): Promise<void> {
-  return (await getRemoteStore()).batchWriteFlightRecords(seasonId, records, onProgress);
+export async function getSourceRows(seasonId: string): Promise<ParsedRow[]> {
+  return (await getRemoteStore()).getSourceRows(seasonId);
 }
 export async function applySeasonalImportRemote(input: RemoteSeasonalImportInput): Promise<RemoteSeasonalImportResult> {
   const store = await getRemoteStore();
@@ -355,11 +309,6 @@ export async function applySeasonServerMutationV1(
     throw new Error('Server-authoritative mutation RPC is not available.');
   }
   return store.applySeasonServerMutationV1(payload);
-}
-export async function verifySeasonImportCounts(seasonId: string, expected: RemoteSeasonImportCounts): Promise<RemoteSeasonImportCounts> {
-  const store = await getRemoteStore();
-  if (!store.verifySeasonImportCounts) return expected;
-  return store.verifySeasonImportCounts(seasonId, expected);
 }
 export async function getFlightRecords(seasonId: string): Promise<FlightRecord[]> {
   return (await getRemoteStore()).getFlightRecords(seasonId);
@@ -466,50 +415,6 @@ export async function loadSeasonWorkspaceWindow(
       syncStatus: 'synced',
     },
   };
-}
-function sourceRowWritesDisabled(): Error {
-  return new Error('Source row writes are disabled. Seasonal data is stored as atomic flight records.');
-}
-
-export async function addSourceRow(_seasonId: string, _row: Omit<ParsedRow, 'rowIndex'>): Promise<ParsedRow> {
-  void _seasonId;
-  void _row;
-  throw sourceRowWritesDisabled();
-}
-export async function deleteSourceRow(_seasonId: string, _rowIndex: number, _linkedRowIndex?: number): Promise<void> {
-  void _seasonId;
-  void _rowIndex;
-  void _linkedRowIndex;
-  throw sourceRowWritesDisabled();
-}
-export async function linkSourceRows(_seasonId: string, _rowIndexA: number, _rowIndexB: number, _linkType?: 'overnight' | 'sameday'): Promise<void> {
-  void _seasonId;
-  void _rowIndexA;
-  void _rowIndexB;
-  void _linkType;
-  throw sourceRowWritesDisabled();
-}
-export async function mergeSameDaySourceRows(_seasonId: string, _rowIndexA: number, _rowIndexB: number): Promise<void> {
-  void _seasonId;
-  void _rowIndexA;
-  void _rowIndexB;
-  throw sourceRowWritesDisabled();
-}
-export async function unlinkSourceRows(_seasonId: string, _rowIndexA: number, _rowIndexB: number): Promise<void> {
-  void _seasonId;
-  void _rowIndexA;
-  void _rowIndexB;
-  throw sourceRowWritesDisabled();
-}
-export async function splitSourceRowTurnaround(_seasonId: string, _rowIndex: number): Promise<number> {
-  void _seasonId;
-  void _rowIndex;
-  throw sourceRowWritesDisabled();
-}
-export async function applySourceRowOperationPlan(_seasonId: string, _plan: SourceRowOperationPlan): Promise<void> {
-  void _seasonId;
-  void _plan;
-  throw sourceRowWritesDisabled();
 }
 export async function getModifications(seasonId: string): Promise<Map<string, FlightModification>> {
   return (await getRemoteStore()).getModifications(seasonId);

@@ -9,6 +9,7 @@ import {
   normalizeSeasonalImportExpectedDataVersion,
   parseSeasonalImportV2Result,
   parseSeasonalImportV2StageResult,
+  prepareSeasonalImportV2Attempt,
   runSeasonalImportV2RpcFlow,
   SeasonalImportV2RpcRejectedError,
   SeasonalImportV2StatusUnknownError,
@@ -260,7 +261,7 @@ test('seasonal import checksum is stable across DTO property order, nullability,
   );
 });
 
-test('request ID is deterministic, UUID-form and sensitive to expected version', async () => {
+test('request ID is deterministic, UUID-form and separates version and import mode', async () => {
   const input = {
     seasonId: 'season-w26',
     seasonCode: 'W26',
@@ -272,6 +273,7 @@ test('request ID is deterministic, UUID-form and sensitive to expected version',
   const retry = await deriveSeasonalImportV2RequestId(input);
   const nextVersion = await deriveSeasonalImportV2RequestId({ ...input, expectedDataVersion: 4 });
   const otherSeason = await deriveSeasonalImportV2RequestId({ ...input, seasonId: 'season-s27' });
+  const repairMode = await deriveSeasonalImportV2RequestId({ ...input, mode: 'repair' });
   const otherChecksum = await deriveSeasonalImportV2RequestId({
     ...input,
     checksum: `${input.checksum.startsWith('f') ? 'e' : 'f'}${input.checksum.slice(1)}`,
@@ -281,7 +283,28 @@ test('request ID is deterministic, UUID-form and sensitive to expected version',
   assert.equal(retry, first);
   assert.notEqual(nextVersion, first);
   assert.notEqual(otherSeason, first);
+  assert.notEqual(repairMode, first);
   assert.notEqual(otherChecksum, first);
+});
+
+test('shared V2 attempt preparation canonicalizes source rows and binds repair mode into request semantics', async () => {
+  const input = {
+    seasonId: 'season-w26',
+    seasonCode: ' w26 ',
+    expectedDataVersion: 3,
+    fileName: 'W26.xlsx',
+    uploadedAt: 123,
+    sourceRows: [sourceRow(1, 'VN336')],
+  };
+  const standard = await prepareSeasonalImportV2Attempt(input);
+  const repair = await prepareSeasonalImportV2Attempt({ ...input, mode: 'repair' });
+
+  assert.equal(standard.mode, 'standard');
+  assert.equal(repair.mode, 'repair');
+  assert.equal(standard.seasonCode, 'W26');
+  assert.deepEqual(standard.sourceRows, canonicalizeSeasonalImportSourceRows(input.sourceRows));
+  assert.equal(standard.checksum, repair.checksum, 'mode must not change canonical source content checksum');
+  assert.notEqual(standard.requestId, repair.requestId, 'mode must change deterministic request identity');
 });
 
 test('new-season null expected version normalizes to zero while existing-season null is rejected', async () => {

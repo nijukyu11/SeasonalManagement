@@ -1,12 +1,12 @@
 # SeasonalManagement Architecture
 
-Last updated: 2026-07-13
+Last updated: 2026-07-19
 
 ## Purpose
 
 SeasonalManagement is a native-first aviation operations app for importing seasonal Excel schedules, editing atomic flight legs, allocating check-in counters and gates, exporting recognized Excel/PDF outputs, and running read-only dashboard analysis.
 
-The current runtime target is the Tauri desktop app. Next.js/React is the UI shell and self-hosted Supabase is the only operational read/write authority, auth boundary, Realtime source, and Edge Function host. Rust + SQLite remains packaged temporarily for explicitly enabled legacy repair tooling, not as a normal route read model or write queue.
+The current runtime target is the Tauri desktop app. Next.js/React is the UI shell and self-hosted Supabase is the only operational read/write authority, auth boundary, Realtime source, and Edge Function host. Rust + SQLite remains packaged temporarily for explicitly enabled legacy repair tooling, not as a normal route read model or write queue. SQLite is never an import, export, retry, catch-up, or failure fallback.
 
 ## Runtime Shape
 
@@ -34,7 +34,9 @@ Browser/static mode is not the operational source of truth. Legacy IndexedDB and
 
 The 2026-06-22 self-hosted cutover uses Cloudflare Tunnel to expose the restored self-hosted Supabase endpoint at `https://supabase.ahtops.xyz`. The endpoint cutover itself was no-schema-change: release variables point signed builds at the self-hosted endpoint, while the restored database starts from the cloud server dump.
 
-Server-side write hardening is implemented through `opsdata-supabase/supabase/migrations/20260622_server_side_write_hardening.sql`. Seasonal import/re-import calls `apply_seasonal_import_remote(jsonb)` through the remote store so season metadata, imported flight records, change events, and commit cursors are written atomically. Normal schedule/allocation saves use `apply_season_server_mutation_v1(jsonb)`; `sync_season_workspace_v2` is legacy repair/rollback only. Anon execute remains intentionally revoked, so live smoke requires an authenticated operator session.
+Server-side write hardening is implemented through `opsdata-supabase/supabase/migrations/20260622_server_side_write_hardening.sql`. Seasonal import/re-import sends canonical source rows to `stage_seasonal_import_v2(jsonb)` and commits the validated server preview through `commit_seasonal_import_v2(uuid, integer)`. The server generates atomic occurrences and commits season metadata, imported records, change events, and cursors in one transaction. Standard imports retain the `seasonal.write` permission; Settings `Seasonal Full Replace` uses mode `repair` and requires `season.repair` at both stage and commit. Normal schedule/allocation saves use `apply_season_server_mutation_v1(jsonb)`; `sync_season_workspace_v2` is legacy repair/rollback only. Anon execute remains intentionally revoked, so live smoke requires an authenticated operator session.
+
+The additive V2 migration intentionally leaves legacy `apply_seasonal_import_remote(jsonb)` callable during the one-release compatibility window. Task 12 must deploy the additive SQL before the V2 canary client. Only after the canary succeeds may the post-canary deployment revoke authenticated execute on V1; dropping the V1 definition is deferred to a later migration after the rollback window. No V2 client may fall back to V1.
 
 Online-first server-authoritative writes are staged through `opsdata-supabase/supabase/migrations/20260622_online_first_server_mutation_v1.sql`. Normal route mutation seams call `apply_season_server_mutation_v1(jsonb)` via `applySeasonServerMutationV1()` and update the active route/cache from server-authoritative responses or server-window reloads. `sync_season_workspace_v2`, native catch-up, native entity-version comparison, and native conflict review are legacy repair/rollback paths, not the main workflow. `season_mutation_receipts` provides idempotency by `(season_id, client_id, client_mutation_id)`.
 
@@ -68,7 +70,7 @@ The active architecture is now organized around six seams:
 | Native facade | `nativeSeasonRepository`, `nativeSeasonCatchup`, `nativeLocalSeasonStore` | TypeScript should call native through these modules instead of importing Tauri commands ad hoc. |
 | Native core | `src-tauri/src/lib.rs`, `src-tauri/src/native_catchup.rs` | Owns SQLite, row-level mutations, sync, catch-up, conflict resolution, local dashboard SQL, and AI sidecar access. |
 | Remote/backend | `remoteStore`, `supabaseStore`, `supabaseRelationalMappers`, `supabase/schema.sql`, migrations | Native runtime requires Supabase; non-native Firestore fallback still exists but is not the operational desktop path. |
-| AI/reporting | `dashboardAiAnalysis`, `dashboardAiShared`, `ai-agent`, Supabase AI functions | Read-only analysis only; local SQLite is authoritative when desktop data is loaded or dirty. |
+| AI/reporting | `dashboardAiAnalysis`, `dashboardAiShared`, Supabase AI functions | Read-only analysis only; normal reporting reads authoritative Supabase data. Legacy local AI/SQLite paths are repair-only and cannot feed import/export/retry behavior. |
 
 ## Primary Boundaries
 
@@ -88,36 +90,35 @@ The active architecture is now organized around six seams:
 
 Season ownership hardening is staged. The current safe pass scopes destructive modification deletes and enforces unique `season_code`; the larger remote composite-key migration is deferred because it changes parent/child table keys, mappers, RPCs, and reporting surfaces together.
 
-Local SQLite and Supabase intentionally mirror the same concepts:
+Supabase owns the normal data model:
 
-| Concept | Local SQLite | Supabase |
-|---|---|---|
-| Season metadata | `local_seasons` | `seasons` |
-| Imported source evidence | `local_source_rows` | `season_source_rows`, `season_source_row_days` |
-| Editable operating legs | `local_flight_records` | `season_flight_records` plus child counter/window tables |
-| Modification overlays | `local_modifications` | `season_modifications` plus child counter/window/added-leg tables |
-| Undo/history | `local_mod_history_entries` | `season_mod_history_entries`, change tables |
-| Pending sync | `local_pending_ops` | `season_change_events` |
-| Conflict clocks | `local_entity_versions` | `season_entity_versions` |
-| Sync state | `local_sync_meta` | event high-water and workspace snapshot RPCs |
-| AI/settings/audit | local reads where needed | operational settings, AI models/context docs, audit tables |
+| Concept | Supabase authority |
+|---|---|
+| Season metadata | `seasons` |
+| Imported baseline provenance | `season_source_rows`, `season_source_row_days` |
+| Server-generated atomic occurrences | `season_flight_records` plus child counter/window tables |
+| Operational overlays | `season_modifications` plus child counter/window/added-leg tables |
+| Undo/history | `season_mod_history_entries` and change tables |
+| Realtime and conflict clocks | `season_change_events`, `season_entity_versions` |
+| AI/settings/audit | operational settings, AI models/context docs, audit tables |
 
-Local current rows and base rows are stored side by side with `is_base`. Pending operations are derived by comparing current state to base state; they are not a permanent action log. Reversing an edit back to baseline should remove the pending operation.
+Source rows are immutable import provenance from the client perspective. The client may read them for diagnostics and audit evidence but cannot add, delete, link, split, merge, or patch individual source rows. Atomic records are generated set-wise by the V2 server pipeline. Operational edits remain overlays and are materialized with the imported baseline for schedule reads and exports.
 
 ## Import To Export Flow
 
 ```text
 Excel workbook
-  -> parser.ts parses source rows
-  -> atomicSchedule.ts flattens rows into FlightRecord occurrences
-  -> SQLite current/base rows are written for the exact season_id
-  -> route pages query bounded native windows
-  -> edits write row-level native mutations and pending ops
-  -> Save uploads pending change events to Supabase
+  -> parser.ts validates source rows
+  -> seasonalImportRpcContract.ts canonicalizes rows and binds checksum/request ID/mode
+  -> stage_seasonal_import_v2 validates and previews server-generated atomic occurrences
+  -> commit_seasonal_import_v2 commits the imported baseline atomically
+  -> route pages refresh the targeted Supabase season window
+  -> operational edits persist as modification overlays
+  -> get_seasonal_export_snapshot_v2 returns one versioned server snapshot
   -> exporter.ts rebuilds system-recognizable pattern rows
 ```
 
-`sourceRows` are import evidence and compatibility backup. `FlightRecord` rows are the editable/exportable truth. Same-day and overnight relationships must be explicit through `turnaroundId`/`linkType`; export must not infer overnight pairings from time similarity.
+`sourceRows` are imported-baseline provenance. `FlightRecord` rows are server-generated occurrences; modifications are the operational edit boundary. Same-day and overnight relationships must be explicit through `turnaroundId`/`linkType`; export must not infer overnight pairings from time similarity. Import, export, retry, ambiguous-commit recovery, and refresh all stay on Supabase and never read or write SQLite as a fallback.
 
 ## Current Save And Realtime Flow
 
@@ -146,7 +147,7 @@ Fetch/catch-up is separate from Save:
 4. `lastServerSeq` advances only after committed local work.
 5. Token refresh, retryable page fetches, writer locking, WAL, busy timeout, and passive checkpoints are handled in the native layer.
 
-Full workspace snapshot replacement is allowed for import, reset, repair, and guarded baseline seeding. Routine catch-up and normal edits must stay row-level/delta based.
+Legacy full workspace snapshot replacement is allowed only inside explicitly enabled native repair/rollback tooling. It is not an import/export path and is never invoked as retry or failure fallback by server-first routes.
 
 Current sync hardening boundaries:
 
@@ -201,14 +202,14 @@ Current sync hardening boundaries:
 
 Route shells should use dynamic viewport height (`h-dvh`) rather than fixed `h-screen` so the desktop WebView and responsive layouts do not clip or leave stale viewport gaps. Rule tests guard `src/app/**/*.tsx` for this exact class.
 
-| Route | Role | Native data access |
+| Route | Role | Server data access |
 |---|---|---|
-| Seasonal Schedule | Aggregated ARR/DEP macro view, import, export, row-level link/unlink/delete | `queryNativeScheduleWindow`, `queryNativeSourceRowsWindow`, `runNativeScheduleMutation` |
-| Detailed Schedule | ID-level calendar editing, pair-aware delete, manual link/unlink | `queryNativeScheduleWindow`, `runNativeScheduleMutation` |
-| Daily Schedule | Daily operational view and OperationalTurns import | `ensureNativeLocalSeason`, `queryNativeScheduleWindow`, `runNativeScheduleMutation` |
-| Check-in Allocation | Departure-only Gantt, counter assignment/time windows | `queryNativeAllocationWindow`, `runNativeLocalModificationBatchDelta` |
-| Gate Allocation | Gate/stand Gantt allocation | `queryNativeAllocationWindow`, `runNativeLocalModificationBatchDelta` |
-| Dashboard | Overview, MoM/WoW comparison, AI notebook | native schedule/dashboard reads plus Supabase reporting/AI |
+| Seasonal Schedule | Aggregated ARR/DEP macro view, V2 source-row import, versioned export | Supabase import/export RPCs and schedule windows |
+| Detailed Schedule | ID-level calendar editing, pair-aware delete, manual link/unlink | Supabase schedule windows and server mutations |
+| Daily Schedule | Daily operational view and OperationalTurns import | Supabase schedule windows and server mutations |
+| Check-in Allocation | Departure-only Gantt, counter assignment/time windows | Supabase allocation windows and server mutations |
+| Gate Allocation | Gate/stand Gantt allocation | Supabase allocation windows and server mutations |
+| Dashboard | Overview, MoM/WoW comparison, AI notebook | Supabase reporting/AI reads |
 | Settings | Operational resources, rules, route countries, AI providers, AI context docs | Supabase settings tables through `remoteStore` |
 | Audit | Audit session/log review | Supabase audit tables |
 

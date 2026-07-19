@@ -46,15 +46,24 @@ export interface CanonicalSeasonalSourceRow {
   linkType: 'overnight' | 'sameday' | null;
 }
 
+export type SeasonalImportV2Mode = 'standard' | 'repair';
+
 export interface SeasonalImportV2RpcAttempt {
   requestId: string;
   checksum: string;
+  mode?: SeasonalImportV2Mode;
   seasonId?: string | null;
   seasonCode: string;
   expectedDataVersion: number;
   fileName: string;
   uploadedAt: number;
   sourceRows: CanonicalSeasonalSourceRow[];
+}
+
+export function normalizeSeasonalImportV2Mode(mode: unknown): SeasonalImportV2Mode {
+  if (mode === undefined || mode === null || mode === 'standard') return 'standard';
+  if (mode === 'repair') return 'repair';
+  throw new Error('Seasonal import mode must be standard or repair.');
 }
 
 export interface SeasonalImportV2CommittedResult {
@@ -378,6 +387,7 @@ export async function deriveSeasonalImportV2RequestId(input: {
   seasonCode: string;
   expectedDataVersion: number | null;
   checksum: string;
+  mode?: SeasonalImportV2Mode;
 }): Promise<string> {
   const seasonId = input.seasonId?.trim() ?? '';
   const expectedDataVersion = normalizeSeasonalImportExpectedDataVersion(
@@ -387,12 +397,49 @@ export async function deriveSeasonalImportV2RequestId(input: {
   const checksum = input.checksum.trim().toLowerCase();
   if (!checksum) throw new Error('checksum must be a non-empty string.');
   const seasonIdentity = seasonId || `new:${normalizeSeasonCode(input.seasonCode)}`;
-  const bytes = await sha256Bytes(stableJson({ checksum, expectedDataVersion, seasonIdentity }));
+  const mode = normalizeSeasonalImportV2Mode(input.mode);
+  const bytes = await sha256Bytes(stableJson({ checksum, expectedDataVersion, mode, seasonIdentity }));
   const uuidBytes = bytes.slice(0, 16);
   uuidBytes[6] = (uuidBytes[6] & 0x0f) | 0x50;
   uuidBytes[8] = (uuidBytes[8] & 0x3f) | 0x80;
   const hex = bytesToHex(uuidBytes);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export async function prepareSeasonalImportV2Attempt(input: {
+  seasonId?: string | null;
+  seasonCode: string;
+  expectedDataVersion: number | null;
+  fileName: string;
+  uploadedAt: number;
+  sourceRows: readonly unknown[];
+  mode?: SeasonalImportV2Mode;
+}): Promise<SeasonalImportV2RpcAttempt> {
+  const sourceRows = canonicalizeSeasonalImportSourceRows(input.sourceRows);
+  const expectedDataVersion = normalizeSeasonalImportExpectedDataVersion(
+    input.seasonId,
+    input.expectedDataVersion,
+  );
+  const mode = normalizeSeasonalImportV2Mode(input.mode);
+  const checksum = await buildSeasonalImportV2Checksum(input.seasonCode, sourceRows);
+  const requestId = await deriveSeasonalImportV2RequestId({
+    seasonId: input.seasonId,
+    seasonCode: input.seasonCode,
+    expectedDataVersion,
+    checksum,
+    mode,
+  });
+  return {
+    requestId,
+    checksum,
+    mode,
+    seasonId: input.seasonId ?? null,
+    seasonCode: normalizeSeasonCode(input.seasonCode),
+    expectedDataVersion,
+    fileName: input.fileName,
+    uploadedAt: input.uploadedAt,
+    sourceRows,
+  };
 }
 
 function statusUnknown(stage: 'stage' | 'commit' | 'response', cause: unknown): SeasonalImportV2StatusUnknownError {

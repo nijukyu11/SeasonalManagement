@@ -85,6 +85,9 @@ insert into public.app_operator_permission_overrides (user_id, permission_key, e
 values ('a2a8ee9c-8e84-4cb7-aef6-358af42c3b31', 'seasonal.read', 'allow');
 
 insert into public.app_operator_permission_overrides (user_id, permission_key, effect)
+values ('a2a8ee9c-8e84-4cb7-aef6-358af42c3b31', 'season.repair', 'allow');
+
+insert into public.app_operator_permission_overrides (user_id, permission_key, effect)
 values ('d11b35f2-62b1-4310-b3ca-4d46762c79e8', 'seasonal.write', 'allow');
 
 insert into public.seasons (
@@ -4865,6 +4868,137 @@ begin
   exception
     when unique_violation then null;
   end;
+end
+$$;
+
+do $$
+declare
+  v_source_rows jsonb := jsonb_build_array(jsonb_build_object(
+    'rowIndex', 0,
+    'effective', '2027-03-28',
+    'discontinue', '2027-03-28',
+    'airline', 'VN',
+    'aircraft', '321',
+    'daysOfWeek', jsonb_build_array(true, true, true, true, true, true, true),
+    'sta', '07:05',
+    'arrFlight', 'VN336',
+    'arrRoute', 'KIX'
+  ));
+  v_standard_batch_id uuid;
+  v_repair_batch_id uuid;
+  v_mode text;
+begin
+  perform set_config('request.jwt.claim.sub', 'd11b35f2-62b1-4310-b3ca-4d46762c79e8', true);
+  begin
+    perform public.stage_seasonal_import_v2(jsonb_build_object(
+      'requestId', '8e4ad3f9-899d-4fd1-8a82-bb0dd61ac301',
+      'checksum', 'repair-permission-negative',
+      'mode', 'repair',
+      'seasonCode', 'TRP1',
+      'expectedDataVersion', 0,
+      'fileName', 'TRP1.xlsx',
+      'sourceRows', v_source_rows
+    ));
+    raise exception 'operator without season.repair staged a repair import';
+  exception
+    when insufficient_privilege then
+      if position('season.repair' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+
+  perform set_config('request.jwt.claim.sub', 'a2a8ee9c-8e84-4cb7-aef6-358af42c3b31', true);
+  v_standard_batch_id := (
+    public.stage_seasonal_import_v2(jsonb_build_object(
+      'requestId', 'c7f6c8a9-39b8-4c68-a342-4bf087b0a301',
+      'checksum', 'mode-replay-standard',
+      'mode', 'standard',
+      'seasonCode', 'TRP2',
+      'expectedDataVersion', 0,
+      'fileName', 'TRP2.xlsx',
+      'sourceRows', v_source_rows
+    ))->>'batchId'
+  )::uuid;
+
+  begin
+    perform public.stage_seasonal_import_v2(jsonb_build_object(
+      'requestId', 'c7f6c8a9-39b8-4c68-a342-4bf087b0a301',
+      'checksum', 'mode-replay-standard',
+      'mode', 'repair',
+      'seasonCode', 'TRP2',
+      'expectedDataVersion', 0,
+      'fileName', 'TRP2.xlsx',
+      'sourceRows', v_source_rows
+    ));
+    raise exception 'standard import requestId was replayed as repair';
+  exception
+    when unique_violation then
+      if position('different payload' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+
+  update public.season_import_batches
+  set result = jsonb_set(result, '{_staging,importMode}', '"repair"'::jsonb)
+  where batch_id = v_standard_batch_id;
+
+  select result #>> '{_staging,importMode}'
+  into v_mode
+  from public.season_import_batches
+  where batch_id = v_standard_batch_id;
+  if v_mode is distinct from 'standard' then
+    raise exception 'persisted standard importMode was tampered to %', v_mode;
+  end if;
+
+  v_repair_batch_id := (
+    public.stage_seasonal_import_v2(jsonb_build_object(
+      'requestId', 'f1d17ab4-f438-4a22-b593-e4724bbc0301',
+      'checksum', 'mode-replay-repair',
+      'mode', 'repair',
+      'seasonCode', 'TRP3',
+      'expectedDataVersion', 0,
+      'fileName', 'TRP3.xlsx',
+      'sourceRows', v_source_rows
+    ))->>'batchId'
+  )::uuid;
+
+  begin
+    perform public.stage_seasonal_import_v2(jsonb_build_object(
+      'requestId', 'f1d17ab4-f438-4a22-b593-e4724bbc0301',
+      'checksum', 'mode-replay-repair',
+      'mode', 'standard',
+      'seasonCode', 'TRP3',
+      'expectedDataVersion', 0,
+      'fileName', 'TRP3.xlsx',
+      'sourceRows', v_source_rows
+    ));
+    raise exception 'repair import requestId was replayed as standard';
+  exception
+    when unique_violation then
+      if position('different payload' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+
+  if v_repair_batch_id is null then
+    raise exception 'repair-mode stage did not return a batch';
+  end if;
+
+  update public.season_import_batches
+  set created_by = 'd11b35f2-62b1-4310-b3ca-4d46762c79e8'
+  where batch_id = v_repair_batch_id;
+  perform set_config('request.jwt.claim.sub', 'd11b35f2-62b1-4310-b3ca-4d46762c79e8', true);
+  begin
+    perform public.commit_seasonal_import_v2(v_repair_batch_id, 0);
+    raise exception 'operator without season.repair committed a repair import';
+  exception
+    when insufficient_privilege then
+      if position('season.repair' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+
+  perform set_config('request.jwt.claim.sub', 'a2a8ee9c-8e84-4cb7-aef6-358af42c3b31', true);
 end
 $$;
 

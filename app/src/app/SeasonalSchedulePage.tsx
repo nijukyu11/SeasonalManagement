@@ -30,10 +30,7 @@ import { buildImportProgress, buildLoadProgress, type ImportProgress, type LoadP
 import { buildSeasonDisplayLabel, getDirtyImportGuard } from '@/lib/importSeasonRules';
 import {
   buildSeasonalImportCommittedRefreshFailure,
-  buildSeasonalImportV2Checksum,
-  canonicalizeSeasonalImportSourceRows,
-  deriveSeasonalImportV2RequestId,
-  normalizeSeasonalImportExpectedDataVersion,
+  prepareSeasonalImportV2Attempt,
   SeasonalImportV2StatusUnknownError,
 } from '@/lib/seasonalImportRpcContract';
 import {
@@ -1791,7 +1788,6 @@ export default function HomePage() {
         return;
       }
 
-      const sourceRows = canonicalizeSeasonalImportSourceRows(parsedRows);
       setUploadProgress(buildImportProgress('Checking local changes', 24));
       const existing = await findSeasonByCode(seasonCode);
       if (existing) {
@@ -1814,36 +1810,23 @@ export default function HomePage() {
         }
       }
 
-      const uploadedAt = Date.now();
-      const expectedDataVersion = normalizeSeasonalImportExpectedDataVersion(
-        existing?.id ?? null,
-        existing ? existing.dataVersion ?? null : 0,
-      );
-      setUploadProgress(buildImportProgress('Preparing source rows', 30, `${sourceRows.length} source rows`));
-      const checksum = await buildSeasonalImportV2Checksum(seasonCode, sourceRows);
-      const requestId = await deriveSeasonalImportV2RequestId({
+      setUploadProgress(buildImportProgress('Preparing source rows', 30, `${parsedRows.length} source rows`));
+      attemptedImport = await prepareSeasonalImportV2Attempt({
         seasonId: existing?.id ?? null,
         seasonCode,
-        expectedDataVersion,
-        checksum,
+        expectedDataVersion: existing ? existing.dataVersion ?? null : 0,
+        mode: 'standard',
+        fileName: file.name,
+        uploadedAt: Date.now(),
+        sourceRows: parsedRows,
       });
       const commitInvalidation = validateSeasonalFileAction(operation);
       if (commitInvalidation) {
         showSeasonalFileActionInvalidation('import', commitInvalidation);
         return;
       }
-      attemptedImport = {
-        requestId,
-        checksum,
-        seasonId: existing?.id ?? null,
-        seasonCode,
-        expectedDataVersion,
-        fileName: file.name,
-        uploadedAt,
-        sourceRows,
-      };
       setPendingImportAttempt(attemptedImport);
-      setUploadProgress(buildImportProgress('Committing seasonal import', 55, `${sourceRows.length} source rows`));
+      setUploadProgress(buildImportProgress('Committing seasonal import', 55, `${attemptedImport.sourceRows.length} source rows`));
       const remoteImport = await applySeasonalImportRemote(attemptedImport);
       setPendingImportAttempt(null);
       setPendingCommittedImport(remoteImport);

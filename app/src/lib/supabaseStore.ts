@@ -10,7 +10,6 @@ import type {
   RemoteActor,
   RemoteDashboardSeasonData,
   RemoteSeasonEventPage,
-  RemoteSeasonImportCounts,
   RemoteSeasonalImportInput,
   RemoteSeasonalImportResult,
   RemoteSeasonalExportSnapshot,
@@ -25,11 +24,11 @@ import type {
 import { seasonEventTargetKey, type SeasonChangeEvent, type SeasonChangeEventPayload, type SeasonChangeTargetType } from './seasonChangeEvents';
 import type { Season, ParsedRow, FlightModification, ModHistoryEntry, FlightRecord, OperationalSettings } from './types';
 import type { AuditDeltaChunk, AuditLogEntry, AuditSession } from './auditLog';
-import type { SourceRowOperationPlan } from './sourceRowPatterns';
 import { validateOperationalSettings } from './settingsRules';
 import { serializeFlightModificationForPersistence } from './persistenceSchema';
 import {
   canonicalizeSeasonalImportSourceRows,
+  normalizeSeasonalImportV2Mode,
   normalizeSeasonalImportExpectedDataVersion,
   runSeasonalImportV2RpcFlow,
   SeasonalImportV2RpcRejectedError,
@@ -52,9 +51,6 @@ import {
   toCheckInCounterLockRows,
   toCheckInCounterRows,
   toCounterRuleRows,
-  toFlightRecordCounterRows,
-  toFlightRecordRow,
-  toFlightRecordWindowRows,
   toGateGroupMemberRows,
   toGateGroupRows,
   toGateLockMemberRows,
@@ -68,8 +64,6 @@ import {
   toOperationalSettingsRow,
   toRouteCountryRows,
   toSeasonRow,
-  toSourceRowDayRows,
-  toSourceRowRow,
   toStandGateMappingRows,
   type FlightRecordCounterRelationalRow,
   type FlightRecordRelationalRow,
@@ -96,7 +90,6 @@ type SupabaseError = { message: string; code?: string | null; details?: string |
 type SupabaseResult<T> = { data: T | null; error: SupabaseError | null };
 type JsonRecord = Record<string, unknown>;
 type PayloadRow<T> = { payload: T | null };
-type SourceRowIndexRow = { row_index: number | null };
 const SUPABASE_SELECT_PAGE_SIZE = 1000;
 const SUPABASE_IN_FILTER_BATCH_SIZE = 100;
 const SYNC_V2_EVENT_CHUNK_SIZE = 50;
@@ -314,18 +307,6 @@ async function selectAllRows<T>(table: string, filters: SelectFilter[] = [], act
     if (page.length < SUPABASE_SELECT_PAGE_SIZE) break;
   }
   return rows;
-}
-
-type CountResult = { count: number | null; error: { message: string } | null };
-
-async function countRows(table: string, filters: SelectFilter[] = [], action = `count ${table}`): Promise<number> {
-  const query = applySelectFilters(
-    client().from(table).select('*', { count: 'exact', head: true }) as unknown as FilterableQuery,
-    filters
-  );
-  const result = await (query as unknown as Promise<CountResult>);
-  if (result.error) throw new Error(`${action}: ${result.error.message}`);
-  return result.count ?? 0;
 }
 
 async function readRowsByInFilter<T>(
@@ -615,32 +596,11 @@ async function deleteSeasonOwnedRows(table: string, seasonId: string): Promise<v
   assertOk(await client().from(table).delete().eq('season_id', seasonId), `clear ${table}`);
 }
 
-async function readSourceRowRelational(seasonId: string, rowIndex: number): Promise<ParsedRow> {
-  const row = assertOk(
-    await client().from('season_source_rows').select('*').eq('season_id', seasonId).eq('row_index', rowIndex).maybeSingle(),
-    'load source row'
-  ) as SourceRowRelationalRow | null;
-  if (!row) throw new Error(`Source row ${rowIndex} not found`);
-  const dayRows = assertOk(
-    await client().from('season_source_row_days').select('*').eq('season_id', seasonId).eq('row_index', rowIndex),
-    'load source row days'
-  ) as SourceRowDayRelationalRow[];
-  return fromSourceRowRows(row, dayRows);
-}
-
-async function writeSourceRowRelational(seasonId: string, row: ParsedRow): Promise<void> {
-  assertOk(
-    await client().from('season_source_rows').upsert(toSourceRowRow(seasonId, row), { onConflict: 'season_id,row_index' }),
-    'save source row'
-  );
-  assertOk(
-    await client().from('season_source_row_days').delete().eq('season_id', seasonId).eq('row_index', row.rowIndex),
-    'clear source row days'
-  );
-  const dayRows = toSourceRowDayRows(seasonId, row);
-  if (dayRows.length > 0) {
-    assertOk(await client().from('season_source_row_days').upsert(dayRows, { onConflict: 'season_id,row_index,iso_dow' }), 'save source row days');
-  }
+async function deleteSeasonBaselineRows(seasonId: string): Promise<void> {
+  await deleteSeasonOwnedRows('season_source_rows', seasonId);
+  await deleteSeasonOwnedRows('season_flight_records', seasonId);
+  await deleteSeasonOwnedRows('season_modifications', seasonId);
+  await deleteSeasonOwnedRows('season_mod_history_entries', seasonId);
 }
 
 async function readSeasonRelational(id: string): Promise<Season | null> {
@@ -844,30 +804,6 @@ async function writeOperationalSettingsRelational(settings: OperationalSettings)
   await upsertTableRows('operational_gate_lock_members', toGateLockMemberRows(normalized), 'lock_id,gate_id');
 }
 
-async function writeFlightRecordCounters(seasonId: string, records: FlightRecord[]): Promise<void> {
-  if (records.length === 0) return;
-  assertOk(
-    await client().from('season_flight_record_counters').delete().in('record_id', records.map((record) => record.id)),
-    'clear flight record counters'
-  );
-  const rows = records.flatMap((record) => toFlightRecordCounterRows(record));
-  if (rows.length > 0) {
-    await upsertRows('season_flight_record_counters', rows, 'record_id,counter_group,item_index');
-  }
-}
-
-async function writeFlightRecordWindows(seasonId: string, records: FlightRecord[]): Promise<void> {
-  if (records.length === 0) return;
-  assertOk(
-    await client().from('season_flight_record_checkin_windows').delete().in('record_id', records.map((record) => record.id)),
-    'clear flight record windows'
-  );
-  const rows = records.flatMap((record) => toFlightRecordWindowRows(record));
-  if (rows.length > 0) {
-    await upsertRows('season_flight_record_checkin_windows', rows, 'record_id,counter_key');
-  }
-}
-
 async function readFlightRecordCounters(recordIds?: string[]): Promise<FlightRecordCounterRelationalRow[]> {
   if (recordIds) {
     return readRowsByInFilter<FlightRecordCounterRelationalRow>(
@@ -1031,7 +967,7 @@ export const supabaseStore: RemoteStore = {
   },
 
   async deleteSeason(id: string): Promise<void> {
-    await supabaseStore.clearSeasonBaseline(id);
+    await deleteSeasonBaselineRows(id);
     assertOk(await client().from('seasons').delete().eq('id', id), 'delete season');
   },
 
@@ -1108,52 +1044,20 @@ export const supabaseStore: RemoteStore = {
     return rows.map((row) => row.payload as AuditDeltaChunk);
   },
 
-  async clearFlightRecords(seasonId: string): Promise<void> {
-    await deleteSeasonOwnedRows('season_flight_records', seasonId);
-  },
-  async clearSourceRows(seasonId: string): Promise<void> {
-    await deleteSeasonOwnedRows('season_source_rows', seasonId);
-  },
-  async clearModifications(seasonId: string): Promise<void> {
-    await deleteSeasonOwnedRows('season_modifications', seasonId);
-  },
-  async clearModHistory(seasonId: string): Promise<void> {
-    await deleteSeasonOwnedRows('season_mod_history_entries', seasonId);
-  },
-  async clearSeasonBaseline(seasonId: string): Promise<void> {
-    await supabaseStore.clearSourceRows(seasonId);
-    await supabaseStore.clearFlightRecords(seasonId);
-    await supabaseStore.clearModifications(seasonId);
-    await supabaseStore.clearModHistory(seasonId);
-  },
-
-  async batchWriteSourceRows(seasonId: string, rows: ParsedRow[], onProgress?: (written: number, total: number) => void): Promise<void> {
-    for (let i = 0; i < rows.length; i += FIRESTORE_WRITE_BATCH_SIZE) {
-      const chunk = rows.slice(i, i + FIRESTORE_WRITE_BATCH_SIZE);
-      await upsertRows('season_source_rows', chunk.map((row) => toSourceRowRow(seasonId, row)), 'season_id,row_index');
-      const rowIndexes = chunk.map((row) => row.rowIndex);
-      assertOk(await client().from('season_source_row_days').delete().eq('season_id', seasonId).in('row_index', rowIndexes), 'clear source row days');
-      const dayRows = chunk.flatMap((row) => toSourceRowDayRows(seasonId, row));
-      if (dayRows.length > 0) await upsertRows('season_source_row_days', dayRows, 'season_id,row_index,iso_dow');
-      onProgress?.(Math.min(i + FIRESTORE_WRITE_BATCH_SIZE, rows.length), rows.length);
-      await pauseBetweenFirestoreWriteBatches();
-    }
-  },
-
   async getSourceRows(seasonId: string): Promise<ParsedRow[]> {
-    void seasonId;
-    return [];
-  },
-
-  async batchWriteFlightRecords(seasonId: string, records: FlightRecord[], onProgress?: (written: number, total: number) => void): Promise<void> {
-    for (let i = 0; i < records.length; i += FIRESTORE_WRITE_BATCH_SIZE) {
-      const chunk = records.slice(i, i + FIRESTORE_WRITE_BATCH_SIZE);
-      await upsertRows('season_flight_records', chunk.map((record) => toFlightRecordRow(seasonId, record)), 'record_id');
-      await writeFlightRecordCounters(seasonId, chunk);
-      await writeFlightRecordWindows(seasonId, chunk);
-      onProgress?.(Math.min(i + FIRESTORE_WRITE_BATCH_SIZE, records.length), records.length);
-      await pauseBetweenFirestoreWriteBatches();
-    }
+    const [rows, dayRows] = await Promise.all([
+      selectAllRows<SourceRowRelationalRow>('season_source_rows', [
+        { type: 'eq', column: 'season_id', value: seasonId },
+        { type: 'order', column: 'row_index', ascending: true },
+      ], 'load seasonal source provenance'),
+      selectAllRows<SourceRowDayRelationalRow>('season_source_row_days', [
+        { type: 'eq', column: 'season_id', value: seasonId },
+        { type: 'order', column: 'row_index', ascending: true },
+        { type: 'order', column: 'iso_dow', ascending: true },
+      ], 'load seasonal source provenance days'),
+    ]);
+    const daysByRow = groupRowsByKey(dayRows, (row) => String(row.row_index));
+    return rows.map((row) => fromSourceRowRows(row, daysByRow.get(String(row.row_index)) ?? []));
   },
 
   async applySeasonalImportRemote(input: RemoteSeasonalImportInput): Promise<RemoteSeasonalImportResult> {
@@ -1164,6 +1068,7 @@ export const supabaseStore: RemoteStore = {
     const payload = {
       requestId: input.requestId,
       checksum: input.checksum,
+      mode: normalizeSeasonalImportV2Mode(input.mode),
       seasonId: input.seasonId ?? null,
       seasonCode: input.seasonCode,
       expectedDataVersion,
@@ -1211,20 +1116,6 @@ export const supabaseStore: RemoteStore = {
       'load strict seasonal export snapshot',
     );
     return mapSeasonalExportSnapshot(payload, input);
-  },
-
-  async verifySeasonImportCounts(seasonId: string, expected: RemoteSeasonImportCounts): Promise<RemoteSeasonImportCounts> {
-    const [sourceRows, flightRecords] = await Promise.all([
-      countRows('season_source_rows', [{ type: 'eq', column: 'season_id', value: seasonId }], 'count source rows after import'),
-      countRows('season_flight_records', [{ type: 'eq', column: 'season_id', value: seasonId }], 'count flight records after import'),
-    ]);
-    if (sourceRows !== expected.sourceRows || flightRecords !== expected.flightRecords) {
-      throw new Error(
-        `Remote import verification failed: expected ${expected.sourceRows} source rows and ${expected.flightRecords} flight records, ` +
-        `but Supabase has ${sourceRows} source rows and ${flightRecords} flight records.`
-      );
-    }
-    return { sourceRows, flightRecords };
   },
 
   async getDashboardSeasonData(seasonId: string): Promise<RemoteDashboardSeasonData> {
@@ -1284,120 +1175,6 @@ export const supabaseStore: RemoteStore = {
         return loadSeasonWorkspaceSnapshotPaged(seasonId, options);
       }
       throw error;
-    }
-  },
-
-  async addSourceRow(seasonId: string, row: Omit<ParsedRow, 'rowIndex'>): Promise<ParsedRow> {
-    const last = assertOk(
-      await client().from('season_source_rows').select('row_index').eq('season_id', seasonId).order('row_index', { ascending: false }).limit(1),
-      'load max source row'
-    ) as SourceRowIndexRow[];
-    const newRow = { ...row, rowIndex: ((last[0]?.row_index as number | undefined) ?? 0) + 1 } as ParsedRow;
-    await writeSourceRowRelational(seasonId, newRow);
-    return newRow;
-  },
-
-  async deleteSourceRow(seasonId: string, rowIndex: number, linkedRowIndex?: number): Promise<void> {
-    assertOk(await client().from('season_source_rows').delete().eq('season_id', seasonId).eq('row_index', rowIndex), 'delete source row');
-    if (linkedRowIndex != null) {
-      const linked = await readSourceRowRelational(seasonId, linkedRowIndex);
-      delete linked.overnightLinkRowIndex;
-      delete linked.linkType;
-      await writeSourceRowRelational(seasonId, linked);
-    }
-  },
-
-  async linkSourceRows(seasonId: string, rowIndexA: number, rowIndexB: number, linkType: 'overnight' | 'sameday' = 'overnight'): Promise<void> {
-    const [rowA, rowB] = await Promise.all([
-      readSourceRowRelational(seasonId, rowIndexA),
-      readSourceRowRelational(seasonId, rowIndexB),
-    ]);
-    await Promise.all([
-      writeSourceRowRelational(seasonId, { ...rowA, overnightLinkRowIndex: rowIndexB, linkType }),
-      writeSourceRowRelational(seasonId, { ...rowB, overnightLinkRowIndex: rowIndexA, linkType }),
-    ]);
-  },
-
-  async mergeSameDaySourceRows(seasonId: string, rowIndexA: number, rowIndexB: number): Promise<void> {
-    const rowA = await readSourceRowRelational(seasonId, rowIndexA);
-    const rowB = await readSourceRowRelational(seasonId, rowIndexB);
-    const arrRow = rowA.arrFlight && !rowA.depFlight ? rowA : rowB.arrFlight && !rowB.depFlight ? rowB : null;
-    const depRow = rowA.depFlight && !rowA.arrFlight ? rowA : rowB.depFlight && !rowB.arrFlight ? rowB : null;
-    if (!arrRow || !depRow) throw new Error('Same-day merge requires one ARR-only row and one DEP-only row');
-    if (arrRow.airline !== depRow.airline) throw new Error('Cannot merge rows with different airlines');
-    if (arrRow.effective !== depRow.effective || arrRow.discontinue !== depRow.discontinue) throw new Error('Cannot merge rows with different date ranges');
-    if (JSON.stringify(arrRow.daysOfWeek) !== JSON.stringify(depRow.daysOfWeek)) throw new Error('Cannot merge rows with different operating days');
-
-    const merged: ParsedRow = {
-      ...arrRow,
-      std: depRow.std,
-      depFlight: depRow.depFlight,
-      depFlightType: null,
-      depRoute: depRow.depRoute,
-      depFlightCategory: depRow.depFlightCategory,
-      depCodeShares: depRow.depCodeShares,
-      depIntDomInd: depRow.depIntDomInd,
-    };
-    delete merged.overnightLinkRowIndex;
-    delete merged.linkType;
-    await writeSourceRowRelational(seasonId, merged);
-    await supabaseStore.deleteSourceRow(seasonId, depRow.rowIndex);
-  },
-
-  async unlinkSourceRows(seasonId: string, rowIndexA: number, rowIndexB: number): Promise<void> {
-    const [rowA, rowB] = await Promise.all([
-      readSourceRowRelational(seasonId, rowIndexA),
-      readSourceRowRelational(seasonId, rowIndexB),
-    ]);
-    delete rowA.overnightLinkRowIndex;
-    delete rowA.linkType;
-    delete rowB.overnightLinkRowIndex;
-    delete rowB.linkType;
-    await Promise.all([writeSourceRowRelational(seasonId, rowA), writeSourceRowRelational(seasonId, rowB)]);
-  },
-
-  async splitSourceRowTurnaround(seasonId: string, rowIndex: number): Promise<number> {
-    const row = await readSourceRowRelational(seasonId, rowIndex);
-    if (!row.arrFlight || !row.depFlight) throw new Error(`Source row ${rowIndex} is not an ARR+DEP turnaround row`);
-    const newRow = await supabaseStore.addSourceRow(seasonId, {
-      ...row,
-      sta: null,
-      arrFlight: null,
-      arrFlightType: null,
-      arrRoute: null,
-      arrFlightCategory: null,
-      arrCodeShares: null,
-      arrIntDomInd: null,
-    });
-    const arrOnly = {
-      ...row,
-      std: null,
-      depFlight: null,
-      depFlightType: null,
-      depRoute: null,
-      depFlightCategory: null,
-      depCodeShares: null,
-      depIntDomInd: null,
-    };
-    delete arrOnly.overnightLinkRowIndex;
-    delete arrOnly.linkType;
-    await writeSourceRowRelational(seasonId, arrOnly);
-    return newRow.rowIndex;
-  },
-
-  async applySourceRowOperationPlan(seasonId: string, plan: SourceRowOperationPlan): Promise<void> {
-    for (const chunk of chunkFirestoreWrites(plan.writes)) {
-      const rowsToWrite = chunk.filter((write) => write.type !== 'delete' && write.row).map((write) => write.row as ParsedRow);
-      const deletes = chunk.filter((write) => write.type === 'delete').map((write) => write.rowIndex);
-      if (rowsToWrite.length > 0) {
-        await upsertRows('season_source_rows', rowsToWrite.map((row) => toSourceRowRow(seasonId, row)), 'season_id,row_index');
-        const rowIndexes = rowsToWrite.map((row) => row.rowIndex);
-        assertOk(await client().from('season_source_row_days').delete().eq('season_id', seasonId).in('row_index', rowIndexes), 'clear source row plan days');
-        const dayRows = rowsToWrite.flatMap((row) => toSourceRowDayRows(seasonId, row));
-        if (dayRows.length > 0) await upsertRows('season_source_row_days', dayRows, 'season_id,row_index,iso_dow');
-      }
-      if (deletes.length > 0) assertOk(await client().from('season_source_rows').delete().eq('season_id', seasonId).in('row_index', deletes), 'delete source row plan');
-      await pauseBetweenFirestoreWriteBatches();
     }
   },
 

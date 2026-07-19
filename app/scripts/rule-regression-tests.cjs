@@ -10296,18 +10296,22 @@ async function run() {
     'Workspace-change metadata must patch provider pending state before scheduler notification without native summary refresh'
   );
   assert(
-    settingsPageSource.includes('This clears existing server records, modifications, and history') &&
+    settingsPageSource.includes('The server will generate atomic flight records and preserve valid operational overlays.') &&
+      settingsPageSource.includes("mode: 'repair'") &&
+      settingsPageSource.includes('prepareSeasonalImportV2Attempt({') &&
+      !settingsPageSource.includes('clearSeasonBaseline') &&
+      !settingsPageSource.includes('batchWriteFlightRecords') &&
       !settingsPageSource.includes('queryNativeSyncSummary') &&
       !settingsPageSource.includes('pending local change'),
-    'Settings repair import must describe the server replacement and ignore stale native pending metadata'
+    'Settings repair import must use the V2 server replacement and ignore stale native pending metadata'
   );
-  const settingsRepairImportStart = settingsPageSource.indexOf('const handleSeasonRepairImport');
-  const settingsRepairPublishStart = settingsPageSource.indexOf('publishSeasonWorkspaceChanged({', settingsRepairImportStart);
+  const settingsRepairRefreshStart = settingsPageSource.indexOf('const applySeasonRepairCommittedRefresh');
+  const settingsRepairPublishStart = settingsPageSource.indexOf('publishSeasonWorkspaceChanged({', settingsRepairRefreshStart);
   const settingsRepairPublishBlock = settingsPageSource.slice(settingsRepairPublishStart, settingsRepairPublishStart + 260);
   assert(
-    settingsRepairImportStart >= 0 &&
-      settingsRepairPublishStart > settingsRepairImportStart &&
-      settingsRepairPublishBlock.includes('syncMeta: refreshedWindow.syncMeta'),
+    settingsRepairRefreshStart >= 0 &&
+      settingsRepairPublishStart > settingsRepairRefreshStart &&
+      settingsRepairPublishBlock.includes('syncMeta: refreshed.window.syncMeta'),
     'Settings repair import must publish server-window syncMeta so sync badges update immediately after replacement'
   );
   assert(
@@ -10536,8 +10540,6 @@ async function run() {
     supabaseStoreSource.includes('const SUPABASE_SELECT_PAGE_SIZE = 1000') &&
       supabaseStoreSource.includes('async function selectAllRows') &&
       supabaseStoreSource.includes('.range(from, to)') &&
-      supabaseStoreSource.includes('async function countRows') &&
-      supabaseStoreSource.includes("select('*', { count: 'exact', head: true })") &&
       supabaseStoreSource.includes("rpc('stage_seasonal_import_v2'") &&
       supabaseStoreSource.includes("rpc('commit_seasonal_import_v2'") &&
       supabaseStoreSource.includes('runSeasonalImportV2RpcFlow(payload') &&
@@ -10554,6 +10556,9 @@ async function run() {
       seasonalImportRpcContractSource.includes('parseSeasonalImportV2Result') &&
       seasonalImportRpcContractSource.includes("status: 'validated' | 'committed'") &&
       seasonalImportRpcContractSource.includes('Number.isSafeInteger') &&
+      seasonalImportRpcContractSource.includes('export async function prepareSeasonalImportV2Attempt') &&
+      seasonalImportRpcContractSource.includes('canonicalizeSeasonalImportSourceRows(input.sourceRows)') &&
+      seasonalImportRpcContractSource.includes('buildSeasonalImportV2Checksum(input.seasonCode, sourceRows)') &&
       remoteStoreSource.includes('applySeasonalImportRemote?') &&
       seasonalPageSource.includes('applySeasonalImportRemote') &&
       !seasonalPageSource.includes('await batchWriteFlightRecords(seasonId, recordsToWrite') &&
@@ -10571,16 +10576,16 @@ async function run() {
       [seasonalPageSource, detailedPageSource, dailyPageSource, dashboardPageSource, checkInPageSource, gatePageSource].every((source) =>
         source.includes('loadSeasonWorkspaceWindow') && !source.includes('queryNativeScheduleWindow') && !source.includes('queryNativeAllocationWindow')
       ) &&
-      seasonalPageSource.includes('canonicalizeSeasonalImportSourceRows(parsedRows)') &&
-      seasonalPageSource.includes('buildSeasonalImportV2Checksum(seasonCode, sourceRows)') &&
+      seasonalPageSource.includes('prepareSeasonalImportV2Attempt({') &&
+      seasonalPageSource.includes("mode: 'standard'") &&
+      seasonalPageSource.includes('sourceRows: parsedRows') &&
       seasonalPageSource.indexOf('setPendingImportAttempt(attemptedImport)') <
         seasonalPageSource.indexOf('applySeasonalImportRemote(attemptedImport)') &&
-      seasonalPageSource.includes('sourceRows,') &&
       seasonalPageSource.includes('remoteImport.sourceRowCount') &&
       !seasonalPageSource.includes('sourceRows: []') &&
       !seasonalPageSource.includes('flightRecords: seasonRecords') &&
       !seasonalPageSource.includes('modificationDeleteRecordIds'),
-    'Supabase large season reads must be paginated, imports must verify remote counts, and operational routes must use server windows without native fallback'
+    'Supabase large season reads must be paginated, V2 imports must trust strict committed counts, and operational routes must use server windows without native fallback'
   );
   const supabaseInFilterBatchMatch = supabaseStoreSource.match(/const SUPABASE_IN_FILTER_BATCH_SIZE = (\d+)/);
   const supabaseInFilterBatchSize = Number(supabaseInFilterBatchMatch?.[1] ?? 0);
@@ -10861,8 +10866,9 @@ async function run() {
       seasonSyncSource.match(/nativeFullSaveReason: 'sync-baseline'/g)?.length >= 5 &&
       !seasonalPageSource.includes('importNativeSeasonSnapshot({') &&
       seasonalPageSource.includes('loadSeasonWorkspaceWindow({') &&
-      seasonalPageSource.includes('canonicalizeSeasonalImportSourceRows(parsedRows)') &&
-      seasonalPageSource.includes('buildSeasonalImportV2Checksum(seasonCode, sourceRows)') &&
+      seasonalPageSource.includes('prepareSeasonalImportV2Attempt({') &&
+      seasonalPageSource.includes("mode: 'standard'") &&
+      seasonalPageSource.includes('sourceRows: parsedRows') &&
       seasonalPageSource.includes('applySeasonalImportRemote(attemptedImport)') &&
       !seasonalPageSource.includes('sourceRows: []') &&
       !seasonalPageSource.includes("nativeFullSaveReason: 'undo-reset'") &&
@@ -10875,7 +10881,7 @@ async function run() {
       localSeasonSqlStoreSource.includes('db.supportsExplicitTransactions === false') &&
       !seasonSyncProviderSource.includes('saveLocalSeasonWorkspace(currentWorkspace') &&
       !seasonSyncProviderSource.includes("source: publishSource ?? 'paged-catchup'"),
-    'Desktop full-workspace SQLite saves must be blocked unless the call is an explicit import, server baseline seed, or repair path'
+    'Desktop full-workspace SQLite saves must stay legacy repair/server-baseline only while Seasonal import uses V2 Supabase RPCs'
   );
   assert(
     syncActionButtonSource.includes('export default function SyncActionButton') &&
@@ -11347,10 +11353,12 @@ async function run() {
     'Relational Supabase schema must expose read-only reporting views for Looker Studio'
   );
   assert(
-    supabaseStoreSource.includes('toFlightRecordRow') &&
-      supabaseStoreSource.includes('fromFlightRecordRows') &&
-      supabaseStoreSource.includes('writeFlightRecordCounters') &&
+    supabaseStoreSource.includes('fromFlightRecordRows') &&
       supabaseStoreSource.includes('readFlightRecordCounters') &&
+      supabaseStoreSource.includes('fromSourceRowRows') &&
+      supabaseStoreSource.includes('load seasonal source provenance') &&
+      !supabaseStoreSource.includes('toSourceRowRow') &&
+      !supabaseStoreSource.includes('writeFlightRecordCounters') &&
       supabaseStoreSource.includes('writeOperationalSettingsRelational') &&
       supabaseStoreSource.includes('readOperationalSettingsRelational') &&
       !supabaseStoreSource.includes("from('season_flight_records').select('payload')") &&

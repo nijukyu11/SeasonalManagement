@@ -5,25 +5,16 @@ import * as XLSX from 'xlsx';
 import { syncDashboardAiProviderKey } from '@/lib/dashboardAiAdmin';
 import { getCurrentOperatorAccess } from '@/lib/operatorUserManagement';
 import {
-  batchWriteFlightRecords,
-  clearSeasonBaseline,
-  createSeason,
+  applySeasonalImportRemote,
   findSeasonByCode,
   getOperationalSettings,
   getSeasons,
   loadSeasonWorkspaceWindow,
   saveOperationalSettings,
-  updateSeason,
-  verifySeasonImportCounts,
+  type RemoteSeasonalImportInput,
+  type RemoteSeasonalImportResult,
 } from '@/lib/remoteStore';
 import { parseSeasonalSchedule } from '@/lib/parser';
-import {
-  assertNoDuplicateFlightNumbers,
-  flattenRowsToFlightRecords,
-  flightRecordsToLegs,
-  mergeDuplicateImportPeriods,
-  mergeDuplicateImportRecords,
-} from '@/lib/atomicSchedule';
 import { buildCanonicalSeasonalRows } from '@/lib/canonicalSeasonalRows';
 import { parseCheckInCounterInventoryInput } from '@/lib/checkInCounterSettings';
 import { mergeRouteCountryMappings, normalizeRouteCode, parseRouteCountryRows } from '@/lib/routeCountry';
@@ -40,9 +31,17 @@ import {
 import { DEFAULT_DEEPSEEK_BASE_URL, hydrateOperationalSettings, removeAircraftGroupFromSettings, validateOperationalSettings } from '@/lib/settingsRules';
 import { appendAuditLogEntry, buildSettingsAuditDeltas } from '@/lib/auditLog';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
-import { buildSeasonNameFromFileName } from '@/lib/importSeasonRules';
 import {
-  getCachedSeasons,
+  buildSeasonalImportCommittedRefreshFailure,
+  prepareSeasonalImportV2Attempt,
+  SeasonalImportV2StatusUnknownError,
+} from '@/lib/seasonalImportRpcContract';
+import {
+  buildSeasonalImportStatusUnknownNotice,
+  loadTargetedCommittedImportRefresh,
+  resumeSeasonalImportAttemptOnce,
+} from '@/lib/seasonalImportRecovery';
+import {
   publishSeasonWorkspaceChanged,
   setCachedSeasonData,
   setCachedSeasons,
@@ -61,7 +60,6 @@ import type {
   GateResource,
   OperationalSettings,
   RouteCountryMapping,
-  Season,
   StandGateMapping,
 } from '@/lib/types';
 import { useAppDialog } from '../components/AppDialog';
@@ -272,12 +270,21 @@ export default function SettingsPage() {
   const [canUseAi, setCanUseAi] = useState(false);
   const [canManageUsers, setCanManageUsers] = useState(false);
   const [canManageRoles, setCanManageRoles] = useState(false);
+  const [canRepairSeason, setCanRepairSeason] = useState(false);
   const [routeCountryRoute, setRouteCountryRoute] = useState('');
   const [routeCountryCountry, setRouteCountryCountry] = useState('');
   const [routeCountrySearch, setRouteCountrySearch] = useState('');
   const [routeCountryImportStatus, setRouteCountryImportStatus] = useState<string | null>(null);
   const [seasonRepairRunning, setSeasonRepairRunning] = useState(false);
   const [seasonRepairStatus, setSeasonRepairStatus] = useState<string | null>(null);
+  const [seasonRepairPendingAttempt, setSeasonRepairPendingAttempt] = useSessionState<RemoteSeasonalImportInput | null>(
+    'settings:seasonRepairPendingAttempt',
+    null,
+  );
+  const [seasonRepairCommittedImport, setSeasonRepairCommittedImport] = useSessionState<RemoteSeasonalImportResult | null>(
+    'settings:seasonRepairCommittedImport',
+    null,
+  );
   const settingsScrollRef = useRef<HTMLElement | null>(null);
   useSessionScrollRestoration('settings:scroll', settingsScrollRef);
 
@@ -322,6 +329,7 @@ export default function SettingsPage() {
           setCanUseAi(access.canUseAi);
           setCanManageUsers(access.canManageUsers);
           setCanManageRoles(access.permissions.has('roles.manage'));
+          setCanRepairSeason(access.permissions.has('season.repair'));
         }
       } catch {
         if (!cancelled) {
@@ -329,6 +337,7 @@ export default function SettingsPage() {
           setCanUseAi(false);
           setCanManageUsers(false);
           setCanManageRoles(false);
+          setCanRepairSeason(false);
         }
       }
     })();
@@ -339,7 +348,8 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (activeTab === 'usersRoles' && !canManageUsers) setActiveTab('checkinCounters');
-  }, [activeTab, canManageUsers, setActiveTab]);
+    if (activeTab === 'seasonRepair' && !canRepairSeason) setActiveTab('checkinCounters');
+  }, [activeTab, canManageUsers, canRepairSeason, setActiveTab]);
 
   const visibleTabs = useMemo(() => [
     { id: 'checkinCounters' as const, label: 'Counters' },
@@ -352,9 +362,9 @@ export default function SettingsPage() {
     { id: 'dashboardAlerts' as const, label: 'Dashboard Alerts' },
     { id: 'aiAnalysis' as const, label: 'AI Analysis' },
     ...(canManageUsers ? [{ id: 'usersRoles' as const, label: 'Users & Roles' }] : []),
-    { id: 'seasonRepair' as const, label: 'Season Repair' },
+    ...(canRepairSeason ? [{ id: 'seasonRepair' as const, label: 'Season Repair' }] : []),
     { id: 'updates' as const, label: 'Updates' },
-  ], [canManageUsers]);
+  ], [canManageUsers, canRepairSeason]);
 
   const isDirty = useMemo(() => JSON.stringify(settings) !== JSON.stringify(savedSettings), [savedSettings, settings]);
   const checkInCounters = useMemo(() => orderedCounters(settings.checkInCounters), [settings.checkInCounters]);
@@ -1069,34 +1079,116 @@ export default function SettingsPage() {
     }
   }, [settings.routeCountries, showAlert, showConfirm]);
 
+  const applySeasonRepairCommittedRefresh = useCallback(async (remoteImport: RemoteSeasonalImportResult) => {
+    setSeasonRepairStatus(`Refreshing ${remoteImport.seasonCode} from server`);
+    const refreshed = await loadTargetedCommittedImportRefresh({
+      committedImport: remoteImport,
+      windowInput: {
+        resourceType: 'schedule',
+        limit: 500000,
+      },
+      loadSeasons: getSeasons,
+      loadWindow: loadSeasonWorkspaceWindow,
+    });
+    const canonical = buildCanonicalSeasonalRows({
+      records: refreshed.window.records,
+      modifications: refreshed.window.modifications,
+    });
+    if (!canonical.validation.valid) {
+      throw new Error(canonical.validation.issues[0]?.message ?? 'Committed seasonal rows failed canonical validation.');
+    }
+
+    setCachedSeasons(refreshed.seasons);
+    setCachedSeasonData(remoteImport.seasonId, {
+      rows: canonical.rows,
+      records: refreshed.window.records,
+      modifications: refreshed.window.modifications,
+      seasonDataVersion: refreshed.season.dataVersion,
+    });
+    publishSeasonWorkspaceChanged({
+      seasonId: remoteImport.seasonId,
+      localRevision: refreshed.window.syncMeta.localRevision,
+      source: 'settings',
+      syncMeta: refreshed.window.syncMeta,
+    });
+    setSeasonRepairCommittedImport(null);
+    setSeasonRepairStatus(`Replaced ${remoteImport.seasonCode}: ${remoteImport.flightRecordCount} flight records`);
+    void appendAuditLogEntry({
+      seasonId: remoteImport.seasonId,
+      seasonCode: remoteImport.seasonCode,
+      module: 'settings',
+      category: 'import',
+      operation: `Full replace repair import for season ${remoteImport.seasonCode}: ${remoteImport.flightRecordCount} flight records`,
+      targetFlightIds: refreshed.window.records.slice(0, 200).map((record) => record.id),
+      targetFlightLabels: Array.from(new Set(
+        refreshed.window.records.map((record) => `${record.airline}${record.flightNumber}`),
+      )).slice(0, 200),
+      deltas: [{
+        targetType: 'sync',
+        targetId: remoteImport.seasonId,
+        targetLabel: remoteImport.seasonCode,
+        field: 'repairImportSummary',
+        before: null,
+        after: {
+          batchId: remoteImport.batchId,
+          sourceRows: remoteImport.sourceRowCount,
+          flightRecords: remoteImport.flightRecordCount,
+          preservedOperationalRecords: remoteImport.preservedOperationalCount,
+          removedImportedRecords: remoteImport.removedImportedCount,
+          dataVersion: remoteImport.dataVersion,
+        },
+      }],
+    });
+  }, [setSeasonRepairCommittedImport]);
+
   const handleSeasonRepairImport = useCallback(async (file: File | null) => {
     if (!file || seasonRepairRunning) return;
+    if (!canRepairSeason) {
+      void showAlert({
+        title: 'Season Repair Import Blocked',
+        message: 'Missing required permission: season.repair',
+        tone: 'warning',
+      });
+      return;
+    }
+    if (seasonRepairPendingAttempt || seasonRepairCommittedImport) {
+      void showAlert({
+        title: 'Season Repair Recovery Pending',
+        message: 'Finish the pending Resume/Check or Refresh action before choosing another file.',
+        tone: 'warning',
+      });
+      return;
+    }
+
     setSeasonRepairRunning(true);
     setSeasonRepairStatus(`Reading ${file.name}`);
+    let attemptedImport: RemoteSeasonalImportInput | null = null;
     try {
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: 'array' });
-      const { seasonCode, rows: parsedRows } = parseSeasonalSchedule(workbook);
+      const { seasonCode, rows: parsedRows, issues } = parseSeasonalSchedule(workbook);
+      if (issues.length > 0) {
+        const visibleIssues = issues.slice(0, 10).map((issue) => issue.message);
+        const remaining = issues.length - visibleIssues.length;
+        throw new Error(`${visibleIssues.join('\n')}${remaining > 0 ? `\n...and ${remaining} more issue(s).` : ''}`);
+      }
       if (parsedRows.length === 0) throw new Error('File contains no valid seasonal rows.');
 
-      const duplicateMerge = mergeDuplicateImportPeriods(parsedRows);
-      const rows = duplicateMerge.rows;
-      const recordDuplicateMerge = mergeDuplicateImportRecords(flattenRowsToFlightRecords(rows));
-      const duplicatePeriods = [
-        ...duplicateMerge.duplicatePeriods,
-        ...recordDuplicateMerge.duplicatePeriods,
-      ];
-      const records = recordDuplicateMerge.records;
-      assertNoDuplicateFlightNumbers(records);
-
-      const legs = flightRecordsToLegs(records);
-      const dates = legs.map((leg) => leg.date).sort();
       const existing = await findSeasonByCode(seasonCode);
+      attemptedImport = await prepareSeasonalImportV2Attempt({
+        seasonId: existing?.id ?? null,
+        seasonCode,
+        expectedDataVersion: existing ? existing.dataVersion ?? null : 0,
+        mode: 'repair',
+        fileName: file.name,
+        uploadedAt: Date.now(),
+        sourceRows: parsedRows,
+      });
       const confirmed = await showConfirm({
         title: 'Replace Full Season',
         message:
-          `Replace the full ${seasonCode} baseline with ${records.length} flight records from ${file.name}? ` +
-          'This clears existing server records, modifications, and history for that season before recreating it.',
+          `Replace the imported ${seasonCode} baseline from ${attemptedImport.sourceRows.length} validated source rows in ${file.name}? ` +
+          'The server will generate atomic flight records and preserve valid operational overlays.',
         tone: 'warning',
         confirmLabel: existing ? 'Replace Season' : 'Create Season',
       });
@@ -1105,111 +1197,114 @@ export default function SettingsPage() {
         return;
       }
 
-      const uploadedAt = Date.now();
-      const seasonFields = {
-        seasonCode,
-        name: buildSeasonNameFromFileName(file.name, seasonCode),
-        fileName: file.name,
-        uploadedAt,
-        effectiveStart: dates[0] || '',
-        effectiveEnd: dates[dates.length - 1] || '',
-        totalLegs: legs.length,
-        totalSourceRows: 0,
-        dataVersion: (existing?.dataVersion ?? 0) + 1,
-        lastSyncedAt: uploadedAt,
-      };
-
-      setSeasonRepairStatus(existing ? `Clearing ${seasonCode}` : `Creating ${seasonCode}`);
-      let seasonId: string;
-      let nextSeason: Season;
-      if (existing) {
-        seasonId = existing.id;
-        await clearSeasonBaseline(seasonId);
-        await updateSeason(seasonId, seasonFields);
-        nextSeason = { ...existing, ...seasonFields, id: seasonId };
-      } else {
-        seasonId = await createSeason(seasonFields as Omit<Season, 'id'>);
-        nextSeason = { ...seasonFields, id: seasonId } as Season;
+      setSeasonRepairPendingAttempt(attemptedImport);
+      setSeasonRepairStatus(`Validating and committing ${attemptedImport.sourceRows.length} source rows`);
+      const remoteImport = await applySeasonalImportRemote(attemptedImport);
+      setSeasonRepairPendingAttempt(null);
+      setSeasonRepairCommittedImport(remoteImport);
+      try {
+        await applySeasonRepairCommittedRefresh(remoteImport);
+      } catch (refreshError) {
+        const failure = buildSeasonalImportCommittedRefreshFailure(remoteImport, refreshError);
+        setSeasonRepairStatus(failure.title);
+        void showAlert({ title: failure.title, message: failure.message, tone: 'warning' });
+        return;
       }
-
-      setSeasonRepairStatus(`Writing ${records.length} flight records`);
-      await batchWriteFlightRecords(seasonId, records);
-      const verifiedCounts = await verifySeasonImportCounts(seasonId, {
-        sourceRows: 0,
-        flightRecords: records.length,
-      });
-      const refreshedWindow = await loadSeasonWorkspaceWindow({
-        seasonId,
-        resourceType: 'schedule',
-        limit: 500000,
-      });
-      if (!refreshedWindow) {
-        throw new Error('Server seasonal schedule window is unavailable after repair import.');
-      }
-      const canonical = buildCanonicalSeasonalRows({
-        records: refreshedWindow.records,
-        modifications: refreshedWindow.modifications,
-      });
-      if (!canonical.validation.valid) {
-        console.warn('Canonical seasonal pattern validation failed after repair import', canonical.diagnostics);
-      }
-
-      const previousSeasons = getCachedSeasons() ?? await getSeasons();
-      const nextSeasons = existing
-        ? previousSeasons.map((season) => season.id === seasonId ? nextSeason : season)
-        : [nextSeason, ...previousSeasons];
-      setCachedSeasons(nextSeasons);
-      setCachedSeasonData(seasonId, {
-        rows: canonical.rows,
-        records: refreshedWindow.records,
-        modifications: refreshedWindow.modifications,
-        seasonDataVersion: nextSeason.dataVersion,
-      });
-      publishSeasonWorkspaceChanged({
-        seasonId,
-        localRevision: refreshedWindow.syncMeta.localRevision,
-        source: 'settings',
-        syncMeta: refreshedWindow.syncMeta,
-      });
-      void appendAuditLogEntry({
-        seasonId,
-        seasonCode,
-        module: 'settings',
-        category: 'import',
-        operation: `Full replace repair import for season ${seasonCode}: ${records.length} flight records`,
-        targetFlightIds: records.map((record) => record.id),
-        targetFlightLabels: Array.from(new Set(records.map((record) => `${record.airline}${record.flightNumber}`))).slice(0, 200),
-        deltas: [{
-          targetType: 'sync',
-          targetId: seasonId,
-          targetLabel: seasonCode,
-          field: 'repairImportSummary',
-          before: null,
-          after: {
-            sourceRows: 0,
-            flightRecords: records.length,
-            effectiveStart: nextSeason.effectiveStart,
-            effectiveEnd: nextSeason.effectiveEnd,
-            fileName: file.name,
-            duplicatePeriods: duplicatePeriods.length,
-          },
-        }],
-      });
-      setSeasonRepairStatus(`Replaced ${seasonCode}: ${verifiedCounts.flightRecords} flight records`);
       void showAlert({
         title: 'Season Repair Import Complete',
-        message: duplicatePeriods.length > 0
-          ? `Replaced ${seasonCode}. ${duplicatePeriods.length} duplicate overlapping period${duplicatePeriods.length === 1 ? '' : 's'} were merged.`
-          : `Replaced ${seasonCode} with ${verifiedCounts.flightRecords} flight records.`,
-        tone: duplicatePeriods.length > 0 ? 'warning' : 'success',
+        message: `Replaced ${remoteImport.seasonCode} with ${remoteImport.flightRecordCount} server-generated flight records.`,
+        tone: 'success',
       });
-    } catch (err) {
-      setSeasonRepairStatus('Repair import failed');
-      void showAlert({ title: 'Season Repair Import Failed', message: (err as Error).message, tone: 'error' });
+    } catch (error) {
+      if (error instanceof SeasonalImportV2StatusUnknownError && attemptedImport) {
+        setSeasonRepairPendingAttempt(attemptedImport);
+        const notice = buildSeasonalImportStatusUnknownNotice(attemptedImport, error);
+        setSeasonRepairStatus(notice.title);
+        void showAlert({ title: notice.title, message: notice.message, tone: 'warning' });
+      } else {
+        setSeasonRepairPendingAttempt(null);
+        setSeasonRepairStatus('Repair import failed');
+        void showAlert({ title: 'Season Repair Import Failed', message: (error as Error).message, tone: 'error' });
+      }
     } finally {
       setSeasonRepairRunning(false);
     }
-  }, [seasonRepairRunning, showAlert, showConfirm]);
+  }, [
+    applySeasonRepairCommittedRefresh,
+    canRepairSeason,
+    seasonRepairCommittedImport,
+    seasonRepairPendingAttempt,
+    seasonRepairRunning,
+    setSeasonRepairCommittedImport,
+    setSeasonRepairPendingAttempt,
+    showAlert,
+    showConfirm,
+  ]);
+
+  const handleResumeSeasonRepairImport = useCallback(async () => {
+    const attempt = seasonRepairPendingAttempt;
+    if (!attempt || seasonRepairRunning || !canRepairSeason) return;
+    setSeasonRepairRunning(true);
+    setSeasonRepairStatus(`Checking ${attempt.seasonCode} import status`);
+    try {
+      const remoteImport = await resumeSeasonalImportAttemptOnce(attempt, applySeasonalImportRemote);
+      setSeasonRepairPendingAttempt(null);
+      setSeasonRepairCommittedImport(remoteImport);
+      try {
+        await applySeasonRepairCommittedRefresh(remoteImport);
+      } catch (refreshError) {
+        const failure = buildSeasonalImportCommittedRefreshFailure(remoteImport, refreshError);
+        setSeasonRepairStatus(failure.title);
+        void showAlert({ title: failure.title, message: failure.message, tone: 'warning' });
+      }
+    } catch (error) {
+      if (error instanceof SeasonalImportV2StatusUnknownError) {
+        const notice = buildSeasonalImportStatusUnknownNotice(attempt, error);
+        setSeasonRepairStatus(notice.title);
+        void showAlert({ title: notice.title, message: notice.message, tone: 'warning' });
+      } else {
+        setSeasonRepairPendingAttempt(null);
+        setSeasonRepairStatus('Repair import failed');
+        void showAlert({ title: 'Season Repair Import Failed', message: (error as Error).message, tone: 'error' });
+      }
+    } finally {
+      setSeasonRepairRunning(false);
+    }
+  }, [
+    applySeasonRepairCommittedRefresh,
+    canRepairSeason,
+    seasonRepairPendingAttempt,
+    seasonRepairRunning,
+    setSeasonRepairCommittedImport,
+    setSeasonRepairPendingAttempt,
+    showAlert,
+  ]);
+
+  const handleRefreshSeasonRepairImport = useCallback(async () => {
+    const committedImport = seasonRepairCommittedImport;
+    if (!committedImport || seasonRepairRunning || !canRepairSeason) return;
+    setSeasonRepairRunning(true);
+    try {
+      await applySeasonRepairCommittedRefresh(committedImport);
+      void showAlert({
+        title: 'Season Repair Refresh Complete',
+        message: `Loaded committed season ${committedImport.seasonCode} from the server.`,
+        tone: 'success',
+      });
+    } catch (error) {
+      const failure = buildSeasonalImportCommittedRefreshFailure(committedImport, error);
+      setSeasonRepairStatus(failure.title);
+      void showAlert({ title: failure.title, message: failure.message, tone: 'warning' });
+    } finally {
+      setSeasonRepairRunning(false);
+    }
+  }, [
+    applySeasonRepairCommittedRefresh,
+    canRepairSeason,
+    seasonRepairCommittedImport,
+    seasonRepairRunning,
+    showAlert,
+  ]);
 
   const updateAirlineColor = (airlineCode: string, patch: Partial<AirlineColorSetting>) => {
     const now = currentTimestamp();
@@ -1634,12 +1729,17 @@ export default function SettingsPage() {
             />
           )}
 
-          {activeTab === 'seasonRepair' && (
+          {activeTab === 'seasonRepair' && canRepairSeason && (
             <SeasonRepairTab
+              canRepairSeason={canRepairSeason}
               running={seasonRepairRunning}
               status={seasonRepairStatus}
               selectedSeasonId={selectedSeasonId}
+              hasPendingAttempt={seasonRepairPendingAttempt !== null}
+              hasPendingCommittedImport={seasonRepairCommittedImport !== null}
               onImport={handleSeasonRepairImport}
+              onResume={handleResumeSeasonRepairImport}
+              onRefresh={handleRefreshSeasonRepairImport}
             />
           )}
 

@@ -14,19 +14,23 @@ function requireSqlSection(source: string, pattern: RegExp, label: string): stri
 
 test('main Seasonal import sends canonical source rows and never builds client atomic import arrays', () => {
   const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
+  const contractSource = readFileSync(join(root, 'lib', 'seasonalImportRpcContract.ts'), 'utf8');
   const importStart = source.indexOf('const handleFile = useCallback');
   const importEnd = source.indexOf('const handleRowDoubleClick', importStart);
   const importSource = source.slice(importStart, importEnd);
   const refreshStart = source.indexOf('const applyTargetedCommittedImportRefresh = useCallback');
   const refreshEnd = source.indexOf('const loadSeasonRows = useCallback', refreshStart);
   const refreshSource = source.slice(refreshStart, refreshEnd);
-  const rpcStart = importSource.indexOf('attemptedImport = {');
+  const rpcStart = importSource.indexOf('attemptedImport = await prepareSeasonalImportV2Attempt');
   const rpcEnd = importSource.indexOf('setPendingImportAttempt(attemptedImport)', rpcStart);
   const rpcInputSource = importSource.slice(rpcStart, rpcEnd);
 
-  assert.match(importSource, /canonicalizeSeasonalImportSourceRows\(parsedRows\)/);
-  assert.match(importSource, /buildSeasonalImportV2Checksum\(seasonCode, sourceRows\)/);
-  assert.match(importSource, /deriveSeasonalImportV2RequestId\(/);
+  assert.match(importSource, /prepareSeasonalImportV2Attempt\(\{/);
+  assert.match(importSource, /mode:\s*'standard'/);
+  assert.match(contractSource, /export async function prepareSeasonalImportV2Attempt/);
+  assert.match(contractSource, /canonicalizeSeasonalImportSourceRows\(input\.sourceRows\)/);
+  assert.match(contractSource, /buildSeasonalImportV2Checksum\(input\.seasonCode, sourceRows\)/);
+  assert.match(contractSource, /deriveSeasonalImportV2RequestId\(\{/);
   assert.match(importSource, /setPendingImportAttempt\(attemptedImport\)[\s\S]*applySeasonalImportRemote\(attemptedImport\)/);
   assert.match(rpcInputSource, /sourceRows/);
   assert.match(refreshSource, /refreshed\.window\.records/);
@@ -56,11 +60,12 @@ test('remote store performs the exact stage-then-commit V2 RPC sequence without 
     return match ? [match[1]] : [];
   });
 
-  assert.match(remoteStoreSource, /interface RemoteSeasonalImportInput/);
+  assert.match(remoteStoreSource, /type RemoteSeasonalImportInput = SeasonalImportV2RpcAttempt/);
   assert.match(remoteStoreSource, /applySeasonalImportRemote\(input: RemoteSeasonalImportInput\): Promise<RemoteSeasonalImportResult>/);
   assert.deepEqual(payloadKeys, [
     'requestId',
     'checksum',
+    'mode',
     'seasonId',
     'seasonCode',
     'expectedDataVersion',
@@ -190,25 +195,91 @@ test('operator display uses app profile username and display name when available
   assert.match(auditSource, /session\.actor\.displayName \?\? session\.actor\.email \?\? 'Anonymous'/);
 });
 
-test('Settings keeps the explicit full-season repair import path', () => {
+test('Settings Seasonal Full Replace uses the permissioned V2 source-row pipeline only', () => {
   const settingsSource = readFileSync(join(root, 'app', 'settings', 'page.tsx'), 'utf8');
   const repairSource = readFileSync(join(root, 'app', 'settings', 'components', 'SeasonRepairTab.tsx'), 'utf8');
+  const handlerStart = settingsSource.indexOf('const handleSeasonRepairImport');
+  const handlerEnd = settingsSource.indexOf('const updateAirlineColor', handlerStart);
+  const handlerSource = settingsSource.slice(handlerStart, handlerEnd);
+
   assert.match(settingsSource, /handleSeasonRepairImport/);
-  assert.match(settingsSource, /clearSeasonBaseline\(seasonId\)/);
-  assert.match(settingsSource, /loadSeasonWorkspaceWindow\(\{/);
-  assert.doesNotMatch(settingsSource, /\b(?:query|import|check)Native/);
-  assert.match(settingsSource, /totalSourceRows: 0/);
-  assert.doesNotMatch(settingsSource, /batchWriteSourceRows/);
+  assert.match(settingsSource, /access\.permissions\.has\('season\.repair'\)/);
+  assert.match(handlerSource, /prepareSeasonalImportV2Attempt\(\{/);
+  assert.match(handlerSource, /mode:\s*'repair'/);
+  assert.match(handlerSource, /applySeasonalImportRemote\(attemptedImport\)/);
+  assert.match(settingsSource, /loadTargetedCommittedImportRefresh\(\{/);
+  assert.match(handlerSource, /resumeSeasonalImportAttemptOnce\(attempt, applySeasonalImportRemote\)/);
+  assert.match(handlerSource, /SeasonalImportV2StatusUnknownError/);
+  assert.match(handlerSource, /buildSeasonalImportCommittedRefreshFailure/);
+  assert.doesNotMatch(handlerSource, /flattenRowsToFlightRecords|mergeDuplicateImportRecords|assertNoDuplicateFlightNumbers/);
+  assert.doesNotMatch(handlerSource, /clearSeasonBaseline|batchWriteFlightRecords|verifySeasonImportCounts/);
+  assert.doesNotMatch(handlerSource, /callSeasonalImportRpcRawPayload|apply_seasonal_import_remote/);
+  assert.doesNotMatch(handlerSource, /\b(?:queryNative|importNative|checkNative)\b|SQLite|catch-?up|fallback/i);
+  assert.match(settingsSource, /useSessionState<RemoteSeasonalImportInput \| null>/);
+  assert.match(settingsSource, /settings:seasonRepairPendingAttempt/);
+  assert.match(settingsSource, /settings:seasonRepairCommittedImport/);
   assert.match(repairSource, /Seasonal Full Replace/);
+  assert.match(repairSource, /canRepairSeason/);
+  assert.match(repairSource, /Resume\/Check/);
+  assert.match(repairSource, />\s*Refresh\s*</);
 });
 
-test('remote source-row mutation APIs remain disabled for seasonal atomic data', () => {
-  const source = readFileSync(join(root, 'lib', 'remoteStore.ts'), 'utf8');
-  assert.match(source, /return \[\]/);
-  assert.match(source, /Source row writes are disabled\. Seasonal data is stored as atomic flight records\./);
-  assert.match(source, /export async function addSourceRow[\s\S]*throw sourceRowWritesDisabled\(\)/);
-  assert.match(source, /export async function deleteSourceRow[\s\S]*throw sourceRowWritesDisabled\(\)/);
-  assert.match(source, /export async function linkSourceRows[\s\S]*throw sourceRowWritesDisabled\(\)/);
+test('Seasonal remote stores expose provenance reads and no direct source-row/import compatibility mutations', () => {
+  const remoteSource = readFileSync(join(root, 'lib', 'remoteStore.ts'), 'utf8');
+  const supabaseSource = readFileSync(join(root, 'lib', 'supabaseStore.ts'), 'utf8');
+  const seasonalSource = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
+  const settingsSource = readFileSync(join(root, 'app', 'settings', 'page.tsx'), 'utf8');
+  const interfaceStart = remoteSource.indexOf('export interface RemoteStore');
+  const interfaceEnd = remoteSource.indexOf('let cachedStore', interfaceStart);
+  const exportsStart = remoteSource.indexOf('export function getRemoteStore');
+  const exportsEnd = remoteSource.indexOf('export async function getModifications', exportsStart);
+  const publicSeasonalApi = `${remoteSource.slice(interfaceStart, interfaceEnd)}\n${remoteSource.slice(exportsStart, exportsEnd)}`;
+  const forbidden = [
+    'clearFlightRecords',
+    'clearSourceRows',
+    'clearModifications',
+    'clearModHistory',
+    'clearSeasonBaseline',
+    'batchWriteSourceRows',
+    'batchWriteFlightRecords',
+    'verifySeasonImportCounts',
+    'callSeasonalImportRpcRawPayload',
+    'addSourceRow',
+    'deleteSourceRow',
+    'linkSourceRows',
+    'mergeSameDaySourceRows',
+    'unlinkSourceRows',
+    'splitSourceRowTurnaround',
+    'applySourceRowOperationPlan',
+  ];
+
+  assert.match(publicSeasonalApi, /getSourceRows/);
+  assert.match(supabaseSource, /load seasonal source provenance/);
+  for (const symbol of forbidden) {
+    const pattern = new RegExp(`\\b${symbol}\\b`);
+    assert.doesNotMatch(publicSeasonalApi, pattern, `${symbol} must not be exposed by remoteStore`);
+    assert.doesNotMatch(supabaseSource, new RegExp(`async\\s+${symbol}\\b`), `${symbol} must not be implemented by supabaseStore`);
+    assert.doesNotMatch(seasonalSource, pattern, `Seasonal page must not reach ${symbol}`);
+    assert.doesNotMatch(settingsSource, pattern, `Settings repair must not reach ${symbol}`);
+  }
+  assert.doesNotMatch(supabaseSource, /rpc\('apply_seasonal_import_remote'|\/rest\/v1\/rpc\/apply_seasonal_import_remote/);
+});
+
+test('additive V2 migration keeps V1 callable until Task 12 post-canary revocation', () => {
+  const migrationSource = readFileSync(
+    join(root, '..', 'supabase', 'migrations', '20260718090000_seasonal_source_import_v2.sql'),
+    'utf8',
+  );
+  const architectureSource = readFileSync(join(root, '..', '..', 'architecture.md'), 'utf8');
+
+  assert.doesNotMatch(
+    migrationSource,
+    /revoke execute on function public\.apply_seasonal_import_remote\s*\(/i,
+  );
+  assert.match(migrationSource, /importMode/);
+  assert.match(migrationSource, /season\.repair/);
+  assert.match(architectureSource, /post-canary/i);
+  assert.match(architectureSource, /apply_seasonal_import_remote/);
 });
 
 test('seasonal source import V2 stages canonical rows behind a permissioned RPC', () => {
@@ -221,6 +292,7 @@ test('seasonal source import V2 stages canonical rows behind a permissioned RPC'
   const importBatchRowsTablePattern = /create table if not exists public\.season_import_batch_rows[\s\S]*?\n\);/i;
   const resultConstraintBackfillPattern = /do \$\$(?:\r?\n)?begin(?:\r?\n)?  if not exists \((?:\r?\n)?    select 1(?:\r?\n)?    from pg_catalog\.pg_constraint constraints[\s\S]*?season_import_batches_result_object_check[\s\S]*?(?:\r?\n)?\$\$;/i;
   const stageFunctionPattern = /create or replace function public\.stage_seasonal_import_v2\(p_import jsonb\)[\s\S]*?\n\$\$;/i;
+  const commitFunctionPattern = /create or replace function public\.commit_seasonal_import_v2\([\s\S]*?\n\$\$;/i;
   const preserveFingerprintFunctionPattern = /create or replace function public\.preserve_season_import_batch_staging_metadata_v2\(\)[\s\S]*?\n\$\$;/i;
   const preserveFingerprintTriggerPattern = /drop trigger if exists preserve_season_import_batch_staging_metadata_v2[\s\S]*?execute function public\.preserve_season_import_batch_staging_metadata_v2\(\);/i;
 
@@ -231,6 +303,7 @@ test('seasonal source import V2 stages canonical rows behind a permissioned RPC'
     ['staging metadata trigger function', preserveFingerprintFunctionPattern],
     ['staging metadata trigger', preserveFingerprintTriggerPattern],
     ['stage_seasonal_import_v2 function', stageFunctionPattern],
+    ['commit_seasonal_import_v2 function', commitFunctionPattern],
   ] as const) {
     assert.equal(
       requireSqlSection(schemaSource, pattern, `${label} in schema.sql`),
@@ -241,8 +314,10 @@ test('seasonal source import V2 stages canonical rows behind a permissioned RPC'
 
   for (const source of [migrationSource, schemaSource]) {
     const stageFunctionSource = source.match(stageFunctionPattern)?.[0];
+    const commitFunctionSource = source.match(commitFunctionPattern)?.[0];
     const preserveFingerprintFunctionSource = source.match(preserveFingerprintFunctionPattern)?.[0];
     assert.ok(stageFunctionSource, 'stage_seasonal_import_v2 body must be present');
+    assert.ok(commitFunctionSource, 'commit_seasonal_import_v2 body must be present');
     assert.ok(
       preserveFingerprintFunctionSource,
       'preserve_season_import_batch_staging_metadata_v2 body must be present'
@@ -255,6 +330,12 @@ test('seasonal source import V2 stages canonical rows behind a permissioned RPC'
     assert.match(source, /revoke all on table public\.season_import_batch_rows from public, anon, authenticated/);
     assert.match(source, /grant execute on function public\.stage_seasonal_import_v2\(jsonb\) to authenticated/);
     assert.match(stageFunctionSource, /public\.app_operator_has_permission\('seasonal\.write'\)/);
+    assert.match(stageFunctionSource, /public\.app_operator_has_permission\('season\.repair'\)/);
+    assert.match(stageFunctionSource, /'importMode', v_import_mode/);
+    assert.match(stageFunctionSource, /'fingerprintVersion', 3/);
+    assert.match(commitFunctionSource, /result #>> '\{_staging,importMode\}'/);
+    assert.match(commitFunctionSource, /public\.app_operator_has_permission\('seasonal\.write'\)/);
+    assert.match(commitFunctionSource, /public\.app_operator_has_permission\('season\.repair'\)/);
     assert.match(stageFunctionSource, /set search_path = pg_catalog, pg_temp/);
     assert.match(stageFunctionSource, /on conflict \(request_id\) do nothing/);
     assert.match(stageFunctionSource, /requestFingerprint/);
@@ -314,6 +395,11 @@ test('seasonal source import V2 SQL suite preserves runtime regression fixtures'
   assert.match(sqlTestSource, /same-checksum retry with changed sourceRows was not rejected/);
   assert.match(sqlTestSource, /invalid payload corrected under the same request identity was not rejected/);
   assert.match(sqlTestSource, /request fingerprint was not preserved across result update/);
+  assert.match(sqlTestSource, /operator without season\.repair staged a repair import/);
+  assert.match(sqlTestSource, /operator without season\.repair committed a repair import/);
+  assert.match(sqlTestSource, /standard import requestId was replayed as repair/);
+  assert.match(sqlTestSource, /repair import requestId was replayed as standard/);
+  assert.match(sqlTestSource, /persisted standard importMode was tampered/);
   assert.match(sqlTestSource, /p_import exceeds maximum size of 67108864 bytes/);
   assert.match(sqlTestSource, /seasonCode exceeds maximum length of 32/);
   assert.match(sqlTestSource, /seasonId exceeds maximum length of 256/);
