@@ -3430,47 +3430,35 @@ create index if not exists season_modification_added_legs_occurrence_v2_idx
     season_id, scheduled_date, airline, flight_number
   );
 
-create or replace function public.guard_seasonal_manual_added_occurrence_v2()
-returns trigger
+create or replace function public.assert_seasonal_manual_added_occurrence_v2(
+  p_season_id text,
+  p_leg_id text,
+  p_scheduled_date text,
+  p_airline text,
+  p_flight_number text
+)
+returns void
 language plpgsql
 security definer
 set search_path = pg_catalog, pg_temp
 as $$
 declare
-  v_scheduled_date text;
-  v_airline text;
-  v_flight_number text;
+  v_scheduled_date text := nullif(p_scheduled_date, '');
+  v_airline text := pg_catalog.upper(pg_catalog.btrim(p_airline));
+  v_flight_number text := public.seasonal_occurrence_flight_number_v2(
+    p_airline,
+    p_flight_number
+  );
   v_conflicting_record_id text;
 begin
-  if new.source_kind is distinct from 'added'
-    or new.status is distinct from 'active'
-    or new.action is not distinct from 'deleted'
-    or not exists (
-      select 1
-      from public.season_modifications modifications
-      where modifications.season_id = new.season_id
-        and modifications.leg_id = new.leg_id
-        and modifications.action = 'added'
-    )
-  then
-    return new;
-  end if;
-
-  v_scheduled_date := coalesce(nullif(new.scheduled_date, ''), nullif(new.date, ''));
-  v_airline := pg_catalog.upper(pg_catalog.btrim(new.airline));
-  v_flight_number := public.seasonal_occurrence_flight_number_v2(
-    new.airline,
-    coalesce(nullif(new.flight_number, ''), new.raw_flight_number)
-  );
-
   if v_scheduled_date is null or v_airline = '' or v_flight_number is null then
-    raise exception 'Manual added leg % has no canonical occurrence identity', new.leg_id
+    raise exception 'Manual added leg % has no canonical occurrence identity', p_leg_id
       using errcode = '22023';
   end if;
 
   perform 1
   from public.seasons seasons
-  where seasons.id = new.season_id
+  where seasons.id = p_season_id
   for update;
 
   select candidates.record_id
@@ -3481,7 +3469,7 @@ begin
     left join public.season_modifications modifications
       on modifications.season_id = records.season_id
      and modifications.leg_id = records.record_id
-    where records.season_id = new.season_id
+    where records.season_id = p_season_id
       and records.status = 'active'
       and records.action is distinct from 'deleted'
       and modifications.action is distinct from 'deleted'
@@ -3501,11 +3489,11 @@ begin
       on modifications.season_id = added_legs.season_id
      and modifications.leg_id = added_legs.leg_id
      and modifications.action = 'added'
-    where added_legs.season_id = new.season_id
-      and added_legs.leg_id <> new.leg_id
+    where added_legs.season_id = p_season_id
+      and added_legs.leg_id <> p_leg_id
       and added_legs.source_kind = 'added'
       and added_legs.status = 'active'
-      and added_legs.action is distinct from 'deleted'
+      and added_legs.action = 'added'
       and coalesce(
         nullif(added_legs.scheduled_date, ''),
         nullif(added_legs.date, '')
@@ -3527,8 +3515,167 @@ begin
       v_conflicting_record_id
       using errcode = '23505';
   end if;
+end;
+$$;
+
+create or replace function public.assert_seasonal_added_modification_state_v2(
+  p_season_id text,
+  p_leg_id text,
+  p_require_child boolean
+)
+returns void
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_action text;
+  v_changed_fields text[];
+  v_added_leg public.season_modification_added_legs%rowtype;
+begin
+  select modifications.action, modifications.changed_fields
+  into v_action, v_changed_fields
+  from public.season_modifications modifications
+  where modifications.season_id = p_season_id
+    and modifications.leg_id = p_leg_id;
+
+  if not found or v_action <> 'added' then
+    return;
+  end if;
+
+  perform 1
+  from public.seasons seasons
+  where seasons.id = p_season_id
+  for update;
+
+  if not ('addedLeg' = any(coalesce(v_changed_fields, '{}'::text[]))) then
+    raise exception 'Added modification % changed_fields must include addedLeg', p_leg_id
+      using errcode = '23514';
+  end if;
+
+  select added_legs.*
+  into v_added_leg
+  from public.season_modification_added_legs added_legs
+  where added_legs.season_id = p_season_id
+    and added_legs.leg_id = p_leg_id;
+
+  if not found then
+    if p_require_child then
+      raise exception 'Added modification % must have a matching added-leg child', p_leg_id
+        using errcode = '23514';
+    end if;
+    return;
+  end if;
+
+  if v_added_leg.action is distinct from 'added'
+    or v_added_leg.source_kind is distinct from 'added'
+    or v_added_leg.status is distinct from 'active'
+  then
+    return;
+  end if;
+
+  perform public.assert_seasonal_manual_added_occurrence_v2(
+    p_season_id,
+    p_leg_id,
+    coalesce(nullif(v_added_leg.scheduled_date, ''), nullif(v_added_leg.date, '')),
+    v_added_leg.airline,
+    coalesce(nullif(v_added_leg.flight_number, ''), v_added_leg.raw_flight_number)
+  );
+end;
+$$;
+
+create or replace function public.guard_seasonal_manual_added_occurrence_v2()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_parent_action text;
+  v_parent_changed_fields text[];
+begin
+  select modifications.action, modifications.changed_fields
+  into v_parent_action, v_parent_changed_fields
+  from public.season_modifications modifications
+  where modifications.season_id = new.season_id
+    and modifications.leg_id = new.leg_id;
+
+  if not found or v_parent_action <> 'added' then
+    return new;
+  end if;
+
+  if not ('addedLeg' = any(coalesce(v_parent_changed_fields, '{}'::text[]))) then
+    raise exception 'Added modification % changed_fields must include addedLeg', new.leg_id
+      using errcode = '23514';
+  end if;
+
+  if new.action is distinct from 'added'
+    or new.source_kind is distinct from 'added'
+    or new.status is distinct from 'active'
+  then
+    return new;
+  end if;
+
+  perform public.assert_seasonal_manual_added_occurrence_v2(
+    new.season_id,
+    new.leg_id,
+    coalesce(nullif(new.scheduled_date, ''), nullif(new.date, '')),
+    new.airline,
+    coalesce(nullif(new.flight_number, ''), new.raw_flight_number)
+  );
 
   return new;
+end;
+$$;
+
+create or replace function public.guard_seasonal_added_modification_v2()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+begin
+  if new.action = 'added' then
+    perform public.assert_seasonal_added_modification_state_v2(
+      new.season_id,
+      new.leg_id,
+      false
+    );
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.enforce_seasonal_added_modification_v2()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+begin
+  if tg_op in ('UPDATE', 'DELETE') then
+    perform public.assert_seasonal_added_modification_state_v2(
+      old.season_id,
+      old.leg_id,
+      true
+    );
+  end if;
+
+  if tg_op in ('INSERT', 'UPDATE')
+    and (
+      tg_op = 'INSERT'
+      or new.season_id is distinct from old.season_id
+      or new.leg_id is distinct from old.leg_id
+    )
+  then
+    perform public.assert_seasonal_added_modification_state_v2(
+      new.season_id,
+      new.leg_id,
+      true
+    );
+  end if;
+
+  return null;
 end;
 $$;
 
@@ -3541,6 +3688,32 @@ before insert or update of
 on public.season_modification_added_legs
 for each row
 execute function public.guard_seasonal_manual_added_occurrence_v2();
+
+drop trigger if exists guard_seasonal_added_modification_v2
+  on public.season_modifications;
+create trigger guard_seasonal_added_modification_v2
+after insert or update of season_id, leg_id, action, changed_fields
+on public.season_modifications
+for each row
+execute function public.guard_seasonal_added_modification_v2();
+
+drop trigger if exists enforce_seasonal_added_modification_parent_v2
+  on public.season_modifications;
+create constraint trigger enforce_seasonal_added_modification_parent_v2
+after insert or update or delete
+on public.season_modifications
+deferrable initially deferred
+for each row
+execute function public.enforce_seasonal_added_modification_v2();
+
+drop trigger if exists enforce_seasonal_added_modification_child_v2
+  on public.season_modification_added_legs;
+create constraint trigger enforce_seasonal_added_modification_child_v2
+after insert or update or delete
+on public.season_modification_added_legs
+deferrable initially deferred
+for each row
+execute function public.enforce_seasonal_added_modification_v2();
 
 create or replace function public.finalize_seasonal_occurrence_constraints_v2()
 returns void
@@ -3589,7 +3762,15 @@ $$;
 
 revoke execute on function public.seasonal_occurrence_flight_number_v2(text, text)
   from public, anon, authenticated;
+revoke execute on function public.assert_seasonal_manual_added_occurrence_v2(text, text, text, text, text)
+  from public, anon, authenticated;
+revoke execute on function public.assert_seasonal_added_modification_state_v2(text, text, boolean)
+  from public, anon, authenticated;
 revoke execute on function public.guard_seasonal_manual_added_occurrence_v2()
+  from public, anon, authenticated;
+revoke execute on function public.guard_seasonal_added_modification_v2()
+  from public, anon, authenticated;
+revoke execute on function public.enforce_seasonal_added_modification_v2()
   from public, anon, authenticated;
 revoke execute on function public.finalize_seasonal_occurrence_constraints_v2()
   from public, anon, authenticated;

@@ -193,6 +193,17 @@ added_records as (
     end as canonical_flight_number
   from added_parts
 ),
+effective_added_records as (
+  select added.*
+  from added_records added
+  where added.parent_action = 'added'
+    and 'addedLeg' = any(coalesce(added.parent_changed_fields, '{}'::text[]))
+    and added.leg_id = added.record_id
+    and added.action = 'added'
+    and added.source_kind = 'added'
+    and added.status = 'active'
+    and added.source_side = case when added.type = 'A' then 'ARR' else 'DEP' end
+),
 effective_records as (
   select
     base.season_code,
@@ -234,13 +245,7 @@ effective_records as (
     added.turnaround_id,
     added.source_kind,
     added.status
-  from added_records added
-  where added.parent_action = 'added'
-    and 'addedLeg' = any(coalesce(added.parent_changed_fields, '{}'::text[]))
-    and added.leg_id = added.record_id
-    and added.action = 'added'
-    and added.source_kind = 'added'
-    and added.status = 'active'
+  from effective_added_records added
 ),
 baseline_counts as (
   select
@@ -391,6 +396,8 @@ added_relation_anomalies as (
       when added.leg_id is not null and added.action is distinct from 'added' then 'child-action-mismatch'
       when added.leg_id is not null and added.source_kind is distinct from 'added' then 'child-source-kind-mismatch'
       when added.leg_id is not null and added.status is distinct from 'active' then 'child-status-mismatch'
+      when added.leg_id is not null and added.source_side is distinct from
+        case when added.type = 'A' then 'ARR' else 'DEP' end then 'child-source-side-mismatch'
       when added.leg_id is not null
         and not ('addedLeg' = any(coalesce(modifications.changed_fields, '{}'::text[])))
         then 'parent-changed-fields-missing-added-leg'
@@ -406,6 +413,8 @@ added_relation_anomalies as (
      or (added.leg_id is not null and added.action is distinct from 'added')
      or (added.leg_id is not null and added.source_kind is distinct from 'added')
      or (added.leg_id is not null and added.status is distinct from 'active')
+     or (added.leg_id is not null and added.source_side is distinct from
+       case when added.type = 'A' then 'ARR' else 'DEP' end)
      or (
        added.leg_id is not null
        and not ('addedLeg' = any(coalesce(modifications.changed_fields, '{}'::text[])))
@@ -429,12 +438,11 @@ base_added_id_collisions as (
   where base.record_id = modifications.leg_id
      or base.record_id = added.record_id
 ),
-non_normalized_base as (
+normalization_candidates as (
   select
     base.season_code,
     base.season_id,
     base.record_id,
-    base.occurrence_date,
     base.airline,
     base.flight_number,
     base.raw_flight_number,
@@ -446,22 +454,50 @@ non_normalized_base as (
         then pg_catalog.repeat('0', 3 - pg_catalog.char_length(base.normalized_flight_part))
           || base.normalized_flight_part
       else base.normalized_flight_part
-    end as canonical_raw_flight_number
+    end as canonical_raw_flight_number,
+    'base'::text as identity_source
   from base_records base
-  where base.airline is distinct from base.normalized_airline
-     or base.flight_number is distinct from base.canonical_flight_number
-     or base.raw_flight_number is distinct from case
-       when base.normalized_flight_part ~ '^[0-9]+$'
-         and pg_catalog.char_length(base.normalized_flight_part) < 3
-         then pg_catalog.repeat('0', 3 - pg_catalog.char_length(base.normalized_flight_part))
-           || base.normalized_flight_part
-       else base.normalized_flight_part
-     end
+
+  union all
+
+  select
+    added.season_code,
+    added.season_id,
+    added.record_id,
+    added.airline,
+    added.flight_number,
+    added.raw_flight_number,
+    added.normalized_airline,
+    added.canonical_flight_number,
+    case
+      when added.normalized_flight_part ~ '^[0-9]+$'
+        and pg_catalog.char_length(added.normalized_flight_part) < 3
+        then pg_catalog.repeat('0', 3 - pg_catalog.char_length(added.normalized_flight_part))
+          || added.normalized_flight_part
+      else added.normalized_flight_part
+    end as canonical_raw_flight_number,
+    'added-leg'::text as identity_source
+  from effective_added_records added
 ),
-non_normalized_summary as (
+normalization_findings as (
+  select
+    candidates.*,
+    case
+      when candidates.airline is distinct from candidates.normalized_airline
+        or candidates.flight_number is distinct from candidates.canonical_flight_number
+        then 'canonical-identity-mismatch-' || candidates.identity_source
+      else 'raw-flight-number-padding-' || candidates.identity_source
+    end as category
+  from normalization_candidates candidates
+  where candidates.airline is distinct from candidates.normalized_airline
+     or candidates.flight_number is distinct from candidates.canonical_flight_number
+     or candidates.raw_flight_number is distinct from candidates.canonical_raw_flight_number
+),
+normalization_summary as (
   select
     invalid.season_code,
     invalid.season_id,
+    invalid.category,
     (pg_catalog.array_agg(invalid.record_id order by invalid.record_id))[1:10] as record_ids,
     pg_catalog.count(*)::bigint as finding_count,
     pg_catalog.count(*) filter (
@@ -473,8 +509,8 @@ non_normalized_summary as (
     pg_catalog.count(*) filter (
       where invalid.raw_flight_number is distinct from invalid.canonical_raw_flight_number
     )::bigint as raw_flight_number_mismatch_count
-  from non_normalized_base invalid
-  group by invalid.season_code, invalid.season_id
+  from normalization_findings invalid
+  group by invalid.season_code, invalid.season_id, invalid.category
 ),
 source_row_generation as (
   select
@@ -713,18 +749,22 @@ from (
   union all
 
   select
-    'non-normalized-flight-number',
+    invalid.category,
     invalid.season_code,
     invalid.season_id,
     invalid.record_ids,
     pg_catalog.format(
-      'airline_mismatch=%s flight_number_mismatch=%s raw_flight_number_mismatch=%s',
+      'classification=%s airline_mismatch=%s flight_number_mismatch=%s raw_flight_number_mismatch=%s',
+      case
+        when invalid.category like 'canonical-identity-mismatch-%' then 'blocking'
+        else 'informational'
+      end,
       invalid.airline_mismatch_count,
       invalid.flight_number_mismatch_count,
       invalid.raw_flight_number_mismatch_count
     ),
     invalid.finding_count
-  from non_normalized_summary invalid
+  from normalization_summary invalid
 
   union all
 

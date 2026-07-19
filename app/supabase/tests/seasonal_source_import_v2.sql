@@ -4787,11 +4787,21 @@ begin
     join pg_class tables on tables.oid = triggers.tgrelid
     join pg_namespace namespaces on namespaces.oid = tables.relnamespace
     where namespaces.nspname = 'public'
-      and tables.relname = 'season_modification_added_legs'
-      and triggers.tgname = 'guard_seasonal_manual_added_occurrence_v2'
+      and (
+        (tables.relname = 'season_modification_added_legs' and triggers.tgname in (
+          'guard_seasonal_manual_added_occurrence_v2',
+          'enforce_seasonal_added_modification_child_v2'
+        ))
+        or (tables.relname = 'season_modifications' and triggers.tgname in (
+          'guard_seasonal_added_modification_v2',
+          'enforce_seasonal_added_modification_parent_v2'
+        ))
+      )
       and not triggers.tgisinternal
+    group by namespaces.nspname
+    having count(*) = 4
   ) then
-    raise exception 'Task 9 manual-added occurrence guard trigger is missing';
+    raise exception 'Task 9 manual-added occurrence guard triggers are incomplete';
   end if;
 end
 $$;
@@ -4852,6 +4862,122 @@ begin
   exception
     when unique_violation then null;
   end;
+end
+$$;
+
+rollback;
+
+-- Isolate deferred-constraint coverage from the intentionally malformed Task 5
+-- fixtures above. The production RPC writes parent first, replaces the child,
+-- then reaches the transaction boundary where both constraint triggers run.
+begin;
+
+insert into public.seasons (
+  id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+  total_legs, total_source_rows, data_version
+) values (
+  'task9-parent-guard-season', 'T9P', 'Task 9 parent guard', '', 0,
+  '2027-01-02', '2027-01-02', 1, 0, 1
+);
+
+insert into public.season_flight_records (
+  season_id, record_id, link_id, type, airline, flight_number, raw_flight_number,
+  route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+  operational_date, day_of_week, source_kind, source_side, status
+) values (
+  'task9-parent-guard-season', 'task9-parent-imported-owner',
+  'task9-parent-imported-owner', 'A', 'VN', 'VN123', '123', 'HAN', '08:00',
+  '321', 'J', '2027-01-02', '2027-01-02', '08:00', '2027-01-02', 6,
+  'imported', 'ARR', 'active'
+);
+
+insert into public.season_modifications (season_id, leg_id, action, changed_fields)
+values (
+  'task9-parent-guard-season', 'task9-parent-bypass', 'modified', array['addedLeg']
+);
+
+insert into public.season_modification_added_legs (
+  season_id, leg_id, record_id, type, airline, flight_number, raw_flight_number,
+  route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+  operational_date, day_of_week, action, source_kind, source_side, status
+) values (
+  'task9-parent-guard-season', 'task9-parent-bypass', 'task9-parent-bypass',
+  'A', 'VN', 'VN123', '123', 'HAN', '09:00', '321', 'J', '2027-01-02',
+  '2027-01-02', '09:00', '2027-01-02', 6, 'added', 'added', 'ARR', 'active'
+);
+
+do $$
+begin
+  begin
+    update public.season_modifications
+    set action = 'added'
+    where leg_id = 'task9-parent-bypass';
+    raise exception 'parent action transition bypassed the occurrence collision guard';
+  exception
+    when unique_violation then
+      if position('manual added occurrence collision' in lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  if not exists (
+    select 1
+    from public.season_modifications
+    where leg_id = 'task9-parent-bypass'
+      and action = 'modified'
+  ) then
+    raise exception 'rejected parent transition did not roll back atomically';
+  end if;
+
+  insert into public.season_modifications (
+    season_id, leg_id, action, changed_fields
+  ) values (
+    'task9-parent-guard-season', 'task9-valid-atomic-added',
+    'added', array['addedLeg']
+  );
+
+  -- Mirrors upsert_season_modification_from_json: parent first, replace child.
+  delete from public.season_modification_added_legs
+  where leg_id = 'task9-valid-atomic-added';
+
+  insert into public.season_modification_added_legs (
+    season_id, leg_id, record_id, type, airline, flight_number,
+    raw_flight_number, route, schedule, aircraft, category, date,
+    scheduled_date, scheduled_time, operational_date, day_of_week,
+    action, source_kind, source_side, status
+  ) values (
+    'task9-parent-guard-season', 'task9-valid-atomic-added',
+    'task9-valid-atomic-added', 'D', 'VN', 'VN124', '124', 'HAN', '10:00',
+    '321', 'J', '2027-01-02', '2027-01-02', '10:00', '2027-01-02', 6,
+    'added', 'added', 'DEP', 'active'
+  );
+end
+$$;
+
+set constraints
+  enforce_seasonal_added_modification_parent_v2,
+  enforce_seasonal_added_modification_child_v2
+immediate;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from public.season_modifications modifications
+    join public.season_modification_added_legs added_legs
+      on added_legs.season_id = modifications.season_id
+     and added_legs.leg_id = modifications.leg_id
+    where modifications.leg_id = 'task9-valid-atomic-added'
+      and modifications.action = 'added'
+      and 'addedLeg' = any(modifications.changed_fields)
+      and added_legs.record_id = modifications.leg_id
+      and added_legs.flight_number = 'VN124'
+      and added_legs.action = 'added'
+      and added_legs.source_kind = 'added'
+      and added_legs.status = 'active'
+  ) then
+    raise exception 'valid atomic parent-first added creation did not survive deferred validation';
+  end if;
 end
 $$;
 

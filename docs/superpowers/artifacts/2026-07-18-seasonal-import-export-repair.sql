@@ -15,15 +15,102 @@ begin;
 set local statement_timeout = '120s';
 set local lock_timeout = '10s';
 
--- Serialize against V2 season commits and other maintenance touching S26/W25.
+-- Serialize against V2 season commits and maintenance in one deterministic
+-- lexical ID order before any count, version, or fingerprint assertion.
 select id, season_code, data_version
 from public.seasons
 where id in (
   'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+  'season-f77c5ea9-be54-4615-ab0a-d83062b9b854',
   'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
 )
 order by id
 for update;
+
+create temporary table task9_locked_season_state on commit drop as
+select
+  seasons.id as season_id,
+  pg_catalog.md5(pg_catalog.concat_ws('|',
+    pg_catalog.md5(pg_catalog.to_jsonb(seasons)::text),
+    coalesce((
+      select pg_catalog.md5(pg_catalog.string_agg(
+        pg_catalog.md5(pg_catalog.to_jsonb(records)::text), '' order by records.record_id
+      ))
+      from public.season_flight_records records
+      where records.season_id = seasons.id
+    ), pg_catalog.md5('')),
+    coalesce((
+      select pg_catalog.md5(pg_catalog.string_agg(
+        pg_catalog.md5(pg_catalog.to_jsonb(counters)::text), ''
+        order by counters.record_id, counters.counter_group, counters.item_index
+      ))
+      from public.season_flight_record_counters counters
+      join public.season_flight_records records on records.record_id = counters.record_id
+      where records.season_id = seasons.id
+    ), pg_catalog.md5('')),
+    coalesce((
+      select pg_catalog.md5(pg_catalog.string_agg(
+        pg_catalog.md5(pg_catalog.to_jsonb(windows)::text), ''
+        order by windows.record_id, windows.counter_key
+      ))
+      from public.season_flight_record_checkin_windows windows
+      join public.season_flight_records records on records.record_id = windows.record_id
+      where records.season_id = seasons.id
+    ), pg_catalog.md5('')),
+    coalesce((
+      select pg_catalog.md5(pg_catalog.string_agg(
+        pg_catalog.md5(pg_catalog.to_jsonb(modifications)::text), '' order by modifications.leg_id
+      ))
+      from public.season_modifications modifications
+      where modifications.season_id = seasons.id
+    ), pg_catalog.md5('')),
+    coalesce((
+      select pg_catalog.md5(pg_catalog.string_agg(
+        pg_catalog.md5(pg_catalog.to_jsonb(counters)::text), ''
+        order by counters.leg_id, counters.counter_group, counters.item_index
+      ))
+      from public.season_modification_counters counters
+      join public.season_modifications modifications on modifications.leg_id = counters.leg_id
+      where modifications.season_id = seasons.id
+    ), pg_catalog.md5('')),
+    coalesce((
+      select pg_catalog.md5(pg_catalog.string_agg(
+        pg_catalog.md5(pg_catalog.to_jsonb(windows)::text), ''
+        order by windows.leg_id, windows.counter_key
+      ))
+      from public.season_modification_checkin_windows windows
+      join public.season_modifications modifications on modifications.leg_id = windows.leg_id
+      where modifications.season_id = seasons.id
+    ), pg_catalog.md5('')),
+    coalesce((
+      select pg_catalog.md5(pg_catalog.string_agg(
+        pg_catalog.md5(pg_catalog.to_jsonb(added_legs)::text), '' order by added_legs.leg_id
+      ))
+      from public.season_modification_added_legs added_legs
+      where added_legs.season_id = seasons.id
+    ), pg_catalog.md5('')),
+    coalesce((
+      select pg_catalog.md5(pg_catalog.string_agg(
+        pg_catalog.md5(pg_catalog.to_jsonb(source_rows)::text), '' order by source_rows.row_index
+      ))
+      from public.season_source_rows source_rows
+      where source_rows.season_id = seasons.id
+    ), pg_catalog.md5('')),
+    coalesce((
+      select pg_catalog.md5(pg_catalog.string_agg(
+        pg_catalog.md5(pg_catalog.to_jsonb(days)::text), ''
+        order by days.row_index, days.iso_dow
+      ))
+      from public.season_source_row_days days
+      where days.season_id = seasons.id
+    ), pg_catalog.md5(''))
+  )) as state_fingerprint
+from public.seasons seasons
+where seasons.id in (
+  'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+  'season-f77c5ea9-be54-4615-ab0a-d83062b9b854',
+  'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+);
 
 \echo 'REPAIR 01 - assert exact audited production state'
 do $$
@@ -32,6 +119,25 @@ declare
   v_min_date text;
   v_max_date text;
 begin
+  if not exists (
+    select 1
+    from task9_locked_season_state locked
+    where locked.season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+      and locked.state_fingerprint = '097e4e976fb8106343c93f366cdc9ea2'
+  ) or not exists (
+    select 1
+    from task9_locked_season_state locked
+    where locked.season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+      and locked.state_fingerprint = '0c1b151941e3c08707fe040152890631'
+  ) or not exists (
+    select 1
+    from task9_locked_season_state locked
+    where locked.season_id = 'season-f77c5ea9-be54-4615-ab0a-d83062b9b854'
+      and locked.state_fingerprint = '7bd171520a385ec980bff2216e4b1a35'
+  ) then
+    raise exception 'S26/W25/W26 locked state fingerprint drifted; aborting repair';
+  end if;
+
   if not exists (
     select 1 from public.seasons
     where id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
@@ -669,6 +775,7 @@ do $$
 declare
   v_count bigint;
   v_hash text;
+  v_blocker_summary text;
 begin
   select count(*) into v_count
   from public.season_flight_records
@@ -712,81 +819,296 @@ begin
     raise exception 'Effective PR585/PR586 output changed while removing hidden duplicates';
   end if;
 
-  select count(*) into v_count
-  from (
+  with
+  base_prepared as (
     select
-      records.season_id,
-      coalesce(nullif(records.scheduled_date, ''), nullif(records.date, '')) as scheduled_date,
-      pg_catalog.upper(pg_catalog.btrim(records.airline)) as airline,
-      pg_catalog.upper(pg_catalog.btrim(records.flight_number)) as flight_number
+      records.*,
+      coalesce(nullif(records.scheduled_date, ''), nullif(records.date, '')) as occurrence_date,
+      pg_catalog.upper(pg_catalog.btrim(records.airline)) as normalized_airline,
+      pg_catalog.upper(pg_catalog.btrim(
+        coalesce(nullif(records.flight_number, ''), records.raw_flight_number)
+      )) as normalized_input
     from public.season_flight_records records
-    where records.source_kind = 'imported'
-      and records.status = 'active'
-      and records.action is distinct from 'deleted'
-    group by
-      records.season_id,
-      coalesce(nullif(records.scheduled_date, ''), nullif(records.date, '')),
-      pg_catalog.upper(pg_catalog.btrim(records.airline)),
-      pg_catalog.upper(pg_catalog.btrim(records.flight_number))
-    having count(*) > 1
-  ) duplicates;
-  if v_count <> 0 then raise exception 'Blocking imported base duplicates remain: %', v_count; end if;
-
-  select count(*) into v_count
-  from (
-    select effective.season_id, effective.turnaround_id
-    from public.season_flight_records effective
+  ),
+  base_parts as (
+    select
+      base_prepared.*,
+      case
+        when normalized_airline <> ''
+          and pg_catalog.char_length(normalized_input) > pg_catalog.char_length(normalized_airline)
+          and pg_catalog.left(normalized_input, pg_catalog.char_length(normalized_airline)) = normalized_airline
+          then pg_catalog.substr(normalized_input, pg_catalog.char_length(normalized_airline) + 1)
+        else normalized_input
+      end as normalized_flight_part
+    from base_prepared
+  ),
+  base_records as (
+    select
+      base_parts.*,
+      normalized_airline || case
+        when normalized_flight_part ~ '^[0-9]+$'
+          and pg_catalog.char_length(normalized_flight_part) < 3
+          then pg_catalog.repeat('0', 3 - pg_catalog.char_length(normalized_flight_part))
+            || normalized_flight_part
+        else normalized_flight_part
+      end as canonical_flight_number
+    from base_parts
+  ),
+  added_prepared as (
+    select
+      added_legs.*,
+      modifications.action as parent_action,
+      modifications.changed_fields as parent_changed_fields,
+      coalesce(nullif(added_legs.scheduled_date, ''), nullif(added_legs.date, '')) as occurrence_date,
+      pg_catalog.upper(pg_catalog.btrim(added_legs.airline)) as normalized_airline,
+      pg_catalog.upper(pg_catalog.btrim(
+        coalesce(nullif(added_legs.flight_number, ''), added_legs.raw_flight_number)
+      )) as normalized_input
+    from public.season_modification_added_legs added_legs
     left join public.season_modifications modifications
-      on modifications.season_id = effective.season_id
-     and modifications.leg_id = effective.record_id
-    where effective.status = 'active'
-      and effective.action is distinct from 'deleted'
+      on modifications.season_id = added_legs.season_id
+     and modifications.leg_id = added_legs.leg_id
+  ),
+  added_parts as (
+    select
+      added_prepared.*,
+      case
+        when normalized_airline <> ''
+          and pg_catalog.char_length(normalized_input) > pg_catalog.char_length(normalized_airline)
+          and pg_catalog.left(normalized_input, pg_catalog.char_length(normalized_airline)) = normalized_airline
+          then pg_catalog.substr(normalized_input, pg_catalog.char_length(normalized_airline) + 1)
+        else normalized_input
+      end as normalized_flight_part
+    from added_prepared
+  ),
+  added_records as (
+    select
+      added_parts.*,
+      normalized_airline || case
+        when normalized_flight_part ~ '^[0-9]+$'
+          and pg_catalog.char_length(normalized_flight_part) < 3
+          then pg_catalog.repeat('0', 3 - pg_catalog.char_length(normalized_flight_part))
+            || normalized_flight_part
+        else normalized_flight_part
+      end as canonical_flight_number
+    from added_parts
+  ),
+  effective_added_records as (
+    select added.*
+    from added_records added
+    where added.parent_action = 'added'
+      and 'addedLeg' = any(coalesce(added.parent_changed_fields, '{}'::text[]))
+      and added.leg_id = added.record_id
+      and added.action = 'added'
+      and added.source_kind = 'added'
+      and added.status = 'active'
+      and added.source_side = case when added.type = 'A' then 'ARR' else 'DEP' end
+  ),
+  effective_records as (
+    select
+      base.season_id,
+      base.record_id,
+      base.type,
+      base.occurrence_date,
+      base.normalized_airline as airline,
+      base.canonical_flight_number as flight_number,
+      base.linked_record_id,
+      base.turnaround_id
+    from base_records base
+    left join public.season_modifications modifications
+      on modifications.season_id = base.season_id
+     and modifications.leg_id = base.record_id
+    where base.status = 'active'
+      and base.action is distinct from 'deleted'
       and modifications.action is distinct from 'deleted'
-      and nullif(pg_catalog.btrim(effective.turnaround_id), '') is not null
-    group by effective.season_id, effective.turnaround_id
-    having count(*) <> 2
-  ) invalid_turnarounds;
-  if v_count <> 0 then raise exception 'Blocking turnaround groups remain: %', v_count; end if;
 
-  select count(*) into v_count
-  from public.season_flight_records effective
-  left join public.season_modifications modifications
-    on modifications.season_id = effective.season_id
-   and modifications.leg_id = effective.record_id
-  left join public.season_flight_records counterpart
-    on counterpart.season_id = effective.season_id
-   and counterpart.record_id = effective.linked_record_id
-  where effective.status = 'active'
-    and effective.action is distinct from 'deleted'
-    and modifications.action is distinct from 'deleted'
-    and nullif(pg_catalog.btrim(effective.linked_record_id), '') is not null
-    and counterpart.record_id is null;
-  if v_count <> 0 then raise exception 'Blocking orphan links remain: %', v_count; end if;
+    union all
 
-  select count(*) into v_count
-  from public.season_flight_records effective
-  left join public.season_modifications modifications
-    on modifications.season_id = effective.season_id
-   and modifications.leg_id = effective.record_id
-  join public.season_flight_records counterpart
-    on counterpart.season_id = effective.season_id
-   and counterpart.record_id = effective.linked_record_id
-  where effective.status = 'active'
-    and effective.action is distinct from 'deleted'
-    and modifications.action is distinct from 'deleted'
-    and counterpart.linked_record_id is distinct from effective.record_id;
-  if v_count <> 0 then raise exception 'Blocking non-reciprocal links remain: %', v_count; end if;
+    select
+      added.season_id,
+      added.record_id,
+      added.type,
+      added.occurrence_date,
+      added.normalized_airline,
+      added.canonical_flight_number,
+      added.linked_record_id,
+      added.turnaround_id
+    from effective_added_records added
+  ),
+  blocking_findings as (
+    select
+      'duplicate-imported-base-occurrence'::text as category,
+      duplicates.season_id || '|' || duplicates.occurrence_date || '|'
+        || duplicates.airline || '|' || duplicates.flight_number as finding_key
+    from (
+      select
+        base.season_id,
+        base.occurrence_date,
+        base.normalized_airline as airline,
+        base.canonical_flight_number as flight_number
+      from base_records base
+      where base.source_kind = 'imported'
+        and base.status = 'active'
+        and base.action is distinct from 'deleted'
+        and nullif(base.occurrence_date, '') is not null
+        and nullif(base.canonical_flight_number, '') is not null
+      group by
+        base.season_id,
+        base.occurrence_date,
+        base.normalized_airline,
+        base.canonical_flight_number
+      having pg_catalog.count(*) > 1
+    ) duplicates
 
-  select count(*) into v_count
-  from public.season_modifications modifications
-  left join public.season_flight_records base
-    on base.season_id = modifications.season_id
-   and base.record_id = modifications.leg_id
-  left join public.season_modification_added_legs added
-    on added.season_id = modifications.season_id
-   and added.leg_id = modifications.leg_id
-  where base.record_id is null and added.leg_id is null;
-  if v_count <> 0 then raise exception 'Orphan modifications remain: %', v_count; end if;
+    union all
+
+    select
+      'duplicate-effective-occurrence',
+      duplicates.season_id || '|' || duplicates.occurrence_date || '|'
+        || duplicates.airline || '|' || duplicates.flight_number
+    from (
+      select
+        effective.season_id,
+        effective.occurrence_date,
+        effective.airline,
+        effective.flight_number
+      from effective_records effective
+      where nullif(effective.occurrence_date, '') is not null
+        and nullif(effective.flight_number, '') is not null
+      group by
+        effective.season_id,
+        effective.occurrence_date,
+        effective.airline,
+        effective.flight_number
+      having pg_catalog.count(*) > 1
+    ) duplicates
+
+    union all
+
+    select
+      'effective-orphan-link',
+      effective.season_id || '|' || effective.record_id
+    from effective_records effective
+    left join effective_records counterpart
+      on counterpart.season_id = effective.season_id
+     and counterpart.record_id = effective.linked_record_id
+    where nullif(pg_catalog.btrim(effective.linked_record_id), '') is not null
+      and counterpart.record_id is null
+
+    union all
+
+    select
+      'effective-nonreciprocal-link',
+      effective.season_id || '|' || effective.record_id
+    from effective_records effective
+    join effective_records counterpart
+      on counterpart.season_id = effective.season_id
+     and counterpart.record_id = effective.linked_record_id
+    where nullif(pg_catalog.btrim(effective.linked_record_id), '') is not null
+      and counterpart.linked_record_id is distinct from effective.record_id
+
+    union all
+
+    select
+      'invalid-effective-turnaround',
+      invalid.season_id || '|' || invalid.turnaround_id
+    from (
+      select effective.season_id, effective.turnaround_id
+      from effective_records effective
+      where nullif(pg_catalog.btrim(effective.turnaround_id), '') is not null
+      group by effective.season_id, effective.turnaround_id
+      having pg_catalog.count(*) <> 2
+    ) invalid
+
+    union all
+
+    select
+      'orphan-modification',
+      modifications.season_id || '|' || modifications.leg_id
+    from public.season_modifications modifications
+    left join public.season_flight_records base
+      on base.season_id = modifications.season_id
+     and base.record_id = modifications.leg_id
+    left join public.season_modification_added_legs added
+      on added.season_id = modifications.season_id
+     and added.leg_id = modifications.leg_id
+    where base.record_id is null and added.leg_id is null
+
+    union all
+
+    select
+      'added-relation-anomaly',
+      modifications.season_id || '|' || modifications.leg_id
+    from public.season_modifications modifications
+    left join public.season_modification_added_legs added
+      on added.season_id = modifications.season_id
+     and added.leg_id = modifications.leg_id
+    where (modifications.action = 'added' and added.leg_id is null)
+       or (modifications.action <> 'added' and added.leg_id is not null)
+       or (added.leg_id is not null and added.leg_id is distinct from added.record_id)
+       or (added.leg_id is not null and added.action is distinct from 'added')
+       or (added.leg_id is not null and added.source_kind is distinct from 'added')
+       or (added.leg_id is not null and added.status is distinct from 'active')
+       or (added.leg_id is not null and added.source_side is distinct from
+         case when added.type = 'A' then 'ARR' else 'DEP' end)
+       or (
+         added.leg_id is not null
+         and not ('addedLeg' = any(coalesce(modifications.changed_fields, '{}'::text[])))
+       )
+
+    union all
+
+    select
+      'base-added-id-collision',
+      base.season_id || '|' || base.record_id
+    from public.season_flight_records base
+    join public.season_modifications modifications
+      on modifications.season_id = base.season_id
+     and modifications.action = 'added'
+    left join public.season_modification_added_legs added
+      on added.season_id = modifications.season_id
+     and added.leg_id = modifications.leg_id
+    where base.record_id = modifications.leg_id
+       or base.record_id = added.record_id
+
+    union all
+
+    select
+      'canonical-identity-mismatch-base',
+      base.season_id || '|' || base.record_id
+    from base_records base
+    where base.airline is distinct from base.normalized_airline
+       or base.flight_number is distinct from base.canonical_flight_number
+
+    union all
+
+    select
+      'canonical-identity-mismatch-added-leg',
+      added.season_id || '|' || added.record_id
+    from effective_added_records added
+    where added.airline is distinct from added.normalized_airline
+       or added.flight_number is distinct from added.canonical_flight_number
+  ),
+  blocker_counts as (
+    select blockers.category, pg_catalog.count(*)::bigint as finding_count
+    from blocking_findings blockers
+    group by blockers.category
+  )
+  select
+    coalesce(pg_catalog.sum(counts.finding_count), 0)::bigint,
+    coalesce(pg_catalog.string_agg(
+      counts.category || '=' || counts.finding_count,
+      ', ' order by counts.category
+    ), '<none>')
+  into v_count, v_blocker_summary
+  from blocker_counts counts;
+
+  if v_count <> 0 then
+    raise exception 'Blocking post-repair audit findings remain (%): %',
+      v_count, v_blocker_summary;
+  end if;
+
+  raise notice 'Post-repair blocking audit categories: 0 (effective added legs included)';
 
   select count(*) into v_count
   from public.season_flight_records

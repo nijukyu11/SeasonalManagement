@@ -4,9 +4,9 @@
 
 - Production inspection target: self-hosted Supabase PostgreSQL reached through the approved SSH host. Credentials are intentionally omitted.
 - PostgreSQL commands used `psql -X -v ON_ERROR_STOP=1` against database `postgres` as `supabase_admin` in container `opsdata-supabase-db`.
-- Final read-only audit before the dry run: `2026-07-19 06:13:18 UTC`.
-- Final read-only audit after the dry run: `2026-07-19 06:13:23 UTC`.
-- The repair artifact ended with executable `rollback;`. No production data or schema mutation was committed.
+- Follow-up full read-only audit before the dry run: `2026-07-19 06:49:43.583930 UTC`.
+- Follow-up full read-only audit after the dry run: `2026-07-19 06:52:08.397060 UTC`.
+- The repair artifact ended with executable `rollback;`; structural validation found zero uncommented `commit;` statements. No production data or schema mutation was committed.
 
 ## Live Season Baseline
 
@@ -67,7 +67,9 @@ The repair asserts this incomplete state and performs no W25 reclassification. W
 
 - S26 has 1,616 raw flight-number padding differences.
 - W26 has 1,492 raw flight-number padding differences.
-- Both groups have zero airline mismatches and zero canonical `flight_number` mismatches. The differences are only values such as raw `81` versus canonical raw `081`.
+- The follow-up audit now separates base rows from effective/manual added-leg rows and canonical mismatches from raw padding-only differences.
+- Base rows have zero airline mismatches and zero canonical `flight_number` mismatches. The differences are only values such as raw `81` versus canonical raw `081`.
+- Production has zero added-leg rows, so canonical added-leg mismatches and added-leg raw-padding findings are both zero.
 - The occurrence and export contracts normalize through the canonical full flight identity. Task 9 therefore records these as informational and does not rewrite 3,108 production rows.
 
 ## Dry-Run Result
@@ -85,17 +87,18 @@ maintenance.seasonal_fix_<UTC YYYYMMDDtHHMMSSz>_mod_windows
 maintenance.seasonal_fix_<UTC YYYYMMDDtHHMMSSz>_added_legs
 ```
 
-Dry-run tag: `20260719t061322z`. Backups contained 2 season rows, 13 affected base records, 4 affected modifications, and zero child/added-leg rows, matching assertions.
+Follow-up dry-run tag: `20260719t065112z`. Backups contained 2 season rows, 13 affected base records, 4 affected modifications, and zero child/added-leg rows, matching assertions.
 
 Inside the transaction after repair simulation:
 
 - S26 base records: 26,180.
 - S26 modifications: 1,424.
 - W25 base and legacy-added records: 8,165, unchanged.
-- Duplicate imported occurrences, invalid effective turnaround cardinality, orphan links, non-reciprocal links, and orphan modifications: zero.
+- The consolidated postcondition reported `0` blocking findings. It includes imported-base duplicates, duplicate effective occurrences, strict effective added legs, added-relation anomalies, base/added ID collisions, orphan modifications, effective orphan/non-reciprocal links, invalid effective turnaround groups, and canonical identity mismatches.
+- Effective link validation joins only the effective materialized set; hidden or deleted counterparts cannot satisfy a link.
 - S26/W25 simulated data versions: 16,573 and 8,228.
 
-The final `ROLLBACK` succeeded. A separate catalog query found zero tables matching `maintenance.seasonal_fix_20260719t061322z_%` afterward.
+The final `ROLLBACK` succeeded. At `2026-07-19 06:52:11.814845 UTC`, a separate catalog query found zero tables matching `maintenance.seasonal_fix_20260719t065112z_%` and zero tables matching any `maintenance.seasonal_fix_%` tag.
 
 ## Persistent-State Proof
 
@@ -106,7 +109,14 @@ The final `ROLLBACK` succeeded. A separate catalog query found zero tables match
 | W25 | `0c1b151941e3c08707fe040152890631` | `0c1b151941e3c08707fe040152890631` | Yes |
 | W26 | `7bd171520a385ec980bff2216e4b1a35` | `7bd171520a385ec980bff2216e4b1a35` | Yes |
 
-The before/after audit category summaries also matched exactly. Production remains in the pre-repair state.
+The complete audit output from `AUDIT 01B` through `ROLLBACK`, covering fingerprints, category rows, exact IDs, and detail queries, produced `0` differing lines before versus after the dry run. Production remains in the pre-repair state.
+
+## Follow-Up Spec Review
+
+- Collision protection now covers both mutation surfaces. The child trigger validates direct child inserts/updates, while the parent trigger locks the season and validates an existing child whenever a parent becomes `action='added'`.
+- Deferrable, initially deferred constraint triggers on both parent and child enforce the final transaction state without rejecting the server RPC's parent-first, replace-child write order. SQL coverage proves the child-first/non-added-parent bypass is rejected when the parent transitions to `added`, and the valid atomic parent-first creation succeeds.
+- The repair locks S26, W26, and W25 season rows together in deterministic lexical ID order before count, version, or fingerprint assertions. W26 is therefore protected from changing between its assertion and the repair finalizer.
+- The postcondition and audit share the same effective-base/effective-added concepts. The known incomplete W25 legacy classification remains an explicit non-action and is not weakened into a guessed repair.
 
 ## Constraint Deployment Order
 
@@ -114,18 +124,21 @@ The additive migration and schema install:
 
 - Supporting indexes for `(season_id, date, airline, flight_number)`, `(season_id, operational_date)`, and `(season_id, turnaround_id)`.
 - A canonical scalar occurrence normalizer shared by constraints and guards.
-- A season-locking trigger that rejects future effective manual-added occurrence collisions against base or other added records.
+- Season-locking parent and child guards that reject future effective manual-added occurrence collisions against base or other added records.
+- Deferrable parent/child constraint triggers that preserve the atomic parent-first write order while preventing a transaction from committing an `added` parent without its matching child.
 - `finalize_seasonal_occurrence_constraints_v2()`, which refuses dirty data and creates the active imported occurrence unique index only after cleanup.
 
 The additive migration does not invoke the finalizer, so the known PR duplicates cannot make Task 12 deployment fail. The repair invokes it after removing the asserted duplicates. Current Task 9 production dry-run reports the finalizer as deferred because the additive migration is not deployed yet.
 
 ## Local Verification
 
-- `npm run test:seasonal-import-sql`: passed; PGlite migration ran twice, the manual-added collision trigger rejected a direct collision, and the finalizer rejected intentionally dirty fixtures.
+- `npm run test:seasonal-import-sql`: passed; PGlite migration ran twice, direct-child and parent-transition collision paths were rejected, and valid atomic parent-first added creation passed deferred validation.
 - `npm run test:seasonal-schema-twice`: passed; full schema ran twice.
-- Focused import/export source and contract tests: 38 passed.
+- Focused import/export snapshot, selection, migration/schema parity, and source contract tests: 38 passed, 0 failed.
 - `npm run test:rules`: passed.
-- Structural audit check: no DML/DDL statement; read-only transaction; final `ROLLBACK`.
+- Migration/schema occurrence-constraint blocks are byte-for-byte equal, and the focused source parity assertions passed.
+- Structural audit check: zero DML/DDL statements and a repeatable-read read-only transaction.
+- Structural repair check: final executable statement is `rollback;` and uncommented `commit;` count is zero.
 - `git diff --check`: passed.
 
 ## Deferred Task 12 Commit
@@ -136,4 +149,4 @@ The additive migration does not invoke the finalizer, so the known PR duplicates
 4. Change only the repair artifact's final executable `rollback;` to `commit;` and run it with `psql -X -v ON_ERROR_STOP=1`.
 5. Confirm the timestamped maintenance tables persist, the finalizer created `season_flight_records_active_imported_occurrence_v2_key`, and the post-commit audit has zero repaired blocking categories.
 
-No production `COMMIT` is authorized or performed in Task 9.
+No production `COMMIT` is authorized or performed in Task 9 or this follow-up.
