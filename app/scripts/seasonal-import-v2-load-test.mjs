@@ -45,9 +45,16 @@ const {
   runSeasonalImportV2RpcFlow,
 } = await import('../src/lib/seasonalImportRpcContract.ts');
 const {
+  SEASONAL_IMPORT_RECOVERY_STORAGE_KEY,
   buildSeasonalImportRecoveryReceipt,
+  committedSeasonalImportFromRecoveryReceipt,
+  loadSeasonalImportRecoveryReceipt,
   markSeasonalImportRecoveryCommitted,
+  persistSeasonalImportRecoveryReceipt,
 } = await import('../src/lib/seasonalImportReceipt.ts');
+const { loadTargetedCommittedImportRefresh } = await import('../src/lib/seasonalImportRecovery.ts');
+const { materializeSeasonalExportSnapshot } = await import('../src/lib/seasonalExportSnapshot.ts');
+const { fromSeasonRow } = await import('../src/lib/supabaseRelationalMappers.ts');
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_DIR = path.join(SCRIPT_DIR, 'fixtures');
@@ -405,6 +412,18 @@ export async function fetchExportSnapshot(client, userId, seasonId, dataVersion)
   return result.rows[0]?.result;
 }
 
+async function loadAuthoritativeSeasons(client, userId) {
+  const result = await authenticatedQuery(
+    client,
+    userId,
+    `select id, season_code, name, file_name, uploaded_at, effective_start,
+            effective_end, total_legs, total_source_rows, data_version, last_synced_at
+     from public.seasons
+     order by uploaded_at desc, id`,
+  );
+  return result.rows.map(fromSeasonRow);
+}
+
 export async function removeBatchAndSeason(client, userId, batchId, seasonId) {
   if (batchId) await client.query('delete from public.season_import_batches where batch_id = $1::uuid', [batchId]);
   if (seasonId) {
@@ -556,11 +575,101 @@ async function runFaultInjection(client, principals, committedMain) {
     buildSeasonalImportRecoveryReceipt(commitLost, primaryUserId),
     recoveredCommit,
   );
-  const receiptJson = JSON.stringify(receipt);
-  assert.doesNotMatch(receiptJson, /sourceRows|fileName|uploadedAt/);
-  const refreshFailure = buildSeasonalImportCommittedRefreshFailure(recoveredCommit, new Error('injected refresh failure'));
+  const storedValues = new Map();
+  const receiptStorage = {
+    getItem: (key) => storedValues.get(key) ?? null,
+    setItem: (key, value) => { storedValues.set(key, value); },
+    removeItem: (key) => { storedValues.delete(key); },
+  };
+  persistSeasonalImportRecoveryReceipt(receiptStorage, receipt);
+  const persistedReceiptJson = storedValues.get(SEASONAL_IMPORT_RECOVERY_STORAGE_KEY);
+  assert.equal(typeof persistedReceiptJson, 'string');
+  assert.doesNotMatch(persistedReceiptJson, /"sourceRows"|"fileName"|"uploadedAt"|\.xlsx|PK\u0003\u0004/);
+  const retainedReceipt = loadSeasonalImportRecoveryReceipt(receiptStorage, {
+    ownerUserId: primaryUserId,
+    expectedSeasonId: recoveredCommit.seasonId,
+  });
+  assert.ok(retainedReceipt);
+  assert.deepEqual(committedSeasonalImportFromRecoveryReceipt(retainedReceipt), recoveredCommit);
+
+  const refreshStateBefore = await client.query(
+    `select
+       batches.status,
+       batches.generated_record_count,
+       batches.committed_at,
+       seasons.data_version,
+       (select count(*)::integer
+        from public.season_import_batches matching
+        where matching.request_id = batches.request_id) as batch_count,
+       (select count(*)::integer
+        from public.season_flight_records records
+        where records.season_id = batches.season_id
+          and records.source_kind = 'imported'
+          and records.status = 'active') as record_count
+     from public.season_import_batches batches
+     join public.seasons seasons on seasons.id = batches.season_id
+     where batches.batch_id = $1::uuid`,
+    [recoveredCommit.batchId],
+  );
+  assert.equal(refreshStateBefore.rows.length, 1);
+
+  let refreshError;
+  let snapshotLoaderCalls = 0;
+  await assert.rejects(
+    loadTargetedCommittedImportRefresh({
+      committedImport: recoveredCommit,
+      loadSeasons: () => loadAuthoritativeSeasons(client, primaryUserId),
+      loadSnapshot: async (input) => {
+        snapshotLoaderCalls += 1;
+        const rawSnapshot = await fetchExportSnapshot(
+          client,
+          primaryUserId,
+          input.seasonId,
+          input.expectedDataVersion,
+        );
+        assert.equal(typeof rawSnapshot?.totalCount, 'number');
+        return materializeSeasonalExportSnapshot(
+          { ...rawSnapshot, totalCount: rawSnapshot.totalCount + 1 },
+          input,
+        );
+      },
+    }),
+    (error) => {
+      refreshError = error;
+      assert.match(String(error), /totalCount .* does not match flightRecords length/);
+      return true;
+    },
+  );
+  assert.equal(snapshotLoaderCalls, 1);
+  const refreshFailure = buildSeasonalImportCommittedRefreshFailure(recoveredCommit, refreshError);
   assert.equal(refreshFailure.title, 'Import committed, refresh failed');
+  assert.match(refreshFailure.message, new RegExp(recoveredCommit.seasonId));
   assert.match(refreshFailure.message, new RegExp(recoveredCommit.batchId));
+  assert.match(refreshFailure.message, /totalCount .* does not match flightRecords length/);
+
+  const refreshStateAfter = await client.query(
+    `select
+       batches.status,
+       batches.generated_record_count,
+       batches.committed_at,
+       seasons.data_version,
+       (select count(*)::integer
+        from public.season_import_batches matching
+        where matching.request_id = batches.request_id) as batch_count,
+       (select count(*)::integer
+        from public.season_flight_records records
+        where records.season_id = batches.season_id
+          and records.source_kind = 'imported'
+          and records.status = 'active') as record_count
+     from public.season_import_batches batches
+     join public.seasons seasons on seasons.id = batches.season_id
+     where batches.batch_id = $1::uuid`,
+    [recoveredCommit.batchId],
+  );
+  assert.deepEqual(refreshStateAfter.rows, refreshStateBefore.rows, 'refresh recovery must not restage or recommit');
+  assert.equal(refreshStateAfter.rows[0].status, 'committed');
+  assert.equal(refreshStateAfter.rows[0].batch_count, 1);
+  assert.equal(refreshStateAfter.rows[0].record_count, 1);
 
   const mainBatch = await client.query('select request_id from public.season_import_batches where batch_id = $1::uuid', [committedMain.batchId]);
   assert.equal(mainBatch.rows.length, 1);
@@ -594,7 +703,16 @@ async function runFaultInjection(client, principals, committedMain) {
     beforeStage: 'status-unknown-no-batch',
     afterStage: { batchId: recoveredAfterStage.batchId, status: recoveredAfterStage.status },
     commitResponseLost: { batchId: recoveredCommit.batchId, status: recoveredCommit.status },
-    postCommitRefresh: refreshFailure.title,
+    postCommitRefresh: {
+      status: refreshFailure.title,
+      malformedSnapshotRejected: true,
+      snapshotLoaderCalls,
+      retainedMinimalReceipt: true,
+      stageOrCommitStateUnchanged: true,
+      sourceRowsPersistedInReceipt: false,
+      workbookPayloadPersistedInReceipt: false,
+      receiptBytes: Buffer.byteLength(persistedReceiptJson, 'utf8'),
+    },
     conflicts: ['owner:42501', 'mode:23505', 'version:fail-closed'],
   };
 }

@@ -229,6 +229,12 @@ Observed RED checkpoints before the final implementation:
   the direct executable contract. A temporary compiled `psql.exe` wrapper
   outside the repository subsequently made the unchanged package command pass.
 
+The follow-up spec review initially found all three required behaviors absent:
+the load harness did not invoke the shared committed-refresh helper, the
+round-trip did not commit and snapshot the reimport target, and
+`unresolvedPairCount` was a literal zero. The corrected behavioral runs below
+replace those unsupported assertions.
+
 ## Deterministic Fixtures
 
 Both committed JSON fixtures contain canonical source rows only. They contain
@@ -287,6 +293,12 @@ rows. PostgreSQL exposed real lock waits: `advisory` for the first client,
 cross-season-code lookup remained fail-closed with SQLSTATE `21000` rather
 than choosing an arbitrary season.
 
+The corrected follow-up used a second disposable PostgreSQL 17.6 database,
+`seasonal_task11_followup_20260719_124455_3b42f0`. The actual package command
+again exited `0` in 11.1 seconds through the temporary executable wrapper and
+repeated the SQL and true multi-session coverage before the corrected W26 load
+and S26/W26 round-trip harnesses ran.
+
 ## Load and Fault Metrics
 
 The W26 load harness ran against PostgreSQL 17.6 with a clean test season and
@@ -295,10 +307,10 @@ batch:
 | Metric | Result |
 |---|---:|
 | Canonical request bytes | 60,896 |
-| Client parse | 33.03 ms |
-| Stage | 2,828.21 ms |
-| Preview | 2,691.98 ms |
-| Commit | 14,650.47 ms |
+| Client parse | 29.39 ms |
+| Stage | 2,902.29 ms |
+| Preview | 2,664.29 ms |
+| Commit | 14,529.35 ms |
 | Generated occurrences | 26,370 |
 | Duplicate occurrences | 0 |
 
@@ -309,24 +321,56 @@ No such failure occurred in the verified run.
 Behavioral fault injection passed for failure before stage, response loss after
 stage, commit-response delivery loss, and post-commit refresh failure. Reusing
 the same request ID did not create another batch or recommit. Stage/commit
-delivery loss recovered the single committed receipt; refresh failure reported
-`Import committed, refresh failed` with a minimal committed receipt. Owner,
-cross-mode, and version conflicts remained fail-closed (`42501`, `23505`, and
-version conflict respectively).
+delivery loss recovered the single committed result.
+
+The refresh case now invokes the actual shared
+`loadTargetedCommittedImportRefresh` path after a real commit. Its snapshot
+loader called the real export RPC once, changed only `totalCount`, and passed
+that precisely malformed response through the strict snapshot materializer.
+The materializer rejected the count mismatch and the behavioral result was
+`Import committed, refresh failed` with the real season and batch IDs. The
+540-byte committed recovery receipt round-tripped through the shared receipt
+storage helpers and reconstructed the original minimal commit result. Batch
+status, generated count, committed timestamp, season data version, batch count,
+and active imported count were identical before and after refresh, proving no
+restage or recommit. The receipt contained no source rows, workbook bytes,
+filename, or upload payload. This claim is receipt-scoped; normal server
+staging still persists canonical source rows by design. Owner, cross-mode, and
+version conflicts remained fail-closed (`42501`, `23505`, and version conflict
+respectively). The corrected W26 load/fault command exited `0` in 27.5 seconds.
 
 ## Round-Trip Results
 
-| Season | Imported source rows | Generated occurrences | Export source rows | Workbook bytes | Re-import duplicates | Unresolved pairs | Signature result |
-|---|---:|---:|---:|---:|---:|---:|---|
-| S26 | 912 | 25,849 | 730 | 588,196 | 0 | 0 | Exact match |
-| W26 | 130 | 26,370 | 130 | 116,966 | 0 | 0 | Exact match |
+| Season | Imported source rows | Generated occurrences | Export source rows | Workbook bytes | Re-import duplicates | Measured unresolved | Pairs | Turnaround groups | Signature result |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| S26 | 912 | 25,849 | 730 | 588,196 | 0 | 0 | 8,861 | 8,861 | Exact match |
+| W26 | 130 | 26,370 | 130 | 116,966 | 0 | 0 | 9,571 | 9,571 | Exact match |
+
+| Season | Original committed season ID | Authoritative reimport season ID |
+|---|---|---|
+| S26 | `season-b13d6572-6ed8-47a8-897d-b02b3e0710f1` | `season-58f38653-50d3-46b8-baa7-baa133256bd6` |
+| W26 | `season-716e92d0-61ba-4eb9-966b-93d8f84f0462` | `season-6adddf36-58e7-40ec-a583-9fd707b1de33` |
 
 Each path staged and committed into an isolated season, fetched a versioned
 export snapshot, built canonical rows and an in-memory workbook, strict-parsed
-that workbook, previewed it in a different season and batch, then compared
-sorted occurrence signatures. Neither snapshot was truncated; neither workbook
-was empty; missing, extra, duplicate, unresolved-pair, and count deltas were all
-zero. The harnesses do not read production rows or SQLite.
+that workbook, then reimported it through a separate batch. Because the server
+enforces one authoritative season per season code, the harness deleted the
+original committed season before same-code reimport. It captured the persisted
+`_staging.targetSeasonId`, committed the reimport, and asserted that the commit
+result and committed batch used that same non-empty target ID and that it
+differed from the original ID. It verified authoritative season metadata and
+record counts before cleanup.
+
+The harness then fetched a versioned snapshot from the committed reimport
+target, ran `materializeEffectiveSeasonalLegs`, and passed those effective legs
+to the shared `resolveSeasonalPairs`. For both fixtures the measured post-
+reimport diagnostics were unresolved `0`, ambiguous `0`, nonreciprocal `0`,
+and missing counterpart `0`. Sorted operational pair signatures, per-pair
+turnaround cardinality, turnaround group count, and complete occurrence
+signatures matched the pre-export canonical data. Neither authoritative
+snapshot was truncated; neither workbook was empty; missing, extra, duplicate,
+and count deltas were zero. The corrected two-season round-trip command exited
+`0` in 155.9 seconds. The harnesses do not read production rows or SQLite.
 
 ## Production Read-Only Comparison and Task 12 Blocker
 
@@ -352,7 +396,10 @@ Production was queried only in read-only transactions. Before and after the
 disposable test, the W26 fingerprint was identical:
 `26598|52ff4b3e40369ecd9606f07cbd41a32a`. Production contained zero Task 11 V2
 RPCs, zero import-batch tables, and no migration metadata table. No Task 11
-migration or mutation was applied to production.
+migration or mutation was applied to production. The follow-up reran the W26
+fingerprint and RPC-count checks in a read-only transaction after its real
+PostgreSQL harnesses; the fingerprint still matched and the RPC count remained
+zero.
 
 ## Cleanup Evidence
 
@@ -365,10 +412,18 @@ migration or mutation was applied to production.
   Zero files remained under the Task 11 temporary prefix.
 - Final test-database cleanup before drop contained zero test seasons, batches,
   and operators.
+- Follow-up database `seasonal_task11_followup_20260719_124455_3b42f0` also
+  contained zero seasons, batches, and test operators before drop. Session
+  termination found no remaining client, `DROP DATABASE` succeeded, and
+  `pg_database` returned zero rows afterward.
+- The verified follow-up tunnel PID 16740 was stopped, port 55433 had zero
+  listeners, and all ten follow-up wrapper, askpass, secret, marker, and log
+  items were deleted. A final local check found zero Task 11 temporary items.
 
 ## Final Verification Matrix
 
-- Focused parser/import/export/selection/pairing tests: 65 passed, 0 failed.
+- Focused parser/import/export/selection/pairing/recovery/snapshot tests:
+  89 passed, 0 failed in 687 ms.
 - `npm run test:rules`: passed.
 - `npx tsc --noEmit --pretty false`: passed.
 - Targeted ESLint, including all three Task 11 scripts and the concurrency
@@ -383,11 +438,15 @@ migration or mutation was applied to production.
 - `npm run test:seasonal-import-v2-load`: passed on real PostgreSQL with the
   metrics above.
 - `npm run test:seasonal-roundtrip`: passed for real S26 and W26 fixtures.
-- `npm run build`: passed in 48.4 seconds with Next.js 16.2.4; compilation
-  completed in 20.3 seconds and all 12 static pages generated.
+- `npm run build`: passed in 55.1 seconds with Next.js 16.2.4; compilation
+  completed in 21.8 seconds and all 12 static pages generated.
 - Strict UTF-8 decoding passed for all nine intended files. Mojibake, hardcoded
   external host/credential/personal-path, and trailing-whitespace scans found
   zero matches; `git diff --check` passed.
+- The follow-up repeated strict UTF-8, mojibake, secret, external-host,
+  personal-path, trailing-whitespace, stale-claim, and `git diff --check` scans
+  over exactly the two corrected harnesses and this verification artifact; all
+  scans passed with zero findings.
 - Fixture-boundary verification found zero `flightRecords`, `record_id`, or
   `seasonId` keys in either JSON, and zero `.xls` or `.xlsx` files in the Task
   11 Git changes. Both JSON source-row byte counts and SHA-256 values matched
