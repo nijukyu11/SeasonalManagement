@@ -790,13 +790,28 @@ assertions. The follow-up makes all three fail-closed:
   requires the occurrence index to exist and be unique, valid, and ready.
 - The 154 route updates also derive and verify the V2-compatible series ID.
 - Exact S26, W25, and W26 total record, active imported, modification, version,
-  route, series, and finalizer states are asserted before the final output.
+  route, series, and finalizer states are asserted before the final output. The
+  route and series checks count the complete active imported W26 SQ173 set, not
+  only rows present in the temporary proof table, and each global count must be
+  exactly 154.
 
 The corrected production dry-run completed in 42.2 seconds, reached zero
 blocking categories, printed 154 repaired routes and 154 repaired series IDs,
 and rolled back. Its immediate cleanup check found zero task sessions, backup
 tables, and finalizer indexes. Production still contained all 154 original
 empty-route/`SER_D_SQ_SQ173_NONE` rows and zero persisted repaired series rows.
+
+The first quality review then identified that the final output printed global
+route and series counts but the executable assertions covered only the proof
+set. The follow-up added separate full-table active imported W26 SQ173 route and
+series assertions, each requiring exactly 154 rows before the transaction may
+reach its final output.
+
+The latest production dry-run with those global assertions passed in 41.9
+seconds, again reached zero blockers, printed route and series counts of 154,
+and ended in `ROLLBACK`. The immediate post-run query returned zero task
+sessions, backup tables, finalizer indexes, and persisted repaired rows; season
+versions and record/modification counts remained unchanged.
 
 Kong, PostgREST, and PostgreSQL logs were reviewed from the additive deploy
 through the corrected shadows. No HTTP call to a V2 stage, preview, or commit

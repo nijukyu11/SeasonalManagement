@@ -1704,6 +1704,42 @@ begin
     raise exception 'Expected 627 W26 modifications after repair, found %', v_count;
   end if;
 
+  select count(*) into v_count
+  from public.season_flight_records
+  where season_id = 'season-f77c5ea9-be54-4615-ab0a-d83062b9b854'
+    and source_kind = 'imported'
+    and status = 'active'
+    and action is distinct from 'deleted'
+    and type = 'D'
+    and public.seasonal_occurrence_airline_v2(airline) = 'SQ'
+    and public.seasonal_occurrence_flight_number_v2(
+      airline,
+      flight_number,
+      raw_flight_number
+    ) = 'SQ173'
+    and route = 'SIN';
+  if v_count <> 154 then
+    raise exception 'Expected exactly 154 active imported W26 SQ173 routes equal to SIN, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_flight_records
+  where season_id = 'season-f77c5ea9-be54-4615-ab0a-d83062b9b854'
+    and source_kind = 'imported'
+    and status = 'active'
+    and action is distinct from 'deleted'
+    and type = 'D'
+    and public.seasonal_occurrence_airline_v2(airline) = 'SQ'
+    and public.seasonal_occurrence_flight_number_v2(
+      airline,
+      flight_number,
+      raw_flight_number
+    ) = 'SQ173'
+    and flight_series_id = 'SER_D_SQ_SQ173_SIN';
+  if v_count <> 154 then
+    raise exception 'Expected exactly 154 active imported W26 SQ173 series IDs for SIN, found %', v_count;
+  end if;
+
   if not exists (
     select 1
     from pg_catalog.pg_index indexes
