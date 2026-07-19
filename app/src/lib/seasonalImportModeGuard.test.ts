@@ -327,7 +327,7 @@ test('seasonal source import V2 SQL suite preserves runtime regression fixtures'
   assert.match(sqlTestSource, /rollback;\s*$/);
 });
 
-test('Task 9 repair takes V2 season locks before the mutable table graph', () => {
+test('Task 9 repair takes V2 season locks before a fail-fast NOWAIT table graph', () => {
   const repairSource = readFileSync(
     join(
       root,
@@ -357,11 +357,21 @@ test('Task 9 repair takes V2 season locks before the mutable table graph', () =>
   const advisoryLock = repairSource.indexOf('perform pg_catalog.pg_advisory_xact_lock(');
   const seasonRowLock = repairSource.indexOf('order by id\nfor update;');
   const firstTableLock = repairSource.indexOf(
-    'lock table public.seasons in share row exclusive mode;'
+    'lock table public.seasons in share row exclusive mode nowait;'
   );
   const fingerprint = repairSource.indexOf(
     'create temporary table task9_locked_season_state on commit drop as'
   );
+  const staticGraphLocks = [
+    ...repairSource.matchAll(
+      /^lock table public\.([a-z0-9_]+) in share row exclusive mode nowait;$/gim
+    ),
+  ].map((match) => match[1]);
+  const optionalStagingLocks = [
+    ...repairSource.matchAll(
+      /execute 'lock table public\.(season_import_(?:batches|batch_rows)) in share row exclusive mode nowait';/g
+    ),
+  ].map((match) => match[1]);
 
   assert.match(
     advisorySection,
@@ -383,9 +393,17 @@ test('Task 9 repair takes V2 season locks before the mutable table graph', () =>
   assert.ok(seasonRowLock > advisoryLock, 'season rows must lock after advisory locks');
   assert.ok(firstTableLock > seasonRowLock, 'table graph must lock after season rows');
   assert.ok(fingerprint > firstTableLock, 'fingerprints must run after every lock layer');
+  assert.equal(staticGraphLocks.length, 16, 'every static maintenance table lock must use NOWAIT');
+  assert.deepEqual(optionalStagingLocks, ['season_import_batches', 'season_import_batch_rows']);
+  assert.doesNotMatch(
+    repairSource,
+    /^\s*lock table public\.[a-z0-9_]+ in share row exclusive mode;\s*$/gim
+  );
+  assert.ok(repairSource.indexOf('\\set ON_ERROR_STOP on') < firstTableLock);
   assert.match(repairSource, /lock_timeout is per lock wait/i);
   assert.match(repairSource, /statement_timeout is per statement/i);
   assert.match(repairSource, /operator must monitor total wall time/i);
+  assert.match(repairSource, /quiesce direct writers and retry/i);
 });
 
 test('seasonal export V2 uses one strict permissioned full snapshot in migration and schema', () => {

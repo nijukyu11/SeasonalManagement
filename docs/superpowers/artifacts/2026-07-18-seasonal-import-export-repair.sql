@@ -55,22 +55,26 @@ for update;
 -- for every Task 9 run. lock_timeout is per lock wait.
 -- statement_timeout is per statement; neither bounds the full transaction.
 -- The operator must monitor total wall time and cancel at the approved threshold.
-lock table public.seasons in share row exclusive mode;
-lock table public.season_source_rows in share row exclusive mode;
-lock table public.season_source_row_days in share row exclusive mode;
-lock table public.season_flight_records in share row exclusive mode;
-lock table public.season_flight_record_counters in share row exclusive mode;
-lock table public.season_flight_record_checkin_windows in share row exclusive mode;
-lock table public.season_modifications in share row exclusive mode;
-lock table public.season_modification_added_legs in share row exclusive mode;
-lock table public.season_modification_counters in share row exclusive mode;
-lock table public.season_modification_checkin_windows in share row exclusive mode;
-lock table public.season_mod_history_entries in share row exclusive mode;
-lock table public.season_mod_history_changes in share row exclusive mode;
-lock table public.season_mod_history_record_changes in share row exclusive mode;
-lock table public.season_change_events in share row exclusive mode;
-lock table public.schedule_notification_deliveries in share row exclusive mode;
-lock table public.season_entity_versions in share row exclusive mode;
+-- Every graph lock uses NOWAIT. A conflicting direct writer aborts this psql run
+-- before fingerprints, backups, or mutations. ON_ERROR_STOP closes the session,
+-- PostgreSQL rolls back the open transaction, and all earlier advisory/row locks
+-- are released. Quiesce direct writers and retry the complete artifact.
+lock table public.seasons in share row exclusive mode nowait;
+lock table public.season_source_rows in share row exclusive mode nowait;
+lock table public.season_source_row_days in share row exclusive mode nowait;
+lock table public.season_flight_records in share row exclusive mode nowait;
+lock table public.season_flight_record_counters in share row exclusive mode nowait;
+lock table public.season_flight_record_checkin_windows in share row exclusive mode nowait;
+lock table public.season_modifications in share row exclusive mode nowait;
+lock table public.season_modification_added_legs in share row exclusive mode nowait;
+lock table public.season_modification_counters in share row exclusive mode nowait;
+lock table public.season_modification_checkin_windows in share row exclusive mode nowait;
+lock table public.season_mod_history_entries in share row exclusive mode nowait;
+lock table public.season_mod_history_changes in share row exclusive mode nowait;
+lock table public.season_mod_history_record_changes in share row exclusive mode nowait;
+lock table public.season_change_events in share row exclusive mode nowait;
+lock table public.schedule_notification_deliveries in share row exclusive mode nowait;
+lock table public.season_entity_versions in share row exclusive mode nowait;
 
 -- These staging tables are installed by the additive Task 12 migration. They
 -- do not exist on the current predeploy production schema, so the predeploy
@@ -78,10 +82,10 @@ lock table public.season_entity_versions in share row exclusive mode;
 do $$
 begin
   if pg_catalog.to_regclass('public.season_import_batches') is not null then
-    execute 'lock table public.season_import_batches in share row exclusive mode';
+    execute 'lock table public.season_import_batches in share row exclusive mode nowait';
   end if;
   if pg_catalog.to_regclass('public.season_import_batch_rows') is not null then
-    execute 'lock table public.season_import_batch_rows in share row exclusive mode';
+    execute 'lock table public.season_import_batch_rows in share row exclusive mode nowait';
   end if;
 end;
 $$;

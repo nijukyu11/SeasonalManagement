@@ -4,10 +4,10 @@
 
 - Production inspection target: self-hosted Supabase PostgreSQL reached through the approved SSH host. Credentials are intentionally omitted.
 - PostgreSQL commands used `psql -X -v ON_ERROR_STOP=1` against database `postgres` as `supabase_admin` in container `opsdata-supabase-db`.
-- P1 follow-up full read-only audit before the dry run: `2026-07-19 08:23:02.897333 UTC`.
-- P1 follow-up full read-only audit after the dry run: `2026-07-19 08:24:56.689707 UTC`.
+- Final P1 NOWAIT follow-up full read-only audit before the dry run: `2026-07-19 08:43:14.018118 UTC`.
+- Final P1 NOWAIT follow-up full read-only audit after the dry run: `2026-07-19 08:44:04.485386 UTC`.
 - The repair artifact ended with executable `rollback;`; structural validation found zero uncommented `commit;` statements. No production data or schema mutation was committed.
-- A separate read-only production catalog check at `2026-07-19 08:25:00.971541 UTC` found zero Task 9 backup tables and zero deployed copies of the three new effective-base/overlay helper functions sampled by this follow-up. The production dry run is therefore accurately classified as predeploy.
+- A separate read-only production catalog check at `2026-07-19 08:44:08.577654 UTC` found zero Task 9 backup tables. The production dry run remains accurately classified as predeploy.
 
 ## Live Season Baseline
 
@@ -99,7 +99,7 @@ maintenance.seasonal_fix_<UTC YYYYMMDDtHHMMSSz>_mod_windows
 maintenance.seasonal_fix_<UTC YYYYMMDDtHHMMSSz>_added_legs
 ```
 
-P1 follow-up dry-run tag: `20260719t082433z`. Backups contained 2 affected season rows, 13 affected base records, 4 affected modifications, and zero child/added-leg rows, matching assertions.
+Final P1 NOWAIT follow-up dry-run tag: `20260719t084333z`. Backups contained 2 affected season rows, 13 affected base records, 4 affected modifications, and zero child/added-leg rows, matching assertions.
 
 Inside the transaction after repair simulation:
 
@@ -111,7 +111,7 @@ Inside the transaction after repair simulation:
 - S26/W25 simulated data versions: 16,573 and 8,228.
 - `SET CONSTRAINTS ALL IMMEDIATE` ran before the final postcondition, finalizer boundary, and rollback. Because the additive migration is not installed on production, this predeploy execution could fire only currently deployed constraints; it did not and could not exercise the new deferred Task 9 triggers.
 
-The final `ROLLBACK` succeeded. At `2026-07-19 08:25:00.971541 UTC`, a separate read-only catalog query found zero tables matching `maintenance.seasonal_fix_20260719t082433z_%` and zero tables matching any `maintenance.seasonal_fix_%` tag.
+The final `ROLLBACK` succeeded. At `2026-07-19 08:44:08.577654 UTC`, a separate read-only catalog query found zero tables matching `maintenance.seasonal_fix_20260719t084333z_%` and zero tables matching any `maintenance.seasonal_fix_%` tag.
 
 ## Repair Lock Boundary
 
@@ -136,7 +136,9 @@ schedule_notification_deliveries
 season_entity_versions
 ```
 
-The production catalog exposed 17 relevant FK edges. Gates and remarks are columns, not separate seasonal child tables. Task 12 staging tables are locked in the same transaction when they exist. These locks allow ordinary `SELECT` readers while blocking concurrent `INSERT`/`UPDATE`/`DELETE`. `lock_timeout=10s` applies to each lock wait and `statement_timeout=120s` applies to each statement; neither is a total transaction bound. The operator must monitor total wall time and cancel the maintenance transaction if it exceeds the approved threshold. Advisory locks, season-row locks, and table locks are held through deferred checks, postcondition, and rollback or the separately authorized Task 12 commit.
+The production catalog exposed 17 relevant FK edges. Gates and remarks are columns, not separate seasonal child tables. Task 12 staging tables are locked in the same transaction when they exist. All 16 static graph locks and both optional staging locks use `SHARE ROW EXCLUSIVE MODE NOWAIT`: ordinary `SELECT` readers remain allowed, but any conflicting direct writer makes lock acquisition fail immediately before fingerprints, backups, or mutations. With `psql -X -v ON_ERROR_STOP=1` and the artifact's `\set ON_ERROR_STOP on`, psql stops the script and closes the connection; PostgreSQL rolls back the open transaction and releases the advisory and season-row locks already acquired. The operator must quiesce direct writers and retry the complete artifact instead of waiting through a lock cycle.
+
+`lock_timeout=10s` still applies per wait outside the `NOWAIT` graph statements, and `statement_timeout=120s` applies per statement; neither is a total transaction bound. The operator must monitor total wall time and cancel if it exceeds the approved threshold. On a successful idle-server run, advisory locks, season-row locks, and table locks are held through deferred checks, postcondition, and rollback or the separately authorized Task 12 commit.
 
 ## Persistent-State Proof
 
@@ -156,6 +158,7 @@ The complete audit output from `AUDIT 01B` through `ROLLBACK`, covering fingerpr
 - A deferrable overlay-visibility constraint trigger validates final state for both OLD and NEW base identities affected by modification insert, update, move, or delete. It rejects `deleted -> modified`, overlay deletion, and leg/season moves that expose a base collision at `SET CONSTRAINTS ALL IMMEDIATE`, while a coordinated transaction that removes the colliding manual-added relation succeeds regardless of write order.
 - Cross-table guards cover every effective base-table record regardless of `source_kind`, including legacy W25 rows stored as `source_kind='added'`. Child-backed manual additions remain distinguished by `season_modification_added_legs`, so legacy base rows do not self-collide. Manual-after-legacy-base and legacy-base-after-manual insert/update bypasses are rejected; non-colliding writes remain valid. The base-only unique index remains intentionally scoped to active imported baseline rows.
 - The repair acquires the same advisory key used by `commit_seasonal_import_v2`, in deterministic season-ID order, before its ordered season-row locks and then the table graph. No table lock is held while waiting for a V2 season lock.
+- Every table-graph lock is fail-fast `NOWAIT`. Structural coverage requires all 16 static locks and both optional staging locks to retain deterministic order and `SHARE ROW EXCLUSIVE` mode, and requires `ON_ERROR_STOP` before the first lock/fingerprint boundary.
 - Occurrence identity matches `atomicSchedule.ts`: `record.date` is authoritative, airline and candidate flight strings are trimmed before fallback, and canonical flight identity follows `cleanFlightNumber`, including prefixed values and numeric padding. The helper, guards, finalizer index, audit, and repair postcondition use these semantics for both base and effective added legs.
 - The postcondition and audit share the same effective-base/effective-added concepts. The known incomplete W25 legacy classification remains an explicit non-action and is not weakened into a guessed repair.
 
@@ -180,7 +183,9 @@ The additive migration does not invoke the finalizer, so the known PR duplicates
 - `npm run test:rules`: passed.
 - Migration/schema occurrence-constraint blocks are byte-for-byte equal: 723 lines each, SHA-256 `0996d3c7ac36ced4456f1f24bb2edb7ef10dc7cf9685dfc99486c0eea473913a`.
 - Structural audit check: zero DML/DDL statements and a repeatable-read read-only transaction.
-- Structural repair check: exact V2 advisory locks precede ordered season-row locks, all 16 table locks precede fingerprints/backups, one executable `SET CONSTRAINTS ALL IMMEDIATE` fires before the postcondition, the final executable statement is `rollback;`, and uncommented `commit;` count is zero.
+- Focused source structural tests: 17 passed, 0 failed. The new test was first observed failing against the non-NOWAIT artifact, then passed after the repair update.
+- Structural repair check: exact V2 advisory locks precede ordered season-row locks; all 16 static and both optional staging table locks use `SHARE ROW EXCLUSIVE MODE NOWAIT` before fingerprints/backups; `ON_ERROR_STOP` is set before lock acquisition; one executable `SET CONSTRAINTS ALL IMMEDIATE` fires before the postcondition; the final executable statement is `rollback;`; and uncommented `commit;` count is zero.
+- A local two-session lock-manager probe was not run because this workstation has no Docker CLI, local `psql`, or PostgreSQL service, while PGlite does not provide an equivalent multi-session PostgreSQL lock manager. The production idle-server dry run successfully exercised the NOWAIT statements; no conflicting writer was introduced on production solely for testing.
 - `git diff --check`: passed.
 
 ## Deferred Task 12 Commit
