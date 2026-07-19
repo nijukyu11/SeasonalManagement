@@ -108,13 +108,14 @@ function addedModification(legId = 'added-record', changedFields: unknown[] = ['
   });
 }
 
-function addedLeg(legId = 'added-record') {
+function addedLeg(legId = 'added-record', overrides: Record<string, unknown> = {}) {
   return {
     ...record(legId),
     leg_id: legId,
     action: 'added',
     source_row_index: 0,
     source_kind: 'added',
+    ...overrides,
   };
 }
 
@@ -232,6 +233,105 @@ test('rejects orphan, duplicate, and non-added-parent added-leg children', () =>
     }), { seasonId: 'season-s26', dataVersion: 7 }),
     /modificationAddedLegs\[0\].*added modification/i,
   );
+});
+
+test('rejects an added-leg child whose record identity differs from its parent', () => {
+  assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({
+      modifications: [addedModification()],
+      modificationAddedLegs: [addedLeg('added-record', { record_id: 'cross-wired-record' })],
+    }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /added-record.*record_id.*parent leg_id/i,
+  );
+});
+
+test('rejects an added modification whose identity collides with a base record', () => {
+  assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({
+      flightRecords: [record('added-record')],
+      modifications: [addedModification()],
+      modificationAddedLegs: [addedLeg()],
+    }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /added-record.*must not reference.*base flight record/i,
+  );
+});
+
+test('rejects an inactive added-leg child', () => {
+  assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({
+      modifications: [addedModification()],
+      modificationAddedLegs: [addedLeg('added-record', { status: 'deleted' })],
+    }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /added-record.*status.*active/i,
+  );
+});
+
+test('rejects a wrong-action added-leg child', () => {
+  assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({
+      modifications: [addedModification()],
+      modificationAddedLegs: [addedLeg('added-record', { action: 'modified' })],
+    }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /added-record.*action.*added/i,
+  );
+});
+
+test('rejects an added-leg child with non-manual source_kind', () => {
+  assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({
+      modifications: [addedModification()],
+      modificationAddedLegs: [addedLeg('added-record', { source_kind: 'imported' })],
+    }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /added-record.*source_kind.*added/i,
+  );
+});
+
+test('rejects an added-leg child with source_side inconsistent with its type', () => {
+  assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({
+      modifications: [addedModification()],
+      modificationAddedLegs: [addedLeg('added-record', { source_side: 'DEP' })],
+    }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /added-record.*source_side.*ARR/i,
+  );
+});
+
+test('rejects an orphan modified modification', () => {
+  assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({
+      modifications: [modification({ leg_id: 'orphan-modified' })],
+    }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /orphan-modified.*modified.*base flight record/i,
+  );
+});
+
+test('rejects an orphan deleted modification', () => {
+  assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({
+      modifications: [modification({
+        leg_id: 'orphan-deleted',
+        action: 'deleted',
+        changed_fields: [],
+      })],
+    }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /orphan-deleted.*deleted.*base flight record/i,
+  );
+});
+
+test('accepts modified and deleted modifications owned by base flight records', () => {
+  const snapshot = parseSeasonalExportSnapshotRows(payload({
+    totalCount: 2,
+    flightRecords: [record('modified-record'), record('deleted-record')],
+    modifications: [
+      modification({ leg_id: 'modified-record' }),
+      modification({ leg_id: 'deleted-record', action: 'deleted', changed_fields: [] }),
+    ],
+  }), { seasonId: 'season-s26', dataVersion: 7 });
+
+  assert.deepEqual(snapshot.modifications.map((entry) => entry.leg_id), [
+    'modified-record',
+    'deleted-record',
+  ]);
 });
 
 test("mode='all' materializes a valid added modification from its marked child", () => {

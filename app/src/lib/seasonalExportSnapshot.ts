@@ -225,6 +225,10 @@ export function parseSeasonalExportSnapshotRows(
     modification.leg_id as string,
     modification,
   ]));
+  const addedLegsById = new Map(arrays.modificationAddedLegs.map((addedLeg) => [
+    addedLeg.leg_id as string,
+    addedLeg,
+  ]));
   arrays.modificationAddedLegs.forEach((row, index) => {
     const owner = modificationsById.get(row.leg_id as string);
     if (owner?.action !== 'added') {
@@ -232,14 +236,39 @@ export function parseSeasonalExportSnapshotRows(
     }
   });
   arrays.modifications.forEach((modification) => {
-    if (modification.action !== 'added') return;
     const legId = modification.leg_id as string;
+    if (modification.action !== 'added') {
+      if (!recordIds.has(legId)) {
+        throw new Error(`Modification ${legId} with action ${modification.action} must reference a base flight record.`);
+      }
+      return;
+    }
     const changedFields = modification.changed_fields as string[];
     if (!changedFields.includes('addedLeg')) {
       throw new Error(`Added modification ${legId} changed_fields must include addedLeg.`);
     }
-    if (!addedLegIds.has(legId)) {
+    const addedLeg = addedLegsById.get(legId);
+    if (!addedLegIds.has(legId) || !addedLeg) {
       throw new Error(`Added modification ${legId} must have exactly one matching added-leg child.`);
+    }
+    if (recordIds.has(legId)) {
+      throw new Error(`Added modification ${legId} must not reference an existing base flight record.`);
+    }
+    if (addedLeg.record_id !== legId) {
+      throw new Error(`Added modification ${legId} child record_id must equal its parent leg_id.`);
+    }
+    if (addedLeg.action !== 'added') {
+      throw new Error(`Added modification ${legId} child action must be added.`);
+    }
+    if (addedLeg.status !== 'active') {
+      throw new Error(`Added modification ${legId} child status must be active.`);
+    }
+    if (addedLeg.source_kind !== 'added') {
+      throw new Error(`Added modification ${legId} child source_kind must be added.`);
+    }
+    const expectedSourceSide = addedLeg.type === 'A' ? 'ARR' : 'DEP';
+    if (addedLeg.source_side !== expectedSourceSide) {
+      throw new Error(`Added modification ${legId} child source_side must be ${expectedSourceSide} for type ${addedLeg.type}.`);
     }
   });
 
