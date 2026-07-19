@@ -17,15 +17,20 @@ test('main Seasonal import sends canonical source rows and never builds client a
   const importStart = source.indexOf('const handleFile = useCallback');
   const importEnd = source.indexOf('const handleRowDoubleClick', importStart);
   const importSource = source.slice(importStart, importEnd);
-  const rpcStart = importSource.indexOf('applySeasonalImportRemote({');
-  const rpcEnd = importSource.indexOf('lastCommittedImportRef.current', rpcStart);
+  const refreshStart = source.indexOf('const applyTargetedCommittedImportRefresh = useCallback');
+  const refreshEnd = source.indexOf('const loadSeasonRows = useCallback', refreshStart);
+  const refreshSource = source.slice(refreshStart, refreshEnd);
+  const rpcStart = importSource.indexOf('attemptedImport = {');
+  const rpcEnd = importSource.indexOf('setPendingImportAttempt(attemptedImport)', rpcStart);
   const rpcInputSource = importSource.slice(rpcStart, rpcEnd);
 
+  assert.match(importSource, /canonicalizeSeasonalImportSourceRows\(parsedRows\)/);
   assert.match(importSource, /buildSeasonalImportV2Checksum\(seasonCode, sourceRows\)/);
   assert.match(importSource, /deriveSeasonalImportV2RequestId\(/);
-  assert.match(importSource, /applySeasonalImportRemote\(\{[\s\S]*sourceRows/);
-  assert.match(importSource, /refreshedWindow\.records/);
-  assert.match(importSource, /refreshedWindow\.modifications/);
+  assert.match(importSource, /setPendingImportAttempt\(attemptedImport\)[\s\S]*applySeasonalImportRemote\(attemptedImport\)/);
+  assert.match(rpcInputSource, /sourceRows/);
+  assert.match(refreshSource, /refreshed\.window\.records/);
+  assert.match(refreshSource, /refreshed\.window\.modifications/);
   assert.doesNotMatch(importSource, /flattenRowsToFlightRecords/);
   assert.doesNotMatch(importSource, /mergeDuplicateImportRecords/);
   assert.doesNotMatch(importSource, /buildSeasonalImportPatch/);
@@ -65,11 +70,13 @@ test('remote store performs the exact stage-then-commit V2 RPC sequence without 
   ]);
   assert.ok(stageCall >= 0, 'stage_seasonal_import_v2 must be called');
   assert.ok(commitCall > stageCall, 'commit_seasonal_import_v2 must run only after staging');
-  assert.match(methodSource, /p_import:\s*payload/);
-  assert.match(methodSource, /parseSeasonalImportV2StageResult/);
-  assert.match(methodSource, /p_batch_id:\s*staged\.batchId/);
-  assert.match(methodSource, /p_expected_data_version:\s*expectedDataVersion/);
-  assert.match(methodSource, /parseSeasonalImportV2Result/);
+  assert.match(methodSource, /runSeasonalImportV2RpcFlow\(payload/);
+  assert.match(methodSource, /p_import:\s*attempt/);
+  assert.match(methodSource, /p_batch_id:\s*batchId/);
+  assert.match(methodSource, /p_expected_data_version:\s*version/);
+  assert.match(methodSource, /canonicalizeSeasonalImportSourceRows\(input\.sourceRows\)/);
+  assert.match(methodSource, /assertSeasonalImportRpcOk/);
+  assert.match(supabaseStoreSource, /result\.error\.code[\s\S]*SeasonalImportV2RpcRejectedError/);
   assert.doesNotMatch(methodSource, /\bactor\b/);
   assert.doesNotMatch(methodSource, /flightRecords|flight_records|source_rows/);
   assert.doesNotMatch(supabaseStoreSource, /callSeasonalImportRpcRawPayload/);
@@ -88,6 +95,34 @@ test('committed seasonal import refresh failures have a dedicated non-retry UI b
   assert.match(contractSource, /Import committed, refresh failed/);
   assert.match(importSource, /return;/);
   assert.doesNotMatch(importSource, /retry.*commit|commit.*retry/i);
+});
+
+test('seasonal import recovery exposes explicit resume and targeted read-only refresh paths', () => {
+  const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
+  const resumeStart = source.indexOf('const handleResumeImportAttempt = useCallback');
+  const resumeEnd = source.indexOf('const handleFile = useCallback', resumeStart);
+  const refreshStart = source.indexOf('const handlePendingCommittedRefresh = useCallback');
+  const refreshEnd = source.indexOf('const handleResumeImportAttempt = useCallback', refreshStart);
+  const targetedStart = source.indexOf('const applyTargetedCommittedImportRefresh = useCallback');
+  const targetedEnd = source.indexOf('const loadSeasonRows = useCallback', targetedStart);
+  const resumeSource = source.slice(resumeStart, resumeEnd);
+  const refreshSource = source.slice(refreshStart, refreshEnd);
+  const targetedSource = source.slice(targetedStart, targetedEnd);
+
+  assert.match(resumeSource, /resumeSeasonalImportAttemptOnce\(attempt, applySeasonalImportRemote\)/);
+  assert.match(resumeSource, /SeasonalImportV2StatusUnknownError/);
+  assert.match(resumeSource, /setPendingImportAttempt\(attempt\)/);
+  assert.doesNotMatch(resumeSource, /while\s*\(|for\s*\(|retry/i);
+  assert.match(refreshSource, /applyTargetedCommittedImportRefresh\(committedImport, operation\)/);
+  assert.doesNotMatch(
+    refreshSource,
+    /applySeasonalImportRemote|resumeSeasonalImportAttemptOnce|stage_seasonal_import_v2|commit_seasonal_import_v2/,
+  );
+  assert.match(targetedSource, /loadTargetedCommittedImportRefresh/);
+  assert.match(targetedSource, /setPendingCommittedImport\(null\)/);
+  assert.doesNotMatch(source, /buildCommittedSeasonFallback|replaceSeasonInList/);
+  assert.match(source, />\s*Resume\/Check\s*</);
+  assert.match(source, />\s*Refresh\s*</);
 });
 
 test('server workspace window uses paged server fallback for transient RPC fetch failures', () => {

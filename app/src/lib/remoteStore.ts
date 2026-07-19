@@ -13,6 +13,10 @@ import type { SeasonChangeEvent } from './seasonChangeEvents';
 import { isSupabaseConfigured } from './supabase';
 import { getCachedOperationalSettings, setCachedOperationalSettings } from './seasonDataCache';
 import { isTauriRuntime } from './nativeRuntime';
+import type {
+  SeasonalImportV2CommittedResult,
+  SeasonalImportV2RpcAttempt,
+} from './seasonalImportRpcContract';
 
 export interface RemoteActor {
   uid?: string | null;
@@ -86,31 +90,11 @@ export interface RemoteSeasonImportCounts {
   flightRecords: number;
 }
 
-export interface RemoteSeasonalImportInput {
-  requestId: string;
-  checksum: string;
-  seasonId?: string | null;
-  seasonCode: string;
-  expectedDataVersion: number | null;
-  fileName: string;
-  uploadedAt: number;
-  sourceRows: ParsedRow[];
+export interface RemoteSeasonalImportInput extends SeasonalImportV2RpcAttempt {
   actor?: RemoteActor | null;
 }
 
-export interface RemoteSeasonalImportResult {
-  batchId: string;
-  seasonId: string;
-  seasonCode: string;
-  status: 'committed';
-  sourceRowCount: number;
-  flightRecordCount: number;
-  preservedOperationalCount: number;
-  removedImportedCount: number;
-  dataVersion: number;
-  serverHighWater: number;
-  checksum: string;
-}
+export type RemoteSeasonalImportResult = SeasonalImportV2CommittedResult;
 
 export interface RemoteDashboardSeasonData {
   sourceRows: ParsedRow[];

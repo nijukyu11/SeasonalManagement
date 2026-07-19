@@ -27,9 +27,10 @@ import type { SourceRowOperationPlan } from './sourceRowPatterns';
 import { validateOperationalSettings } from './settingsRules';
 import { serializeFlightModificationForPersistence } from './persistenceSchema';
 import {
+  canonicalizeSeasonalImportSourceRows,
   normalizeSeasonalImportExpectedDataVersion,
-  parseSeasonalImportV2Result,
-  parseSeasonalImportV2StageResult,
+  runSeasonalImportV2RpcFlow,
+  SeasonalImportV2RpcRejectedError,
 } from './seasonalImportRpcContract';
 import {
   fromFlightRecordRows,
@@ -200,6 +201,15 @@ function stripUndefinedDeep<T>(value: T): T {
 function assertOk<T>(result: SupabaseResult<T>, action: string): T {
   if (result.error) throw new Error(`${action}: ${result.error.message}`);
   return result.data as T;
+}
+
+function assertSeasonalImportRpcOk<T>(result: SupabaseResult<T>, action: string): T {
+  if (!result.error) return result.data as T;
+  const message = `${action}: ${result.error.message}`;
+  if (typeof result.error.code === 'string' && result.error.code.trim()) {
+    throw new SeasonalImportV2RpcRejectedError(message, result.error);
+  }
+  throw new Error(message);
 }
 
 function isMissingDashboardAlertColumnError(error: unknown): boolean {
@@ -1112,26 +1122,21 @@ export const supabaseStore: RemoteStore = {
       expectedDataVersion,
       fileName: input.fileName,
       uploadedAt: input.uploadedAt,
-      sourceRows: input.sourceRows,
+      sourceRows: canonicalizeSeasonalImportSourceRows(input.sourceRows),
     };
-    const staged = parseSeasonalImportV2StageResult(assertOk(
-      await client().rpc('stage_seasonal_import_v2', { p_import: payload }),
-      'stage seasonal import',
-    ));
-    const committed = parseSeasonalImportV2Result(assertOk(
-      await client().rpc('commit_seasonal_import_v2', {
-        p_batch_id: staged.batchId,
-        p_expected_data_version: expectedDataVersion,
-      }),
-      'commit seasonal import',
-    ));
-    if (committed.batchId !== staged.batchId) {
-      throw new Error('Seasonal import commit response.batchId does not match the staged batch.');
-    }
-    if (committed.checksum !== input.checksum) {
-      throw new Error('Seasonal import commit response.checksum does not match the request checksum.');
-    }
-    return committed;
+    return runSeasonalImportV2RpcFlow(payload, {
+      stage: async (attempt) => assertSeasonalImportRpcOk(
+        await client().rpc('stage_seasonal_import_v2', { p_import: attempt }),
+        'stage seasonal import',
+      ),
+      commit: async (batchId, version) => assertSeasonalImportRpcOk(
+        await client().rpc('commit_seasonal_import_v2', {
+          p_batch_id: batchId,
+          p_expected_data_version: version,
+        }),
+        'commit seasonal import',
+      ),
+    });
   },
 
   async applySeasonServerMutationV1(payload: ServerSeasonMutationPayload): Promise<ServerSeasonMutationResult> {

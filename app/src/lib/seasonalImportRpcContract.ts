@@ -1,6 +1,3 @@
-import type { RemoteSeasonalImportResult } from './remoteStore.ts';
-import type { ParsedRow } from './types.ts';
-
 const COMMITTED_RESULT_FIELDS = [
   'batchId',
   'seasonId',
@@ -24,18 +21,100 @@ const STAGE_RESULT_FIELDS = [
   'valid',
 ] as const;
 
+export interface CanonicalSeasonalSourceRow {
+  rowIndex: number;
+  effective: string;
+  discontinue: string;
+  airline: string;
+  aircraft: string;
+  daysOfWeek: [boolean, boolean, boolean, boolean, boolean, boolean, boolean];
+  sta: string | null;
+  arrFlight: string | null;
+  arrFlightType: string | null;
+  arrRoute: string | null;
+  arrFlightCategory: string | null;
+  arrCodeShares: string | null;
+  arrIntDomInd: string | null;
+  std: string | null;
+  depFlight: string | null;
+  depFlightType: string | null;
+  depRoute: string | null;
+  depFlightCategory: string | null;
+  depCodeShares: string | null;
+  depIntDomInd: string | null;
+  overnightLinkRowIndex: number | null;
+  linkType: 'overnight' | 'sameday' | null;
+}
+
+export interface SeasonalImportV2RpcAttempt {
+  requestId: string;
+  checksum: string;
+  seasonId?: string | null;
+  seasonCode: string;
+  expectedDataVersion: number;
+  fileName: string;
+  uploadedAt: number;
+  sourceRows: CanonicalSeasonalSourceRow[];
+}
+
+export interface SeasonalImportV2CommittedResult {
+  batchId: string;
+  seasonId: string;
+  seasonCode: string;
+  status: 'committed';
+  sourceRowCount: number;
+  flightRecordCount: number;
+  preservedOperationalCount: number;
+  removedImportedCount: number;
+  dataVersion: number;
+  serverHighWater: number;
+  checksum: string;
+}
+
 export interface SeasonalImportV2StageResult {
   batchId: string;
-  status: 'validated';
+  status: 'validated' | 'committed';
   sourceRowCount: number;
   generatedRecordCount: number;
   diagnostics: [];
   valid: true;
 }
 
+export interface SeasonalImportV2RpcTransport {
+  stage(payload: SeasonalImportV2RpcAttempt): Promise<unknown>;
+  commit(batchId: string, expectedDataVersion: number): Promise<unknown>;
+}
+
 export interface SeasonalImportCommittedRefreshFailure {
   title: 'Import committed, refresh failed';
   message: string;
+}
+
+export class SeasonalImportV2StageRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SeasonalImportV2StageRejectedError';
+  }
+}
+
+export class SeasonalImportV2StatusUnknownError extends Error {
+  readonly cause: unknown;
+
+  constructor(message: string, cause: unknown) {
+    super(message);
+    this.name = 'SeasonalImportV2StatusUnknownError';
+    this.cause = cause;
+  }
+}
+
+export class SeasonalImportV2RpcRejectedError extends Error {
+  readonly cause: unknown;
+
+  constructor(message: string, cause: unknown) {
+    super(message);
+    this.name = 'SeasonalImportV2RpcRejectedError';
+    this.cause = cause;
+  }
 }
 
 function requireExactRecord(
@@ -89,7 +168,7 @@ function diagnosticMessage(diagnostics: unknown[]): string {
   }).join('; ');
 }
 
-export function parseSeasonalImportV2Result(value: unknown): RemoteSeasonalImportResult {
+export function parseSeasonalImportV2Result(value: unknown): SeasonalImportV2CommittedResult {
   const record = requireExactRecord(value, COMMITTED_RESULT_FIELDS, 'Seasonal import commit response');
   const status = requireNonEmptyString(record, 'status', 'Seasonal import commit response');
   if (status !== 'committed') {
@@ -121,10 +200,12 @@ export function parseSeasonalImportV2StageResult(value: unknown): SeasonalImport
     throw new Error('Seasonal import stage response.diagnostics must be an array.');
   }
   if (record.diagnostics.length > 0) {
-    throw new Error(`Seasonal import stage diagnostics: ${diagnosticMessage(record.diagnostics)}`);
+    throw new SeasonalImportV2StageRejectedError(
+      `Seasonal import stage diagnostics: ${diagnosticMessage(record.diagnostics)}`,
+    );
   }
-  if (status !== 'validated') {
-    throw new Error('Seasonal import stage response.status must be validated.');
+  if (status !== 'validated' && status !== 'committed') {
+    throw new Error('Seasonal import stage response.status must be validated or committed.');
   }
   if (record.valid !== true) {
     throw new Error('Seasonal import stage response.valid must be true.');
@@ -141,36 +222,95 @@ export function parseSeasonalImportV2StageResult(value: unknown): SeasonalImport
 }
 
 function normalizeSeasonCode(seasonCode: string): string {
-  const normalized = seasonCode.trim().toUpperCase();
+  const normalized = seasonCode.trim().normalize('NFC').toUpperCase();
   if (!normalized) throw new Error('seasonCode must be a non-empty string.');
   return normalized;
 }
 
-function canonicalSourceRow(row: ParsedRow): Record<string, unknown> {
+function requireCanonicalString(record: Record<string, unknown>, field: string): string {
+  const value = record[field];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Canonical seasonal source row.${field} must be a non-empty string.`);
+  }
+  return value.normalize('NFC');
+}
+
+function optionalCanonicalString(record: Record<string, unknown>, field: string): string | null {
+  const value = record[field];
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') {
+    throw new Error(`Canonical seasonal source row.${field} must be a string, null, or absent.`);
+  }
+  return value.normalize('NFC');
+}
+
+function canonicalizeSourceRow(value: unknown, sourceIndex: number): CanonicalSeasonalSourceRow {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Canonical seasonal source row ${sourceIndex} must be an object.`);
+  }
+  const row = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(row.rowIndex) || (row.rowIndex as number) < 0) {
+    throw new Error(`Canonical seasonal source row ${sourceIndex}.rowIndex must be a safe non-negative integer.`);
+  }
+  if (
+    !Array.isArray(row.daysOfWeek)
+    || row.daysOfWeek.length !== 7
+    || row.daysOfWeek.some((day) => typeof day !== 'boolean')
+  ) {
+    throw new Error(`Canonical seasonal source row ${sourceIndex}.daysOfWeek must contain exactly seven booleans.`);
+  }
+  const overnightLinkRowIndex = row.overnightLinkRowIndex;
+  if (
+    overnightLinkRowIndex !== undefined
+    && overnightLinkRowIndex !== null
+    && (!Number.isSafeInteger(overnightLinkRowIndex) || (overnightLinkRowIndex as number) < 0)
+  ) {
+    throw new Error(
+      `Canonical seasonal source row ${sourceIndex}.overnightLinkRowIndex must be a safe non-negative integer, null, or absent.`,
+    );
+  }
+  const rawLinkType = row.linkType;
+  const linkType = rawLinkType === undefined || rawLinkType === null
+    ? null
+    : typeof rawLinkType === 'string'
+      ? rawLinkType.normalize('NFC')
+      : rawLinkType;
+  if (linkType !== null && linkType !== 'overnight' && linkType !== 'sameday') {
+    throw new Error(
+      `Canonical seasonal source row ${sourceIndex}.linkType must be overnight, sameday, null, or absent.`,
+    );
+  }
+
   return {
-    rowIndex: row.rowIndex,
-    effective: row.effective,
-    discontinue: row.discontinue,
-    airline: row.airline,
-    aircraft: row.aircraft,
-    daysOfWeek: row.daysOfWeek,
-    sta: row.sta,
-    arrFlight: row.arrFlight,
-    arrFlightType: row.arrFlightType,
-    arrRoute: row.arrRoute,
-    arrFlightCategory: row.arrFlightCategory,
-    arrCodeShares: row.arrCodeShares,
-    arrIntDomInd: row.arrIntDomInd,
-    std: row.std,
-    depFlight: row.depFlight,
-    depFlightType: row.depFlightType,
-    depRoute: row.depRoute,
-    depFlightCategory: row.depFlightCategory,
-    depCodeShares: row.depCodeShares,
-    depIntDomInd: row.depIntDomInd,
-    overnightLinkRowIndex: row.overnightLinkRowIndex,
-    linkType: row.linkType,
+    rowIndex: row.rowIndex as number,
+    effective: requireCanonicalString(row, 'effective'),
+    discontinue: requireCanonicalString(row, 'discontinue'),
+    airline: requireCanonicalString(row, 'airline'),
+    aircraft: requireCanonicalString(row, 'aircraft'),
+    daysOfWeek: [...row.daysOfWeek] as CanonicalSeasonalSourceRow['daysOfWeek'],
+    sta: optionalCanonicalString(row, 'sta'),
+    arrFlight: optionalCanonicalString(row, 'arrFlight'),
+    arrFlightType: optionalCanonicalString(row, 'arrFlightType'),
+    arrRoute: optionalCanonicalString(row, 'arrRoute'),
+    arrFlightCategory: optionalCanonicalString(row, 'arrFlightCategory'),
+    arrCodeShares: optionalCanonicalString(row, 'arrCodeShares'),
+    arrIntDomInd: optionalCanonicalString(row, 'arrIntDomInd'),
+    std: optionalCanonicalString(row, 'std'),
+    depFlight: optionalCanonicalString(row, 'depFlight'),
+    depFlightType: optionalCanonicalString(row, 'depFlightType'),
+    depRoute: optionalCanonicalString(row, 'depRoute'),
+    depFlightCategory: optionalCanonicalString(row, 'depFlightCategory'),
+    depCodeShares: optionalCanonicalString(row, 'depCodeShares'),
+    depIntDomInd: optionalCanonicalString(row, 'depIntDomInd'),
+    overnightLinkRowIndex: overnightLinkRowIndex == null ? null : overnightLinkRowIndex as number,
+    linkType,
   };
+}
+
+export function canonicalizeSeasonalImportSourceRows(
+  sourceRows: readonly unknown[],
+): CanonicalSeasonalSourceRow[] {
+  return sourceRows.map((row, index) => canonicalizeSourceRow(row, index));
 }
 
 function stableJson(value: unknown): string {
@@ -206,11 +346,11 @@ function bytesToHex(bytes: Uint8Array): string {
 
 export async function buildSeasonalImportV2Checksum(
   seasonCode: string,
-  sourceRows: readonly ParsedRow[],
+  sourceRows: readonly CanonicalSeasonalSourceRow[],
 ): Promise<string> {
   const canonicalPayload = stableJson({
     seasonCode: normalizeSeasonCode(seasonCode),
-    sourceRows: sourceRows.map(canonicalSourceRow),
+    sourceRows,
   });
   return bytesToHex(await sha256Bytes(canonicalPayload));
 }
@@ -223,7 +363,10 @@ export function normalizeSeasonalImportExpectedDataVersion(
   if (seasonId != null && !normalizedSeasonId) {
     throw new Error('seasonId must be a non-empty string when provided.');
   }
-  if (expectedDataVersion === null && !normalizedSeasonId) return 0;
+  if (!normalizedSeasonId) {
+    if (expectedDataVersion === null || expectedDataVersion === 0) return 0;
+    throw new Error('A new seasonal import must use expectedDataVersion zero.');
+  }
   if (!Number.isSafeInteger(expectedDataVersion) || (expectedDataVersion ?? -1) < 0) {
     throw new Error('expectedDataVersion must be a finite safe non-negative integer.');
   }
@@ -252,8 +395,64 @@ export async function deriveSeasonalImportV2RequestId(input: {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+function statusUnknown(stage: 'stage' | 'commit' | 'response', cause: unknown): SeasonalImportV2StatusUnknownError {
+  const detail = cause instanceof Error && cause.message ? ` ${cause.message}` : '';
+  return new SeasonalImportV2StatusUnknownError(
+    `Seasonal import ${stage} status is unknown.${detail}`,
+    cause,
+  );
+}
+
+export async function runSeasonalImportV2RpcFlow(
+  attempt: SeasonalImportV2RpcAttempt,
+  transport: SeasonalImportV2RpcTransport,
+): Promise<SeasonalImportV2CommittedResult> {
+  let stagePayload: unknown;
+  try {
+    stagePayload = await transport.stage(attempt);
+  } catch (error) {
+    if (error instanceof SeasonalImportV2RpcRejectedError) throw error;
+    throw statusUnknown('stage', error);
+  }
+
+  let staged: SeasonalImportV2StageResult;
+  try {
+    staged = parseSeasonalImportV2StageResult(stagePayload);
+  } catch (error) {
+    if (error instanceof SeasonalImportV2StageRejectedError) throw error;
+    throw statusUnknown('response', error);
+  }
+
+  let commitPayload: unknown;
+  try {
+    commitPayload = await transport.commit(staged.batchId, attempt.expectedDataVersion);
+  } catch (error) {
+    if (error instanceof SeasonalImportV2RpcRejectedError) throw error;
+    throw statusUnknown('commit', error);
+  }
+
+  try {
+    const committed = parseSeasonalImportV2Result(commitPayload);
+    if (committed.batchId !== staged.batchId) {
+      throw new Error('Seasonal import commit response.batchId does not match the staged batch.');
+    }
+    if (committed.checksum !== attempt.checksum) {
+      throw new Error('Seasonal import commit response.checksum does not match the request checksum.');
+    }
+    if (committed.seasonCode !== normalizeSeasonCode(attempt.seasonCode)) {
+      throw new Error('Seasonal import commit response.seasonCode does not match the request seasonCode.');
+    }
+    if (attempt.seasonId && committed.seasonId !== attempt.seasonId) {
+      throw new Error('Seasonal import commit response.seasonId does not match the requested seasonId.');
+    }
+    return committed;
+  } catch (error) {
+    throw statusUnknown('response', error);
+  }
+}
+
 export function buildSeasonalImportCommittedRefreshFailure(
-  result: RemoteSeasonalImportResult,
+  result: SeasonalImportV2CommittedResult,
   cause: unknown,
 ): SeasonalImportCommittedRefreshFailure {
   const causeMessage = cause instanceof Error && cause.message

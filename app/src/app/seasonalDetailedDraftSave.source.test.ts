@@ -165,16 +165,17 @@ test('Seasonal Schedule passes draft changes through the save guard flow', () =>
 test('Seasonal file actions wire the controller at commit, apply, and download boundaries', () => {
   const source = readSource('app/SeasonalSchedulePage.tsx');
   const importStart = source.indexOf('const handleFile = useCallback');
+  const refreshApplyStart = source.indexOf('const applyTargetedCommittedImportRefresh = useCallback');
   const exportStart = source.indexOf('const handleExportUpdated = useCallback');
   const commit = source.indexOf('applySeasonalImportRemote', importStart);
-  const importApply = source.indexOf('applySeasonData(patternRows, refreshedRecords, refreshedModifications)', commit);
+  const importApply = source.indexOf('applySeasonData(patternRows, refreshedRecords, refreshedModifications)', refreshApplyStart);
   const download = source.indexOf('downloadCanonicalSeasonalExcel', exportStart);
 
   assert.match(source, /createSeasonalFileActionController/);
   assert.match(source, /beginSeasonalFileAction\('import'\)/);
   assert.match(source, /beginSeasonalFileAction\('export'\)/);
   assert.ok(source.lastIndexOf('validateSeasonalFileAction(', commit) > importStart);
-  assert.ok(source.lastIndexOf('validateSeasonalFileAction(', importApply) > commit);
+  assert.ok(source.lastIndexOf('validateSeasonalFileAction(', importApply) > refreshApplyStart);
   assert.ok(source.lastIndexOf('validateSeasonalFileAction(', download) > exportStart);
 });
 
@@ -191,8 +192,8 @@ test('every Seasonal file action guard result returns before its side-effect bou
     ['handleImportClick', 'getSeasonalFileActionBlock', 'import', 'block', 'property', 'click', 'opening the import picker'],
     ['handleFile', 'getSeasonalFileActionBlock', 'import', 'block', 'identifier', 'findSeasonByCode', 'the first import server lookup'],
     ['handleFile', 'validateSeasonalFileAction', 'import', 'commitInvalidation', 'identifier', 'applySeasonalImportRemote', 'the import server commit'],
-    ['handleFile', 'validateSeasonalFileAction', 'import', 'applyInvalidation', 'identifier', 'setCachedSeasons', 'applying the committed cache snapshot'],
-    ['handleFile', 'validateSeasonalFileAction', 'import', 'finalApplyInvalidation', 'identifier', 'setSeasons', 'applying the committed UI snapshot'],
+    ['applyTargetedCommittedImportRefresh', 'validateSeasonalFileAction', 'import', 'applyInvalidation', 'identifier', 'setCachedSeasons', 'applying the committed cache snapshot'],
+    ['applyTargetedCommittedImportRefresh', 'validateSeasonalFileAction', 'import', 'finalApplyInvalidation', 'identifier', 'setSeasons', 'applying the committed UI snapshot'],
     ['handleExportUpdated', 'getSeasonalFileActionBlock', 'export', 'initialBlock', 'identifier', 'loadSeasonWorkspaceWindow', 'the export server request'],
     ['handleExportUpdated', 'validateSeasonalFileAction', 'export', 'snapshotInvalidation', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],
     ['handleExportUpdated', 'getSeasonalFileActionBlock', 'export', 'snapshotBlock', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],

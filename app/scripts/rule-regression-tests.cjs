@@ -10534,14 +10534,19 @@ async function run() {
       supabaseStoreSource.includes("select('*', { count: 'exact', head: true })") &&
       supabaseStoreSource.includes("rpc('stage_seasonal_import_v2'") &&
       supabaseStoreSource.includes("rpc('commit_seasonal_import_v2'") &&
-      supabaseStoreSource.includes('p_import: payload') &&
-      supabaseStoreSource.includes('p_batch_id: staged.batchId') &&
-      supabaseStoreSource.includes('p_expected_data_version: expectedDataVersion') &&
-      supabaseStoreSource.includes('parseSeasonalImportV2StageResult') &&
-      supabaseStoreSource.includes('parseSeasonalImportV2Result') &&
+      supabaseStoreSource.includes('runSeasonalImportV2RpcFlow(payload') &&
+      supabaseStoreSource.includes('p_import: attempt') &&
+      supabaseStoreSource.includes('p_batch_id: batchId') &&
+      supabaseStoreSource.includes('p_expected_data_version: version') &&
+      supabaseStoreSource.includes('canonicalizeSeasonalImportSourceRows(input.sourceRows)') &&
+      supabaseStoreSource.includes('assertSeasonalImportRpcOk') &&
+      supabaseStoreSource.includes('SeasonalImportV2RpcRejectedError') &&
       !supabaseStoreSource.includes('callSeasonalImportRpcRawPayload') &&
       !supabaseStoreSource.includes("rpc('apply_seasonal_import_remote'") &&
       seasonalImportRpcContractSource.includes('COMMITTED_RESULT_FIELDS') &&
+      seasonalImportRpcContractSource.includes('parseSeasonalImportV2StageResult') &&
+      seasonalImportRpcContractSource.includes('parseSeasonalImportV2Result') &&
+      seasonalImportRpcContractSource.includes("status: 'validated' | 'committed'") &&
       seasonalImportRpcContractSource.includes('Number.isSafeInteger') &&
       remoteStoreSource.includes('applySeasonalImportRemote?') &&
       seasonalPageSource.includes('applySeasonalImportRemote') &&
@@ -10560,7 +10565,10 @@ async function run() {
       [seasonalPageSource, detailedPageSource, dailyPageSource, dashboardPageSource, checkInPageSource, gatePageSource].every((source) =>
         source.includes('loadSeasonWorkspaceWindow') && !source.includes('queryNativeScheduleWindow') && !source.includes('queryNativeAllocationWindow')
       ) &&
+      seasonalPageSource.includes('canonicalizeSeasonalImportSourceRows(parsedRows)') &&
       seasonalPageSource.includes('buildSeasonalImportV2Checksum(seasonCode, sourceRows)') &&
+      seasonalPageSource.indexOf('setPendingImportAttempt(attemptedImport)') <
+        seasonalPageSource.indexOf('applySeasonalImportRemote(attemptedImport)') &&
       seasonalPageSource.includes('sourceRows,') &&
       seasonalPageSource.includes('remoteImport.sourceRowCount') &&
       !seasonalPageSource.includes('sourceRows: []') &&
@@ -10708,11 +10716,13 @@ async function run() {
       seasonalFileActionBusyBody.includes('|| fetchingServerData') &&
       seasonalImportClickBody.includes('const block = getSeasonalFileActionBlock({') &&
       seasonalImportClickBody.includes('busy: isSeasonalFileActionBusyNow()') &&
+      seasonalImportClickBody.includes('pendingImportAttemptRef.current || pendingCommittedImportRef.current') &&
       seasonalImportClickBody.includes('fileInputRef.current?.click()') &&
       seasonalImportHandlerBody.includes('const block = getSeasonalFileActionBlock({') &&
       seasonalImportHandlerBody.includes('busy: isSeasonalFileActionBusyNow()') &&
+      seasonalImportHandlerBody.includes('pendingImportAttemptRef.current || pendingCommittedImportRef.current') &&
       seasonalImportHandlerBody.includes("const operation = beginSeasonalFileAction('import')") &&
-      seasonalImportButtonBody.includes('disabled={seasonalFileActionBusy || hasDraftChanges}'),
+      seasonalImportButtonBody.includes('disabled={seasonalFileActionBusy || hasDraftChanges || seasonalImportRecoveryPending}'),
     'Seasonal import must be disabled and guarded while save or Fetch data is active so baseline replacement cannot race server reads'
   );
   const dailyImportHandlerStart = dailyPageSource.indexOf('const handleDailyImportFile = useCallback(async (file: File | null) => {');
@@ -10845,8 +10855,9 @@ async function run() {
       seasonSyncSource.match(/nativeFullSaveReason: 'sync-baseline'/g)?.length >= 5 &&
       !seasonalPageSource.includes('importNativeSeasonSnapshot({') &&
       seasonalPageSource.includes('loadSeasonWorkspaceWindow({') &&
+      seasonalPageSource.includes('canonicalizeSeasonalImportSourceRows(parsedRows)') &&
       seasonalPageSource.includes('buildSeasonalImportV2Checksum(seasonCode, sourceRows)') &&
-      seasonalPageSource.includes('applySeasonalImportRemote({') &&
+      seasonalPageSource.includes('applySeasonalImportRemote(attemptedImport)') &&
       !seasonalPageSource.includes('sourceRows: []') &&
       !seasonalPageSource.includes("nativeFullSaveReason: 'undo-reset'") &&
       detailedPageSource.includes('runNativeScheduleMutation') &&
