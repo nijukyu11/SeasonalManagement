@@ -1,5 +1,9 @@
 import * as XLSX from 'xlsx';
-import { flattenRowsToFlightRecords, flightRecordsToLegs } from './atomicSchedule';
+import {
+  canonicalizeSeasonalFlightIdentity,
+  flattenRowsToFlightRecords,
+  flightRecordsToLegs,
+} from './atomicSchedule';
 import { materializeEffectiveSeasonalLegs } from './effectiveSeasonalLegs.ts';
 import {
   closeSeasonalSelectionOverPairs,
@@ -272,8 +276,9 @@ function buildCandidates(legs: FlightLeg[]): {
 
 function legIdentity(leg: FlightLeg | null): unknown[] {
   if (!leg) return [];
+  const identity = canonicalizeSeasonalFlightIdentity(leg);
   return [
-    leg.rawFlightNumber,
+    identity.flightNumber,
     leg.route,
     leg.schedule,
     leg.category,
@@ -319,11 +324,12 @@ function rowFromCandidate(candidate: RowCandidate, dates: string[], rowIndex: nu
 }
 
 function occurrenceSignature(leg: Pick<FlightLeg, 'type' | 'date' | 'airline' | 'flightNumber' | 'route' | 'schedule' | 'aircraft' | 'category' | 'codeShares' | 'intDomInd'>): string {
+  const identity = canonicalizeSeasonalFlightIdentity(leg);
   return [
     leg.type,
     leg.date,
-    leg.airline,
-    leg.flightNumber,
+    identity.airline,
+    identity.flightNumber,
     leg.route,
     leg.schedule,
     leg.aircraft,

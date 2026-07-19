@@ -8,12 +8,18 @@ import {
   applySeasonalImportRemote,
   findSeasonByCode,
   getSeasons,
+  getSeasonalExportSnapshot,
   loadSeasonWorkspaceWindow,
   type RemoteSeasonalImportInput,
   type RemoteSeasonalImportResult,
 } from '@/lib/remoteStore';
 import { validateFlightLegsForSeasonalExport } from '@/lib/exporter';
 import { buildCanonicalSeasonalRows, downloadCanonicalSeasonalExcel } from '@/lib/canonicalSeasonalRows';
+import { materializeEffectiveSeasonalLegs } from '@/lib/effectiveSeasonalLegs';
+import {
+  validateSeasonalExportSelection,
+  type SeasonalExportSelection,
+} from '@/lib/seasonalExportSelection';
 import {
   buildFlightRecordHistoryEntry,
   countHistoryEntryLegs,
@@ -95,7 +101,6 @@ import {
 
 const PAGE_SIZE = 50;
 const DAY_LABELS = ['1', '2', '3', '4', '5', '6', '7'];
-const FULL_SEASON_EXPORT_LIMIT = 500000;
 
 function buildSeasonalWindowKey(input: {
   dateFrom?: string | null;
@@ -122,6 +127,13 @@ interface SeasonalScheduleDraftState {
   baseModifications: Map<string, FlightModification>;
   records: FlightRecord[];
   modifications: FlightModification[];
+}
+
+function describeSeasonalExportFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error ?? 'Unknown export error.');
+  if (/version|data version/i.test(message)) return `Version: ${message}`;
+  if (/snapshot|array|totalCount|truncated|season mismatch/i.test(message)) return `Snapshot: ${message}`;
+  return `Server: ${message}`;
 }
 
 function countSeasonalDraftChanges(draft: SeasonalScheduleDraftState | null): number {
@@ -240,6 +252,7 @@ export default function HomePage() {
   const [displayRows, setDisplayRows] = useState<DisplayRow[]>([]);
   const [flightRecords, setFlightRecords] = useState<FlightRecord[]>([]);
   const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
+  const [exportAllSelected, setExportAllSelected] = useState(false);
   const [modifications, setModifications] = useState<Map<string, FlightModification>>(new Map());
   const [modHistory, setModHistory] = useState<ModHistoryEntry[]>([]);
   const [draftState, setDraftStateValue] = useState<SeasonalScheduleDraftState | null>(null);
@@ -416,6 +429,7 @@ export default function HomePage() {
       );
       return unknownIds.length === 0 ? previous : new Set();
     });
+    setExportAllSelected(false);
   }, []);
 
   const publishSeasonalWorkspaceChange = useCallback((
@@ -874,17 +888,18 @@ export default function HomePage() {
   }, [flightRecords, linkModalGroup]);
 
   const toggleGroupSelection = useCallback((group: DisplayGroup) => {
+    setExportAllSelected(false);
     setSelectedRecordIds((prev) => {
-      const next = new Set(prev);
+      const next = exportAllSelected ? new Set<string>() : new Set(prev);
       const ids = Array.from(group.recordIds);
-      const allSelected = ids.length > 0 && ids.every((id) => next.has(id));
+      const allSelected = exportAllSelected || (ids.length > 0 && ids.every((id) => next.has(id)));
       for (const id of ids) {
         if (allSelected) next.delete(id);
         else next.add(id);
       }
       return next;
     });
-  }, []);
+  }, [exportAllSelected]);
 
   // Filtering on DisplayGroups
   const filteredGroups = useMemo(() => {
@@ -927,23 +942,12 @@ export default function HomePage() {
     return result;
   }, [displayGroups, debouncedFilters, groupOverlapsDateFilter]);
 
-  const filteredRecordIds = useMemo(() => {
-    const ids: string[] = [];
-    for (const group of filteredGroups) ids.push(...group.recordIds);
-    return Array.from(new Set(ids));
-  }, [filteredGroups]);
-  const allFilteredSelected = filteredRecordIds.length > 0 && filteredRecordIds.every((id) => selectedRecordIds.has(id));
-  const hasPartialFilteredSelection = !allFilteredSelected && filteredRecordIds.some((id) => selectedRecordIds.has(id));
-  const toggleAllFilteredSelection = useCallback(() => {
-    setSelectedRecordIds((prev) => {
-      const next = new Set(prev);
-      for (const id of filteredRecordIds) {
-        if (allFilteredSelected) next.delete(id);
-        else next.add(id);
-      }
-      return next;
-    });
-  }, [allFilteredSelected, filteredRecordIds]);
+  const allSeasonSelected = exportAllSelected;
+  const hasPartialSeasonSelection = !exportAllSelected && selectedRecordIds.size > 0;
+  const toggleAllSeasonSelection = useCallback(() => {
+    setExportAllSelected((current) => !current);
+    setSelectedRecordIds(new Set());
+  }, []);
 
   const totalPages = Math.ceil(filteredGroups.length / PAGE_SIZE);
   const pagedGroups = filteredGroups.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -969,21 +973,20 @@ export default function HomePage() {
   const handleExportUpdated = useCallback(async () => {
     if (!activeSeason) return;
     const exportSeason = activeSeason;
-    const localSelection = reconcileSeasonalSelection(
-      Array.from(selectedRecordIds),
-      buildSeasonalAvailableRecordIds(flightRecords, modifications),
-    );
+    const exportSelection: SeasonalExportSelection = {
+      seasonId: exportSeason.id,
+      dataVersion: exportSeason.dataVersion ?? 0,
+      mode: exportAllSelected ? 'all' : 'ids',
+      recordIds: Array.from(selectedRecordIds),
+    };
     const initialBlock = getSeasonalFileActionBlock({
       action: 'export',
       hasDraftChanges: latestDraftStateRef.current.hasDraftChanges,
       busy: isSeasonalFileActionBusyNow(),
-      selectedCount: localSelection.matchedIds.length,
-      staleSelectionCount: localSelection.unknownIds.length,
+      selectedCount: exportSelection.mode === 'all' ? 1 : exportSelection.recordIds.length,
+      staleSelectionCount: 0,
     });
     if (initialBlock) {
-      if (initialBlock.code === 'stale-selection') {
-        setSelectedRecordIds(new Set(localSelection.matchedIds));
-      }
       void showAlert({
         title: initialBlock.code === 'no-selection' ? 'Select flights to export' : 'Cannot Export',
         message: initialBlock.code === 'no-selection'
@@ -1004,44 +1007,55 @@ export default function HomePage() {
     }
     try {
       setIsExporting(true);
-      const exportWindow = await loadSeasonWorkspaceWindow({
+      const exportSnapshot = await getSeasonalExportSnapshot({
         seasonId: exportSeason.id,
-        dateFrom: null,
-        dateTo: null,
-        resourceType: 'schedule',
-        limit: FULL_SEASON_EXPORT_LIMIT,
+        expectedDataVersion: exportSelection.dataVersion,
       });
-      if (!exportWindow) throw new Error('Server seasonal schedule export window is unavailable.');
       const snapshotInvalidation = validateSeasonalFileAction(operation);
       if (snapshotInvalidation) {
         showSeasonalFileActionInvalidation('export', snapshotInvalidation);
         return;
       }
-      const exportRecords = exportWindow.records;
-      const exportModifications = exportWindow.modifications;
-      const serverSelection = reconcileSeasonalSelection(
-        localSelection.matchedIds,
-        buildSeasonalAvailableRecordIds(exportRecords, exportModifications),
+      const effectiveSnapshotLegs = materializeEffectiveSeasonalLegs(
+        exportSnapshot.records,
+        exportSnapshot.modifications,
       );
+      const selectedSnapshot = validateSeasonalExportSelection({
+        selection: exportSelection,
+        snapshotSeasonId: exportSnapshot.seasonId,
+        snapshotDataVersion: exportSnapshot.dataVersion,
+        effectiveLegs: effectiveSnapshotLegs,
+      });
+      if (!selectedSnapshot.valid) {
+        const issue = selectedSnapshot.issues[0];
+        const issueLeg = issue?.recordId
+          ? effectiveSnapshotLegs.find((leg) => leg.id === issue.recordId)
+          : null;
+        const flightLabel = issueLeg ? `${issueLeg.flightNumber} on ${issueLeg.date}: ` : '';
+        void showAlert({
+          title: 'Cannot Export',
+          message: `${issue?.code ?? 'selection'}: ${flightLabel}${issue?.message ?? 'Invalid export selection.'}`,
+          tone: 'error',
+        });
+        return;
+      }
       const snapshotBlock = getSeasonalFileActionBlock({
         action: 'export',
         hasDraftChanges: latestDraftStateRef.current.hasDraftChanges,
         busy: false,
-        selectedCount: serverSelection.matchedIds.length,
-        staleSelectionCount: serverSelection.unknownIds.length,
+        selectedCount: selectedSnapshot.legs.length,
+        staleSelectionCount: selectedSnapshot.issues.filter((issue) => issue.code === 'unknown-record-id').length,
       });
       if (snapshotBlock) {
-        setSelectedRecordIds(new Set(serverSelection.matchedIds));
         void showAlert({ title: 'Cannot Export', message: snapshotBlock.message, tone: 'warning' });
         return;
       }
-      const selectedIds = serverSelection.matchedIds;
+      const exportLegs = selectedSnapshot.legs;
       const canonicalExport = buildCanonicalSeasonalRows({
-        records: exportRecords,
-        modifications: exportModifications,
-        selectedRecordIds: selectedIds,
+        records: exportSnapshot.records,
+        modifications: exportSnapshot.modifications,
+        selectedRecordIds: selectedSnapshot.recordIds,
       });
-      const exportLegs = canonicalExport.effectiveLegs;
       const violations = findDuplicateFlightNumberViolations(exportLegs);
       if (violations.length > 0) {
         void showAlert({
@@ -1053,9 +1067,11 @@ export default function HomePage() {
       }
       const exportValidation = validateFlightLegsForSeasonalExport(exportLegs);
       if (!exportValidation.valid) {
+        const issue = exportValidation.issues[0];
+        const issueLeg = exportLegs.find((leg) => leg.id === issue.legId);
         void showAlert({
           title: 'Cannot Export',
-          message: exportValidation.issues[0].message,
+          message: `${issue.code}: ${issueLeg ? `${issueLeg.flightNumber} on ${issueLeg.date}: ` : ''}${issue.message}`,
           tone: 'error',
         });
         return;
@@ -1063,9 +1079,13 @@ export default function HomePage() {
       if (!canonicalExport.validation.valid) {
         void showAlert({
           title: 'Cannot Export',
-          message: canonicalExport.validation.issues[0]?.message ?? 'Canonical seasonal export does not round-trip.',
+          message: `round-trip: ${canonicalExport.validation.issues[0]?.message ?? 'Canonical seasonal export does not round-trip.'}`,
           tone: 'error',
         });
+        return;
+      }
+      if (canonicalExport.rows.length === 0) {
+        void showAlert({ title: 'Cannot Export', message: 'zero-selection: Export would create a blank workbook.', tone: 'error' });
         return;
       }
       const downloadInvalidation = validateSeasonalFileAction(operation);
@@ -1076,7 +1096,7 @@ export default function HomePage() {
       const result = await downloadCanonicalSeasonalExcel(canonicalExport.rows, exportSeason.seasonCode);
       notifyExportCompleted(result);
     } catch (err) {
-      void showAlert({ title: 'Export Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Cannot Export', message: describeSeasonalExportFailure(err), tone: 'error' });
     } finally {
       setIsExporting(false);
       finishSeasonalFileAction(operation);
@@ -1085,9 +1105,8 @@ export default function HomePage() {
     activeSeason,
     beginSeasonalFileAction,
     finishSeasonalFileAction,
-    flightRecords,
+    exportAllSelected,
     isSeasonalFileActionBusyNow,
-    modifications,
     notifyExportCompleted,
     selectedRecordIds,
     showAlert,
@@ -2131,16 +2150,16 @@ export default function HomePage() {
               <button
                 className="flex items-center gap-1.5 bg-tertiary-container text-on-tertiary-container text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-tertiary-container/80 transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={handleExportUpdated}
-                disabled={activeDisplayLegs.length === 0 || selectedRecordIds.size === 0 || seasonalFileActionBusy || hasDraftChanges}
-                title={isExporting ? 'Exporting selected flights' : selectedRecordIds.size === 0 ? 'Select flights to export' : 'Export selected flights'}
+                disabled={(!exportAllSelected && (activeDisplayLegs.length === 0 || selectedRecordIds.size === 0)) || seasonalFileActionBusy || hasDraftChanges}
+                title={isExporting ? 'Exporting selected flights' : exportAllSelected ? 'Export all flights in season' : selectedRecordIds.size === 0 ? 'Select flights to export' : 'Export selected flights'}
               >
                 <span className={`material-symbols-outlined text-[16px] ${isExporting ? 'animate-spin' : ''}`}>{isExporting ? 'sync' : 'download'}</span>
-                {isExporting ? 'Exporting...' : selectedRecordIds.size > 0 ? `Export (${selectedRecordIds.size})` : 'Export'}
+                {isExporting ? 'Exporting...' : exportAllSelected ? 'Export All' : selectedRecordIds.size > 0 ? `Export (${selectedRecordIds.size})` : 'Export'}
               </button>
             </div>
             <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-on-surface-variant">
               <span>{filteredGroups.length.toLocaleString()} groups after filters</span>
-              <span>{selectedRecordIds.size.toLocaleString()} selected for export</span>
+              <span>{exportAllSelected ? 'All season flights selected' : `${selectedRecordIds.size.toLocaleString()} selected for export`}</span>
             </div>
           </div>
 
@@ -2202,13 +2221,13 @@ export default function HomePage() {
                           <div className="flex items-center gap-2">
                             <input
                               type="checkbox"
-                              checked={allFilteredSelected}
+                              checked={allSeasonSelected}
                               ref={(node) => {
-                                if (node) node.indeterminate = hasPartialFilteredSelection;
+                                if (node) node.indeterminate = hasPartialSeasonSelection;
                               }}
-                              onChange={toggleAllFilteredSelection}
-                              disabled={filteredRecordIds.length === 0}
-                              aria-label="Select all flights in current table for export"
+                              onChange={toggleAllSeasonSelection}
+                              disabled={!activeSeason}
+                              aria-label="Select all flights in season for export"
                               className="h-4 w-4 rounded border-outline text-primary focus:ring-primary disabled:opacity-40"
                             />
                             <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Export</span>
@@ -2324,7 +2343,7 @@ export default function HomePage() {
                             <td className="py-3 px-3 whitespace-nowrap" onDoubleClick={(e) => e.stopPropagation()}>
                               <input
                                 type="checkbox"
-                                checked={group.recordIds.size > 0 && Array.from(group.recordIds).every((id) => selectedRecordIds.has(id))}
+                                checked={exportAllSelected || (group.recordIds.size > 0 && Array.from(group.recordIds).every((id) => selectedRecordIds.has(id)))}
                                 onChange={(e) => {
                                   e.stopPropagation();
                                   toggleGroupSelection(group);

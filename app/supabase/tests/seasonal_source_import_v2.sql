@@ -82,6 +82,9 @@ insert into public.app_operator_permission_overrides (user_id, permission_key, e
 values ('a2a8ee9c-8e84-4cb7-aef6-358af42c3b31', 'seasonal.write', 'allow');
 
 insert into public.app_operator_permission_overrides (user_id, permission_key, effect)
+values ('a2a8ee9c-8e84-4cb7-aef6-358af42c3b31', 'seasonal.read', 'allow');
+
+insert into public.app_operator_permission_overrides (user_id, permission_key, effect)
 values ('d11b35f2-62b1-4310-b3ca-4d46762c79e8', 'seasonal.write', 'allow');
 
 insert into public.seasons (
@@ -4586,5 +4589,172 @@ begin
   drop trigger task5_suppress_source_row on public.season_source_rows;
 end
 $$;
+
+insert into public.seasons (
+  id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+  total_legs, total_source_rows, data_version
+) values (
+  'task8-export-season', 'X80', 'Task 8 export snapshot', 'X80.xlsx', 0,
+  '2026-12-01', '2026-12-02', 3, 0, 5
+);
+
+insert into public.season_flight_records (
+  season_id, record_id, link_id, type, airline, flight_number, raw_flight_number,
+  route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+  operational_date, day_of_week, source_row_index, source_kind, source_side, status
+) values
+  (
+    'task8-export-season', 'z-record', 'z-record', 'D', 'LJ', 'LJ082', '82',
+    'ICN', '07:05', '738', 'J', '2026-12-02', '2026-12-02', '07:05',
+    '2026-12-02', 3, 2, 'imported', 'DEP', 'active'
+  ),
+  (
+    'task8-export-season', 'a-record', 'a-record', 'A', 'LJ', 'LJ081', '81',
+    'ICN', '23:15', '738', 'J', '2026-12-01', '2026-12-01', '23:15',
+    '2026-12-01', 2, 1, 'imported', 'ARR', 'active'
+  );
+
+insert into public.season_flight_record_counters (
+  record_id, counter_group, item_index, counter_value
+) values ('a-record', '__single__', 0, '24');
+
+insert into public.season_flight_record_checkin_windows (
+  record_id, counter_key, window_start, window_end
+) values ('a-record', '24', '20:15', '22:15');
+
+insert into public.season_modifications (
+  season_id, leg_id, action, changed_fields, gate, check_in_allocation_mode
+) values
+  ('task8-export-season', 'a-record', 'modified', array['gate'], 3, 'grouped'),
+  ('task8-export-season', 'added-record', 'added', array[]::text[], null, null);
+
+insert into public.season_modification_counters (
+  leg_id, counter_group, item_index, counter_value
+) values ('a-record', '__single__', 0, '25');
+
+insert into public.season_modification_checkin_windows (
+  leg_id, counter_key, window_start, window_end
+) values ('a-record', '25', '20:30', '22:30');
+
+insert into public.season_modification_added_legs (
+  season_id, leg_id, record_id, link_id, type, airline, flight_number,
+  raw_flight_number, route, schedule, aircraft, category, date,
+  scheduled_date, scheduled_time, operational_date, day_of_week,
+  action, source_row_index, source_kind, source_side, status
+) values (
+  'task8-export-season', 'added-record', 'added-record', 'added-record', 'A',
+  'VN', 'VN336', '336', 'KIX', '09:00', '321', 'J', '2026-12-02',
+  '2026-12-02', '09:00', '2026-12-02', 3, 'added', 0, 'added', 'ARR', 'active'
+);
+
+insert into public.season_change_events (
+  season_id, client_id, op_id, actor_user_id, target_type, target_id,
+  changed_fields, op_payload
+) values (
+  'task8-export-season', 'task8-export-test', 'task8-export-event',
+  'a2a8ee9c-8e84-4cb7-aef6-358af42c3b31', 'seasonImport',
+  'task8-export-season', array['flightRecords'], '{}'::jsonb
+);
+
+do $$
+begin
+  if not has_function_privilege(
+    'authenticated',
+    'public.get_seasonal_export_snapshot_v2(text,integer)',
+    'EXECUTE'
+  ) then
+    raise exception 'authenticated must execute get_seasonal_export_snapshot_v2';
+  end if;
+  if has_function_privilege(
+    'anon',
+    'public.get_seasonal_export_snapshot_v2(text,integer)',
+    'EXECUTE'
+  ) then
+    raise exception 'anon must not execute get_seasonal_export_snapshot_v2';
+  end if;
+  if not exists (
+    select 1
+    from pg_proc procedures
+    join pg_namespace namespaces on namespaces.oid = procedures.pronamespace
+    where namespaces.nspname = 'public'
+      and procedures.proname = 'get_seasonal_export_snapshot_v2'
+      and procedures.prosecdef
+      and procedures.provolatile = 's'
+      and coalesce(array_to_string(procedures.proconfig, ','), '')
+        like '%search_path=pg_catalog, pg_temp%'
+  ) then
+    raise exception 'export snapshot RPC must be STABLE hardened SECURITY DEFINER';
+  end if;
+end
+$$;
+
+set local role authenticated;
+
+do $$
+declare
+  v_snapshot jsonb;
+begin
+  v_snapshot := public.get_seasonal_export_snapshot_v2('task8-export-season', 5);
+  if v_snapshot->>'seasonId' <> 'task8-export-season'
+    or (v_snapshot->>'dataVersion')::integer <> 5
+    or (v_snapshot->>'totalCount')::integer <> 2
+    or v_snapshot->>'truncated' <> 'false'
+    or (v_snapshot->>'serverHighWater')::bigint <= 0
+  then
+    raise exception 'export snapshot metadata is invalid: %', v_snapshot;
+  end if;
+
+  if (v_snapshot->'flightRecords'->0->>'record_id') <> 'a-record'
+    or (v_snapshot->'flightRecords'->1->>'record_id') <> 'z-record'
+    or jsonb_array_length(v_snapshot->'flightRecordCounters') <> 1
+    or jsonb_array_length(v_snapshot->'flightRecordWindows') <> 1
+    or jsonb_array_length(v_snapshot->'modifications') <> 2
+    or jsonb_array_length(v_snapshot->'modificationCounters') <> 1
+    or jsonb_array_length(v_snapshot->'modificationWindows') <> 1
+    or jsonb_array_length(v_snapshot->'modificationAddedLegs') <> 1
+  then
+    raise exception 'export snapshot relations are incomplete or non-deterministic: %', v_snapshot;
+  end if;
+
+  if exists (
+    select 1
+    from jsonb_each(v_snapshot) fields(key, value)
+    where fields.key in (
+      'flightRecords', 'flightRecordCounters', 'flightRecordWindows',
+      'modifications', 'modificationCounters', 'modificationWindows',
+      'modificationAddedLegs'
+    )
+      and jsonb_typeof(fields.value) <> 'array'
+  ) then
+    raise exception 'export snapshot relation field was not an array';
+  end if;
+
+  begin
+    perform public.get_seasonal_export_snapshot_v2('task8-export-season', 4);
+    raise exception 'stale export data version was accepted';
+  exception
+    when serialization_failure then null;
+  end;
+end
+$$;
+
+select set_config('request.jwt.claim.sub', 'd11b35f2-62b1-4310-b3ca-4d46762c79e8', true);
+
+do $$
+begin
+  begin
+    perform public.get_seasonal_export_snapshot_v2('task8-export-season', 5);
+    raise exception 'operator without seasonal.read fetched export snapshot';
+  exception
+    when insufficient_privilege then
+      if position('seasonal.read' in sqlerrm) = 0 then
+        raise;
+      end if;
+  end;
+end
+$$;
+
+reset role;
+select set_config('request.jwt.claim.sub', 'a2a8ee9c-8e84-4cb7-aef6-358af42c3b31', true);
 
 rollback;

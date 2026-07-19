@@ -96,6 +96,21 @@ export interface RemoteSeasonalImportInput extends SeasonalImportV2RpcAttempt {
 
 export type RemoteSeasonalImportResult = SeasonalImportV2CommittedResult;
 
+export interface RemoteSeasonalExportSnapshotInput {
+  seasonId: string;
+  expectedDataVersion: number;
+}
+
+export interface RemoteSeasonalExportSnapshot {
+  seasonId: string;
+  dataVersion: number;
+  totalCount: number;
+  serverHighWater: number;
+  truncated: false;
+  records: FlightRecord[];
+  modifications: Map<string, FlightModification>;
+}
+
 export interface RemoteDashboardSeasonData {
   sourceRows: ParsedRow[];
   records: FlightRecord[];
@@ -162,6 +177,9 @@ export interface RemoteStore {
   applySeasonalImportRemote?(input: RemoteSeasonalImportInput): Promise<RemoteSeasonalImportResult>;
   verifySeasonImportCounts?(seasonId: string, expected: RemoteSeasonImportCounts): Promise<RemoteSeasonImportCounts>;
   getFlightRecords(seasonId: string): Promise<FlightRecord[]>;
+  getSeasonalExportSnapshot?(
+    input: RemoteSeasonalExportSnapshotInput
+  ): Promise<RemoteSeasonalExportSnapshot>;
   getDashboardSeasonData?(seasonId: string): Promise<RemoteDashboardSeasonData>;
   getSeasonWorkspaceWindow?(input: RemoteSeasonWorkspaceWindowInput): Promise<RemoteSeasonWorkspaceWindowResult | null>;
   getSeasonWorkspaceSnapshot?(
@@ -345,6 +363,15 @@ export async function verifySeasonImportCounts(seasonId: string, expected: Remot
 }
 export async function getFlightRecords(seasonId: string): Promise<FlightRecord[]> {
   return (await getRemoteStore()).getFlightRecords(seasonId);
+}
+export async function getSeasonalExportSnapshot(
+  input: RemoteSeasonalExportSnapshotInput
+): Promise<RemoteSeasonalExportSnapshot> {
+  const store = await getRemoteStore();
+  if (!store.getSeasonalExportSnapshot) {
+    throw new Error('Strict seasonal export snapshot RPC is unavailable for the configured backend.');
+  }
+  return store.getSeasonalExportSnapshot(input);
 }
 export async function getSeasonEventHighWater(seasonId: string): Promise<number> {
   const store = await getRemoteStore();

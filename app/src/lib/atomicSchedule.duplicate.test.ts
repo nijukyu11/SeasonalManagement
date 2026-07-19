@@ -61,3 +61,29 @@ test('duplicate validation allows copying same flight number to an empty target 
     );
   });
 });
+
+test('duplicate validation canonicalizes short and prefixed flight numbers before candidate filtering', () => {
+  const existing = leg({
+    id: 'existing-lj081',
+    airline: 'LJ',
+    flightNumber: '81',
+    rawFlightNumber: '81',
+  });
+  const added = leg({
+    id: 'added-lj081',
+    airline: 'LJ',
+    flightNumber: 'LJ081',
+    rawFlightNumber: '081',
+    action: 'added',
+  });
+
+  assert.throws(
+    () => assertNoDuplicateFlightNumbersForEffectiveRecords(
+      [existing],
+      new Map(),
+      [added],
+      [{ legId: added.id, action: 'added' }],
+    ),
+    /Duplicate flight number LJ081 on 2026-11-01/,
+  );
+});

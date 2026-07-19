@@ -9487,24 +9487,30 @@ async function run() {
     fixedViewportViolations.length === 0,
     `App UI must use dynamic viewport height (h-dvh) instead of h-screen, got ${fixedViewportViolations.slice(0, 12).map(({ relativePath, lineNumber }) => `${relativePath}:${lineNumber}`).join(', ')}`
   );
+  const seasonalExportSource = seasonalPageSource.slice(
+    seasonalPageSource.indexOf('const handleExportUpdated = useCallback'),
+    seasonalPageSource.indexOf('const handleUndo = useCallback')
+  );
   assert(
-    seasonalPageSource.includes('const initialBlock = getSeasonalFileActionBlock({') &&
-      seasonalPageSource.includes('selectedCount: localSelection.matchedIds.length') &&
-      seasonalPageSource.includes("initialBlock.code === 'no-selection' ? 'Select flights to export'") &&
-      seasonalPageSource.includes('selectedRecordIds: selectedIds') &&
-      !seasonalPageSource.includes('selectedRecordIds.size > 0 ? Array.from(selectedRecordIds) : undefined') &&
-      !seasonalPageSource.includes('Export Updated Schedule'),
-    'Seasonal canonical export must require selected flights; full export should happen only when the user selects all rows'
+    seasonalExportSource.includes('const exportSelection: SeasonalExportSelection = {') &&
+      seasonalExportSource.includes('seasonId: exportSeason.id') &&
+      seasonalExportSource.includes("mode: exportAllSelected ? 'all' : 'ids'") &&
+      seasonalExportSource.includes('getSeasonalExportSnapshot({') &&
+      seasonalExportSource.includes('records: exportSnapshot.records') &&
+      seasonalExportSource.includes('selectedRecordIds: selectedSnapshot.recordIds') &&
+      !seasonalExportSource.includes('loadSeasonWorkspaceWindow') &&
+      !seasonalExportSource.includes('queryNativeScheduleWindow'),
+    'Seasonal canonical export must use one season/version-scoped full server snapshot without window or native fallback'
   );
   assert(
     seasonalPageSource.includes('const [isExporting, setIsExporting]') &&
-      seasonalPageSource.includes('toggleAllFilteredSelection') &&
-      seasonalPageSource.includes('allFilteredSelected') &&
-      seasonalPageSource.includes('hasPartialFilteredSelection') &&
-      seasonalPageSource.includes('node.indeterminate = hasPartialFilteredSelection') &&
-      seasonalPageSource.includes('aria-label="Select all flights in current table for export"') &&
+      seasonalPageSource.includes('toggleAllSeasonSelection') &&
+      seasonalPageSource.includes('allSeasonSelected') &&
+      seasonalPageSource.includes('hasPartialSeasonSelection') &&
+      seasonalPageSource.includes('node.indeterminate = hasPartialSeasonSelection') &&
+      seasonalPageSource.includes('aria-label="Select all flights in season for export"') &&
       seasonalPageSource.includes('Exporting...'),
-    'Seasonal export UX must include a header select-all checkbox and show Exporting... while canonical export is running'
+    'Seasonal export UX must include a full-season select-all checkbox and show Exporting... while canonical export is running'
   );
   const tauriDefaultCapabilityPath = path.join(root, 'src-tauri', 'capabilities', 'default.json');
   const tauriDefaultCapabilitySource = fs.existsSync(tauriDefaultCapabilityPath) ? fs.readFileSync(tauriDefaultCapabilityPath, 'utf8') : '';

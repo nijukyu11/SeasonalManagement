@@ -199,11 +199,14 @@ test('server-authoritative schedule pages reject missing server windows without 
   assert.doesNotMatch(detailedLoad, /\bqueryNativeScheduleWindow\b/, 'detailed');
 });
 
-test('Seasonal export reads selected records from server workspace instead of native SQLite', () => {
+test('Seasonal export reads one strict full server snapshot instead of a window or native SQLite', () => {
   const source = readFileSync(join(process.cwd(), 'src/app/SeasonalSchedulePage.tsx'), 'utf8');
   const exportSource = extractFunctionBody(source, 'handleExportUpdated');
-  assert.match(exportSource, /loadSeasonWorkspaceWindow/, 'seasonal export');
+  assert.match(exportSource, /getSeasonalExportSnapshot/, 'seasonal export');
+  assert.match(exportSource, /materializeEffectiveSeasonalLegs\(\s*exportSnapshot\.records,\s*exportSnapshot\.modifications/, 'seasonal export');
+  assert.doesNotMatch(exportSource, /loadSeasonWorkspaceWindow/, 'seasonal export');
   assert.doesNotMatch(exportSource, /queryNativeScheduleWindow/, 'seasonal export');
+  assert.doesNotMatch(exportSource, /buildSeasonalAvailableRecordIds\(flightRecords,\s*modifications\)/, 'seasonal export');
 });
 
 test('Fetch data does not submit unsent route-local commits before server reads', () => {

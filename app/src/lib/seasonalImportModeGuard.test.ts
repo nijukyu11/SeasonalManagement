@@ -327,6 +327,37 @@ test('seasonal source import V2 SQL suite preserves runtime regression fixtures'
   assert.match(sqlTestSource, /rollback;\s*$/);
 });
 
+test('seasonal export V2 uses one strict permissioned full snapshot in migration and schema', () => {
+  const migrationSource = readFileSync(
+    join(root, '..', 'supabase', 'migrations', '20260718090000_seasonal_source_import_v2.sql'),
+    'utf8'
+  );
+  const schemaSource = readFileSync(join(root, '..', 'supabase', 'schema.sql'), 'utf8');
+  const functionPattern = /create or replace function public\.get_seasonal_export_snapshot_v2\([\s\S]*?\n\$\$;/i;
+  const migrationFunction = requireSqlSection(migrationSource, functionPattern, 'export snapshot function in migration');
+  const schemaFunction = requireSqlSection(schemaSource, functionPattern, 'export snapshot function in schema');
+
+  assert.equal(schemaFunction, migrationFunction);
+  for (const source of [migrationSource, schemaSource]) {
+    const body = requireSqlSection(source, functionPattern, 'export snapshot function');
+    assert.match(body, /app_operator_has_permission\('seasonal\.read'\)/);
+    assert.match(body, /security definer/i);
+    assert.match(body, /set search_path = pg_catalog, pg_temp/i);
+    assert.match(body, /'flightRecords'/);
+    assert.match(body, /'flightRecordCounters'/);
+    assert.match(body, /'flightRecordWindows'/);
+    assert.match(body, /'modifications'/);
+    assert.match(body, /'modificationCounters'/);
+    assert.match(body, /'modificationWindows'/);
+    assert.match(body, /'modificationAddedLegs'/);
+    assert.match(body, /'truncated', false/);
+    assert.doesNotMatch(body, /operational_date\s*(?:>=|<=|between)/i);
+    assert.doesNotMatch(body, /\blimit\b/i);
+    assert.match(source, /revoke execute on function public\.get_seasonal_export_snapshot_v2\(text, integer\) from public, anon/);
+    assert.match(source, /grant execute on function public\.get_seasonal_export_snapshot_v2\(text, integer\) to authenticated/);
+  }
+});
+
 test('seasonal source import V2 tracks a bounded real-PostgreSQL concurrency harness', () => {
   const concurrencySource = readFileSync(
     join(root, '..', 'supabase', 'tests', 'seasonal_source_import_v2_concurrency.mjs'),

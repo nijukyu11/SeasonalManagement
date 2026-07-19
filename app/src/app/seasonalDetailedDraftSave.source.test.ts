@@ -194,7 +194,7 @@ test('every Seasonal file action guard result returns before its side-effect bou
     ['handleFile', 'validateSeasonalFileAction', 'import', 'commitInvalidation', 'identifier', 'applySeasonalImportRemote', 'the import server commit'],
     ['applyTargetedCommittedImportRefresh', 'validateSeasonalFileAction', 'import', 'applyInvalidation', 'identifier', 'setCachedSeasons', 'applying the committed cache snapshot'],
     ['applyTargetedCommittedImportRefresh', 'validateSeasonalFileAction', 'import', 'finalApplyInvalidation', 'identifier', 'setSeasons', 'applying the committed UI snapshot'],
-    ['handleExportUpdated', 'getSeasonalFileActionBlock', 'export', 'initialBlock', 'identifier', 'loadSeasonWorkspaceWindow', 'the export server request'],
+    ['handleExportUpdated', 'getSeasonalFileActionBlock', 'export', 'initialBlock', 'identifier', 'getSeasonalExportSnapshot', 'the export server request'],
     ['handleExportUpdated', 'validateSeasonalFileAction', 'export', 'snapshotInvalidation', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],
     ['handleExportUpdated', 'getSeasonalFileActionBlock', 'export', 'snapshotBlock', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],
     ['handleExportUpdated', 'validateSeasonalFileAction', 'export', 'downloadInvalidation', 'identifier', 'downloadCanonicalSeasonalExcel', 'the export download'],
@@ -222,8 +222,19 @@ test('Seasonal selection is reset or reconciled at every snapshot boundary', () 
 
   assert.match(source, /const handleSeasonChange[\s\S]{0,500}setSelectedRecordIds\(new Set\(\)\)/);
   assert.match(source, /reconcileSeasonalSelection\(\s*Array\.from\(previous\),\s*buildSeasonalAvailableRecordIds\(records,\s*mods\)/);
-  assert.match(source, /buildSeasonalAvailableRecordIds\(flightRecords,\s*modifications\)/);
-  assert.match(source, /buildSeasonalAvailableRecordIds\(exportRecords,\s*exportModifications\)/);
+  assert.match(source, /validateSeasonalExportSelection\(\{/);
+  assert.match(source, /mode:\s*exportAllSelected\s*\?\s*'all'\s*:\s*'ids'/);
+  assert.match(source, /getSeasonalExportSnapshot\(\{/);
+  const exportSource = source.slice(
+    source.indexOf('const handleExportUpdated = useCallback'),
+    source.indexOf('const handleUndo = useCallback'),
+  );
+  assert.match(
+    exportSource,
+    /materializeEffectiveSeasonalLegs\(\s*exportSnapshot\.records,\s*exportSnapshot\.modifications/,
+  );
+  assert.doesNotMatch(exportSource, /loadSeasonWorkspaceWindow/);
+  assert.doesNotMatch(exportSource, /buildSeasonalAvailableRecordIds\(flightRecords,\s*modifications\)/);
   assert.match(source, /return\s+unknownIds\.length\s*===\s*0\s*\?\s*previous\s*:\s*new Set\(\);/);
   assert.match(
     source,

@@ -755,15 +755,30 @@ export interface DuplicateFlightNumberViolation {
 }
 
 type FlightIdentity = Pick<FlightLeg, 'id' | 'date' | 'airline' | 'flightNumber' | 'action'> & {
+  rawFlightNumber?: string | null;
   status?: FlightRecord['status'];
 };
+
+export function canonicalizeSeasonalFlightIdentity(
+  flight: Pick<FlightIdentity, 'airline' | 'flightNumber' | 'rawFlightNumber'>,
+): { airline: string; flightNumber: string } {
+  const airline = flight.airline.trim().toUpperCase();
+  const sourceFlightNumber = String(flight.flightNumber ?? '').trim()
+    || String(flight.rawFlightNumber ?? '').trim();
+  const cleaned = cleanFlightNumber(airline, sourceFlightNumber);
+  return {
+    airline,
+    flightNumber: cleaned?.flightNumber ?? `${airline}${sourceFlightNumber.toUpperCase()}`,
+  };
+}
 
 export function findDuplicateFlightNumberViolations(records: FlightIdentity[]): DuplicateFlightNumberViolation[] {
   const seen = new Map<string, FlightIdentity[]>();
 
   for (const record of records) {
     if (record.status === 'deleted' || record.action === 'deleted') continue;
-    const key = `${record.date}|${record.airline}|${record.flightNumber}`;
+    const identity = canonicalizeSeasonalFlightIdentity(record);
+    const key = `${record.date}|${identity.airline}|${identity.flightNumber}`;
     const bucket = seen.get(key) ?? [];
     bucket.push(record);
     seen.set(key, bucket);
@@ -796,7 +811,8 @@ export function assertNoDuplicateFlightNumbers(records: FlightIdentity[]): void 
 type FlightDuplicateModification = Pick<FlightModification, 'legId' | 'action'>;
 
 function flightIdentityKey(record: FlightIdentity): string {
-  return `${record.date}|${record.airline}|${record.flightNumber}`;
+  const identity = canonicalizeSeasonalFlightIdentity(record);
+  return `${record.date}|${identity.airline}|${identity.flightNumber}`;
 }
 
 export function assertNoDuplicateFlightNumbersForEffectiveRecords(

@@ -55,7 +55,7 @@ test('round-trip accepts legacy short raw flight numbers after normalization', (
     linkId: 'LEG_A_2026-03-29_153_LJ_LJ081_ICN_23_15_738',
     type: 'A',
     airline: 'LJ',
-    flightNumber: 'LJ081',
+    flightNumber: '81',
     rawFlightNumber: '81',
     requestStatusCode: null,
     route: 'ICN',
@@ -94,6 +94,25 @@ test('round-trip accepts legacy short raw flight numbers after normalization', (
   assert.equal(result.rows.length, 1);
   assert.equal(result.rows[0].arrFlight, '81');
   assert.equal(result.validation.valid, true, JSON.stringify(result.validation));
+});
+
+test('canonical identity handles leading zeros and prefixed values without double-prefixing', () => {
+  for (const [flightNumber, rawFlightNumber, expectedCell] of [
+    ['081', '081', '081'],
+    ['LJ81', 'LJ81', 'LJ81'],
+    ['LJ081', '081', '081'],
+  ]) {
+    const candidate = flightRecord({
+      id: `identity-${flightNumber}`,
+      airline: 'LJ',
+      flightNumber,
+      rawFlightNumber,
+      type: 'A',
+    });
+    const result = buildCanonicalSeasonalRows({ records: [candidate], modifications: new Map() });
+    assert.equal(result.rows[0].arrFlight, expectedCell);
+    assert.equal(result.validation.valid, true, JSON.stringify(result.validation));
+  }
 });
 
 function flightRecord(overrides = {}) {
