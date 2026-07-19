@@ -3,14 +3,20 @@ import test from 'node:test';
 
 import { materializeEffectiveSeasonalLegs } from './effectiveSeasonalLegs.ts';
 import { validateSeasonalExportSelection } from './seasonalExportSelection.ts';
-import { parseSeasonalExportSnapshotRows } from './seasonalExportSnapshot.ts';
+import {
+  materializeSeasonalExportSnapshot,
+  parseSeasonalExportSnapshotRows,
+} from './seasonalExportSnapshot.ts';
+import { loadTargetedCommittedImportRefresh } from './seasonalImportRecovery.ts';
+import type { RemoteSeasonalImportResult } from './remoteStore.ts';
 import {
   fromModificationRows,
   type ModificationAddedLegRelationalRow,
   type ModificationRelationalRow,
 } from './supabaseRelationalMappers.ts';
+import type { Season } from './types.ts';
 
-function record(recordId = 'record-1') {
+function record(recordId = 'record-1', overrides: Record<string, unknown> = {}) {
   return {
     season_id: 'season-s26',
     record_id: recordId,
@@ -52,14 +58,17 @@ function record(recordId = 'record-1') {
     source_side: 'ARR',
     status: 'active',
     turnaround_id: null,
+    ...overrides,
   };
 }
 
 function payload(overrides: Record<string, unknown> = {}) {
   return {
     seasonId: 'season-s26',
+    seasonCode: 'S26',
     dataVersion: 7,
     totalCount: 1,
+    sourceRowCount: 1,
     serverHighWater: 12,
     truncated: false,
     flightRecords: [record()],
@@ -126,6 +135,8 @@ test('accepts one complete exact export snapshot', () => {
   });
 
   assert.equal(parsed.flightRecords.length, 1);
+  assert.equal(parsed.seasonCode, 'S26');
+  assert.equal(parsed.sourceRowCount, 1);
   assert.equal(parsed.totalCount, 1);
   assert.equal(parsed.truncated, false);
 });
@@ -155,10 +166,11 @@ test('rejects every missing relation array and truncated snapshots', () => {
   );
 });
 
-test('rejects malformed counts, entries, count mismatch, season mismatch, and version mismatch', () => {
+test('rejects malformed metadata, entries, physical count mismatch, season mismatch, and version mismatch', () => {
   for (const [field, value] of [
     ['dataVersion', Number.NaN],
     ['totalCount', -1],
+    ['sourceRowCount', -1],
     ['serverHighWater', 1.5],
   ] as const) {
     assert.throws(
@@ -176,6 +188,10 @@ test('rejects malformed counts, entries, count mismatch, season mismatch, and ve
     /season.*mismatch/i,
   );
   assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({ seasonCode: '' }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /seasonCode.*non-empty/i,
+  );
+  assert.throws(
     () => parseSeasonalExportSnapshotRows(payload({ dataVersion: 8 }), { seasonId: 'season-s26', dataVersion: 7 }),
     /version.*mismatch/i,
   );
@@ -187,6 +203,78 @@ test('rejects malformed counts, entries, count mismatch, season mismatch, and ve
     () => parseSeasonalExportSnapshotRows(payload({ modifications: [modification({ changed_fields: ['gate', 42] })] }), { seasonId: 'season-s26', dataVersion: 7 }),
     /modifications\[0\].*changed_fields/i,
   );
+
+  for (const field of ['seasonCode', 'sourceRowCount']) {
+    const missing = payload();
+    Reflect.deleteProperty(missing, field);
+    assert.throws(
+      () => parseSeasonalExportSnapshotRows(missing, { seasonId: 'season-s26', dataVersion: 7 }),
+      new RegExp(field, 'i'),
+    );
+  }
+});
+
+test('accepts preserved physical added records without changing imported row semantics', () => {
+  const parsed = parseSeasonalExportSnapshotRows(payload({
+    totalCount: 2,
+    flightRecords: [
+      record('imported-record'),
+      record('legacy-added-record', { source_kind: 'added', action: 'added', status: 'active' }),
+    ],
+  }), { seasonId: 'season-s26', dataVersion: 7 });
+
+  assert.equal(parsed.flightRecords.length, 2);
+  assert.deepEqual(parsed.flightRecords.map((entry) => entry.source_kind), ['imported', 'added']);
+});
+
+test('strict materializer and committed refresh cache imported plus preserved physical rows', async () => {
+  const snapshot = materializeSeasonalExportSnapshot(payload({
+    totalCount: 2,
+    flightRecords: [
+      record('imported-deleted', { action: 'deleted', status: 'deleted' }),
+      record('preserved-added', { source_kind: 'added', action: 'added', status: 'active' }),
+    ],
+  }), { seasonId: 'season-s26', expectedDataVersion: 7 });
+  const committed = {
+    batchId: '10000000-0000-4000-8000-000000000001',
+    seasonId: 'season-s26',
+    seasonCode: 'S26',
+    status: 'committed',
+    sourceRowCount: 1,
+    flightRecordCount: 1,
+    preservedOperationalCount: 1,
+    removedImportedCount: 0,
+    dataVersion: 7,
+    serverHighWater: 12,
+    checksum: 'cross-layer',
+  } satisfies RemoteSeasonalImportResult;
+  const season = {
+    id: committed.seasonId,
+    seasonCode: committed.seasonCode,
+    name: 'Summer 2026',
+    fileName: 'S26.xlsx',
+    uploadedAt: 0,
+    effectiveStart: '2026-03-29',
+    effectiveEnd: '2026-10-24',
+    totalLegs: 1,
+    totalSourceRows: 1,
+    dataVersion: 7,
+  } satisfies Season;
+
+  const refreshed = await loadTargetedCommittedImportRefresh({
+    committedImport: committed,
+    loadSeasons: async () => [season],
+    loadSnapshot: async () => snapshot,
+  });
+
+  assert.deepEqual(refreshed.window.records.map((entry) => entry.id), [
+    'imported-deleted',
+    'preserved-added',
+  ]);
+  assert.deepEqual(refreshed.window.records.map((entry) => entry.sourceKind), [
+    'imported',
+    'added',
+  ]);
 });
 
 test('rejects an added modification without an added-leg child', () => {

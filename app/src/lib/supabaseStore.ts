@@ -86,7 +86,7 @@ import { FIRESTORE_WRITE_BATCH_SIZE, chunkFirestoreWrites, pauseBetweenFirestore
 import { splitModHistoryEntriesForFirestore } from './modHistorySizing';
 import { splitAuditDeltaChunks } from './auditLog';
 import type { LocalEntityVersionMap } from './localSeasonStore';
-import { parseSeasonalExportSnapshotRows } from './seasonalExportSnapshot';
+import { materializeSeasonalExportSnapshot } from './seasonalExportSnapshot';
 
 type SupabaseError = { message: string; code?: string | null; details?: string | null; hint?: string | null };
 type SupabaseResult<T> = { data: T | null; error: SupabaseError | null };
@@ -427,50 +427,6 @@ function mapWorkspaceSnapshot(snapshot: SeasonWorkspaceSnapshotRpc): RemoteSeaso
     modHistory,
     cursor: { serverHighWater },
     entityVersions: toEntityVersionMap(snapshotArray(snapshot.entityVersions)),
-  };
-}
-
-function mapSeasonalExportSnapshot(
-  payload: unknown,
-  input: RemoteSeasonalExportSnapshotInput,
-): RemoteSeasonalExportSnapshot {
-  const snapshot = parseSeasonalExportSnapshotRows(payload, {
-    seasonId: input.seasonId,
-    dataVersion: input.expectedDataVersion,
-  });
-  const flightRecordRows = snapshot.flightRecords as FlightRecordRelationalRow[];
-  const flightRecordCounters = snapshot.flightRecordCounters as FlightRecordCounterRelationalRow[];
-  const flightRecordWindows = snapshot.flightRecordWindows as FlightRecordWindowRelationalRow[];
-  const modificationRows = snapshot.modifications as ModificationRelationalRow[];
-  const modificationCounters = snapshot.modificationCounters as ModificationCounterRelationalRow[];
-  const modificationWindows = snapshot.modificationWindows as ModificationWindowRelationalRow[];
-  const modificationAddedLegs = snapshot.modificationAddedLegs as ModificationAddedLegRelationalRow[];
-
-  const countersByRecord = groupRowsByKey(flightRecordCounters, (row) => row.record_id);
-  const windowsByRecord = groupRowsByKey(flightRecordWindows, (row) => row.record_id);
-  const records = flightRecordRows.map((row) => fromFlightRecordRows(
-    row,
-    countersByRecord.get(row.record_id) ?? [],
-    windowsByRecord.get(row.record_id) ?? [],
-  ));
-  const countersByLeg = groupRowsByKey(modificationCounters, (row) => row.leg_id);
-  const windowsByLeg = groupRowsByKey(modificationWindows, (row) => row.leg_id);
-  const addedLegsByLeg = new Map(modificationAddedLegs.map((row) => [row.leg_id, row]));
-  const modifications = new Map(modificationRows.map((row) => [row.leg_id, fromModificationRows(
-    row,
-    countersByLeg.get(row.leg_id) ?? [],
-    windowsByLeg.get(row.leg_id) ?? [],
-    addedLegsByLeg.get(row.leg_id),
-  )]));
-
-  return {
-    seasonId: snapshot.seasonId,
-    dataVersion: snapshot.dataVersion,
-    totalCount: snapshot.totalCount,
-    serverHighWater: snapshot.serverHighWater,
-    truncated: false,
-    records,
-    modifications,
   };
 }
 
@@ -1127,7 +1083,7 @@ export const supabaseStore: RemoteStore = {
       }),
       'load strict seasonal export snapshot',
     );
-    return mapSeasonalExportSnapshot(payload, input);
+    return materializeSeasonalExportSnapshot(payload, input);
   },
 
   async getDashboardSeasonData(seasonId: string): Promise<RemoteDashboardSeasonData> {

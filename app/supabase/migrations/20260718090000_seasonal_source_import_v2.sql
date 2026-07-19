@@ -3605,11 +3605,17 @@ begin
       when seasons.data_version <> p_expected_data_version then null
       else pg_catalog.jsonb_build_object(
         'seasonId', seasons.id,
+        'seasonCode', seasons.season_code,
         'dataVersion', seasons.data_version,
         'totalCount', (
           select pg_catalog.count(*)
           from public.season_flight_records records
           where records.season_id = seasons.id
+        ),
+        'sourceRowCount', (
+          select pg_catalog.count(*)
+          from public.season_source_rows source_rows
+          where source_rows.season_id = seasons.id
         ),
         'serverHighWater', coalesce((
           select pg_catalog.max(events.server_seq)

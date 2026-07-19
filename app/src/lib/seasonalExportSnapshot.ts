@@ -1,9 +1,27 @@
+import type {
+  RemoteSeasonalExportSnapshot,
+  RemoteSeasonalExportSnapshotInput,
+} from './remoteStore.ts';
+import {
+  fromFlightRecordRows,
+  fromModificationRows,
+  type FlightRecordCounterRelationalRow,
+  type FlightRecordRelationalRow,
+  type FlightRecordWindowRelationalRow,
+  type ModificationAddedLegRelationalRow,
+  type ModificationCounterRelationalRow,
+  type ModificationRelationalRow,
+  type ModificationWindowRelationalRow,
+} from './supabaseRelationalMappers.ts';
+
 type JsonObject = Record<string, unknown>;
 
 export interface SeasonalExportSnapshotRows {
   seasonId: string;
+  seasonCode: string;
   dataVersion: number;
   totalCount: number;
+  sourceRowCount: number;
   serverHighWater: number;
   truncated: false;
   flightRecords: JsonObject[];
@@ -183,8 +201,10 @@ export function parseSeasonalExportSnapshotRows(
   const seasonId = typeof root.seasonId === 'string' && root.seasonId.length > 0
     ? root.seasonId
     : (() => { throw new Error('seasonId must be a non-empty string.'); })();
+  const seasonCode = stringField(root, 'seasonCode', 'seasonal export snapshot', false);
   const dataVersion = nonNegativeInteger(root, 'dataVersion');
   const totalCount = nonNegativeInteger(root, 'totalCount');
+  const sourceRowCount = nonNegativeInteger(root, 'sourceRowCount');
   const serverHighWater = nonNegativeInteger(root, 'serverHighWater');
   if (root.truncated !== false) throw new Error('truncated must be exactly false.');
   if (seasonId !== expected.seasonId) throw new Error(`Export snapshot season mismatch: expected ${expected.seasonId}, got ${seasonId}.`);
@@ -274,10 +294,68 @@ export function parseSeasonalExportSnapshotRows(
 
   return {
     seasonId,
+    seasonCode,
     dataVersion,
     totalCount,
+    sourceRowCount,
     serverHighWater,
     truncated: false,
     ...arrays,
+  };
+}
+
+function groupRowsByKey<T>(rows: T[], getKey: (row: T) => string): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const row of rows) {
+    const key = getKey(row);
+    const current = grouped.get(key) ?? [];
+    current.push(row);
+    grouped.set(key, current);
+  }
+  return grouped;
+}
+
+export function materializeSeasonalExportSnapshot(
+  payload: unknown,
+  input: RemoteSeasonalExportSnapshotInput,
+): RemoteSeasonalExportSnapshot {
+  const snapshot = parseSeasonalExportSnapshotRows(payload, {
+    seasonId: input.seasonId,
+    dataVersion: input.expectedDataVersion,
+  });
+  const flightRecordRows = snapshot.flightRecords as FlightRecordRelationalRow[];
+  const flightRecordCounters = snapshot.flightRecordCounters as FlightRecordCounterRelationalRow[];
+  const flightRecordWindows = snapshot.flightRecordWindows as FlightRecordWindowRelationalRow[];
+  const modificationRows = snapshot.modifications as ModificationRelationalRow[];
+  const modificationCounters = snapshot.modificationCounters as ModificationCounterRelationalRow[];
+  const modificationWindows = snapshot.modificationWindows as ModificationWindowRelationalRow[];
+  const modificationAddedLegs = snapshot.modificationAddedLegs as ModificationAddedLegRelationalRow[];
+  const countersByRecord = groupRowsByKey(flightRecordCounters, (row) => row.record_id);
+  const windowsByRecord = groupRowsByKey(flightRecordWindows, (row) => row.record_id);
+  const records = flightRecordRows.map((row) => fromFlightRecordRows(
+    row,
+    countersByRecord.get(row.record_id) ?? [],
+    windowsByRecord.get(row.record_id) ?? [],
+  ));
+  const countersByLeg = groupRowsByKey(modificationCounters, (row) => row.leg_id);
+  const windowsByLeg = groupRowsByKey(modificationWindows, (row) => row.leg_id);
+  const addedLegsByLeg = new Map(modificationAddedLegs.map((row) => [row.leg_id, row]));
+  const modifications = new Map(modificationRows.map((row) => [row.leg_id, fromModificationRows(
+    row,
+    countersByLeg.get(row.leg_id) ?? [],
+    windowsByLeg.get(row.leg_id) ?? [],
+    addedLegsByLeg.get(row.leg_id),
+  )]));
+
+  return {
+    seasonId: snapshot.seasonId,
+    seasonCode: snapshot.seasonCode,
+    dataVersion: snapshot.dataVersion,
+    totalCount: snapshot.totalCount,
+    sourceRowCount: snapshot.sourceRowCount,
+    serverHighWater: snapshot.serverHighWater,
+    truncated: false,
+    records,
+    modifications,
   };
 }

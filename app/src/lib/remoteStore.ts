@@ -100,8 +100,10 @@ export interface RemoteSeasonalExportSnapshotInput {
 
 export interface RemoteSeasonalExportSnapshot {
   seasonId: string;
+  seasonCode: string;
   dataVersion: number;
   totalCount: number;
+  sourceRowCount: number;
   serverHighWater: number;
   truncated: false;
   records: FlightRecord[];

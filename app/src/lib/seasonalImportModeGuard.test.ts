@@ -545,6 +545,9 @@ test('seasonal export V2 uses one strict permissioned full snapshot in migration
     assert.match(body, /security definer/i);
     assert.match(body, /set search_path = pg_catalog, pg_temp/i);
     assert.match(body, /'flightRecords'/);
+    assert.match(body, /'seasonCode', seasons\.season_code/);
+    assert.match(body, /'sourceRowCount'/);
+    assert.match(body, /from public\.season_source_rows source_rows/);
     assert.match(body, /'flightRecordCounters'/);
     assert.match(body, /'flightRecordWindows'/);
     assert.match(body, /'modifications'/);

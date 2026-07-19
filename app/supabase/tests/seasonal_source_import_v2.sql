@@ -4598,7 +4598,15 @@ insert into public.seasons (
   total_legs, total_source_rows, data_version
 ) values (
   'task8-export-season', 'X80', 'Task 8 export snapshot', 'X80.xlsx', 0,
-  '2026-12-01', '2026-12-02', 3, 0, 5
+  '2026-12-01', '2026-12-02', 3, 1, 5
+);
+
+insert into public.season_source_rows (
+  season_id, row_index, effective, discontinue, airline, aircraft,
+  sta, arr_flight, arr_route, arr_category
+) values (
+  'task8-export-season', 1, '2026-12-01', '2026-12-02', 'LJ', '738',
+  '23:15', 'LJ081', 'ICN', 'J'
 );
 
 insert into public.season_flight_records (
@@ -4615,6 +4623,11 @@ insert into public.season_flight_records (
     'task8-export-season', 'a-record', 'a-record', 'A', 'LJ', 'LJ081', '81',
     'ICN', '23:15', '738', 'J', '2026-12-01', '2026-12-01', '23:15',
     '2026-12-01', 2, 1, 'imported', 'ARR', 'active'
+  ),
+  (
+    'task8-export-season', 'm-added-record', 'm-added-record', 'D', 'VN', 'VN337', '337',
+    'KIX', '10:00', '321', 'J', '2026-12-02', '2026-12-02', '10:00',
+    '2026-12-02', 3, 0, 'added', 'DEP', 'active'
   );
 
 insert into public.season_flight_record_counters (
@@ -4699,8 +4712,10 @@ declare
 begin
   v_snapshot := public.get_seasonal_export_snapshot_v2('task8-export-season', 5);
   if v_snapshot->>'seasonId' <> 'task8-export-season'
+    or v_snapshot->>'seasonCode' <> 'X80'
     or (v_snapshot->>'dataVersion')::integer <> 5
-    or (v_snapshot->>'totalCount')::integer <> 2
+    or (v_snapshot->>'totalCount')::integer <> 3
+    or (v_snapshot->>'sourceRowCount')::integer <> 1
     or v_snapshot->>'truncated' <> 'false'
     or (v_snapshot->>'serverHighWater')::bigint <= 0
   then
@@ -4708,7 +4723,9 @@ begin
   end if;
 
   if (v_snapshot->'flightRecords'->0->>'record_id') <> 'a-record'
-    or (v_snapshot->'flightRecords'->1->>'record_id') <> 'z-record'
+    or (v_snapshot->'flightRecords'->1->>'record_id') <> 'm-added-record'
+    or (v_snapshot->'flightRecords'->1->>'source_kind') <> 'added'
+    or (v_snapshot->'flightRecords'->2->>'record_id') <> 'z-record'
     or jsonb_array_length(v_snapshot->'flightRecordCounters') <> 1
     or jsonb_array_length(v_snapshot->'flightRecordWindows') <> 1
     or jsonb_array_length(v_snapshot->'modifications') <> 2

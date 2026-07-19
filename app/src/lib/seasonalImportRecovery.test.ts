@@ -68,7 +68,7 @@ const committed = {
   status: 'committed',
   sourceRowCount: 1,
   flightRecordCount: 72,
-  preservedOperationalCount: 0,
+  preservedOperationalCount: 2,
   removedImportedCount: 0,
   dataVersion: 1,
   serverHighWater: 9,
@@ -83,18 +83,29 @@ const season = {
   uploadedAt: attempt.uploadedAt,
   effectiveStart: '2026-10-25',
   effectiveEnd: '2027-03-27',
-  totalLegs: committed.flightRecordCount,
+  totalLegs: committed.flightRecordCount + committed.preservedOperationalCount,
   totalSourceRows: committed.sourceRowCount,
   dataVersion: committed.dataVersion,
 } satisfies Season;
 
 const snapshotResult = {
   seasonId: committed.seasonId,
+  seasonCode: committed.seasonCode,
   dataVersion: committed.dataVersion,
-  totalCount: committed.flightRecordCount,
+  totalCount: committed.flightRecordCount + committed.preservedOperationalCount,
+  sourceRowCount: committed.sourceRowCount,
   serverHighWater: committed.serverHighWater,
   truncated: false,
-  records: Array.from({ length: committed.flightRecordCount }, (_, index) => ({ id: `record-${index}` })) as never[],
+  records: [
+    ...Array.from({ length: committed.flightRecordCount }, (_, index) => ({
+      id: `imported-${index}`,
+      sourceKind: 'imported',
+      status: index === 0 ? 'deleted' : 'active',
+      action: index === 0 ? 'deleted' : undefined,
+    })),
+    { id: 'preserved-added-1', sourceKind: 'added', status: 'active', action: 'added' },
+    { id: 'preserved-added-2', sourceKind: 'added', status: 'active', action: 'added' },
+  ] as unknown as RemoteSeasonalExportSnapshot['records'],
   modifications: new Map(),
 } satisfies RemoteSeasonalExportSnapshot;
 
@@ -116,7 +127,7 @@ test('manual Resume/Check calls once with the exact stored attempt and requestId
   assert.equal(received.length, 1);
 });
 
-test('targeted refresh always requests the committed season when active season is different or null', async () => {
+test('targeted refresh caches every imported and preserved added physical row', async () => {
   for (const activeSeasonId of [null, 'season-s26']) {
     const seasonsGate = deferred<Season[]>();
     const snapshotGate = deferred<RemoteSeasonalExportSnapshot>();
@@ -138,7 +149,12 @@ test('targeted refresh always requests the committed season when active season i
     const refreshed = await running;
     assert.equal(refreshed.season.id, committed.seasonId);
     assert.equal(refreshed.snapshot, snapshotResult);
-    assert.equal(refreshed.window.records.length, committed.flightRecordCount);
+    assert.equal(refreshed.window.records.length, snapshotResult.totalCount);
+    assert.equal(refreshed.window.records.filter((record) => record.sourceKind === 'imported').length, committed.flightRecordCount);
+    assert.deepEqual(
+      refreshed.window.records.filter((record) => record.sourceKind === 'added').map((record) => record.id),
+      ['preserved-added-1', 'preserved-added-2'],
+    );
   }
 });
 
@@ -188,22 +204,36 @@ test('first or different active season refresh failure retains pending state, th
   }
 });
 
-test('committed refresh rejects missing, truncated, empty, stale, and count-mismatched snapshots', async () => {
+test('committed refresh rejects malformed, stale, and contract-mismatched snapshots', async () => {
   const cases: Array<[string, unknown, RegExp]> = [
     ['missing records', { ...snapshotResult, records: undefined }, /records.*array/i],
     ['missing modifications', { ...snapshotResult, modifications: undefined }, /modifications.*Map/i],
     ['truncated', { ...snapshotResult, truncated: true }, /truncated/i],
-    ['empty', { ...snapshotResult, records: [], totalCount: committed.flightRecordCount }, /record count/i],
+    ['empty', { ...snapshotResult, records: [], totalCount: 0 }, /imported flight record count/i],
     ['stale version', { ...snapshotResult, dataVersion: committed.dataVersion - 1 }, /dataVersion/i],
     ['stale highwater', { ...snapshotResult, serverHighWater: committed.serverHighWater - 1 }, /serverHighWater/i],
-    ['wrong total', { ...snapshotResult, totalCount: committed.flightRecordCount - 1 }, /totalCount/i],
+    ['wrong physical total', { ...snapshotResult, totalCount: snapshotResult.totalCount - 1 }, /record count.*totalCount/i],
+    ['wrong imported count', {
+      ...snapshotResult,
+      records: snapshotResult.records.map((record, index) => index === 1 ? { ...record, sourceKind: 'added' as const } : record),
+    }, /imported flight record count/i],
+    ['wrong snapshot source row count', { ...snapshotResult, sourceRowCount: committed.sourceRowCount + 1 }, /source row count/i],
+    ['wrong season metadata source row count', { ...snapshotResult }, /season metadata source row count/i],
+    ['wrong snapshot season code', { ...snapshotResult, seasonCode: 'S99' }, /seasonCode mismatch/i],
+    ['wrong season metadata code', { ...snapshotResult }, /season metadata code/i],
   ];
 
   for (const [label, snapshot, expected] of cases) {
     await assert.rejects(
       loadTargetedCommittedImportRefresh({
         committedImport: committed,
-        loadSeasons: async () => [season],
+        loadSeasons: async () => [
+          label === 'wrong season metadata source row count'
+            ? { ...season, totalSourceRows: committed.sourceRowCount + 1 }
+            : label === 'wrong season metadata code'
+              ? { ...season, seasonCode: 'S99' }
+              : season,
+        ],
         loadSnapshot: async () => snapshot as RemoteSeasonalExportSnapshot,
       }),
       expected,
@@ -215,7 +245,7 @@ test('committed refresh rejects missing, truncated, empty, stale, and count-mism
 test('empty committed refresh requires both a zero commit count and an explicit business allowance', async () => {
   const zeroCommitted = { ...committed, sourceRowCount: 0, flightRecordCount: 0 };
   const zeroSeason = { ...season, totalLegs: 0, totalSourceRows: 0 };
-  const zeroSnapshot = { ...snapshotResult, totalCount: 0, records: [] };
+  const zeroSnapshot = { ...snapshotResult, totalCount: 0, sourceRowCount: 0, records: [] };
 
   await assert.rejects(
     loadTargetedCommittedImportRefresh({

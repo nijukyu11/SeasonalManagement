@@ -48,6 +48,12 @@ export async function loadTargetedCommittedImportRefresh(input: {
   if (snapshot.seasonId !== targetSeasonId) {
     throw new Error(`Committed refresh seasonId mismatch: expected ${targetSeasonId}, received ${snapshot.seasonId}.`);
   }
+  if (snapshot.seasonCode !== input.committedImport.seasonCode) {
+    throw new Error(`Committed refresh seasonCode mismatch: expected ${input.committedImport.seasonCode}, received ${snapshot.seasonCode}.`);
+  }
+  if (season.seasonCode !== input.committedImport.seasonCode) {
+    throw new Error(`Committed refresh season metadata code mismatch: expected ${input.committedImport.seasonCode}, received ${season.seasonCode}.`);
+  }
   if (season.dataVersion !== input.committedImport.dataVersion || snapshot.dataVersion !== input.committedImport.dataVersion) {
     throw new Error(`Committed refresh dataVersion mismatch for season ${targetSeasonId}.`);
   }
@@ -63,13 +69,29 @@ export async function loadTargetedCommittedImportRefresh(input: {
   if (!(snapshot.modifications instanceof Map)) {
     throw new Error(`Committed refresh modifications must be a Map for season ${targetSeasonId}.`);
   }
-  if (snapshot.totalCount !== input.committedImport.flightRecordCount) {
-    throw new Error(`Committed refresh totalCount does not match the committed flight record count for season ${targetSeasonId}.`);
+  if (snapshot.sourceRowCount !== input.committedImport.sourceRowCount) {
+    throw new Error(`Committed refresh source row count does not match the committed source row count for season ${targetSeasonId}.`);
+  }
+  if (season.totalSourceRows !== input.committedImport.sourceRowCount) {
+    throw new Error(`Committed refresh season metadata source row count does not match the commit for season ${targetSeasonId}.`);
   }
   if (snapshot.records.length !== snapshot.totalCount) {
     throw new Error(`Committed refresh record count does not match totalCount for season ${targetSeasonId}.`);
   }
-  if (snapshot.records.length === 0 && !input.allowEmptyCommittedImport) {
+  const malformedSourceKind = snapshot.records.find((record) => (
+    record.sourceKind !== 'imported' && record.sourceKind !== 'added'
+  ));
+  if (malformedSourceKind) {
+    throw new Error(`Committed refresh record ${malformedSourceKind.id} has an invalid sourceKind.`);
+  }
+  const importedRecordCount = snapshot.records.reduce(
+    (count, record) => count + (record.sourceKind === 'imported' ? 1 : 0),
+    0,
+  );
+  if (importedRecordCount !== input.committedImport.flightRecordCount) {
+    throw new Error(`Committed refresh imported flight record count does not match the commit for season ${targetSeasonId}.`);
+  }
+  if (importedRecordCount === 0 && !input.allowEmptyCommittedImport) {
     throw new Error(`Committed refresh returned an empty season ${targetSeasonId}; empty repair is not allowed.`);
   }
 
