@@ -208,16 +208,23 @@ test('Settings Seasonal Full Replace uses the permissioned V2 source-row pipelin
   assert.match(handlerSource, /mode:\s*'repair'/);
   assert.match(handlerSource, /applySeasonalImportRemote\(attemptedImport\)/);
   assert.match(settingsSource, /loadTargetedCommittedImportRefresh\(\{/);
-  assert.match(handlerSource, /resumeSeasonalImportAttemptOnce\(attempt, applySeasonalImportRemote\)/);
+  assert.match(handlerSource, /buildSeasonalImportRecoveryReceipt\(attemptedImport, currentOperatorUserId\)/);
+  assert.match(handlerSource, /persistSeasonalImportRecoveryReceipt\(sessionStorage, recoveryReceipt\)/);
+  assert.ok(
+    handlerSource.indexOf('persistSeasonalImportRecoveryReceipt(sessionStorage, recoveryReceipt)')
+      < handlerSource.indexOf('applySeasonalImportRemote(attemptedImport)'),
+    'the minimal recovery receipt must be durable before Settings issues commit',
+  );
+  assert.match(handlerSource, /resumeSeasonalImportRemote\(\{[\s\S]*requestId:\s*receipt\.requestId[\s\S]*expectedDataVersion:\s*receipt\.expectedDataVersion/);
   assert.match(handlerSource, /SeasonalImportV2StatusUnknownError/);
   assert.match(handlerSource, /buildSeasonalImportCommittedRefreshFailure/);
+  assert.match(handlerSource, /committedSeasonalImportFromRecoveryReceipt\(receipt\)/);
   assert.doesNotMatch(handlerSource, /flattenRowsToFlightRecords|mergeDuplicateImportRecords|assertNoDuplicateFlightNumbers/);
   assert.doesNotMatch(handlerSource, /clearSeasonBaseline|batchWriteFlightRecords|verifySeasonImportCounts/);
   assert.doesNotMatch(handlerSource, /callSeasonalImportRpcRawPayload|apply_seasonal_import_remote/);
   assert.doesNotMatch(handlerSource, /\b(?:queryNative|importNative|checkNative)\b|SQLite|catch-?up|fallback/i);
-  assert.match(settingsSource, /useSessionState<RemoteSeasonalImportInput \| null>/);
-  assert.match(settingsSource, /settings:seasonRepairPendingAttempt/);
-  assert.match(settingsSource, /settings:seasonRepairCommittedImport/);
+  assert.doesNotMatch(settingsSource, /useSessionState<RemoteSeasonalImportInput \| null>/);
+  assert.doesNotMatch(handlerSource, /sessionStorage\.setItem\([^\n]*(?:sourceRows|attemptedImport)/);
   assert.match(repairSource, /Seasonal Full Replace/);
   assert.match(repairSource, /canRepairSeason/);
   assert.match(repairSource, /Resume\/Check/);
@@ -280,6 +287,35 @@ test('additive V2 migration keeps V1 callable until Task 12 post-canary revocati
   assert.match(migrationSource, /season\.repair/);
   assert.match(architectureSource, /post-canary/i);
   assert.match(architectureSource, /apply_seasonal_import_remote/);
+});
+
+test('Seasonal baseline and overlay RLS hardening is mirrored in migration and schema', () => {
+  const migrationSource = readFileSync(
+    join(root, '..', 'supabase', 'migrations', '20260718090000_seasonal_source_import_v2.sql'),
+    'utf8',
+  );
+  const schemaSource = readFileSync(join(root, '..', 'supabase', 'schema.sql'), 'utf8');
+  const hardeningPattern = /do \$\$\r?\ndeclare\r?\n  v_table text;\r?\n  v_parent_write text := '\('[\s\S]*?\r?\nend\r?\n\$\$;/i;
+  const migrationBoundary = requireSqlSection(migrationSource, hardeningPattern, 'migration RLS boundary');
+  const schemaBoundary = requireSqlSection(schemaSource, hardeningPattern, 'schema RLS boundary');
+
+  assert.equal(schemaBoundary, migrationBoundary);
+  assert.match(migrationBoundary, /'season_source_rows'/);
+  assert.match(migrationBoundary, /'season_source_row_days'/);
+  assert.match(migrationBoundary, /'season_flight_records'/);
+  assert.match(migrationBoundary, /revoke insert, update, delete on table public\.%I from authenticated/);
+  assert.match(migrationBoundary, /revoke all on table public\.%I from public, anon, authenticated/);
+  assert.match(migrationBoundary, /public\.app_operator_has_permission\(''seasonal\.read''\)/);
+  for (const permission of [
+    'seasonal.write',
+    'detailed.write',
+    'daily.write',
+    'checkin.write',
+    'gate.write',
+  ]) {
+    assert.match(migrationBoundary, new RegExp(`app_operator_has_permission\\(''${permission.replace('.', '\\.') }''\\)`));
+  }
+  assert.doesNotMatch(migrationBoundary, /app_operator_has_permission\(''season\.repair''\)/);
 });
 
 test('seasonal source import V2 stages canonical rows behind a permissioned RPC', () => {

@@ -88,6 +88,11 @@ export type RemoteSeasonalImportInput = SeasonalImportV2RpcAttempt;
 
 export type RemoteSeasonalImportResult = SeasonalImportV2CommittedResult;
 
+export interface RemoteSeasonalImportResumeInput {
+  requestId: string;
+  expectedDataVersion: number;
+}
+
 export interface RemoteSeasonalExportSnapshotInput {
   seasonId: string;
   expectedDataVersion: number;
@@ -160,6 +165,7 @@ export interface RemoteStore {
   getAuditDeltaChunks(sessionId: string, entryId: string): Promise<AuditDeltaChunk[]>;
   getSourceRows(seasonId: string): Promise<ParsedRow[]>;
   applySeasonalImportRemote?(input: RemoteSeasonalImportInput): Promise<RemoteSeasonalImportResult>;
+  resumeSeasonalImportRemote?(input: RemoteSeasonalImportResumeInput): Promise<RemoteSeasonalImportResult>;
   getFlightRecords(seasonId: string): Promise<FlightRecord[]>;
   getSeasonalExportSnapshot?(
     input: RemoteSeasonalExportSnapshotInput
@@ -312,6 +318,15 @@ export async function applySeasonServerMutationV1(
 }
 export async function getFlightRecords(seasonId: string): Promise<FlightRecord[]> {
   return (await getRemoteStore()).getFlightRecords(seasonId);
+}
+export async function resumeSeasonalImportRemote(
+  input: RemoteSeasonalImportResumeInput,
+): Promise<RemoteSeasonalImportResult> {
+  const store = await getRemoteStore();
+  if (!store.resumeSeasonalImportRemote) {
+    throw new Error('Server-side Seasonal import recovery RPC is unavailable for the configured backend.');
+  }
+  return store.resumeSeasonalImportRemote(input);
 }
 export async function getSeasonalExportSnapshot(
   input: RemoteSeasonalExportSnapshotInput

@@ -6,7 +6,10 @@ const migrationUrl = new URL(
   import.meta.url
 );
 const testUrl = new URL('./seasonal_source_import_v2.sql', import.meta.url);
+const compatibilityTestUrl = new URL('./seasonal_source_import_v2_compatibility.sql', import.meta.url);
+const qualityTestUrl = new URL('./seasonal_source_import_v2_quality.sql', import.meta.url);
 const bootstrapFixtureSql = `
+create role service_role;
 create table public.app_operators (
   user_id uuid primary key references auth.users(id) on delete cascade,
   email text,
@@ -200,6 +203,28 @@ create table public.season_modification_added_legs (
   status text not null default 'active',
   turnaround_id text
 );
+create table public.season_mod_history_entries (
+  season_id text not null references public.seasons(id) on delete restrict,
+  entry_id text primary key,
+  timestamp bigint not null,
+  description text not null default ''
+);
+create table public.season_mod_history_changes (
+  entry_id text not null references public.season_mod_history_entries(entry_id) on delete cascade,
+  change_index integer not null,
+  leg_id text not null,
+  previous_mod_snapshot jsonb,
+  new_mod_snapshot jsonb,
+  primary key (entry_id, change_index)
+);
+create table public.season_mod_history_record_changes (
+  entry_id text not null references public.season_mod_history_entries(entry_id) on delete cascade,
+  change_index integer not null,
+  record_id text not null,
+  previous_record_snapshot jsonb,
+  new_record_snapshot jsonb,
+  primary key (entry_id, change_index)
+);
 create table public.season_change_events (
   event_id text primary key default gen_random_uuid()::text,
   season_id text not null references public.seasons(id) on delete restrict,
@@ -252,6 +277,8 @@ try {
   await db.exec(migrationSql);
   await db.exec(migrationSql);
   await db.exec(await readFile(testUrl, 'utf8'));
+  await db.exec(await readFile(compatibilityTestUrl, 'utf8'));
+  await db.exec(await readFile(qualityTestUrl, 'utf8'));
   console.log(JSON.stringify({
     suite: 'seasonal_source_import_v2.sql',
     engine: 'PGlite',

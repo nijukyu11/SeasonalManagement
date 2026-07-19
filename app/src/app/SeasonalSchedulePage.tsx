@@ -47,6 +47,7 @@ import {
   type SeasonalFileActionOperation,
   type SeasonalMutationOperation,
 } from '@/lib/seasonalFileActionGuard';
+import { setSeasonalFileActionRuntimeState } from '@/lib/seasonalFileActionRuntimeState';
 import {
   getCachedSeasons,
   publishSeasonWorkspaceChanged,
@@ -307,6 +308,14 @@ export default function HomePage() {
   const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
   const draftChangeCount = countSeasonalDraftChanges(draftState);
   const hasDraftChanges = draftChangeCount > 0;
+
+  useEffect(() => {
+    if (!activeSeason?.id) return;
+    setSeasonalFileActionRuntimeState(activeSeason.id, {
+      hasDraftChanges,
+      draftRevision: latestDraftStateRef.current.revision,
+    });
+  }, [activeSeason?.id, draftState, hasDraftChanges]);
   const seasonalFileActionActive = activeFileActionToken !== null;
   const seasonalMutationActive = activeMutationToken !== null;
   const seasonalImportRecoveryPending = pendingImportAttempt !== null || pendingCommittedImport !== null;
@@ -456,14 +465,8 @@ export default function HomePage() {
     });
     const refreshed = await loadTargetedCommittedImportRefresh({
       committedImport: remoteImport,
-      windowInput: {
-        dateFrom: debouncedFilters.dateFrom || null,
-        dateTo: debouncedFilters.dateTo || null,
-        resourceType: 'schedule',
-        limit: 100000,
-      },
       loadSeasons: getSeasons,
-      loadWindow: loadSeasonWorkspaceWindow,
+      loadSnapshot: getSeasonalExportSnapshot,
     });
     const refreshedRecords = refreshed.window.records;
     const refreshedModifications = refreshed.window.modifications;

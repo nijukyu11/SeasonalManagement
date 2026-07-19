@@ -31,6 +31,7 @@ export interface CreateOperatorUserInput {
 }
 
 export interface CurrentOperatorAccess {
+  userId: string | null;
   roles: OperatorRoleId[];
   permissions: Set<OperatorPermissionKey>;
   canManageUsers: boolean;
@@ -116,6 +117,7 @@ export async function getCurrentOperatorAccess(): Promise<CurrentOperatorAccess>
     canUseAi: operator.can_use_ai === true,
   });
   return {
+    userId,
     roles,
     permissions,
     canManageUsers: permissions.has('users.manage'),
@@ -126,6 +128,7 @@ export async function getCurrentOperatorAccess(): Promise<CurrentOperatorAccess>
 
 function emptyAccess(): CurrentOperatorAccess {
   return {
+    userId: null,
     roles: [],
     permissions: new Set(),
     canManageUsers: false,

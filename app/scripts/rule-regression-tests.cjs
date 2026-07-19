@@ -11355,7 +11355,7 @@ async function run() {
   assert(
     supabaseStoreSource.includes('fromFlightRecordRows') &&
       supabaseStoreSource.includes('readFlightRecordCounters') &&
-      supabaseStoreSource.includes('fromSourceRowRows') &&
+      supabaseStoreSource.includes('hydrateSourceRowsFromRelationalPages') &&
       supabaseStoreSource.includes('load seasonal source provenance') &&
       !supabaseStoreSource.includes('toSourceRowRow') &&
       !supabaseStoreSource.includes('writeFlightRecordCounters') &&

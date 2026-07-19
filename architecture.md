@@ -36,7 +36,7 @@ The 2026-06-22 self-hosted cutover uses Cloudflare Tunnel to expose the restored
 
 Server-side write hardening is implemented through `opsdata-supabase/supabase/migrations/20260622_server_side_write_hardening.sql`. Seasonal import/re-import sends canonical source rows to `stage_seasonal_import_v2(jsonb)` and commits the validated server preview through `commit_seasonal_import_v2(uuid, integer)`. The server generates atomic occurrences and commits season metadata, imported records, change events, and cursors in one transaction. Standard imports retain the `seasonal.write` permission; Settings `Seasonal Full Replace` uses mode `repair` and requires `season.repair` at both stage and commit. Normal schedule/allocation saves use `apply_season_server_mutation_v1(jsonb)`; `sync_season_workspace_v2` is legacy repair/rollback only. Anon execute remains intentionally revoked, so live smoke requires an authenticated operator session.
 
-The additive V2 migration intentionally leaves legacy `apply_seasonal_import_remote(jsonb)` callable during the one-release compatibility window. Task 12 must deploy the additive SQL before the V2 canary client. Only after the canary succeeds may the post-canary deployment revoke authenticated execute on V1; dropping the V1 definition is deferred to a later migration after the rollback window. No V2 client may fall back to V1.
+The additive V2 migration intentionally leaves legacy `apply_seasonal_import_remote(jsonb)` callable during the one-release compatibility window. Task 12 must deploy the additive SQL before the V2 canary client. Only after the canary succeeds may the post-canary deployment revoke authenticated execute on V1; dropping the V1 definition is deferred to a later migration after the rollback window. No V2 client may call or fall back to V1, and the additive pre-canary migration must not revoke V1 early.
 
 Online-first server-authoritative writes are staged through `opsdata-supabase/supabase/migrations/20260622_online_first_server_mutation_v1.sql`. Normal route mutation seams call `apply_season_server_mutation_v1(jsonb)` via `applySeasonServerMutationV1()` and update the active route/cache from server-authoritative responses or server-window reloads. `sync_season_workspace_v2`, native catch-up, native entity-version comparison, and native conflict review are legacy repair/rollback paths, not the main workflow. `season_mutation_receipts` provides idempotency by `(season_id, client_id, client_mutation_id)`.
 
@@ -104,6 +104,12 @@ Supabase owns the normal data model:
 
 Source rows are immutable import provenance from the client perspective. The client may read them for diagnostics and audit evidence but cannot add, delete, link, split, merge, or patch individual source rows. Atomic records are generated set-wise by the V2 server pipeline. Operational edits remain overlays and are materialized with the imported baseline for schedule reads and exports.
 
+Seasonal relational writes have two distinct authorization boundaries:
+
+- Baseline/import-owned tables, including `seasons`, source rows/days, generated flight records and their children, import batches, change events, and entity versions, are RPC-only for mutation. Authenticated clients receive permission-gated read access where needed but no direct baseline `INSERT`, `UPDATE`, or `DELETE`. Season metadata changes use `manage_season_metadata_v2`; baseline replacement uses the V2 stage/commit functions.
+- Operational overlay parent rows accept operators with `seasonal.write`, `detailed.write`, `daily.write`, `checkin.write`, or `gate.write`. Check-in counter/window children accept `seasonal.write`, `detailed.write`, `daily.write`, or `checkin.write`. Added-leg and modification-history tables accept only `seasonal.write`, `detailed.write`, or `daily.write`. `season.repair` alone never grants direct table DML, and viewers cannot mutate either boundary.
+- Service-role maintenance remains available through server-side administration, but client recovery and import RPCs still require an authenticated operator identity and their exact application permission.
+
 ## Import To Export Flow
 
 ```text
@@ -112,13 +118,15 @@ Excel workbook
   -> seasonalImportRpcContract.ts canonicalizes rows and binds checksum/request ID/mode
   -> stage_seasonal_import_v2 validates and previews server-generated atomic occurrences
   -> commit_seasonal_import_v2 commits the imported baseline atomically
-  -> route pages refresh the targeted Supabase season window
+  -> route pages parse and materialize one complete authoritative Supabase snapshot
   -> operational edits persist as modification overlays
   -> get_seasonal_export_snapshot_v2 returns one versioned server snapshot
   -> exporter.ts rebuilds system-recognizable pattern rows
 ```
 
 `sourceRows` are imported-baseline provenance. `FlightRecord` rows are server-generated occurrences; modifications are the operational edit boundary. Same-day and overnight relationships must be explicit through `turnaroundId`/`linkType`; export must not infer overnight pairings from time similarity. Import, export, retry, ambiguous-commit recovery, and refresh all stay on Supabase and never read or write SQLite as a fallback.
+
+Before Settings issues a repair commit, it persists an owner-scoped minimal receipt containing request/batch identity, mode, checksum, expected version, counts, and committed cursor metadata. It never persists the source-row payload. Storage failure is a blocking precondition before commit. `resume_seasonal_import_v2` resolves only the current authenticated operator's request and returns minimal status/receipt data without staging rows; another operator and the service role cannot use this client RPC to recover that request. After a confirmed commit, receipt-cleanup failure is a warning and cannot change committed success into an ambiguous result.
 
 ## Current Save And Realtime Flow
 
@@ -170,7 +178,7 @@ Current sync hardening boundaries:
 - Live season subscription setup must catch remote store or realtime subscription failures and publish a failed sync state. If subscription setup fails, automatic catch-up is unavailable and stale data must be visible as a sync failure.
 - Live season setup must still run background catch-up when the active `RemoteStore` has no realtime subscription API. Realtime is the push channel, not the prerequisite for initial server update fetch. The fallback must register a no-op live marker so repeated `ensureLiveSeason()` calls do not start duplicate catch-up runs for the same season.
 - Manual Save and Fetch Updates must start their manual operation before calling `ensureLiveSeason()`. The live setup path may start background catch-up, so calling it first can race with manual sync/fetch before the manual guard is active.
-- Seasonal import/re-import replaces or patches a local baseline, so its handler and visible button must be disabled while native catch-up/Fetch Updates is applying server changes.
+- Seasonal import/re-import replaces the server baseline through the strict V2 pipeline. Its handler and visible button use the shared server file-action, unsaved-draft, and pending-submit guards; native catch-up state is not an import prerequisite or fallback.
 - Daily OperationalTurns import writes batches of local schedule changes, so its handler and visible button must also be disabled while native catch-up/Fetch Updates is applying server changes.
 - Daily local mutation controls and handlers must use same-season `syncWriteInProgress = syncInProgress || fetchingUpdates`, not manual-only `syncing`, for Add/Link/Unlink/Delete. Auto Save and catch-up are both write paths and should not leave local mutation controls visually or behaviorally active.
 - Check-in and Gate allocation write interactions must also use same-season `syncWriteInProgress` for drag/drop, resize, context actions, unallocate-all, and override apply. Manual-only `syncing` is insufficient because auto Save and catch-up both write native sync state.
@@ -181,9 +189,9 @@ Current sync hardening boundaries:
 - Save handlers on operational routes, including Seasonal and Detailed, must warn when `reviewCount > 0`, even if the sync result status is `synced` after non-conflicting changes were saved. Controlled sync failures must use the explicit `Save Failed` title instead of a generic status label.
 - Seasonal and Detailed mutation controls must block on any same-season `syncing` state, not only manual Save mode. The shared provider state is season-scoped, so auto/manual sync from another surface must disable edits, undo, link/unlink/delete, import, fetch, and save controls for that season.
 - Native sync publish events must preserve `reviewCount` for `synced` results when native `conflictCount` remains positive.
-- Settings repair import confirmations must include native `conflictCount` as conflict review items, not only pending local changes.
-- Settings repair import must pass the imported native `syncMeta` through `publishSeasonWorkspaceChanged` after replacing the local baseline, because provider route/global state consumes event metadata immediately before the debounced native summary reconcile.
-- Seasonal re-import of an existing season must also pass native `conflictCount` into the dirty-import guard. A clean `pendingCount` does not make baseline replacement safe while conflict review items remain.
+- Settings repair import uses the same cross-route unsaved-draft and server pending-submit guard as standard Seasonal import before stage/commit and before recovery refresh.
+- Settings repair refresh validates the committed season/version/count/high-water against the complete strict Supabase export snapshot, then publishes server sync metadata. It never hydrates the result from SQLite.
+- Seasonal re-import of an existing season must block while route drafts or server pending submissions remain. The operator must Save or Discard before baseline replacement.
 - Route-local sync badge fallbacks must derive conflict count from `LocalSyncMeta.conflicts` and pass it to shared label/tone helpers. `pendingCount = 0` is not enough to render success while conflicts are unresolved, and fallback `pendingCount > 0` must keep warning tone even if provider state is still `live`.
 - Dashboard Fetch Updates must present native catch-up `conflict` results as a warning/status notice and disable while same-season `syncing` is active. It must not silently ignore review items or allow manual catch-up to overlap a save just because Dashboard is read-only.
 - Fetch Updates controls on operational routes and Dashboard must use any `catching_up` state as their busy/disabled state, including background server update replay. Manual fetch should not remain clickable only because the current catch-up was not started by the button.
@@ -250,6 +258,8 @@ Rust and TypeScript must preserve the full `scheduleNotification` payload. Best-
 - Reporting views and public RPC wrappers use allowlists and `security_invoker` behavior where applicable.
 - `operational_ai_context_documents` is RLS-protected for authenticated app operators.
 - Native local SQL for AI is read-only and limited to the dashboard temp view.
+- Seasonal baseline tables are SELECT-only for permissioned authenticated clients and mutate only through approved `SECURITY DEFINER` functions. Overlay RLS uses the route permission matrix documented under Data Model; broad `is_app_operator` write policies are not allowed.
+- Seasonal recovery receipts and `resume_seasonal_import_v2` are owner-scoped and expose no source rows. Repair authorization is checked again at the server stage/commit boundary, and mode is part of deterministic request identity.
 
 ## GitNexus Notes
 

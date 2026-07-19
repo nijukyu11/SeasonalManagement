@@ -7,9 +7,9 @@ import {
   resumeSeasonalImportAttemptOnce,
 } from './seasonalImportRecovery.ts';
 import type {
+  RemoteSeasonalExportSnapshot,
   RemoteSeasonalImportInput,
   RemoteSeasonalImportResult,
-  RemoteSeasonWorkspaceWindowResult,
 } from './remoteStore.ts';
 import type { Season } from './types.ts';
 
@@ -88,22 +88,15 @@ const season = {
   dataVersion: committed.dataVersion,
 } satisfies Season;
 
-const windowResult = {
-  sourceRows: [],
-  records: [],
+const snapshotResult = {
+  seasonId: committed.seasonId,
+  dataVersion: committed.dataVersion,
+  totalCount: committed.flightRecordCount,
+  serverHighWater: committed.serverHighWater,
+  truncated: false,
+  records: Array.from({ length: committed.flightRecordCount }, (_, index) => ({ id: `record-${index}` })) as never[],
   modifications: new Map(),
-  syncMeta: {
-    seasonId: committed.seasonId,
-    baseServerVersion: committed.serverHighWater,
-    lastServerSeq: committed.serverHighWater,
-    localRevision: committed.serverHighWater,
-    pendingCount: 0,
-    lastLocalChangeAt: null,
-    conflicts: [],
-    syncStatus: 'synced',
-  },
-  cursor: { serverHighWater: committed.serverHighWater },
-} as RemoteSeasonWorkspaceWindowResult;
+} satisfies RemoteSeasonalExportSnapshot;
 
 test('manual Resume/Check calls once with the exact stored attempt and requestId', async () => {
   const gate = deferred<RemoteSeasonalImportResult>();
@@ -126,20 +119,14 @@ test('manual Resume/Check calls once with the exact stored attempt and requestId
 test('targeted refresh always requests the committed season when active season is different or null', async () => {
   for (const activeSeasonId of [null, 'season-s26']) {
     const seasonsGate = deferred<Season[]>();
-    const windowGate = deferred<RemoteSeasonWorkspaceWindowResult | null>();
+    const snapshotGate = deferred<RemoteSeasonalExportSnapshot>();
     const requestedSeasonIds: string[] = [];
     const running = loadTargetedCommittedImportRefresh({
       committedImport: committed,
-      windowInput: {
-        dateFrom: null,
-        dateTo: null,
-        resourceType: 'schedule',
-        limit: 100000,
-      },
       loadSeasons: async () => seasonsGate.promise,
-      loadWindow: async (input) => {
+      loadSnapshot: async (input) => {
         requestedSeasonIds.push(input.seasonId);
-        return windowGate.promise;
+        return snapshotGate.promise;
       },
     });
 
@@ -147,10 +134,11 @@ test('targeted refresh always requests the committed season when active season i
     assert.deepEqual(requestedSeasonIds, [committed.seasonId]);
     assert.notEqual(requestedSeasonIds[0], activeSeasonId);
     seasonsGate.resolve([season]);
-    windowGate.resolve(windowResult);
+    snapshotGate.resolve(snapshotResult);
     const refreshed = await running;
     assert.equal(refreshed.season.id, committed.seasonId);
-    assert.equal(refreshed.window, windowResult);
+    assert.equal(refreshed.snapshot, snapshotResult);
+    assert.equal(refreshed.window.records.length, committed.flightRecordCount);
   }
 });
 
@@ -160,14 +148,13 @@ test('first or different active season refresh failure retains pending state, th
     const commitCalls = 0;
     const requestedSeasonIds: string[] = [];
     const firstSeasons = deferred<Season[]>();
-    const firstWindow = deferred<RemoteSeasonWorkspaceWindowResult | null>();
+    const firstSnapshot = deferred<RemoteSeasonalExportSnapshot>();
     const firstRefresh = loadTargetedCommittedImportRefresh({
       committedImport: pendingCommittedImport,
-      windowInput: { resourceType: 'schedule' },
       loadSeasons: async () => firstSeasons.promise,
-      loadWindow: async (input) => {
+      loadSnapshot: async (input) => {
         requestedSeasonIds.push(input.seasonId);
-        return firstWindow.promise;
+        return firstSnapshot.promise;
       },
     });
 
@@ -175,24 +162,23 @@ test('first or different active season refresh failure retains pending state, th
     assert.equal(requestedSeasonIds[0], committed.seasonId);
     assert.notEqual(requestedSeasonIds[0], activeSeasonId);
     firstSeasons.resolve([season]);
-    firstWindow.resolve(null);
-    await assert.rejects(firstRefresh, /season-w27.*window/i);
+    firstSnapshot.reject(new Error('snapshot unavailable'));
+    await assert.rejects(firstRefresh, /snapshot unavailable/i);
     assert.equal(pendingCommittedImport, committed);
     assert.equal(commitCalls, 0);
 
     const secondSeasons = deferred<Season[]>();
-    const secondWindow = deferred<RemoteSeasonWorkspaceWindowResult | null>();
+    const secondSnapshot = deferred<RemoteSeasonalExportSnapshot>();
     const secondRefresh = loadTargetedCommittedImportRefresh({
       committedImport: pendingCommittedImport,
-      windowInput: { resourceType: 'schedule' },
       loadSeasons: async () => secondSeasons.promise,
-      loadWindow: async (input) => {
+      loadSnapshot: async (input) => {
         requestedSeasonIds.push(input.seasonId);
-        return secondWindow.promise;
+        return secondSnapshot.promise;
       },
     });
     secondSeasons.resolve([season]);
-    secondWindow.resolve(windowResult);
+    secondSnapshot.resolve(snapshotResult);
     const refreshed = await secondRefresh;
     assert.equal(refreshed.season.id, committed.seasonId);
     assert.deepEqual(requestedSeasonIds, [committed.seasonId, committed.seasonId]);
@@ -200,6 +186,52 @@ test('first or different active season refresh failure retains pending state, th
     pendingCommittedImport = null;
     assert.equal(pendingCommittedImport, null);
   }
+});
+
+test('committed refresh rejects missing, truncated, empty, stale, and count-mismatched snapshots', async () => {
+  const cases: Array<[string, unknown, RegExp]> = [
+    ['missing records', { ...snapshotResult, records: undefined }, /records.*array/i],
+    ['missing modifications', { ...snapshotResult, modifications: undefined }, /modifications.*Map/i],
+    ['truncated', { ...snapshotResult, truncated: true }, /truncated/i],
+    ['empty', { ...snapshotResult, records: [], totalCount: committed.flightRecordCount }, /record count/i],
+    ['stale version', { ...snapshotResult, dataVersion: committed.dataVersion - 1 }, /dataVersion/i],
+    ['stale highwater', { ...snapshotResult, serverHighWater: committed.serverHighWater - 1 }, /serverHighWater/i],
+    ['wrong total', { ...snapshotResult, totalCount: committed.flightRecordCount - 1 }, /totalCount/i],
+  ];
+
+  for (const [label, snapshot, expected] of cases) {
+    await assert.rejects(
+      loadTargetedCommittedImportRefresh({
+        committedImport: committed,
+        loadSeasons: async () => [season],
+        loadSnapshot: async () => snapshot as RemoteSeasonalExportSnapshot,
+      }),
+      expected,
+      label,
+    );
+  }
+});
+
+test('empty committed refresh requires both a zero commit count and an explicit business allowance', async () => {
+  const zeroCommitted = { ...committed, sourceRowCount: 0, flightRecordCount: 0 };
+  const zeroSeason = { ...season, totalLegs: 0, totalSourceRows: 0 };
+  const zeroSnapshot = { ...snapshotResult, totalCount: 0, records: [] };
+
+  await assert.rejects(
+    loadTargetedCommittedImportRefresh({
+      committedImport: zeroCommitted,
+      loadSeasons: async () => [zeroSeason],
+      loadSnapshot: async () => zeroSnapshot,
+    }),
+    /empty repair is not allowed/i,
+  );
+  const refreshed = await loadTargetedCommittedImportRefresh({
+    committedImport: zeroCommitted,
+    loadSeasons: async () => [zeroSeason],
+    loadSnapshot: async () => zeroSnapshot,
+    allowEmptyCommittedImport: true,
+  });
+  assert.equal(refreshed.snapshot.records.length, 0);
 });
 
 test('ambiguous RPC failure notice is status unknown and exposes Resume/Check', () => {

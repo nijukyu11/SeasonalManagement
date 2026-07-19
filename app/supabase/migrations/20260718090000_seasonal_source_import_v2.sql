@@ -1,3 +1,7 @@
+alter table public.season_source_rows
+  add column if not exists arr_flight_type text,
+  add column if not exists dep_flight_type text;
+
 create table if not exists public.season_import_batches (
   batch_id uuid primary key default gen_random_uuid(),
   request_id uuid not null unique,
@@ -40,6 +44,109 @@ begin
 end;
 $$;
 
+create or replace function public.manage_season_metadata_v2(
+  p_action text,
+  p_season_id text,
+  p_payload jsonb default '{}'::jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_action text := pg_catalog.lower(pg_catalog.btrim(coalesce(p_action, '')));
+  v_table text;
+begin
+  if auth.uid() is null then
+    raise exception 'A signed-in operator is required'
+      using errcode = '42501';
+  end if;
+  if p_season_id is null or pg_catalog.btrim(p_season_id) = '' then
+    raise exception 'p_season_id is required'
+      using errcode = '22023';
+  end if;
+  if v_action in ('create', 'update') then
+    if not public.app_operator_has_permission('seasonal.write')
+      and not public.app_operator_has_permission('daily.write')
+    then
+      raise exception 'Missing required permission: seasonal.write or daily.write'
+        using errcode = '42501';
+    end if;
+    if p_payload is null or pg_catalog.jsonb_typeof(p_payload) <> 'object' then
+      raise exception 'p_payload must be a JSON object'
+        using errcode = '22023';
+    end if;
+    if v_action = 'create' then
+      insert into public.seasons (
+        id, season_code, name, file_name, uploaded_at, effective_start,
+        effective_end, total_legs, total_source_rows, data_version, last_synced_at
+      ) values (
+        p_season_id,
+        coalesce(p_payload->>'season_code', ''),
+        coalesce(p_payload->>'name', ''),
+        coalesce(p_payload->>'file_name', ''),
+        coalesce((p_payload->>'uploaded_at')::bigint, 0),
+        coalesce(p_payload->>'effective_start', ''),
+        coalesce(p_payload->>'effective_end', ''),
+        coalesce((p_payload->>'total_legs')::integer, 0),
+        coalesce((p_payload->>'total_source_rows')::integer, 0),
+        coalesce((p_payload->>'data_version')::integer, 0),
+        nullif(p_payload->>'last_synced_at', '')::bigint
+      );
+    else
+      update public.seasons
+      set season_code = coalesce(p_payload->>'season_code', season_code),
+          name = coalesce(p_payload->>'name', name),
+          file_name = coalesce(p_payload->>'file_name', file_name),
+          uploaded_at = coalesce((p_payload->>'uploaded_at')::bigint, uploaded_at),
+          effective_start = coalesce(p_payload->>'effective_start', effective_start),
+          effective_end = coalesce(p_payload->>'effective_end', effective_end),
+          total_legs = coalesce((p_payload->>'total_legs')::integer, total_legs),
+          total_source_rows = coalesce((p_payload->>'total_source_rows')::integer, total_source_rows),
+          data_version = coalesce((p_payload->>'data_version')::integer, data_version),
+          last_synced_at = case
+            when p_payload ? 'last_synced_at' then nullif(p_payload->>'last_synced_at', '')::bigint
+            else last_synced_at
+          end
+      where id = p_season_id;
+      if not found then
+        raise exception 'Season % does not exist', p_season_id
+          using errcode = 'P0002';
+      end if;
+    end if;
+  elsif v_action = 'delete' then
+    if not public.app_operator_has_permission('season.repair') then
+      raise exception 'Missing required permission: season.repair'
+        using errcode = '42501';
+    end if;
+    foreach v_table in array array[
+      'schedule_notification_deliveries',
+      'season_mod_history_entries',
+      'season_modifications',
+      'season_flight_records',
+      'season_source_rows',
+      'season_change_events',
+      'season_entity_versions'
+    ] loop
+      if pg_catalog.to_regclass('public.' || v_table) is not null then
+        execute pg_catalog.format('delete from public.%I where season_id = $1', v_table)
+          using p_season_id;
+      end if;
+    end loop;
+    delete from public.seasons where id = p_season_id;
+    if not found then
+      raise exception 'Season % does not exist', p_season_id
+        using errcode = 'P0002';
+    end if;
+  else
+    raise exception 'p_action must be create, update, or delete'
+      using errcode = '22023';
+  end if;
+  return pg_catalog.jsonb_build_object('seasonId', p_season_id, 'action', v_action);
+end;
+$$;
+
 alter table public.season_import_batches enable row level security;
 alter table public.season_import_batch_rows enable row level security;
 
@@ -73,6 +180,69 @@ create trigger preserve_season_import_batch_staging_metadata_v2
 before update of result on public.season_import_batches
 for each row
 execute function public.preserve_season_import_batch_staging_metadata_v2();
+
+create or replace function public.upsert_season_source_row_from_json(p_season_id text, row_payload jsonb)
+returns void
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_row_index integer := (row_payload->>'rowIndex')::integer;
+  v_day jsonb;
+  v_index integer := 0;
+begin
+  insert into public.season_source_rows (
+    season_id, row_index, effective, discontinue, airline, aircraft, sta,
+    arr_flight, arr_flight_type, arr_route, arr_category, arr_code_shares, arr_int_dom_ind,
+    std, dep_flight, dep_flight_type, dep_route, dep_category, dep_code_shares, dep_int_dom_ind,
+    overnight_link_row_index, link_type
+  )
+  values (
+    p_season_id, v_row_index, coalesce(row_payload->>'effective', ''), coalesce(row_payload->>'discontinue', ''),
+    coalesce(row_payload->>'airline', ''), coalesce(row_payload->>'aircraft', ''), row_payload->>'sta',
+    row_payload->>'arrFlight', row_payload->>'arrFlightType', row_payload->>'arrRoute',
+    row_payload->>'arrFlightCategory', row_payload->>'arrCodeShares', row_payload->>'arrIntDomInd',
+    row_payload->>'std', row_payload->>'depFlight', row_payload->>'depFlightType', row_payload->>'depRoute',
+    row_payload->>'depFlightCategory', row_payload->>'depCodeShares', row_payload->>'depIntDomInd',
+    nullif(row_payload->>'overnightLinkRowIndex', '')::integer, row_payload->>'linkType'
+  )
+  on conflict (season_id, row_index) do update set
+    effective = excluded.effective,
+    discontinue = excluded.discontinue,
+    airline = excluded.airline,
+    aircraft = excluded.aircraft,
+    sta = excluded.sta,
+    arr_flight = excluded.arr_flight,
+    arr_flight_type = excluded.arr_flight_type,
+    arr_route = excluded.arr_route,
+    arr_category = excluded.arr_category,
+    arr_code_shares = excluded.arr_code_shares,
+    arr_int_dom_ind = excluded.arr_int_dom_ind,
+    std = excluded.std,
+    dep_flight = excluded.dep_flight,
+    dep_flight_type = excluded.dep_flight_type,
+    dep_route = excluded.dep_route,
+    dep_category = excluded.dep_category,
+    dep_code_shares = excluded.dep_code_shares,
+    dep_int_dom_ind = excluded.dep_int_dom_ind,
+    overnight_link_row_index = excluded.overnight_link_row_index,
+    link_type = excluded.link_type;
+
+  delete from public.season_source_row_days
+  where season_id = p_season_id and row_index = v_row_index;
+  for v_day in select * from jsonb_array_elements(coalesce(row_payload->'daysOfWeek', '[]'::jsonb))
+  loop
+    v_index := v_index + 1;
+    if (v_day #>> '{}')::boolean then
+      insert into public.season_source_row_days (season_id, row_index, iso_dow)
+      values (p_season_id, v_row_index, v_index)
+      on conflict do nothing;
+    end if;
+  end loop;
+end;
+$$;
+
 
 create or replace function public.normalize_seasonal_flight_number_v2(
   p_airline text,
@@ -994,6 +1164,8 @@ declare
   v_persisted_source_rows jsonb := '[]'::jsonb;
   v_request_fingerprint text;
   v_persisted_request_fingerprint text;
+  v_persisted_fingerprint_version integer;
+  v_persisted_import_mode text;
   v_diagnostics jsonb := '[]'::jsonb;
   v_diagnostic_count integer := 0;
   v_generation_diagnostics jsonb := '[]'::jsonb;
@@ -2042,25 +2214,74 @@ begin
         using errcode = '23505';
     end if;
 
-    v_request_fingerprint := pg_catalog.encode(
-      pg_catalog.sha256(
-        pg_catalog.convert_to(
-          pg_catalog.jsonb_build_object(
-            'fingerprintVersion', 3,
-            'importMode', v_import_mode,
-            'sourceRows', v_source_rows,
-            'seasonIdentity', pg_catalog.jsonb_build_object(
-              'seasonCode', v_season_code,
-              'targetSeasonId', v_target_season_id
-            ),
-            'expectedDataVersion', v_expected_data_version,
-            'fileName', v_file_name
-          )::text,
-          'UTF8'
-        )
-      ),
-      'hex'
-    );
+    begin
+      v_persisted_fingerprint_version := coalesce(
+        nullif(v_batch.result #>> '{_staging,fingerprintVersion}', '')::integer,
+        2
+      );
+    exception when invalid_text_representation or numeric_value_out_of_range then
+      raise exception 'Import requestId % has invalid fingerprintVersion', v_request_id
+        using errcode = '23505';
+    end;
+
+    if v_persisted_fingerprint_version = 2 then
+      if v_import_mode <> 'standard' then
+        raise exception 'Import requestId % fingerprint v2 is bound to standard mode', v_request_id
+          using errcode = '23505';
+      end if;
+      v_request_fingerprint := pg_catalog.encode(
+        pg_catalog.sha256(
+          pg_catalog.convert_to(
+            pg_catalog.jsonb_build_object(
+              'fingerprintVersion', 2,
+              'sourceRows', v_source_rows,
+              'seasonIdentity', pg_catalog.jsonb_build_object(
+                'seasonCode', v_season_code,
+                'targetSeasonId', v_target_season_id
+              ),
+              'expectedDataVersion', v_expected_data_version,
+              'fileName', v_file_name
+            )::text,
+            'UTF8'
+          )
+        ),
+        'hex'
+      );
+    elsif v_persisted_fingerprint_version = 3 then
+      v_persisted_import_mode := nullif(
+        pg_catalog.lower(pg_catalog.btrim(v_batch.result #>> '{_staging,importMode}')),
+        ''
+      );
+      if v_persisted_import_mode not in ('standard', 'repair')
+        or v_persisted_import_mode is distinct from v_import_mode
+      then
+        raise exception 'Import requestId % was already used with a different payload or import mode', v_request_id
+          using errcode = '23505';
+      end if;
+      v_request_fingerprint := pg_catalog.encode(
+        pg_catalog.sha256(
+          pg_catalog.convert_to(
+            pg_catalog.jsonb_build_object(
+              'fingerprintVersion', 3,
+              'importMode', v_import_mode,
+              'sourceRows', v_source_rows,
+              'seasonIdentity', pg_catalog.jsonb_build_object(
+                'seasonCode', v_season_code,
+                'targetSeasonId', v_target_season_id
+              ),
+              'expectedDataVersion', v_expected_data_version,
+              'fileName', v_file_name
+            )::text,
+            'UTF8'
+          )
+        ),
+        'hex'
+      );
+    else
+      raise exception 'Import requestId % has unsupported fingerprintVersion %',
+        v_request_id, v_persisted_fingerprint_version
+        using errcode = '23505';
+    end if;
 
     if v_persisted_request_fingerprint is distinct from v_request_fingerprint then
       raise exception 'Import requestId % was already used with a different payload', v_request_id
@@ -2241,6 +2462,7 @@ declare
   v_conflicting_record_id text;
   v_result jsonb;
   v_import_mode text;
+  v_fingerprint_version integer;
 begin
   if not public.app_operator_has_permission('seasonal.write')
     and not public.app_operator_has_permission('season.repair')
@@ -2266,10 +2488,31 @@ begin
       using errcode = '42501';
   end if;
 
-  v_import_mode := coalesce(
-    nullif(pg_catalog.lower(pg_catalog.btrim(v_batch.result #>> '{_staging,importMode}')), ''),
-    'standard'
-  );
+  begin
+    v_fingerprint_version := coalesce(
+      nullif(v_batch.result #>> '{_staging,fingerprintVersion}', '')::integer,
+      2
+    );
+  exception when invalid_text_representation or numeric_value_out_of_range then
+    raise exception 'Seasonal import batch % has invalid fingerprintVersion', p_batch_id
+      using errcode = '22023';
+  end;
+  if v_fingerprint_version = 2 then
+    v_import_mode := 'standard';
+    if nullif(v_batch.result #>> '{_staging,importMode}', '') not in ('standard') then
+      raise exception 'Seasonal import batch % fingerprint v2 has invalid importMode', p_batch_id
+        using errcode = '22023';
+    end if;
+  elsif v_fingerprint_version = 3 then
+    v_import_mode := nullif(
+      pg_catalog.lower(pg_catalog.btrim(v_batch.result #>> '{_staging,importMode}')),
+      ''
+    );
+  else
+    raise exception 'Seasonal import batch % has unsupported fingerprintVersion %',
+      p_batch_id, v_fingerprint_version
+      using errcode = '22023';
+  end if;
   if v_import_mode = 'repair' then
     if not public.app_operator_has_permission('season.repair') then
       raise exception 'Missing required permission: season.repair'
@@ -3039,12 +3282,14 @@ begin
     aircraft,
     sta,
     arr_flight,
+    arr_flight_type,
     arr_route,
     arr_category,
     arr_code_shares,
     arr_int_dom_ind,
     std,
     dep_flight,
+    dep_flight_type,
     dep_route,
     dep_category,
     dep_code_shares,
@@ -3061,12 +3306,14 @@ begin
     batch_rows.row_data->>'aircraft',
     batch_rows.row_data->>'sta',
     batch_rows.row_data->>'arrFlight',
+    batch_rows.row_data->>'arrFlightType',
     batch_rows.row_data->>'arrRoute',
     batch_rows.row_data->>'arrFlightCategory',
     batch_rows.row_data->>'arrCodeShares',
     batch_rows.row_data->>'arrIntDomInd',
     batch_rows.row_data->>'std',
     batch_rows.row_data->>'depFlight',
+    batch_rows.row_data->>'depFlightType',
     batch_rows.row_data->>'depRoute',
     batch_rows.row_data->>'depFlightCategory',
     batch_rows.row_data->>'depCodeShares',
@@ -4175,3 +4422,201 @@ revoke execute on function public.enforce_seasonal_effective_base_visibility_v2(
   from public, anon, authenticated;
 revoke execute on function public.finalize_seasonal_occurrence_constraints_v2()
   from public, anon, authenticated;
+
+
+create or replace function public.resume_seasonal_import_v2(
+  p_request_id uuid,
+  p_expected_data_version integer
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_batch public.season_import_batches%rowtype;
+  v_result jsonb;
+begin
+  if auth.uid() is null then
+    raise exception 'A signed-in operator is required for Seasonal import recovery'
+      using errcode = '42501';
+  end if;
+  if p_request_id is null then
+    raise exception 'p_request_id is required'
+      using errcode = '22023';
+  end if;
+  if p_expected_data_version is null or p_expected_data_version < 0 then
+    raise exception 'p_expected_data_version must be a non-negative integer'
+      using errcode = '22023';
+  end if;
+
+  select batches.*
+  into v_batch
+  from public.season_import_batches batches
+  where batches.request_id = p_request_id
+    and batches.created_by = auth.uid();
+
+  if not found then
+    raise exception 'Seasonal import request is not available to the current operator'
+      using errcode = '42501';
+  end if;
+  if v_batch.expected_data_version is distinct from p_expected_data_version then
+    raise exception 'Seasonal import recovery version does not match the staged request'
+      using errcode = '40001';
+  end if;
+  if v_batch.status not in ('validated', 'committed') then
+    raise exception 'Seasonal import request cannot be recovered from status %', v_batch.status
+      using errcode = '22023';
+  end if;
+
+  v_result := public.commit_seasonal_import_v2(
+    v_batch.batch_id,
+    p_expected_data_version
+  );
+  return pg_catalog.jsonb_build_object(
+    'batchId', v_result->>'batchId',
+    'seasonId', v_result->>'seasonId',
+    'seasonCode', v_result->>'seasonCode',
+    'status', v_result->>'status',
+    'sourceRowCount', (v_result->>'sourceRowCount')::integer,
+    'flightRecordCount', (v_result->>'flightRecordCount')::integer,
+    'preservedOperationalCount', (v_result->>'preservedOperationalCount')::integer,
+    'removedImportedCount', (v_result->>'removedImportedCount')::integer,
+    'dataVersion', (v_result->>'dataVersion')::integer,
+    'serverHighWater', (v_result->>'serverHighWater')::bigint,
+    'checksum', v_result->>'checksum'
+  );
+end;
+$$;
+
+revoke execute on function public.resume_seasonal_import_v2(uuid, integer)
+  from public, anon;
+grant execute on function public.resume_seasonal_import_v2(uuid, integer)
+  to authenticated;
+revoke execute on function public.manage_season_metadata_v2(text, text, jsonb)
+  from public, anon;
+grant execute on function public.manage_season_metadata_v2(text, text, jsonb)
+  to authenticated;
+grant execute on function public.seasonal_occurrence_date_v2(text) to authenticated;
+grant execute on function public.seasonal_occurrence_airline_v2(text) to authenticated;
+grant execute on function public.seasonal_occurrence_flight_number_v2(text, text) to authenticated;
+grant execute on function public.seasonal_occurrence_flight_number_v2(text, text, text) to authenticated;
+grant execute on function public.normalize_seasonal_flight_number_v2(text, text) to authenticated;
+
+do $$
+declare
+  v_table text;
+  v_parent_write text := '('
+    || 'public.app_operator_has_permission(''seasonal.write'') or '
+    || 'public.app_operator_has_permission(''detailed.write'') or '
+    || 'public.app_operator_has_permission(''daily.write'') or '
+    || 'public.app_operator_has_permission(''checkin.write'') or '
+    || 'public.app_operator_has_permission(''gate.write'')'
+    || ')';
+  v_schedule_write text := '('
+    || 'public.app_operator_has_permission(''seasonal.write'') or '
+    || 'public.app_operator_has_permission(''detailed.write'') or '
+    || 'public.app_operator_has_permission(''daily.write'')'
+    || ')';
+  v_checkin_write text := '('
+    || 'public.app_operator_has_permission(''seasonal.write'') or '
+    || 'public.app_operator_has_permission(''detailed.write'') or '
+    || 'public.app_operator_has_permission(''daily.write'') or '
+    || 'public.app_operator_has_permission(''checkin.write'')'
+    || ')';
+begin
+  foreach v_table in array array[
+    'seasons',
+    'season_source_rows',
+    'season_source_row_days',
+    'season_flight_records',
+    'season_flight_record_counters',
+    'season_flight_record_checkin_windows',
+    'season_change_events',
+    'season_entity_versions',
+    'schedule_notification_deliveries'
+  ] loop
+    if pg_catalog.to_regclass('public.' || v_table) is null then
+      continue;
+    end if;
+    execute pg_catalog.format('alter table public.%I enable row level security', v_table);
+    execute pg_catalog.format('revoke insert, update, delete on table public.%I from authenticated', v_table);
+    execute pg_catalog.format('grant select on table public.%I to authenticated', v_table);
+    execute pg_catalog.format('drop policy if exists "app operators can write" on public.%I', v_table);
+    execute pg_catalog.format('drop policy if exists "app operators can read" on public.%I', v_table);
+    execute pg_catalog.format('drop policy if exists "seasonal baseline read" on public.%I', v_table);
+    execute pg_catalog.format(
+      'create policy "seasonal baseline read" on public.%I for select to authenticated using (public.app_operator_has_permission(''seasonal.read''))',
+      v_table
+    );
+  end loop;
+
+  foreach v_table in array array[
+    'season_modifications',
+    'season_modification_counters',
+    'season_modification_checkin_windows',
+    'season_modification_added_legs',
+    'season_mod_history_entries',
+    'season_mod_history_changes',
+    'season_mod_history_record_changes'
+  ] loop
+    if pg_catalog.to_regclass('public.' || v_table) is null then
+      continue;
+    end if;
+    execute pg_catalog.format('alter table public.%I enable row level security', v_table);
+    execute pg_catalog.format('grant select, insert, update, delete on table public.%I to authenticated', v_table);
+    execute pg_catalog.format('drop policy if exists "app operators can write" on public.%I', v_table);
+    execute pg_catalog.format('drop policy if exists "app operators can read" on public.%I', v_table);
+    execute pg_catalog.format('drop policy if exists "seasonal overlay read" on public.%I', v_table);
+    execute pg_catalog.format('drop policy if exists "permissioned operational overlay writes" on public.%I', v_table);
+    execute pg_catalog.format(
+      'create policy "seasonal overlay read" on public.%I for select to authenticated using (public.app_operator_has_permission(''seasonal.read''))',
+      v_table
+    );
+    execute pg_catalog.format(
+      'create policy "permissioned operational overlay writes" on public.%I for all to authenticated using (%s) with check (%s)',
+      v_table,
+      case
+        when v_table = 'season_modifications' then v_parent_write
+        when v_table in (
+          'season_modification_counters',
+          'season_modification_checkin_windows'
+        ) then v_checkin_write
+        else v_schedule_write
+      end,
+      case
+        when v_table = 'season_modifications' then v_parent_write
+        when v_table in (
+          'season_modification_counters',
+          'season_modification_checkin_windows'
+        ) then v_checkin_write
+        else v_schedule_write
+      end
+    );
+  end loop;
+
+  foreach v_table in array array[
+    'season_import_batches',
+    'season_import_batch_rows'
+  ] loop
+    execute pg_catalog.format('alter table public.%I enable row level security', v_table);
+    execute pg_catalog.format('revoke all on table public.%I from public, anon, authenticated', v_table);
+    execute pg_catalog.format('drop policy if exists "app operators can write" on public.%I', v_table);
+    execute pg_catalog.format('drop policy if exists "app operators can read" on public.%I', v_table);
+  end loop;
+
+  foreach v_table in array array[
+    'upsert_season_source_row_from_json(text,jsonb)',
+    'upsert_season_flight_record_from_json(text,jsonb)',
+    'upsert_season_modification_from_json(text,jsonb)',
+    'upsert_season_mod_history_from_json(text,jsonb)'
+  ] loop
+    if pg_catalog.to_regprocedure('public.' || v_table) is not null then
+      execute pg_catalog.format(
+        'revoke execute on function public.%s from public, anon, authenticated',
+        v_table
+      );
+    end if;
+  end loop;
+end
+$$;

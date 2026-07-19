@@ -1,7 +1,7 @@
 import type {
+  RemoteSeasonalExportSnapshot,
   RemoteSeasonalImportInput,
   RemoteSeasonalImportResult,
-  RemoteSeasonWorkspaceWindowInput,
   RemoteSeasonWorkspaceWindowResult,
 } from './remoteStore.ts';
 import type { Season } from './types.ts';
@@ -14,6 +14,7 @@ export interface SeasonalImportStatusUnknownNotice {
 export interface TargetedCommittedImportRefreshResult {
   seasons: Season[];
   season: Season;
+  snapshot: RemoteSeasonalExportSnapshot;
   window: RemoteSeasonWorkspaceWindowResult;
 }
 
@@ -26,29 +27,73 @@ export async function resumeSeasonalImportAttemptOnce(
 
 export async function loadTargetedCommittedImportRefresh(input: {
   committedImport: RemoteSeasonalImportResult;
-  windowInput: Omit<RemoteSeasonWorkspaceWindowInput, 'seasonId'>;
   loadSeasons: () => Promise<Season[]>;
-  loadWindow: (windowInput: RemoteSeasonWorkspaceWindowInput) => Promise<RemoteSeasonWorkspaceWindowResult | null>;
+  loadSnapshot: (snapshotInput: {
+    seasonId: string;
+    expectedDataVersion: number;
+  }) => Promise<RemoteSeasonalExportSnapshot>;
+  allowEmptyCommittedImport?: boolean;
 }): Promise<TargetedCommittedImportRefreshResult> {
   const targetSeasonId = input.committedImport.seasonId;
   const seasonsPromise = input.loadSeasons();
-  const windowPromise = input.loadWindow({
-    ...input.windowInput,
+  const snapshotPromise = input.loadSnapshot({
     seasonId: targetSeasonId,
+    expectedDataVersion: input.committedImport.dataVersion,
   });
-  const [seasons, window] = await Promise.all([seasonsPromise, windowPromise]);
+  const [seasons, snapshot] = await Promise.all([seasonsPromise, snapshotPromise]);
   const season = seasons.find((candidate) => candidate.id === targetSeasonId);
   if (!season) {
     throw new Error(`Committed season ${targetSeasonId} is missing from the authoritative season list.`);
   }
-  if (!window) {
-    throw new Error(`Committed season ${targetSeasonId} authoritative server window is unavailable.`);
+  if (snapshot.seasonId !== targetSeasonId) {
+    throw new Error(`Committed refresh seasonId mismatch: expected ${targetSeasonId}, received ${snapshot.seasonId}.`);
   }
-  return { seasons, season, window };
+  if (season.dataVersion !== input.committedImport.dataVersion || snapshot.dataVersion !== input.committedImport.dataVersion) {
+    throw new Error(`Committed refresh dataVersion mismatch for season ${targetSeasonId}.`);
+  }
+  if (!Number.isSafeInteger(snapshot.serverHighWater) || snapshot.serverHighWater < input.committedImport.serverHighWater) {
+    throw new Error(`Committed refresh serverHighWater is stale for season ${targetSeasonId}.`);
+  }
+  if (snapshot.truncated !== false) {
+    throw new Error(`Committed refresh snapshot for season ${targetSeasonId} is truncated.`);
+  }
+  if (!Array.isArray(snapshot.records)) {
+    throw new Error(`Committed refresh records must be an array for season ${targetSeasonId}.`);
+  }
+  if (!(snapshot.modifications instanceof Map)) {
+    throw new Error(`Committed refresh modifications must be a Map for season ${targetSeasonId}.`);
+  }
+  if (snapshot.totalCount !== input.committedImport.flightRecordCount) {
+    throw new Error(`Committed refresh totalCount does not match the committed flight record count for season ${targetSeasonId}.`);
+  }
+  if (snapshot.records.length !== snapshot.totalCount) {
+    throw new Error(`Committed refresh record count does not match totalCount for season ${targetSeasonId}.`);
+  }
+  if (snapshot.records.length === 0 && !input.allowEmptyCommittedImport) {
+    throw new Error(`Committed refresh returned an empty season ${targetSeasonId}; empty repair is not allowed.`);
+  }
+
+  const window: RemoteSeasonWorkspaceWindowResult = {
+    sourceRows: [],
+    records: snapshot.records,
+    modifications: snapshot.modifications,
+    syncMeta: {
+      seasonId: targetSeasonId,
+      baseServerVersion: snapshot.serverHighWater,
+      lastServerSeq: snapshot.serverHighWater,
+      localRevision: snapshot.serverHighWater,
+      pendingCount: 0,
+      lastLocalChangeAt: null,
+      conflicts: [],
+      syncStatus: 'synced',
+    },
+    cursor: { serverHighWater: snapshot.serverHighWater },
+  };
+  return { seasons, season, snapshot, window };
 }
 
 export function buildSeasonalImportStatusUnknownNotice(
-  attempt: RemoteSeasonalImportInput,
+  attempt: Pick<RemoteSeasonalImportInput, 'requestId'>,
   cause: unknown,
 ): SeasonalImportStatusUnknownNotice {
   const causeMessage = cause instanceof Error && cause.message

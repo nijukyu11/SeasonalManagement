@@ -172,8 +172,8 @@ export function serializeSourceRowForPersistence(row: ParsedRow): PersistedSourc
 export function hydrateSourceRowFromPersistence(row: Partial<ParsedRow>): ParsedRow {
   return {
     ...row,
-    arrFlightType: null,
-    depFlightType: null,
+    arrFlightType: row.arrFlightType ?? null,
+    depFlightType: row.depFlightType ?? null,
   } as ParsedRow;
 }
 

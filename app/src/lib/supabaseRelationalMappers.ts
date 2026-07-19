@@ -58,12 +58,14 @@ export type SourceRowRelationalRow = {
   aircraft: string | null;
   sta: string | null;
   arr_flight: string | null;
+  arr_flight_type: string | null;
   arr_route: string | null;
   arr_category: string | null;
   arr_code_shares: string | null;
   arr_int_dom_ind: string | null;
   std: string | null;
   dep_flight: string | null;
+  dep_flight_type: string | null;
   dep_route: string | null;
   dep_category: string | null;
   dep_code_shares: string | null;
@@ -353,12 +355,14 @@ export function toSourceRowRow(seasonId: string, row: ParsedRow): SourceRowRelat
     aircraft: persisted.aircraft,
     sta: persisted.sta,
     arr_flight: persisted.arrFlight,
+    arr_flight_type: row.arrFlightType ?? null,
     arr_route: persisted.arrRoute,
     arr_category: persisted.arrFlightCategory,
     arr_code_shares: persisted.arrCodeShares,
     arr_int_dom_ind: persisted.arrIntDomInd,
     std: persisted.std,
     dep_flight: persisted.depFlight,
+    dep_flight_type: row.depFlightType ?? null,
     dep_route: persisted.depRoute,
     dep_category: persisted.depFlightCategory,
     dep_code_shares: persisted.depCodeShares,
@@ -384,12 +388,14 @@ export function fromSourceRowRows(row: SourceRowRelationalRow, dayRows: SourceRo
     daysOfWeek: Array.from({ length: 7 }, (_, index) => dayRows.some((day) => day.row_index === row.row_index && day.iso_dow === index + 1)),
     sta: row.sta,
     arrFlight: row.arr_flight,
+    arrFlightType: row.arr_flight_type,
     arrRoute: row.arr_route,
     arrFlightCategory: row.arr_category,
     arrCodeShares: row.arr_code_shares,
     arrIntDomInd: row.arr_int_dom_ind,
     std: row.std,
     depFlight: row.dep_flight,
+    depFlightType: row.dep_flight_type,
     depRoute: row.dep_route,
     depFlightCategory: row.dep_category,
     depCodeShares: row.dep_code_shares,
@@ -397,6 +403,31 @@ export function fromSourceRowRows(row: SourceRowRelationalRow, dayRows: SourceRo
     overnightLinkRowIndex: row.overnight_link_row_index ?? undefined,
     linkType: row.link_type ?? undefined,
   });
+}
+
+export function hydrateSourceRowsFromRelationalPages(
+  rowPages: SourceRowRelationalRow[][],
+  dayPages: SourceRowDayRelationalRow[][],
+): ParsedRow[] {
+  const rows = rowPages.flat().sort((left, right) => (
+    left.season_id.localeCompare(right.season_id) || left.row_index - right.row_index
+  ));
+  const days = dayPages.flat().sort((left, right) => (
+    left.season_id.localeCompare(right.season_id)
+    || left.row_index - right.row_index
+    || left.iso_dow - right.iso_dow
+  ));
+  const daysByRow = new Map<string, SourceRowDayRelationalRow[]>();
+  for (const day of days) {
+    const key = `${day.season_id}:${day.row_index}`;
+    const current = daysByRow.get(key) ?? [];
+    current.push(day);
+    daysByRow.set(key, current);
+  }
+  return rows.map((row) => fromSourceRowRows(
+    row,
+    daysByRow.get(`${row.season_id}:${row.row_index}`) ?? [],
+  ));
 }
 
 export function toFlightRecordRow(seasonId: string, record: FlightRecord): FlightRecordRelationalRow {

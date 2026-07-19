@@ -152,6 +152,10 @@ function createSeasonSyncWarningStore() {
 const seasonSyncStateStore = createSeasonSyncStateStore();
 const seasonSyncWarningStore = createSeasonSyncWarningStore();
 
+export function getSeasonSyncStateSnapshot(seasonId: string): SeasonAutoSyncState {
+  return seasonSyncStateStore.get(seasonId);
+}
+
 function browserSetTimeout(callback: () => void, delay: number): ReturnType<typeof setTimeout> {
   if (typeof window === 'undefined') return setTimeout(callback, delay);
   return window.setTimeout(callback, delay) as unknown as ReturnType<typeof setTimeout>;

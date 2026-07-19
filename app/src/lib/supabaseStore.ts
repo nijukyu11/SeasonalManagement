@@ -12,6 +12,7 @@ import type {
   RemoteSeasonEventPage,
   RemoteSeasonalImportInput,
   RemoteSeasonalImportResult,
+  RemoteSeasonalImportResumeInput,
   RemoteSeasonalExportSnapshot,
   RemoteSeasonalExportSnapshotInput,
   RemoteSeasonSyncCursorState,
@@ -30,6 +31,7 @@ import {
   canonicalizeSeasonalImportSourceRows,
   normalizeSeasonalImportV2Mode,
   normalizeSeasonalImportExpectedDataVersion,
+  parseSeasonalImportV2Result,
   runSeasonalImportV2RpcFlow,
   SeasonalImportV2RpcRejectedError,
 } from './seasonalImportRpcContract';
@@ -40,7 +42,7 @@ import {
   fromSeasonRow,
   fromSettingsTableRows,
   toAiContextDocumentRows,
-  fromSourceRowRows,
+  hydrateSourceRowsFromRelationalPages,
   toAiModelRows,
   toAircraftGroupRows,
   toAircraftGroupTypeRows,
@@ -592,17 +594,6 @@ async function upsertRows(table: string, rows: JsonRecord[], onConflict: string,
   }
 }
 
-async function deleteSeasonOwnedRows(table: string, seasonId: string): Promise<void> {
-  assertOk(await client().from(table).delete().eq('season_id', seasonId), `clear ${table}`);
-}
-
-async function deleteSeasonBaselineRows(seasonId: string): Promise<void> {
-  await deleteSeasonOwnedRows('season_source_rows', seasonId);
-  await deleteSeasonOwnedRows('season_flight_records', seasonId);
-  await deleteSeasonOwnedRows('season_modifications', seasonId);
-  await deleteSeasonOwnedRows('season_mod_history_entries', seasonId);
-}
-
 async function readSeasonRelational(id: string): Promise<Season | null> {
   const row = assertOk(
     await client().from('seasons').select('*').eq('id', id).maybeSingle(),
@@ -950,7 +941,11 @@ export const supabaseStore: RemoteStore = {
     const id = randomId('season');
     const uploadedAt = Date.now();
     assertOk(
-      await client().from('seasons').insert(toSeasonRow({ ...season, uploadedAt }, id, uploadedAt)),
+      await client().rpc('manage_season_metadata_v2', {
+        p_action: 'create',
+        p_season_id: id,
+        p_payload: toSeasonRow({ ...season, uploadedAt }, id, uploadedAt),
+      }),
       'create season'
     );
     return id;
@@ -961,14 +956,21 @@ export const supabaseStore: RemoteStore = {
     if (!current) throw new Error(`Season ${id} not found`);
     const next = { ...current, ...data, id };
     assertOk(
-      await client().from('seasons').update(toSeasonRow(next, id, next.uploadedAt)).eq('id', id),
+      await client().rpc('manage_season_metadata_v2', {
+        p_action: 'update',
+        p_season_id: id,
+        p_payload: toSeasonRow(next, id, next.uploadedAt),
+      }),
       'update season'
     );
   },
 
   async deleteSeason(id: string): Promise<void> {
-    await deleteSeasonBaselineRows(id);
-    assertOk(await client().from('seasons').delete().eq('id', id), 'delete season');
+    assertOk(await client().rpc('manage_season_metadata_v2', {
+      p_action: 'delete',
+      p_season_id: id,
+      p_payload: {},
+    }), 'delete season');
   },
 
   async getOperationalSettings(): Promise<OperationalSettings> {
@@ -1056,8 +1058,7 @@ export const supabaseStore: RemoteStore = {
         { type: 'order', column: 'iso_dow', ascending: true },
       ], 'load seasonal source provenance days'),
     ]);
-    const daysByRow = groupRowsByKey(dayRows, (row) => String(row.row_index));
-    return rows.map((row) => fromSourceRowRows(row, daysByRow.get(String(row.row_index)) ?? []));
+    return hydrateSourceRowsFromRelationalPages([rows], [dayRows]);
   },
 
   async applySeasonalImportRemote(input: RemoteSeasonalImportInput): Promise<RemoteSeasonalImportResult> {
@@ -1089,6 +1090,17 @@ export const supabaseStore: RemoteStore = {
         'commit seasonal import',
       ),
     });
+  },
+
+  async resumeSeasonalImportRemote(input: RemoteSeasonalImportResumeInput): Promise<RemoteSeasonalImportResult> {
+    const payload = assertSeasonalImportRpcOk(
+      await client().rpc('resume_seasonal_import_v2', {
+        p_request_id: input.requestId,
+        p_expected_data_version: input.expectedDataVersion,
+      }),
+      'resume Seasonal import',
+    );
+    return parseSeasonalImportV2Result(payload);
   },
 
   async applySeasonServerMutationV1(payload: ServerSeasonMutationPayload): Promise<ServerSeasonMutationResult> {
