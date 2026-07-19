@@ -219,7 +219,7 @@ test('seasonal source import V2 stages canonical rows behind a permissioned RPC'
   const schemaSource = readFileSync(join(root, '..', 'supabase', 'schema.sql'), 'utf8');
   const importBatchTablePattern = /create table if not exists public\.season_import_batches[\s\S]*?\n\);/i;
   const importBatchRowsTablePattern = /create table if not exists public\.season_import_batch_rows[\s\S]*?\n\);/i;
-  const resultConstraintBackfillPattern = /do \$\$\n?begin\n?  if not exists \(\n?    select 1\n?    from pg_catalog\.pg_constraint constraints[\s\S]*?season_import_batches_result_object_check[\s\S]*?\n?\$\$;/i;
+  const resultConstraintBackfillPattern = /do \$\$(?:\r?\n)?begin(?:\r?\n)?  if not exists \((?:\r?\n)?    select 1(?:\r?\n)?    from pg_catalog\.pg_constraint constraints[\s\S]*?season_import_batches_result_object_check[\s\S]*?(?:\r?\n)?\$\$;/i;
   const stageFunctionPattern = /create or replace function public\.stage_seasonal_import_v2\(p_import jsonb\)[\s\S]*?\n\$\$;/i;
   const preserveFingerprintFunctionPattern = /create or replace function public\.preserve_season_import_batch_staging_metadata_v2\(\)[\s\S]*?\n\$\$;/i;
   const preserveFingerprintTriggerPattern = /drop trigger if exists preserve_season_import_batch_staging_metadata_v2[\s\S]*?execute function public\.preserve_season_import_batch_staging_metadata_v2\(\);/i;
