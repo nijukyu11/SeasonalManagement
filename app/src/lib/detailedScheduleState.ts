@@ -3,11 +3,11 @@ import { buildOperationalFlightMetadata } from './iataSeason.ts';
 import { materializeEffectiveSeasonalLegs } from './effectiveSeasonalLegs.ts';
 import {
   expectedDateForLinkedLeg,
-  findValidLinkedCounterpart,
   inferLinkedPairType,
-  isValidLinkedFlightPair,
+  resolveSeasonalPairs,
   shiftIsoDate,
-} from './flightPairIntegrity.ts';
+  type SeasonalPairResolution,
+} from './seasonalPairing.ts';
 
 export interface OvernightCompanionState {
   flightNumber: string;
@@ -465,6 +465,7 @@ export interface DetailedTransferInput {
   targetDate: string;
   mode: DetailedTransferMode;
   idSeed?: string;
+  pairResolution?: SeasonalPairResolution;
 }
 
 function targetAnchorDateForTransfer(sourceLeg: FlightLeg, targetDate: string, linkType: 'overnight' | 'sameday'): string {
@@ -536,9 +537,19 @@ export function buildDetailedTransferModifications(input: DetailedTransferInput)
   const seed = input.idSeed ?? `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
   let sequence = 0;
   const nextId = (prefix: string) => `${prefix}_${seed}_${sequence++}`;
-  const counterpart = findValidLinkedCounterpart(input.sourceLeg, input.allLegs);
+  const resolutionLegs = input.allLegs.some((leg) => leg.id === input.sourceLeg.id)
+    ? input.allLegs
+    : [...input.allLegs, input.sourceLeg];
+  const resolution = input.pairResolution ?? resolveSeasonalPairs(resolutionLegs);
+  const counterpartId = resolution.byLegId.get(input.sourceLeg.id);
+  const byId = new Map(resolutionLegs.map((leg) => [leg.id, leg]));
+  const counterpart = counterpartId ? byId.get(counterpartId) ?? null : null;
 
   if (!counterpart) {
+    const pairIssue = resolution.issues.find((issue) => issue.legId === input.sourceLeg.id);
+    if (pairIssue) {
+      throw new Error(`Cannot ${input.mode} paired flight: ${pairIssue.message}`);
+    }
     const newId = nextId('F_NEW');
     const mods: FlightModification[] = [{
       legId: newId,
@@ -552,16 +563,6 @@ export function buildDetailedTransferModifications(input: DetailedTransferInput)
   const sourcePair = input.sourceLeg.type === 'A'
     ? { arr: input.sourceLeg, dep: counterpart }
     : { arr: counterpart, dep: input.sourceLeg };
-  if (!isValidLinkedFlightPair(sourcePair.arr, sourcePair.dep)) {
-    const newId = nextId('F_NEW');
-    const mods: FlightModification[] = [{
-      legId: newId,
-      action: 'added',
-      addedLeg: transferredSingleLeg(input.sourceLeg, input.targetDate, newId),
-    }];
-    if (input.mode === 'move') mods.push({ legId: input.sourceLeg.id, action: 'deleted' });
-    return mods;
-  }
 
   const linkType = inferLinkedPairType(sourcePair.arr, sourcePair.dep);
   const pairAnchorDate = targetAnchorDateForTransfer(input.sourceLeg, input.targetDate, linkType);
@@ -590,17 +591,20 @@ export function buildOvernightCompanionMap(
   allLegs: FlightLeg[]
 ): Map<string, OvernightCompanionState> {
   const companionMap = new Map<string, OvernightCompanionState>();
+  const resolution = resolveSeasonalPairs(allLegs);
+  const byId = new Map(allLegs.map((leg) => [leg.id, leg]));
 
   for (const leg of primaryLegs) {
-    if (!leg.linkId) continue;
-    const linked = findValidLinkedCounterpart(leg, allLegs);
+    const counterpartId = resolution.byLegId.get(leg.id);
+    const linked = counterpartId ? byId.get(counterpartId) ?? null : null;
     if (!linked) continue;
+    const linkType = inferLinkedPairType(leg, linked);
 
     const key = `${leg.date}_${leg.id}`;
     if (leg.type === 'A') {
       companionMap.set(key, {
         flightNumber: linked.flightNumber,
-        schedule: leg.linkType === 'overnight' ? `${linked.schedule}+1` : linked.schedule,
+        schedule: linkType === 'overnight' ? `${linked.schedule}+1` : linked.schedule,
         route: linked.route,
         aircraft: linked.aircraft,
         type: 'D',
@@ -609,7 +613,7 @@ export function buildOvernightCompanionMap(
     } else {
       companionMap.set(key, {
         flightNumber: linked.flightNumber,
-        schedule: leg.linkType === 'overnight' ? `${linked.schedule}-1` : linked.schedule,
+        schedule: linkType === 'overnight' ? `${linked.schedule}-1` : linked.schedule,
         route: linked.route,
         aircraft: linked.aircraft,
         type: 'A',

@@ -46,6 +46,7 @@ function leg(overrides: Partial<FlightLeg>): FlightLeg {
     action: overrides.action ?? null,
     sourceRowIndex: overrides.sourceRowIndex ?? 833,
     linkedSourceRowIndex: overrides.linkedSourceRowIndex,
+    turnaroundId: overrides.turnaroundId,
     linkType: overrides.linkType,
     pairAnchorDate: overrides.pairAnchorDate,
     linkedRecordId: overrides.linkedRecordId,
@@ -148,4 +149,48 @@ test('groupFlightLegs exports repaired YP pattern as two combined rows', () => {
     ['621', '622'],
     ['621', '622'],
   ]);
+});
+
+test('groupFlightLegs combines a unique legacy turnaround with distinct link IDs', () => {
+  const arrival = leg({
+    id: 'legacy-group-arr',
+    type: 'A',
+    linkId: 'legacy-arr-link',
+    turnaroundId: 'legacy-group-turn',
+  });
+  const departure = leg({
+    id: 'legacy-group-dep',
+    type: 'D',
+    linkId: 'legacy-dep-link',
+    turnaroundId: 'legacy-group-turn',
+  });
+
+  const groups = groupFlightLegs([arrival, departure]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].arrFlightNumber, arrival.rawFlightNumber);
+  assert.equal(groups[0].depFlightNumber, departure.rawFlightNumber);
+});
+
+test('pair issues fail validation and block grouping', () => {
+  const ambiguous = [
+    leg({ id: 'amb-arr-1', type: 'A', turnaroundId: 'ambiguous-export' }),
+    leg({ id: 'amb-arr-2', type: 'A', turnaroundId: 'ambiguous-export' }),
+    leg({ id: 'amb-dep-1', type: 'D', turnaroundId: 'ambiguous-export' }),
+    leg({ id: 'amb-dep-2', type: 'D', turnaroundId: 'ambiguous-export' }),
+  ];
+
+  const validation = validateFlightLegsForSeasonalExport(ambiguous);
+
+  assert.equal(validation.valid, false);
+  assert.throws(() => groupFlightLegs(ambiguous), /ambiguous turnaround/i);
+});
+
+test('invalid runtime leg type fails export validation and grouping', () => {
+  const invalid = leg({ id: 'invalid-export-type', type: 'X' as FlightLeg['type'] });
+
+  const validation = validateFlightLegsForSeasonalExport([invalid]);
+
+  assert.equal(validation.valid, false);
+  assert.throws(() => groupFlightLegs([invalid]), /invalid flight type/i);
 });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { closeSeasonalSelectionOverPairs, resolveSeasonalPairs } from './seasonalPairing.ts';
+import { findValidLinkedCounterpart, isValidLinkedFlightPair } from './flightPairIntegrity.ts';
 import type { FlightLeg } from './types.ts';
 
 function leg(overrides: Partial<FlightLeg>): FlightLeg {
@@ -76,6 +77,7 @@ test('pair resolver prioritizes reciprocal linked record IDs', () => {
   assert.equal(result.pairs[0].departure.id, departure.id);
   assert.equal(result.byLegId.get(arrival.id), departure.id);
   assert.deepEqual(result.unpaired.map((candidate) => candidate.id), [extra.id]);
+  assert.equal(result.issues.some((issue) => issue.legId === extra.id && issue.code === 'missing-counterpart'), true);
 });
 
 test('pair resolver uses unique turnaround and anchor fallbacks', () => {
@@ -170,4 +172,45 @@ test('selection closure automatically includes the selected overnight counterpar
     closeSeasonalSelectionOverPairs([departure.id], resolution),
     [departure.id, arrival.id],
   );
+});
+
+test('pair resolver rejects duplicate IDs without self-pairing', () => {
+  const duplicateArrival = leg({ id: 'duplicate-id', type: 'A', linkedRecordId: 'duplicate-id' });
+  const duplicateDeparture = leg({ id: 'duplicate-id', type: 'D', linkedRecordId: 'duplicate-id' });
+
+  const result = resolveSeasonalPairs([duplicateArrival, duplicateDeparture]);
+
+  assert.equal(result.pairs.length, 0);
+  assert.equal(result.byLegId.has('duplicate-id'), false);
+  assert.equal(result.unpaired.length, 2);
+  assert.equal(
+    result.issues.some((issue) => issue.legId === 'duplicate-id' && issue.code === 'ambiguous-pair'),
+    true,
+  );
+});
+
+test('pair resolver rejects invalid runtime leg types explicitly', () => {
+  const invalid = leg({
+    id: 'invalid-type',
+    type: 'X' as FlightLeg['type'],
+    linkedRecordId: 'valid-arrival',
+  });
+  const arrival = leg({ id: 'valid-arrival', type: 'A', linkedRecordId: invalid.id });
+
+  const result = resolveSeasonalPairs([invalid, arrival]);
+
+  assert.equal(result.pairs.length, 0);
+  assert.equal(result.unpaired.length, 2);
+  assert.equal(
+    result.issues.some((issue) => issue.legId === invalid.id && issue.code === 'ambiguous-pair'),
+    true,
+  );
+});
+
+test('legacy compatibility helpers delegate to turnaround resolution', () => {
+  const arrival = leg({ id: 'adapter-arr', type: 'A', linkId: 'legacy-arr', turnaroundId: 'adapter-turn' });
+  const departure = leg({ id: 'adapter-dep', type: 'D', linkId: 'legacy-dep', turnaroundId: 'adapter-turn' });
+
+  assert.equal(isValidLinkedFlightPair(arrival, departure), true);
+  assert.equal(findValidLinkedCounterpart(arrival, [arrival, departure])?.id, departure.id);
 });

@@ -247,6 +247,10 @@ export function enrichRows(rows: ParsedRow[]): DisplayRow[] {
  */
 export function expandToFlightLegs(rows: ParsedRow[]): FlightLeg[] {
   const legs: FlightLeg[] = [];
+  type ExpandedPairMetadata = Partial<Pick<
+    FlightLeg,
+    'turnaroundId' | 'linkType' | 'pairAnchorDate' | 'linkedRecordId'
+  >>;
 
   // Determine season year from the first row's effective date
   const firstRow = rows[0];
@@ -288,6 +292,8 @@ export function expandToFlightLegs(rows: ParsedRow[]): FlightLeg[] {
         // Content-based stable IDs (independent of row order / filtering)
         const arrRaw = String(row.arrFlight ?? '');
         const depRaw = String(row.depFlight ?? '');
+        const arrId = `${row.airline}_${arrRaw}_${dateStr}_A`;
+        const depId = `${row.airline}_${depRaw}_${dateStr}_D`;
 
         // Compute linkId based on link type:
         // - overnight ARR: includes paired DEP flight, uses own date
@@ -322,10 +328,46 @@ export function expandToFlightLegs(rows: ParsedRow[]): FlightLeg[] {
           linkId = `${row.airline}_${arrRaw}_${depRaw}_${dateStr}`;
         }
 
+        let arrPairMeta: ExpandedPairMetadata = {};
+        let depPairMeta: ExpandedPairMetadata = {};
+        if (hasArrival && hasDeparture) {
+          arrPairMeta = {
+            turnaroundId: linkId,
+            linkType: 'sameday',
+            pairAnchorDate: dateStr,
+            linkedRecordId: depId,
+          };
+          depPairMeta = {
+            turnaroundId: linkId,
+            linkType: 'sameday',
+            pairAnchorDate: dateStr,
+            linkedRecordId: arrId,
+          };
+        } else if (linkedDep && hasArrival) {
+          const linkedDepDate = new Date(current);
+          if (linkedDep.linkType === 'overnight') linkedDepDate.setDate(linkedDepDate.getDate() + 1);
+          arrPairMeta = {
+            turnaroundId: linkId,
+            linkType: linkedDep.linkType,
+            pairAnchorDate: dateStr,
+            linkedRecordId: `${row.airline}_${String(linkedDep.row.depFlight ?? '')}_${formatDate(linkedDepDate)}_D`,
+          };
+        } else if (linkedArr && hasDeparture) {
+          const pairAnchorDate = new Date(current);
+          if (linkedArr.linkType === 'overnight') pairAnchorDate.setDate(pairAnchorDate.getDate() - 1);
+          const anchorDateStr = formatDate(pairAnchorDate);
+          depPairMeta = {
+            turnaroundId: linkId,
+            linkType: linkedArr.linkType,
+            pairAnchorDate: anchorDateStr,
+            linkedRecordId: `${row.airline}_${String(linkedArr.row.arrFlight ?? '')}_${anchorDateStr}_A`,
+          };
+        }
+
         if (hasArrival) {
           const cleaned = cleanFlightNumber(row.airline, row.arrFlight!);
           legs.push({
-            id: `${row.airline}_${arrRaw}_${dateStr}_A`,
+            id: arrId,
             linkId,
             type: 'A',
             airline: row.airline,
@@ -354,13 +396,14 @@ export function expandToFlightLegs(rows: ParsedRow[]): FlightLeg[] {
             action: null,
             sourceRowIndex: row.rowIndex,
             ...arrLinkMeta,
+            ...arrPairMeta,
           });
         }
 
         if (hasDeparture) {
           const cleaned = cleanFlightNumber(row.airline, row.depFlight!);
           legs.push({
-            id: `${row.airline}_${depRaw}_${dateStr}_D`,
+            id: depId,
             linkId,
             type: 'D',
             airline: row.airline,
@@ -389,6 +432,7 @@ export function expandToFlightLegs(rows: ParsedRow[]): FlightLeg[] {
             action: null,
             sourceRowIndex: row.rowIndex,
             ...depLinkMeta,
+            ...depPairMeta,
           });
 
 

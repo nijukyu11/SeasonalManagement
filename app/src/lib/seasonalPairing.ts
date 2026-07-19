@@ -1,5 +1,6 @@
-import { expectedDateForLinkedLeg, inferLinkedPairType, pairAnchorForLinkedLegs } from './flightPairIntegrity.ts';
 import type { FlightLeg } from './types.ts';
+
+export type FlightPairLinkType = 'overnight' | 'sameday';
 
 export interface SeasonalPairIssue {
   code: 'missing-counterpart' | 'non-reciprocal-link' | 'ambiguous-pair';
@@ -14,8 +15,49 @@ export interface SeasonalPairResolution {
   byLegId: Map<string, string>;
 }
 
+export function shiftIsoDate(isoDate: string, offsetDays: number): string {
+  const date = new Date(`${isoDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().split('T')[0];
+}
+
+export function expectedDateForLinkedLeg(
+  anchorDate: string,
+  legType: FlightLeg['type'],
+  linkType: FlightPairLinkType,
+): string {
+  if (linkType !== 'overnight') return anchorDate;
+  return legType === 'D' ? shiftIsoDate(anchorDate, 1) : anchorDate;
+}
+
+export function inferLinkedPairType(left: FlightLeg, right: FlightLeg): FlightPairLinkType {
+  if (left.linkType) return left.linkType;
+  if (right.linkType) return right.linkType;
+  const arrival = left.type === 'A' ? left : right.type === 'A' ? right : null;
+  const departure = left.type === 'D' ? left : right.type === 'D' ? right : null;
+  return arrival && departure && departure.date > arrival.date ? 'overnight' : 'sameday';
+}
+
+export function pairAnchorForLinkedLegs(
+  left: FlightLeg,
+  right: FlightLeg,
+  linkType = inferLinkedPairType(left, right),
+): string {
+  if (left.pairAnchorDate) return left.pairAnchorDate;
+  if (right.pairAnchorDate) return right.pairAnchorDate;
+  const arrival = left.type === 'A' ? left : right.type === 'A' ? right : null;
+  if (arrival) return arrival.date;
+  return linkType === 'overnight' && left.type === 'D' ? shiftIsoDate(left.date, -1) : left.date;
+}
+
+function hasValidLegType(leg: FlightLeg): boolean {
+  return leg.type === 'A' || leg.type === 'D';
+}
+
 function pairMembers(left: FlightLeg, right: FlightLeg): { arrival: FlightLeg; departure: FlightLeg } | null {
-  if (left.type === right.type) return null;
+  if (left.id === right.id || !hasValidLegType(left) || !hasValidLegType(right) || left.type === right.type) {
+    return null;
+  }
   return left.type === 'A'
     ? { arrival: left, departure: right }
     : { arrival: right, departure: left };
@@ -28,7 +70,12 @@ function pairMetadataIsCompatible(
 ): boolean {
   const pair = pairMembers(left, right);
   if (!pair) return false;
-  if (!options.allowDistinctLinkIds && left.linkId && right.linkId && left.linkId !== right.linkId) return false;
+  if (
+    !options.allowDistinctLinkIds
+    && (!left.linkId || !right.linkId || left.linkId !== right.linkId)
+  ) {
+    return false;
+  }
   if (left.linkType && right.linkType && left.linkType !== right.linkType) return false;
   if (left.pairAnchorDate && right.pairAnchorDate && left.pairAnchorDate !== right.pairAnchorDate) return false;
 
@@ -56,25 +103,60 @@ function hasPairingIntent(leg: FlightLeg): boolean {
 
 export function resolveSeasonalPairs(legs: FlightLeg[]): SeasonalPairResolution {
   const activeLegs = legs.filter((leg) => leg.action !== 'deleted');
-  const byId = new Map(activeLegs.map((leg) => [leg.id, leg]));
   const processed = new Set<string>();
   const blocked = new Set<string>();
   const pairs: SeasonalPairResolution['pairs'] = [];
   const issues: SeasonalPairIssue[] = [];
   const issueKeys = new Set<string>();
+  const issueLegIds = new Set<string>();
   const counterpartByLegId = new Map<string, string>();
 
   const addIssue = (code: SeasonalPairIssue['code'], leg: FlightLeg, message: string): void => {
     const key = `${code}:${leg.id}`;
     if (issueKeys.has(key)) return;
     issueKeys.add(key);
+    issueLegIds.add(leg.id);
     issues.push({ code, legId: leg.id, message });
   };
+
+  const legsById = new Map<string, FlightLeg[]>();
+  for (const leg of activeLegs) addToGroup(legsById, leg.id, leg);
+  for (const [id, group] of legsById) {
+    if (group.length > 1) {
+      blocked.add(id);
+      addIssue(
+        'ambiguous-pair',
+        group[0],
+        `Duplicate active leg ID ${id} appears ${group.length} times and cannot be paired safely.`,
+      );
+      continue;
+    }
+    if (!hasValidLegType(group[0])) {
+      blocked.add(id);
+      addIssue(
+        'ambiguous-pair',
+        group[0],
+        `${group[0].flightNumber} on ${group[0].date} has invalid flight type ${String(group[0].type)}.`,
+      );
+    }
+  }
+
+  const eligibleLegs = activeLegs.filter((leg) => !blocked.has(leg.id));
+  const byId = new Map(eligibleLegs.map((leg) => [leg.id, leg]));
   const addPair = (
     left: FlightLeg,
     right: FlightLeg,
     options?: { allowDistinctLinkIds?: boolean },
   ): boolean => {
+    if (
+      left.id === right.id
+      || processed.has(left.id)
+      || processed.has(right.id)
+      || blocked.has(left.id)
+      || blocked.has(right.id)
+    ) {
+      return false;
+    }
     const pair = pairMembers(left, right);
     if (!pair || !pairMetadataIsCompatible(left, right, options)) return false;
     pairs.push(pair);
@@ -85,12 +167,34 @@ export function resolveSeasonalPairs(legs: FlightLeg[]): SeasonalPairResolution 
     return true;
   };
 
-  for (const leg of activeLegs) {
+  for (const leg of eligibleLegs) {
     if (processed.has(leg.id) || blocked.has(leg.id) || !leg.linkedRecordId) continue;
+    if (leg.linkedRecordId === leg.id) {
+      blocked.add(leg.id);
+      addIssue('ambiguous-pair', leg, `${leg.flightNumber} on ${leg.date} links to itself.`);
+      continue;
+    }
+
     const counterpart = byId.get(leg.linkedRecordId);
     if (!counterpart) {
       blocked.add(leg.id);
-      addIssue('missing-counterpart', leg, `${leg.flightNumber} on ${leg.date} links to a missing counterpart.`);
+      const knownCounterpart = legsById.has(leg.linkedRecordId);
+      addIssue(
+        knownCounterpart ? 'ambiguous-pair' : 'missing-counterpart',
+        leg,
+        knownCounterpart
+          ? `${leg.flightNumber} on ${leg.date} links to an invalid or duplicate counterpart.`
+          : `${leg.flightNumber} on ${leg.date} links to a missing counterpart.`,
+      );
+      continue;
+    }
+    if (processed.has(counterpart.id) || blocked.has(counterpart.id)) {
+      blocked.add(leg.id);
+      addIssue(
+        'ambiguous-pair',
+        leg,
+        `${leg.flightNumber} on ${leg.date} links to a counterpart that is already consumed or invalid.`,
+      );
       continue;
     }
     if (counterpart.linkedRecordId !== leg.id) {
@@ -111,7 +215,7 @@ export function resolveSeasonalPairs(legs: FlightLeg[]): SeasonalPairResolution 
   }
 
   const turnaroundGroups = new Map<string, FlightLeg[]>();
-  for (const leg of activeLegs) {
+  for (const leg of eligibleLegs) {
     if (!processed.has(leg.id) && !blocked.has(leg.id) && leg.turnaroundId) {
       addToGroup(turnaroundGroups, leg.turnaroundId, leg);
     }
@@ -128,13 +232,20 @@ export function resolveSeasonalPairs(legs: FlightLeg[]): SeasonalPairResolution 
       }
       continue;
     }
-    if (group.length === 2) {
-      addPair(group[0], group[1], { allowDistinctLinkIds: true });
+    if (group.length === 2 && !addPair(group[0], group[1], { allowDistinctLinkIds: true })) {
+      for (const leg of group) {
+        blocked.add(leg.id);
+        addIssue(
+          'ambiguous-pair',
+          leg,
+          `${leg.flightNumber} on ${leg.date} belongs to turnaround ${turnaroundId} without one compatible A/D pair.`,
+        );
+      }
     }
   }
 
   const anchorGroups = new Map<string, FlightLeg[]>();
-  for (const leg of activeLegs) {
+  for (const leg of eligibleLegs) {
     if (processed.has(leg.id) || blocked.has(leg.id)) continue;
     const key = anchorKey(leg);
     if (key) addToGroup(anchorGroups, key, leg);
@@ -151,14 +262,20 @@ export function resolveSeasonalPairs(legs: FlightLeg[]): SeasonalPairResolution 
       }
       continue;
     }
-    if (group.length === 2) addPair(group[0], group[1]);
+    if (group.length === 2 && !addPair(group[0], group[1])) {
+      for (const leg of group) {
+        blocked.add(leg.id);
+        addIssue(
+          'ambiguous-pair',
+          leg,
+          `${leg.flightNumber} on ${leg.date} belongs to pair anchor ${key} without one compatible A/D pair.`,
+        );
+      }
+    }
   }
 
   for (const leg of activeLegs) {
-    if (processed.has(leg.id) || issueKeys.has(`missing-counterpart:${leg.id}`)
-      || issueKeys.has(`non-reciprocal-link:${leg.id}`) || issueKeys.has(`ambiguous-pair:${leg.id}`)) {
-      continue;
-    }
+    if (processed.has(leg.id) || issueLegIds.has(leg.id)) continue;
     if (hasPairingIntent(leg)) {
       addIssue('missing-counterpart', leg, `${leg.flightNumber} on ${leg.date} has no unique active counterpart.`);
     }

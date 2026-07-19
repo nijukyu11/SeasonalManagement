@@ -40,6 +40,7 @@ import { filterUiUndoEntriesForSession, trimUiUndoEntries } from '@/lib/uiUndoMe
 import { appendAuditLogEntry, createFlightActionAuditFromHistory } from '@/lib/auditLog';
 import { withScheduleNotificationPayload } from '@/lib/scheduleNotifications';
 import { resolveLinkedDeletionTargets } from '@/lib/pairDeletion';
+import { resolveSeasonalPairs } from '@/lib/seasonalPairing';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
 import { saveWorkbookAsXlsx } from '@/lib/exportSave';
 import type { Season, FlightLeg, FlightModification, ModHistoryEntry, FlightRecord } from '@/lib/types';
@@ -1400,21 +1401,27 @@ function DetailedScheduleContent() {
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
         if (copiedLeg && sweepSelectedDates.length > 0) {
-          const newMods: FlightModification[] = [];
+          try {
+            const pairResolution = resolveSeasonalPairs(allLegs);
+            const newMods: FlightModification[] = [];
 
-          sweepSelectedDates.forEach(targetDate => {
-            newMods.push(...buildDetailedTransferModifications({
-              sourceLeg: copiedLeg,
-              visibleLegs: legs,
-              allLegs,
-              targetDate,
-              mode: 'copy',
-            }));
-          });
+            sweepSelectedDates.forEach(targetDate => {
+              newMods.push(...buildDetailedTransferModifications({
+                sourceLeg: copiedLeg,
+                visibleLegs: legs,
+                allLegs,
+                targetDate,
+                mode: 'copy',
+                pairResolution,
+              }));
+            });
 
-          if (newMods.length > 0) {
-            setProposedMods(newMods);
-            setIsConfirmModalOpen(true);
+            if (newMods.length > 0) {
+              setProposedMods(newMods);
+              setIsConfirmModalOpen(true);
+            }
+          } catch (err) {
+            void showAlert({ title: 'Cannot Copy Flight', message: (err as Error).message, tone: 'error' });
           }
         }
       }
@@ -1438,7 +1445,7 @@ function DetailedScheduleContent() {
     };
     window.addEventListener('keydown', handleKeyboard);
     return () => window.removeEventListener('keydown', handleKeyboard);
-  }, [singleSelectedLeg, copiedLeg, sweepSelectedDates, legs, allLegs, fromDate, toDate, isRouteActive, handleDeleteSelectedLegs]);
+  }, [singleSelectedLeg, copiedLeg, sweepSelectedDates, legs, allLegs, fromDate, toDate, isRouteActive, handleDeleteSelectedLegs, showAlert]);
 
   // Calendar Logic
   const calendarDays = useMemo(() => {
@@ -1563,14 +1570,13 @@ function DetailedScheduleContent() {
     e.preventDefault();
     const data = e.dataTransfer.getData('text/plain');
     if (!data) return;
+    const isCopy = e.ctrlKey || e.metaKey;
     try {
       const { legId } = JSON.parse(data);
       const draggedLeg = legs.find(l => l.id === legId);
       if (!draggedLeg) return;
       if (draggedLeg.date === targetDateStr) return;
 
-      const isCopy = e.ctrlKey || e.metaKey;
-      
       const newMods = buildDetailedTransferModifications({
         sourceLeg: draggedLeg,
         visibleLegs: legs,
@@ -1583,6 +1589,11 @@ function DetailedScheduleContent() {
       setIsConfirmModalOpen(true);
     } catch (err) {
       console.error('Drop error', err);
+      void showAlert({
+        title: isCopy ? 'Cannot Copy Flight' : 'Cannot Move Flight',
+        message: (err as Error).message,
+        tone: 'error',
+      });
     }
   };
 

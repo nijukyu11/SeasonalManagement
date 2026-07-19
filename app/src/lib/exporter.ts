@@ -1,13 +1,14 @@
 import * as XLSX from 'xlsx';
 import { saveExportBlob, type ExportSaveResult } from './exportSave.ts';
 import type { FlightLeg, PatternGroup } from './types';
-import { resolveSeasonalPairs } from './seasonalPairing.ts';
+import { inferLinkedPairType, resolveSeasonalPairs } from './seasonalPairing.ts';
 
 // ─── Pattern Grouping ──────────────────────────────────────────
 
 interface LegPair {
   arrival: FlightLeg | null;
   departure: FlightLeg | null;
+  linkType: 'overnight' | 'sameday' | null;
 }
 
 interface GroupedPattern {
@@ -82,24 +83,36 @@ export function validateFlightLegsForSeasonalExport(legs: FlightLeg[]): Seasonal
 export function groupFlightLegs(legs: FlightLeg[]): PatternGroup[] {
   // Step 1: Filter out deleted (Rule 4.2)
   const activeLegs = legs.filter((l) => l.action !== 'deleted');
+  const resolution = resolveSeasonalPairs(activeLegs);
+  if (resolution.issues.length > 0) {
+    throw new Error(`Cannot group seasonal flights: ${resolution.issues[0].message}`);
+  }
 
-  // Step 2: Build link-based pairs (group by linkId + date)
-  const pairMap = new Map<string, LegPair>();
-
-  for (const leg of activeLegs) {
-    const pairKey = `${leg.linkId}|${leg.date}`;
-    if (!pairMap.has(pairKey)) {
-      pairMap.set(pairKey, { arrival: null, departure: null });
+  // Step 2: Materialize the resolver's one-to-one pairs and valid standalone legs.
+  const legPairs: LegPair[] = [];
+  for (const pair of resolution.pairs) {
+    const linkType = inferLinkedPairType(pair.arrival, pair.departure);
+    if (linkType === 'overnight') {
+      legPairs.push(
+        { arrival: pair.arrival, departure: null, linkType },
+        { arrival: null, departure: pair.departure, linkType },
+      );
+    } else {
+      legPairs.push({ arrival: pair.arrival, departure: pair.departure, linkType });
     }
-    const pair = pairMap.get(pairKey)!;
-    if (leg.type === 'A') pair.arrival = leg;
-    else pair.departure = leg;
+  }
+  for (const leg of resolution.unpaired) {
+    legPairs.push({
+      arrival: leg.type === 'A' ? leg : null,
+      departure: leg.type === 'D' ? leg : null,
+      linkType: leg.linkType ?? null,
+    });
   }
 
   // Step 3: Group pairs by combined pattern key
   const patternMap = new Map<string, GroupedPattern>();
 
-  for (const pair of pairMap.values()) {
+  for (const pair of legPairs) {
     const arrKey = pair.arrival
       ? `A:${pair.arrival.flightNumber}|${pair.arrival.route}|${pair.arrival.schedule}`
       : 'A:null';
@@ -111,7 +124,7 @@ export function groupFlightLegs(legs: FlightLeg[]): PatternGroup[] {
     const aircraft = pair.arrival?.aircraft ?? pair.departure?.aircraft ?? '';
     const arrSourceRowIndex = pair.arrival?.sourceRowIndex ?? pair.departure?.linkedSourceRowIndex ?? null;
     const depSourceRowIndex = pair.departure?.sourceRowIndex ?? pair.arrival?.linkedSourceRowIndex ?? null;
-    const linkType = pair.arrival?.linkType ?? pair.departure?.linkType ?? null;
+    const linkType = pair.linkType;
     const needsSourceBoundary =
       linkType === 'overnight' &&
       (!pair.arrival || !pair.departure) &&

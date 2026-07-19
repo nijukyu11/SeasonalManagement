@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 
 import {
@@ -119,7 +120,7 @@ test('buildDetailedTransferModifications moves both linked legs from all legs ev
   assert.equal(canonical.length, 2);
 });
 
-test('buildDetailedTransferModifications clears stale pair fields when linked counterpart is invalid', () => {
+test('buildDetailedTransferModifications keeps a truly unpaired copy free of pair fields', () => {
   const arr = leg({
     id: 'arr-thu',
     type: 'A',
@@ -127,23 +128,12 @@ test('buildDetailedTransferModifications clears stale pair fields when linked co
     scheduledDate: '2026-05-27',
     operationalDate: '2026-05-27',
     dayOfWeek: 3,
-    linkType: 'sameday',
-    pairAnchorDate: '2026-05-27',
-    linkedRecordId: 'dep-wed',
-  });
-  const dep = leg({
-    id: 'dep-wed',
-    type: 'D',
-    date: '2026-05-27',
-    linkType: 'sameday',
-    pairAnchorDate: '2026-05-27',
-    linkedRecordId: 'arr-thu',
   });
 
   const mods = buildDetailedTransferModifications({
     sourceLeg: arr,
     visibleLegs: [arr],
-    allLegs: [arr, dep],
+    allLegs: [arr],
     targetDate: '2026-06-04',
     mode: 'copy',
     idSeed: 'single',
@@ -187,4 +177,88 @@ test('buildOvernightCompanionMap does not render stale same-day linked record fr
   const companions = buildOvernightCompanionMap([arr], [arr, dep]);
 
   assert.equal(companions.size, 0);
+});
+
+for (const mode of ['copy', 'move'] as const) {
+  const verb = mode === 'copy' ? 'copies' : 'moves';
+  test(`buildDetailedTransferModifications ${verb} a legacy turnaround pair with distinct link IDs`, () => {
+    const arr = leg({
+      id: `legacy-arr-${mode}`,
+      linkId: `legacy-arr-link-${mode}`,
+      type: 'A',
+      turnaroundId: `legacy-turn-${mode}`,
+    });
+    const dep = leg({
+      id: `legacy-dep-${mode}`,
+      linkId: `legacy-dep-link-${mode}`,
+      type: 'D',
+      turnaroundId: `legacy-turn-${mode}`,
+    });
+
+    const modifications = buildDetailedTransferModifications({
+      sourceLeg: arr,
+      visibleLegs: [arr],
+      allLegs: [arr, dep],
+      targetDate: '2026-05-28',
+      mode,
+      idSeed: `legacy-${mode}`,
+    });
+
+    assert.equal(modifications.filter((entry) => entry.action === 'added').length, 2);
+    assert.deepEqual(
+      modifications.filter((entry) => entry.action === 'deleted').map((entry) => entry.legId).sort(),
+      mode === 'move' ? [arr.id, dep.id].sort() : [],
+    );
+  });
+}
+
+test('buildDetailedTransferModifications surfaces a pair issue instead of moving one orphan leg', () => {
+  const orphan = leg({
+    id: 'orphan-arr',
+    type: 'A',
+    turnaroundId: 'missing-turnaround',
+  });
+
+  assert.throws(
+    () => buildDetailedTransferModifications({
+      sourceLeg: orphan,
+      visibleLegs: [orphan],
+      allLegs: [orphan],
+      targetDate: '2026-05-28',
+      mode: 'move',
+      idSeed: 'orphan',
+    }),
+    /Cannot move paired flight.*no unique active counterpart/i,
+  );
+});
+
+test('buildOvernightCompanionMap resolves a legacy turnaround pair with distinct link IDs', () => {
+  const arr = leg({ id: 'legacy-arr', linkId: 'legacy-arr-link', type: 'A', turnaroundId: 'legacy-turn' });
+  const dep = leg({ id: 'legacy-dep', linkId: 'legacy-dep-link', type: 'D', turnaroundId: 'legacy-turn' });
+
+  const companions = buildOvernightCompanionMap([arr], [arr, dep]);
+
+  assert.equal(companions.get(`${arr.date}_${arr.id}`)?.flightNumber, dep.flightNumber);
+});
+
+test('buildOvernightCompanionMap remains linear for a large resolved set', () => {
+  const primaryLegs: FlightLeg[] = [];
+  const allLegs: FlightLeg[] = [];
+  const pairCount = 4_000;
+  for (let index = 0; index < pairCount; index += 1) {
+    const arrId = `perf-arr-${index}`;
+    const depId = `perf-dep-${index}`;
+    const linkId = `perf-link-${index}`;
+    const arr = leg({ id: arrId, linkId, type: 'A', linkedRecordId: depId, sourceRowIndex: index });
+    const dep = leg({ id: depId, linkId, type: 'D', linkedRecordId: arrId, sourceRowIndex: index });
+    primaryLegs.push(arr);
+    allLegs.push(arr, dep);
+  }
+
+  const startedAt = performance.now();
+  const companions = buildOvernightCompanionMap(primaryLegs, allLegs);
+  const elapsedMs = performance.now() - startedAt;
+
+  assert.equal(companions.size, pairCount);
+  assert.ok(elapsedMs < 1_500, `expected linear companion lookup, took ${elapsedMs.toFixed(1)}ms`);
 });

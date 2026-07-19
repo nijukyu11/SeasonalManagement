@@ -22,10 +22,11 @@ export interface CanonicalSeasonalRowsInput {
 }
 
 export interface CanonicalSeasonalValidationIssue {
-  code: 'missing-occurrence' | 'extra-occurrence';
+  code: 'missing-occurrence' | 'extra-occurrence' | SeasonalPairIssue['code'];
   message: string;
   signature: string;
   count: number;
+  legId?: string;
 }
 
 export interface CanonicalSeasonalValidationResult {
@@ -222,7 +223,6 @@ function candidateFromLeg(leg: FlightLeg): RowCandidate {
 function buildCandidates(legs: FlightLeg[]): {
   candidates: RowCandidate[];
   unpairedLinkedLegs: number;
-  pairIssues: SeasonalPairIssue[];
 } {
   const byId = new Map(legs.map((leg) => [leg.id, leg]));
   const resolution = resolveSeasonalPairs(legs);
@@ -267,7 +267,6 @@ function buildCandidates(legs: FlightLeg[]): {
   return {
     candidates,
     unpairedLinkedLegs: issueLegIds.size,
-    pairIssues: resolution.issues,
   };
 }
 
@@ -343,12 +342,26 @@ function countSignatures(legs: FlightLeg[]): Map<string, number> {
   return counts;
 }
 
-function validationIssue(code: CanonicalSeasonalValidationIssue['code'], signature: string, count: number): CanonicalSeasonalValidationIssue {
+function validationIssue(
+  code: 'missing-occurrence' | 'extra-occurrence',
+  signature: string,
+  count: number,
+): CanonicalSeasonalValidationIssue {
   return {
     code,
     signature,
     count,
     message: `${code === 'missing-occurrence' ? 'Missing' : 'Extra'} ${count} occurrence(s): ${signature}`,
+  };
+}
+
+function pairValidationIssue(issue: SeasonalPairIssue): CanonicalSeasonalValidationIssue {
+  return {
+    code: issue.code,
+    message: issue.message,
+    signature: `pair:${issue.legId}`,
+    count: 1,
+    legId: issue.legId,
   };
 }
 
@@ -381,7 +394,7 @@ export function validateCanonicalSeasonalRoundTrip(
   const actualLegs = flightRecordsToLegs(flattenRowsToFlightRecords(rows));
   const expectedCounts = countSignatures(expectedLegs);
   const actualCounts = countSignatures(actualLegs);
-  const issues: CanonicalSeasonalValidationIssue[] = [];
+  const issues = resolveSeasonalPairs(expectedLegs).issues.map(pairValidationIssue);
 
   for (const [signature, count] of expectedCounts) {
     const actual = actualCounts.get(signature) ?? 0;
@@ -402,7 +415,7 @@ export function validateCanonicalSeasonalRoundTrip(
 
 export function buildCanonicalSeasonalRows(input: CanonicalSeasonalRowsInput): CanonicalSeasonalRowsResult {
   const effectiveLegs = buildEffectiveLegs(input);
-  const { candidates, unpairedLinkedLegs, pairIssues } = buildCandidates(effectiveLegs);
+  const { candidates, unpairedLinkedLegs } = buildCandidates(effectiveLegs);
   const groups = new Map<string, { sample: RowCandidate; dates: string[] }>();
 
   for (const candidate of candidates) {
@@ -429,10 +442,7 @@ export function buildCanonicalSeasonalRows(input: CanonicalSeasonalRowsInput): C
     rows,
     effectiveLegs,
     validation,
-    diagnostics: [
-      ...pairIssues.map((issue) => issue.message),
-      ...validation.issues.map((issue) => issue.message),
-    ],
+    diagnostics: validation.issues.map((issue) => issue.message),
     stats: {
       inputRecords: input.records.length,
       effectiveLegs: effectiveLegs.length,
