@@ -1,6 +1,11 @@
 import * as XLSX from 'xlsx';
-import { flattenRowsToFlightRecords, flightRecordsToLegs, includeLinkedLegsForExport } from './atomicSchedule';
-import { applyModificationsToFlightLegs } from './detailedScheduleState';
+import { flattenRowsToFlightRecords, flightRecordsToLegs } from './atomicSchedule';
+import { materializeEffectiveSeasonalLegs } from './effectiveSeasonalLegs.ts';
+import {
+  closeSeasonalSelectionOverPairs,
+  resolveSeasonalPairs,
+  type SeasonalPairIssue,
+} from './seasonalPairing.ts';
 import { saveExportBlob, type ExportSaveResult } from './exportSave.ts';
 import type { FlightLeg, FlightModification, FlightRecord, ParsedRow } from './types';
 
@@ -195,54 +200,13 @@ function legSort(left: FlightLeg, right: FlightLeg): number {
 
 function buildEffectiveLegs(input: CanonicalSeasonalRowsInput): FlightLeg[] {
   const modifications = input.modifications ?? new Map<string, FlightModification>();
-  const baseLegs = flightRecordsToLegs(input.records);
-  const effectiveLegs = applyModificationsToFlightLegs(baseLegs, modifications);
-  return includeLinkedLegsForExport(effectiveLegs, input.selectedRecordIds).sort(legSort);
-}
-
-function pairingKeys(leg: FlightLeg): string[] {
-  const keys: string[] = [];
-  if (leg.turnaroundId) keys.push(`turnaround:${leg.turnaroundId}`);
-  if (leg.linkId && leg.pairAnchorDate && leg.linkType) {
-    keys.push(`anchor:${leg.linkId}|${leg.pairAnchorDate}|${leg.linkType}`);
-  }
-  return keys;
-}
-
-function buildPairingIndex(legs: FlightLeg[]): Map<string, FlightLeg[]> {
-  const index = new Map<string, FlightLeg[]>();
-  for (const leg of legs) {
-    for (const key of pairingKeys(leg)) {
-      const bucket = index.get(key) ?? [];
-      bucket.push(leg);
-      index.set(key, bucket);
-    }
-  }
-  return index;
-}
-
-function findLinkedCounterpart(
-  leg: FlightLeg,
-  byId: Map<string, FlightLeg>,
-  byPairingKey: Map<string, FlightLeg[]>,
-  processed: Set<string>
-): FlightLeg | null {
-  if (leg.linkedRecordId) {
-    const direct = byId.get(leg.linkedRecordId);
-    if (direct && direct.type !== leg.type && !processed.has(direct.id)) return direct;
-  }
-
-  for (const key of pairingKeys(leg)) {
-    for (const candidate of byPairingKey.get(key) ?? []) {
-      if (candidate.id !== leg.id && candidate.type !== leg.type && !processed.has(candidate.id)) return candidate;
-    }
-  }
-
-  return null;
-}
-
-function hasPairingMetadata(leg: FlightLeg): boolean {
-  return !!leg.linkedRecordId || pairingKeys(leg).length > 0;
+  const effectiveLegs = materializeEffectiveSeasonalLegs(input.records, modifications);
+  if (!input.selectedRecordIds || input.selectedRecordIds.length === 0) return effectiveLegs.sort(legSort);
+  const selected = new Set(closeSeasonalSelectionOverPairs(
+    input.selectedRecordIds,
+    resolveSeasonalPairs(effectiveLegs),
+  ));
+  return effectiveLegs.filter((leg) => selected.has(leg.id)).sort(legSort);
 }
 
 function candidateFromLeg(leg: FlightLeg): RowCandidate {
@@ -255,17 +219,22 @@ function candidateFromLeg(leg: FlightLeg): RowCandidate {
   };
 }
 
-function buildCandidates(legs: FlightLeg[]): { candidates: RowCandidate[]; unpairedLinkedLegs: number } {
+function buildCandidates(legs: FlightLeg[]): {
+  candidates: RowCandidate[];
+  unpairedLinkedLegs: number;
+  pairIssues: SeasonalPairIssue[];
+} {
   const byId = new Map(legs.map((leg) => [leg.id, leg]));
-  const byPairingKey = buildPairingIndex(legs);
+  const resolution = resolveSeasonalPairs(legs);
   const processed = new Set<string>();
   const candidates: RowCandidate[] = [];
-  let unpairedLinkedLegs = 0;
+  const issueLegIds = new Set(resolution.issues.map((issue) => issue.legId));
 
   for (const leg of legs) {
     if (processed.has(leg.id)) continue;
 
-    const counterpart = findLinkedCounterpart(leg, byId, byPairingKey, processed);
+    const counterpartId = resolution.byLegId.get(leg.id);
+    const counterpart = counterpartId ? byId.get(counterpartId) ?? null : null;
     if (counterpart) {
       const arrival = leg.type === 'A' ? leg : counterpart;
       const departure = leg.type === 'D' ? leg : counterpart;
@@ -288,17 +257,18 @@ function buildCandidates(legs: FlightLeg[]): { candidates: RowCandidate[]; unpai
           processed.add(departure.id);
           continue;
         }
-        unpairedLinkedLegs += 2;
       }
-    } else if (hasPairingMetadata(leg)) {
-      unpairedLinkedLegs += 1;
     }
 
     candidates.push(candidateFromLeg(leg));
     processed.add(leg.id);
   }
 
-  return { candidates, unpairedLinkedLegs };
+  return {
+    candidates,
+    unpairedLinkedLegs: issueLegIds.size,
+    pairIssues: resolution.issues,
+  };
 }
 
 function legIdentity(leg: FlightLeg | null): unknown[] {
@@ -395,7 +365,10 @@ function expectedLegsFromInput(
       selectedRecordIds,
     });
   }
-  return includeLinkedLegsForExport(expectedRecordsOrLegs as FlightLeg[], selectedRecordIds);
+  const activeLegs = (expectedRecordsOrLegs as FlightLeg[]).filter((leg) => leg.action !== 'deleted');
+  if (!selectedRecordIds || selectedRecordIds.length === 0) return activeLegs;
+  const selected = new Set(closeSeasonalSelectionOverPairs(selectedRecordIds, resolveSeasonalPairs(activeLegs)));
+  return activeLegs.filter((leg) => selected.has(leg.id));
 }
 
 export function validateCanonicalSeasonalRoundTrip(
@@ -429,7 +402,7 @@ export function validateCanonicalSeasonalRoundTrip(
 
 export function buildCanonicalSeasonalRows(input: CanonicalSeasonalRowsInput): CanonicalSeasonalRowsResult {
   const effectiveLegs = buildEffectiveLegs(input);
-  const { candidates, unpairedLinkedLegs } = buildCandidates(effectiveLegs);
+  const { candidates, unpairedLinkedLegs, pairIssues } = buildCandidates(effectiveLegs);
   const groups = new Map<string, { sample: RowCandidate; dates: string[] }>();
 
   for (const candidate of candidates) {
@@ -456,7 +429,10 @@ export function buildCanonicalSeasonalRows(input: CanonicalSeasonalRowsInput): C
     rows,
     effectiveLegs,
     validation,
-    diagnostics: validation.issues.map((issue) => issue.message),
+    diagnostics: [
+      ...pairIssues.map((issue) => issue.message),
+      ...validation.issues.map((issue) => issue.message),
+    ],
     stats: {
       inputRecords: input.records.length,
       effectiveLegs: effectiveLegs.length,

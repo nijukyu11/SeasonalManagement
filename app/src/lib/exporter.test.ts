@@ -80,6 +80,22 @@ test('validateFlightLegsForSeasonalExport reports stale linked date metadata bef
   assert.equal(result.issues.some((issue) => issue.code === 'invalid-linked-pair' && issue.legId === 'arr-thu'), true);
 });
 
+test('validateFlightLegsForSeasonalExport rejects incomplete pairing metadata', () => {
+  const incomplete = leg({
+    id: 'arr-incomplete',
+    type: 'A',
+    linkType: 'sameday',
+  });
+
+  const result = validateFlightLegsForSeasonalExport([incomplete]);
+
+  assert.equal(result.valid, false);
+  assert.equal(
+    result.issues.some((issue) => issue.code === 'invalid-linked-pair' && issue.legId === incomplete.id),
+    true,
+  );
+});
+
 test('groupFlightLegs exports repaired YP pattern as two combined rows', () => {
   const legs: FlightLeg[] = [];
   const addPair = (date: string, sourceRowIndex: number) => {

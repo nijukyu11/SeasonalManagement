@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildCanonicalAddedFlightRecords,
   buildDetailedTransferModifications,
   buildOvernightCompanionMap,
 } from './detailedScheduleState.ts';
@@ -46,6 +47,7 @@ function leg(overrides: Partial<FlightLeg>): FlightLeg {
     action: overrides.action ?? null,
     sourceRowIndex: overrides.sourceRowIndex ?? 833,
     linkedSourceRowIndex: overrides.linkedSourceRowIndex,
+    turnaroundId: overrides.turnaroundId,
     linkType: overrides.linkType,
     pairAnchorDate: overrides.pairAnchorDate,
     linkedRecordId: overrides.linkedRecordId,
@@ -62,6 +64,7 @@ test('buildDetailedTransferModifications moves both linked legs from all legs ev
     linkType: 'sameday',
     pairAnchorDate: '2026-05-27',
     linkedRecordId: 'dep-wed',
+    turnaroundId: 'TRN_SOURCE',
   });
   const dep = leg({
     id: 'dep-wed',
@@ -72,6 +75,7 @@ test('buildDetailedTransferModifications moves both linked legs from all legs ev
     linkType: 'sameday',
     pairAnchorDate: '2026-05-27',
     linkedRecordId: 'arr-wed',
+    turnaroundId: 'TRN_SOURCE',
   });
 
   const mods = buildDetailedTransferModifications({
@@ -107,6 +111,12 @@ test('buildDetailedTransferModifications moves both linked legs from all legs ev
   assert.equal(addedArr.pairAnchorDate, '2026-05-28');
   assert.equal(addedDep.pairAnchorDate, '2026-05-28');
   assert.equal(addedArr.linkId, addedDep.linkId);
+  assert.equal(addedArr.turnaroundId, addedArr.linkId);
+  assert.equal(addedDep.turnaroundId, addedArr.turnaroundId);
+  assert.notEqual(addedArr.turnaroundId, arr.turnaroundId);
+
+  const canonical = buildCanonicalAddedFlightRecords(added);
+  assert.equal(canonical.length, 2);
 });
 
 test('buildDetailedTransferModifications clears stale pair fields when linked counterpart is invalid', () => {
@@ -149,6 +159,11 @@ test('buildDetailedTransferModifications clears stale pair fields when linked co
   assert.equal(copied.linkType, undefined);
   assert.equal(copied.pairAnchorDate, undefined);
   assert.equal(copied.linkedRecordId, undefined);
+  assert.equal(Object.hasOwn(copied, 'turnaroundId'), false);
+
+  const canonical = buildCanonicalAddedFlightRecords(mods);
+  assert.equal(canonical.length, 1);
+  assert.equal(Object.hasOwn(canonical[0], 'turnaroundId'), false);
 });
 
 test('buildOvernightCompanionMap does not render stale same-day linked record from another date', () => {

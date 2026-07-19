@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { saveExportBlob, type ExportSaveResult } from './exportSave.ts';
 import type { FlightLeg, PatternGroup } from './types';
-import { isValidLinkedFlightPair } from './flightPairIntegrity.ts';
+import { resolveSeasonalPairs } from './seasonalPairing.ts';
 
 // ─── Pattern Grouping ──────────────────────────────────────────
 
@@ -42,7 +42,6 @@ function expectedUtcDayOfWeek(date: string): number {
 
 export function validateFlightLegsForSeasonalExport(legs: FlightLeg[]): SeasonalExportValidationResult {
   const activeLegs = legs.filter((leg) => leg.action !== 'deleted');
-  const byId = new Map(activeLegs.map((leg) => [leg.id, leg]));
   const issues: SeasonalExportValidationIssue[] = [];
 
   for (const leg of activeLegs) {
@@ -55,19 +54,19 @@ export function validateFlightLegsForSeasonalExport(legs: FlightLeg[]): Seasonal
         message: `${leg.flightNumber} on ${leg.date} has stale scheduled date or weekday metadata.`,
       });
     }
+  }
 
-    if (!leg.linkedRecordId && !leg.linkType && !leg.pairAnchorDate) continue;
-
-    const linked = leg.linkedRecordId ? byId.get(leg.linkedRecordId) : null;
-    if (!linked || !isValidLinkedFlightPair(leg, linked)) {
-      issues.push({
-        code: 'invalid-linked-pair',
-        legId: leg.id,
-        flightNumber: leg.flightNumber,
-        date: leg.date,
-        message: `${leg.flightNumber} on ${leg.date} has invalid linked flight metadata.`,
-      });
-    }
+  const byId = new Map(activeLegs.map((leg) => [leg.id, leg]));
+  for (const pairIssue of resolveSeasonalPairs(activeLegs).issues) {
+    const leg = byId.get(pairIssue.legId);
+    if (!leg) continue;
+    issues.push({
+      code: 'invalid-linked-pair',
+      legId: leg.id,
+      flightNumber: leg.flightNumber,
+      date: leg.date,
+      message: pairIssue.message,
+    });
   }
 
   return { valid: issues.length === 0, issues };

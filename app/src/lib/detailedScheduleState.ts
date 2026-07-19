@@ -1,5 +1,6 @@
 import type { FlightLeg, FlightModification, FlightRecord, ModHistoryEntry } from './types';
 import { buildOperationalFlightMetadata } from './iataSeason.ts';
+import { materializeEffectiveSeasonalLegs } from './effectiveSeasonalLegs.ts';
 import {
   expectedDateForLinkedLeg,
   findValidLinkedCounterpart,
@@ -394,42 +395,7 @@ export function applyModificationsToFlightLegs(
   baseLegs: FlightLeg[],
   mods: Map<string, FlightModification>
 ): FlightLeg[] {
-  const next = baseLegs
-    .map((leg) => {
-      const mod = mods.get(leg.id);
-      if (!mod) return leg;
-      if (mod.action === 'deleted') return { ...leg, action: 'deleted' as const };
-      if (mod.action === 'modified') {
-        return {
-          ...leg,
-          schedule: mod.schedule ?? leg.schedule,
-          aircraft: mod.aircraft ?? leg.aircraft,
-          route: mod.route ?? leg.route,
-          codeShares: 'codeShares' in mod ? mod.codeShares ?? null : leg.codeShares,
-          pax: 'pax' in mod ? mod.pax ?? null : leg.pax,
-          gate: 'gate' in mod ? mod.gate ?? null : leg.gate,
-          stand: 'stand' in mod ? mod.stand ?? null : leg.stand,
-          counter: 'counter' in mod ? mod.counter ?? null : leg.counter,
-          carousel: 'carousel' in mod ? mod.carousel ?? null : leg.carousel,
-          mct: 'mct' in mod ? mod.mct ?? null : leg.mct,
-          fb: 'fb' in mod ? mod.fb ?? null : leg.fb,
-          lb: 'lb' in mod ? mod.lb ?? null : leg.lb,
-          bhs: 'bhs' in mod ? mod.bhs ?? null : leg.bhs,
-          ghs: 'ghs' in mod ? mod.ghs ?? null : leg.ghs,
-          action: 'modified' as const,
-        };
-      }
-      return leg;
-    })
-    .filter((leg) => leg.action !== 'deleted');
-
-  for (const mod of mods.values()) {
-    if (mod.action === 'added' && mod.addedLeg) {
-      next.push({ ...mod.addedLeg, action: 'added' });
-    }
-  }
-
-  return next;
+  return materializeEffectiveSeasonalLegs(baseLegs, mods);
 }
 
 export function filterDetailedLegs(
@@ -528,6 +494,7 @@ function transferredSingleLeg(sourceLeg: FlightLeg, targetDate: string, newId: s
   delete next.pairAnchorDate;
   delete next.linkedRecordId;
   delete next.linkedSourceRowIndex;
+  delete next.turnaroundId;
   return next;
 }
 
@@ -557,6 +524,7 @@ function transferredPairLeg(
     date: metadata.scheduledDate,
     dayOfWeek: new Date(`${metadata.scheduledDate}T00:00:00Z`).getUTCDay(),
     action: 'added',
+    turnaroundId: sharedLinkId,
     linkType,
     pairAnchorDate,
     linkedRecordId,

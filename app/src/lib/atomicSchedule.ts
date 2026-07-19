@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { cleanFlightNumber } from './parser.ts';
 import { buildOperationalFlightMetadata, getOperationalDate } from './iataSeason.ts';
+import { closeSeasonalSelectionOverPairs, resolveSeasonalPairs } from './seasonalPairing.ts';
 import type { FlightLeg, FlightModification, FlightRecord, ParsedRow } from './types';
 
 const MONTHS: Record<string, number> = {
@@ -701,49 +702,16 @@ export function flightRecordsToLegs(records: FlightRecord[]): FlightLeg[] {
 }
 
 export function includeLinkedPairsForExport(records: FlightRecord[], selectedIds?: string[]): FlightRecord[] {
-  if (!selectedIds || selectedIds.length === 0) return records.filter((record) => record.status !== 'deleted');
-
-  const selected = new Set(selectedIds);
-  const byId = new Map(records.map((record) => [record.id, record]));
-  for (const id of selectedIds) {
-    const record = byId.get(id);
-    if (!record) continue;
-    if (record.linkedRecordId) selected.add(record.linkedRecordId);
-    if (record.turnaroundId) {
-      for (const candidate of records) {
-        if (candidate.turnaroundId === record.turnaroundId) selected.add(candidate.id);
-      }
-    }
-  }
-
-  return records.filter((record) => record.status !== 'deleted' && selected.has(record.id));
+  const activeRecords = records.filter((record) => record.status !== 'deleted' && record.action !== 'deleted');
+  if (!selectedIds || selectedIds.length === 0) return activeRecords;
+  const selected = new Set(closeSeasonalSelectionOverPairs(selectedIds, resolveSeasonalPairs(activeRecords)));
+  return activeRecords.filter((record) => selected.has(record.id));
 }
 
 export function includeLinkedLegsForExport(legs: FlightLeg[], selectedIds?: string[]): FlightLeg[] {
   const activeLegs = legs.filter((leg) => leg.action !== 'deleted');
   if (!selectedIds || selectedIds.length === 0) return activeLegs;
-
-  const selected = new Set(selectedIds);
-  const byId = new Map(activeLegs.map((leg) => [leg.id, leg]));
-  const pairKeys = new Set<string>();
-  const pairKey = (leg: FlightLeg) => `${leg.linkId}|${leg.pairAnchorDate ?? leg.date}`;
-
-  for (const id of selectedIds) {
-    const leg = byId.get(id);
-    if (!leg) continue;
-    if (leg.linkedRecordId) selected.add(leg.linkedRecordId);
-    if (leg.linkId) pairKeys.add(pairKey(leg));
-  }
-
-  for (const leg of activeLegs) {
-    if (selected.has(leg.id)) continue;
-    if (leg.linkedRecordId && selected.has(leg.linkedRecordId)) {
-      selected.add(leg.id);
-      continue;
-    }
-    if (leg.linkId && pairKeys.has(pairKey(leg))) selected.add(leg.id);
-  }
-
+  const selected = new Set(closeSeasonalSelectionOverPairs(selectedIds, resolveSeasonalPairs(activeLegs)));
   return activeLegs.filter((leg) => selected.has(leg.id));
 }
 
