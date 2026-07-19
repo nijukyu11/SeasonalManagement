@@ -198,3 +198,201 @@ The additive migration does not invoke the finalizer, so the known PR duplicates
 6. Confirm the timestamped maintenance tables persist, the finalizer created `season_flight_records_active_imported_occurrence_v2_key`, and the post-commit machine audit reports `blocking_count=0`.
 
 No production `COMMIT` is authorized or performed in Task 9 or this follow-up.
+
+---
+
+# Task 11: Seasonal Import/Export V2 End-to-End Verification
+
+Date: 2026-07-19
+
+## Scope and RED Evidence
+
+Task 11 adds reproducible source-row fixtures and behavioral database, load,
+fault-injection, and workbook round-trip harnesses. It does not deploy the V2
+migration, repair production data, build a native application, bump a version,
+or publish a release.
+
+Observed RED checkpoints before the final implementation:
+
+- The database package command rejected an absent
+  `SEASONAL_TEST_DATABASE_URL` and refused any database name outside the
+  `seasonal_task11_*` disposable namespace.
+- The real two-session race harness expected a legacy `staged` result while
+  the current V2 contract correctly persisted `validated`; the assertion
+  failed before being aligned with the deployed migration contract.
+- The first W26 load cleanup attempted direct season deletion and failed on
+  the real foreign-key graph. Cleanup was changed to the product's
+  `manage_season_metadata_v2('delete')` boundary, after which the test left
+  zero seasons, batches, and test operators.
+- This workstation has no local `psql`. A command-shim attempt was rejected by
+  Node as `spawnSync psql ENOENT`, proving that a `.cmd` shim did not satisfy
+  the direct executable contract. A temporary compiled `psql.exe` wrapper
+  outside the repository subsequently made the unchanged package command pass.
+
+## Deterministic Fixtures
+
+Both committed JSON fixtures contain canonical source rows only. They contain
+no `flightRecords`, atomic record IDs, production rows, or credentials. Real
+workbook overrides are opt-in through `SEASONAL_S26_FIXTURE` and
+`SEASONAL_W26_FIXTURE`; an override must reproduce the manifest hash and
+verified counts.
+
+| Season | Real source workbook | Workbook SHA-256 | Coverage | Source rows | Generated occurrences | Duplicate occurrence keys | Canonical-row SHA-256 |
+|---|---|---|---|---:|---:|---:|---|
+| S26 | `S26_Updated_1779803544123.xlsx` | `edd1315e3b5a44854d15cd345ba1f99c4770944e91e3dc2f20614e4e751840e5` | 2026-03-29 through 2026-10-25 | 912 | 25,849 | 0 | `e40d314eec9f779f259a07da07b66e1c278b62953a12ab50208e8bbcfb542cd1` |
+| W26 | `W26_Alternative.xls` | `97908483683ba6c52f27f23e229957ed171f1db73f86df5a5aa28734e7a9f154` | 2026-10-25 through 2027-03-27 | 130 | 26,370 | 0 | `34ac336788dc112c3e36e9781839a5ccfbcf88927f947ff261ae5e3dd5ddfb21` |
+
+The committed S26 JSON is 662,976 bytes with SHA-256
+`49ace884b1931655f078650b29aeaa647b1db9ea86e8098488e4a0dad3697cec`.
+The committed W26 JSON is 94,845 bytes with SHA-256
+`28f970dbf5cd3cfd0eaaaaa6cfd38352e56c5fe779c25f3ddc4b7e6a296fcb8b`.
+
+The requested `S26_Updated_1783694873754.xlsx` was not present. The selected
+S26 workbook is the newest available full-season `S26_Updated` candidate that
+strict-parsed with zero duplicate occurrence keys. The dated
+`s26_19jul_Q.xls` slice was therefore not used as the success fixture.
+`DAD_SeasonalS26.xlsx` remains a negative fixture: 927 source rows, 25,652
+generated occurrences, and 319 duplicate occurrence keys.
+
+The W26 workbook contains 16,747 detailed rows. Its fixture is derived only by
+the documented daily parser, W26 season partition, canonical normalization,
+pairing, source-row grouping, in-memory workbook export, and strict parse.
+No missing or unknown flight is synthesized. Re-running both real-workbook
+overrides reproduced the committed fixture hashes and counts exactly.
+
+The final local committed-fixture verification strict-parsed and performed an
+in-memory workbook round trip without a database. S26 expanded 912 source rows
+to 25,849 occurrences with zero duplicates in 29.30 ms. W26 expanded 130
+source rows to 26,370 occurrences with zero duplicates in 15.98 ms.
+
+## Real PostgreSQL Integration
+
+A uniquely named database
+`seasonal_task11_20260719_185600_dde993` was created on the remote PostgreSQL
+17.6 cluster solely for Task 11. The runner verified the database name before
+loading the bootstrap, `schema.sql`, tracked V2 migration, SQL integration
+suite, and multi-session harness.
+
+The actual command `npm run test:seasonal-import-v2-db` exited `0`. The checked
+in runner still calls `spawnSync('psql', argv)` directly, requires
+`SEASONAL_TEST_DATABASE_URL` and `SEASONAL_TEST_TEMP_DB=1`, and exits on the
+first nonzero child. Because local `psql` is unavailable, the successful run
+used a temporary compiled `psql.exe` placed first on `PATH`. It forwarded SQL
+and local files through SSH to container-local `psql`; it lived outside the
+repository, contained no password, and was deleted after verification.
+
+The true two-session race/idempotency case passed with one batch and 250 staged
+rows. PostgreSQL exposed real lock waits: `advisory` for the first client,
+`transactionid` for the second, and `relation` for the season lookup. The
+cross-season-code lookup remained fail-closed with SQLSTATE `21000` rather
+than choosing an arbitrary season.
+
+## Load and Fault Metrics
+
+The W26 load harness ran against PostgreSQL 17.6 with a clean test season and
+batch:
+
+| Metric | Result |
+|---|---:|
+| Canonical request bytes | 60,896 |
+| Client parse | 33.03 ms |
+| Stage | 2,828.21 ms |
+| Preview | 2,691.98 ms |
+| Commit | 14,650.47 ms |
+| Generated occurrences | 26,370 |
+| Duplicate occurrences | 0 |
+
+The harness rejected atomic `flightRecords`, payloads over 5 MB, zero-record
+results, SQLSTATE `57014`, any duplicate count, and any generated-count drift.
+No such failure occurred in the verified run.
+
+Behavioral fault injection passed for failure before stage, response loss after
+stage, commit-response delivery loss, and post-commit refresh failure. Reusing
+the same request ID did not create another batch or recommit. Stage/commit
+delivery loss recovered the single committed receipt; refresh failure reported
+`Import committed, refresh failed` with a minimal committed receipt. Owner,
+cross-mode, and version conflicts remained fail-closed (`42501`, `23505`, and
+version conflict respectively).
+
+## Round-Trip Results
+
+| Season | Imported source rows | Generated occurrences | Export source rows | Workbook bytes | Re-import duplicates | Unresolved pairs | Signature result |
+|---|---:|---:|---:|---:|---:|---:|---|
+| S26 | 912 | 25,849 | 730 | 588,196 | 0 | 0 | Exact match |
+| W26 | 130 | 26,370 | 130 | 116,966 | 0 | 0 | Exact match |
+
+Each path staged and committed into an isolated season, fetched a versioned
+export snapshot, built canonical rows and an in-memory workbook, strict-parsed
+that workbook, previewed it in a different season and batch, then compared
+sorted occurrence signatures. Neither snapshot was truncated; neither workbook
+was empty; missing, extra, duplicate, unresolved-pair, and count deltas were all
+zero. The harnesses do not read production rows or SQLite.
+
+## Production Read-Only Comparison and Task 12 Blocker
+
+The fixture-specific W26 expected count is 26,370. It is not production parity.
+The current production W26 active imported baseline contains 26,598 unique
+occurrences: all 26,370 fixture signatures are present and production has 228
+additional signatures.
+
+The 228 production-only signatures are explained structurally as:
+
+- 154 daily `SQ173` departures from 2026-10-25 through 2027-03-27.
+- 23 `AK642` arrivals and 23 `AK643` departures.
+- 27 occurrences on 2027-03-28, outside the fixture coverage.
+- 1 `HX546` arrival on 2026-12-16.
+
+There are also 175 common-key field differences, mainly empty production
+category versus fixture category `J`, plus the known `HX547` schedule mismatch
+(`17:55` production versus `21:15` fixture). Task 12 must perform and approve a
+preview-only shadow comparison before deployment or repair; the 228-count and
+175-field deltas are an explicit blocker, not a Task 11 fixture failure.
+
+Production was queried only in read-only transactions. Before and after the
+disposable test, the W26 fingerprint was identical:
+`26598|52ff4b3e40369ecd9606f07cbd41a32a`. Production contained zero Task 11 V2
+RPCs, zero import-batch tables, and no migration metadata table. No Task 11
+migration or mutation was applied to production.
+
+## Cleanup Evidence
+
+- The disposable database was dropped after terminating matching sessions;
+  `pg_database` subsequently returned zero rows for its exact name.
+- The verified SSH tunnel process was stopped and local port 55432 had zero
+  listeners.
+- The temporary wrapper executable/source, askpass, database marker, tunnel
+  marker, database secret, production TSV, and fingerprint files were deleted.
+  Zero files remained under the Task 11 temporary prefix.
+- Final test-database cleanup before drop contained zero test seasons, batches,
+  and operators.
+
+## Final Verification Matrix
+
+- Focused parser/import/export/selection/pairing tests: 65 passed, 0 failed.
+- `npm run test:rules`: passed.
+- `npx tsc --noEmit --pretty false`: passed.
+- Targeted ESLint, including all three Task 11 scripts and the concurrency
+  harness: passed.
+- `node --check` for all three Task 11 scripts and the concurrency harness:
+  passed.
+- `npm run test:seasonal-import-sql`: passed on PGlite; tracked migration ran
+  twice in 4,375 ms.
+- `npm run test:seasonal-schema-twice`: passed; full schema ran twice.
+- `npm run test:seasonal-import-v2-db`: passed on real PostgreSQL through the
+  temporary executable wrapper.
+- `npm run test:seasonal-import-v2-load`: passed on real PostgreSQL with the
+  metrics above.
+- `npm run test:seasonal-roundtrip`: passed for real S26 and W26 fixtures.
+- `npm run build`: passed in 48.4 seconds with Next.js 16.2.4; compilation
+  completed in 20.3 seconds and all 12 static pages generated.
+- Strict UTF-8 decoding passed for all nine intended files. Mojibake, hardcoded
+  external host/credential/personal-path, and trailing-whitespace scans found
+  zero matches; `git diff --check` passed.
+- Fixture-boundary verification found zero `flightRecords`, `record_id`, or
+  `seasonId` keys in either JSON, and zero `.xls` or `.xlsx` files in the Task
+  11 Git changes. Both JSON source-row byte counts and SHA-256 values matched
+  their manifests.
+
+Task 11 is verification-only. Task 12 remains responsible for additive
+production deployment, shadow parity approval, any authorized repair, native
+canary build, version bump, updater release, and production smoke testing.

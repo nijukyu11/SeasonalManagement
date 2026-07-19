@@ -316,8 +316,8 @@ async function runScenario() {
   await commit(clientB);
 
   assert.equal(firstResponse.batchId, secondResponse.batchId);
-  assert.equal(firstResponse.status, 'staged');
-  assert.equal(secondResponse.status, 'staged');
+  assert.equal(firstResponse.status, 'validated');
+  assert.equal(secondResponse.status, 'validated');
   assert.equal(firstResponse.sourceRowCount, sourceRows.length);
   assert.equal(secondResponse.sourceRowCount, sourceRows.length);
   assert.equal(firstResponse.valid, true);
