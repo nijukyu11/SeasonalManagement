@@ -3404,3 +3404,192 @@ $$;
 
 revoke execute on function public.get_seasonal_export_snapshot_v2(text, integer) from public, anon;
 grant execute on function public.get_seasonal_export_snapshot_v2(text, integer) to authenticated;
+
+create or replace function public.seasonal_occurrence_flight_number_v2(
+  p_airline text,
+  p_raw text
+)
+returns text
+language sql
+immutable
+set search_path = pg_catalog, pg_temp
+as $$
+  select normalized.flight_number
+  from public.normalize_seasonal_flight_number_v2(p_airline, p_raw) normalized
+$$;
+
+create index if not exists season_flight_records_season_date_identity_v2_idx
+  on public.season_flight_records (season_id, date, airline, flight_number);
+create index if not exists season_flight_records_season_operational_date_v2_idx
+  on public.season_flight_records (season_id, operational_date);
+create index if not exists season_flight_records_season_turnaround_v2_idx
+  on public.season_flight_records (season_id, turnaround_id)
+  where turnaround_id is not null;
+create index if not exists season_modification_added_legs_occurrence_v2_idx
+  on public.season_modification_added_legs (
+    season_id, scheduled_date, airline, flight_number
+  );
+
+create or replace function public.guard_seasonal_manual_added_occurrence_v2()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_scheduled_date text;
+  v_airline text;
+  v_flight_number text;
+  v_conflicting_record_id text;
+begin
+  if new.source_kind is distinct from 'added'
+    or new.status is distinct from 'active'
+    or new.action is not distinct from 'deleted'
+    or not exists (
+      select 1
+      from public.season_modifications modifications
+      where modifications.season_id = new.season_id
+        and modifications.leg_id = new.leg_id
+        and modifications.action = 'added'
+    )
+  then
+    return new;
+  end if;
+
+  v_scheduled_date := coalesce(nullif(new.scheduled_date, ''), nullif(new.date, ''));
+  v_airline := pg_catalog.upper(pg_catalog.btrim(new.airline));
+  v_flight_number := public.seasonal_occurrence_flight_number_v2(
+    new.airline,
+    coalesce(nullif(new.flight_number, ''), new.raw_flight_number)
+  );
+
+  if v_scheduled_date is null or v_airline = '' or v_flight_number is null then
+    raise exception 'Manual added leg % has no canonical occurrence identity', new.leg_id
+      using errcode = '22023';
+  end if;
+
+  perform 1
+  from public.seasons seasons
+  where seasons.id = new.season_id
+  for update;
+
+  select candidates.record_id
+  into v_conflicting_record_id
+  from (
+    select records.record_id
+    from public.season_flight_records records
+    left join public.season_modifications modifications
+      on modifications.season_id = records.season_id
+     and modifications.leg_id = records.record_id
+    where records.season_id = new.season_id
+      and records.status = 'active'
+      and records.action is distinct from 'deleted'
+      and modifications.action is distinct from 'deleted'
+      and coalesce(nullif(records.scheduled_date, ''), nullif(records.date, ''))
+        = v_scheduled_date
+      and pg_catalog.upper(pg_catalog.btrim(records.airline)) = v_airline
+      and public.seasonal_occurrence_flight_number_v2(
+        records.airline,
+        coalesce(nullif(records.flight_number, ''), records.raw_flight_number)
+      ) = v_flight_number
+
+    union all
+
+    select added_legs.record_id
+    from public.season_modification_added_legs added_legs
+    join public.season_modifications modifications
+      on modifications.season_id = added_legs.season_id
+     and modifications.leg_id = added_legs.leg_id
+     and modifications.action = 'added'
+    where added_legs.season_id = new.season_id
+      and added_legs.leg_id <> new.leg_id
+      and added_legs.source_kind = 'added'
+      and added_legs.status = 'active'
+      and added_legs.action is distinct from 'deleted'
+      and coalesce(
+        nullif(added_legs.scheduled_date, ''),
+        nullif(added_legs.date, '')
+      ) = v_scheduled_date
+      and pg_catalog.upper(pg_catalog.btrim(added_legs.airline)) = v_airline
+      and public.seasonal_occurrence_flight_number_v2(
+        added_legs.airline,
+        coalesce(nullif(added_legs.flight_number, ''), added_legs.raw_flight_number)
+      ) = v_flight_number
+  ) candidates
+  order by candidates.record_id
+  limit 1;
+
+  if v_conflicting_record_id is not null then
+    raise exception 'Manual added occurrence collision for %|%|% with record %',
+      v_scheduled_date,
+      v_airline,
+      v_flight_number,
+      v_conflicting_record_id
+      using errcode = '23505';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists guard_seasonal_manual_added_occurrence_v2
+  on public.season_modification_added_legs;
+create trigger guard_seasonal_manual_added_occurrence_v2
+before insert or update of
+  season_id, record_id, airline, flight_number, raw_flight_number,
+  date, scheduled_date, action, source_kind, status
+on public.season_modification_added_legs
+for each row
+execute function public.guard_seasonal_manual_added_occurrence_v2();
+
+create or replace function public.finalize_seasonal_occurrence_constraints_v2()
+returns void
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+begin
+  if exists (
+    select 1
+    from public.season_flight_records records
+    where records.source_kind = 'imported'
+      and records.status = 'active'
+      and records.action is distinct from 'deleted'
+    group by
+      records.season_id,
+      coalesce(nullif(records.scheduled_date, ''), nullif(records.date, '')),
+      pg_catalog.upper(pg_catalog.btrim(records.airline)),
+      public.seasonal_occurrence_flight_number_v2(
+        records.airline,
+        coalesce(nullif(records.flight_number, ''), records.raw_flight_number)
+      )
+    having pg_catalog.count(*) > 1
+  ) then
+    raise exception 'Active imported occurrence duplicates must be repaired before finalizing constraints'
+      using errcode = '23505';
+  end if;
+
+  execute $index$
+    create unique index if not exists season_flight_records_active_imported_occurrence_v2_key
+    on public.season_flight_records (
+      season_id,
+      coalesce(nullif(scheduled_date, ''), nullif(date, '')),
+      pg_catalog.upper(pg_catalog.btrim(airline)),
+      public.seasonal_occurrence_flight_number_v2(
+        airline,
+        coalesce(nullif(flight_number, ''), raw_flight_number)
+      )
+    )
+    where source_kind = 'imported'
+      and status = 'active'
+      and action is distinct from 'deleted'
+  $index$;
+end;
+$$;
+
+revoke execute on function public.seasonal_occurrence_flight_number_v2(text, text)
+  from public, anon, authenticated;
+revoke execute on function public.guard_seasonal_manual_added_occurrence_v2()
+  from public, anon, authenticated;
+revoke execute on function public.finalize_seasonal_occurrence_constraints_v2()
+  from public, anon, authenticated;

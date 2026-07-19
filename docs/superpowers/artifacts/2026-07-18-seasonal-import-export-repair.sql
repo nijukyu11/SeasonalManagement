@@ -1,0 +1,829 @@
+-- Seasonal import/export production data repair.
+--
+-- SAFETY:
+-- - The checked-in executable final statement is ROLLBACK for Task 9 dry runs.
+-- - Task 12 may replace only that final ROLLBACK with COMMIT after additive
+--   deployment and S26/W26 shadow parity approval.
+-- - The transaction aborts if any production identity, count, or state has
+--   drifted from the read-only audit captured on 2026-07-19.
+
+\pset pager off
+\pset null '<null>'
+\set ON_ERROR_STOP on
+
+begin;
+set local statement_timeout = '120s';
+set local lock_timeout = '10s';
+
+-- Serialize against V2 season commits and other maintenance touching S26/W25.
+select id, season_code, data_version
+from public.seasons
+where id in (
+  'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+  'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+)
+order by id
+for update;
+
+\echo 'REPAIR 01 - assert exact audited production state'
+do $$
+declare
+  v_count bigint;
+  v_min_date text;
+  v_max_date text;
+begin
+  if not exists (
+    select 1 from public.seasons
+    where id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+      and season_code = 'S26'
+      and effective_start = '2026-03-29'
+      and effective_end = '2026-10-25'
+      and total_legs = 26083
+      and total_source_rows = 0
+      and data_version = 16572
+  ) then
+    raise exception 'S26 season identity or audited metadata drifted; aborting repair';
+  end if;
+
+  if not exists (
+    select 1 from public.seasons
+    where id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+      and season_code = 'W25'
+      and effective_start = '2025-10-26'
+      and effective_end = '2026-03-28'
+      and total_legs = 8165
+      and total_source_rows = 0
+      and data_version = 8227
+  ) then
+    raise exception 'W25 season identity or audited metadata drifted; aborting repair';
+  end if;
+
+  if not exists (
+    select 1 from public.seasons
+    where id = 'season-f77c5ea9-be54-4615-ab0a-d83062b9b854'
+      and season_code = 'W26'
+      and effective_start = '2026-10-25'
+      and effective_end = '2027-03-28'
+      and total_legs = 26598
+      and total_source_rows = 0
+      and data_version = 395
+  ) then
+    raise exception 'W26 season identity or audited metadata drifted; aborting repair';
+  end if;
+
+  select count(*) into v_count
+  from public.season_flight_records
+  where season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6';
+  if v_count <> 26182 then
+    raise exception 'Expected 26182 S26 base records, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_flight_records
+  where season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451';
+  if v_count <> 8165 then
+    raise exception 'Expected 8165 W25 base records, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_flight_records
+  where season_id = 'season-f77c5ea9-be54-4615-ab0a-d83062b9b854';
+  if v_count <> 26641 then
+    raise exception 'Expected 26641 W26 base records, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_source_rows
+  where season_id in (
+    'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+    'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451',
+    'season-f77c5ea9-be54-4615-ab0a-d83062b9b854'
+  );
+  if v_count <> 0 then
+    raise exception 'Expected zero S26/W25/W26 source rows, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_modification_added_legs
+  where season_id in (
+    'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+    'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451',
+    'season-f77c5ea9-be54-4615-ab0a-d83062b9b854'
+  );
+  if v_count <> 0 then
+    raise exception 'Expected zero S26/W25/W26 added-leg payload rows, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_modifications
+  where action = 'added'
+    and season_id in (
+      'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+      'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451',
+      'season-f77c5ea9-be54-4615-ab0a-d83062b9b854'
+    );
+  if v_count <> 0 then
+    raise exception 'Expected zero S26/W25/W26 added modifications, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_modifications
+  where season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+    and action = 'modified';
+  if v_count <> 1035 then
+    raise exception 'Expected 1035 S26 modified overlays, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_modifications
+  where season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+    and action = 'deleted';
+  if v_count <> 391 then
+    raise exception 'Expected 391 S26 deleted overlays, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_modifications
+  where season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+    and action = 'modified';
+  if v_count <> 25 then
+    raise exception 'Expected 25 W25 modified overlays, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_modifications modifications
+  left join public.season_flight_records base
+    on base.season_id = modifications.season_id
+   and base.record_id = modifications.leg_id
+  left join public.season_modification_added_legs added
+    on added.season_id = modifications.season_id
+   and added.leg_id = modifications.leg_id
+  where base.record_id is null and added.leg_id is null;
+  if v_count <> 0 then
+    raise exception 'Expected zero orphan modifications, found %', v_count;
+  end if;
+
+  -- W25 is a legacy base import stored as source_kind=added, but it is not a
+  -- proven complete season. Preserve that classification rather than guessing.
+  select
+    count(*),
+    min(coalesce(nullif(scheduled_date, ''), date)),
+    max(coalesce(nullif(scheduled_date, ''), date))
+  into v_count, v_min_date, v_max_date
+  from public.season_flight_records
+  where season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+    and source_kind = 'added'
+    and status = 'active'
+    and action is distinct from 'deleted'
+    and record_id like 'DAILY_IMPORT_%';
+
+  if v_count <> 8165
+    or v_min_date <> '2025-10-26'
+    or v_max_date <> '2026-02-01' then
+    raise exception 'W25 legacy baseline evidence drifted: count %, bounds %..%',
+      v_count, v_min_date, v_max_date;
+  end if;
+
+  if v_max_date = '2026-03-28' then
+    raise exception 'W25 now appears complete; re-audit before any reclassification';
+  end if;
+
+  raise notice 'W25 source_kind reclassification intentionally skipped: audited coverage ends %, season ends 2026-03-28',
+    v_max_date;
+end;
+$$;
+
+\echo 'REPAIR 02 - assert exact PR585/PR586 keep/discard states'
+do $$
+declare
+  v_count bigint;
+begin
+  select count(*) into v_count
+  from public.season_flight_records records
+  left join public.season_modifications modifications
+    on modifications.season_id = records.season_id
+   and modifications.leg_id = records.record_id
+  where records.season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+    and (
+      (
+        records.record_id = 'F_NEW_1780796888039_giomqg_1'
+        and records.type = 'A'
+        and records.flight_number = 'PR585'
+        and records.raw_flight_number = '585'
+        and records.route = 'MNL'
+        and records.schedule = '15:20'
+        and records.aircraft = '321'
+        and records.source_kind = 'imported'
+        and records.status = 'active'
+        and records.action is null
+        and records.linked_record_id = 'F_NEW_1780795793508_ycwhyq_0'
+        and records.turnaround_id = 'TRN_2026-06-10_940_PR_585_586'
+        and modifications.leg_id is null
+      )
+      or
+      (
+        records.record_id = 'F_NEW_1780795793508_ycwhyq_0'
+        and records.type = 'D'
+        and records.flight_number = 'PR586'
+        and records.raw_flight_number = '586'
+        and records.route = 'MNL'
+        and records.schedule = '16:30'
+        and records.aircraft = '321'
+        and records.source_kind = 'imported'
+        and records.status = 'active'
+        and records.action is null
+        and records.linked_record_id = 'F_NEW_1780796888039_giomqg_1'
+        and records.turnaround_id = 'TRN_2026-06-10_940_PR_585_586'
+        and modifications.leg_id is null
+      )
+    );
+  if v_count <> 2 then
+    raise exception 'Expected two exact effective PR keep records, found %', v_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_flight_records records
+  join public.season_modifications modifications
+    on modifications.season_id = records.season_id
+   and modifications.leg_id = records.record_id
+  where records.season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+    and records.record_id in (
+      'LEG_A_2026-06-10_110_PR_PR585_MNL_15_20_321',
+      'LEG_D_2026-06-10_110_PR_PR586_MNL_16_30_321'
+    )
+    and records.source_kind = 'imported'
+    and records.status = 'active'
+    and records.action is null
+    and records.linked_record_id is null
+    and records.turnaround_id is null
+    and modifications.action = 'deleted'
+    and modifications.changed_fields = '{}'::text[];
+  if v_count <> 2 then
+    raise exception 'Expected two exact hidden PR discard records, found %', v_count;
+  end if;
+
+  select
+    (select count(*) from public.season_flight_record_counters
+      where record_id in (
+        'LEG_A_2026-06-10_110_PR_PR585_MNL_15_20_321',
+        'LEG_D_2026-06-10_110_PR_PR586_MNL_16_30_321'
+      ))
+    + (select count(*) from public.season_flight_record_checkin_windows
+      where record_id in (
+        'LEG_A_2026-06-10_110_PR_PR585_MNL_15_20_321',
+        'LEG_D_2026-06-10_110_PR_PR586_MNL_16_30_321'
+      ))
+    + (select count(*) from public.season_modification_counters
+      where leg_id in (
+        'LEG_A_2026-06-10_110_PR_PR585_MNL_15_20_321',
+        'LEG_D_2026-06-10_110_PR_PR586_MNL_16_30_321'
+      ))
+    + (select count(*) from public.season_modification_checkin_windows
+      where leg_id in (
+        'LEG_A_2026-06-10_110_PR_PR585_MNL_15_20_321',
+        'LEG_D_2026-06-10_110_PR_PR586_MNL_16_30_321'
+      ))
+    + (select count(*) from public.season_modification_added_legs
+      where leg_id in (
+        'LEG_A_2026-06-10_110_PR_PR585_MNL_15_20_321',
+        'LEG_D_2026-06-10_110_PR_PR586_MNL_16_30_321'
+      ))
+  into v_count;
+  if v_count <> 0 then
+    raise exception 'Expected zero child rows on discarded PR duplicates, found %', v_count;
+  end if;
+end;
+$$;
+
+\echo 'REPAIR 03 - assert exact turnaround members and verified reciprocity'
+do $$
+declare
+  v_count bigint;
+  v_effective_count bigint;
+  v_pair_count bigint;
+begin
+  select
+    count(*),
+    count(*) filter (
+      where records.status = 'active'
+        and records.action is distinct from 'deleted'
+        and modifications.action is distinct from 'deleted'
+    ),
+    count(*) filter (
+      where counterpart.record_id is not null
+        and counterpart.linked_record_id = records.record_id
+    ) / 2
+  into v_count, v_effective_count, v_pair_count
+  from public.season_flight_records records
+  left join public.season_modifications modifications
+    on modifications.season_id = records.season_id
+   and modifications.leg_id = records.record_id
+  left join public.season_flight_records counterpart
+    on counterpart.season_id = records.season_id
+   and counterpart.record_id = records.linked_record_id
+  where records.season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+    and records.turnaround_id = 'TRN_2026-08-23_948_HX_542_543'
+    and records.record_id in (
+      'LEG_A_2026-08-23_943_HX_HX542_HKG_03_00_320',
+      'LEG_D_2026-08-23_943_HX_HX543_HKG_04_00_320',
+      'F_NEW_1784417194491_ojlo5j_1',
+      'F_NEW_1784417194491_ojlo5j_2',
+      'F_NEW_1784417194495_2zf5s7_1',
+      'F_NEW_1784417194495_2zf5s7_2'
+    );
+  if v_count <> 6 or v_effective_count <> 4 or v_pair_count <> 3 then
+    raise exception 'HX turnaround drifted: underlying %, effective %, reciprocal pairs %',
+      v_count, v_effective_count, v_pair_count;
+  end if;
+
+  select
+    count(*),
+    count(*) filter (
+      where records.status = 'active'
+        and records.action is distinct from 'deleted'
+        and modifications.action is distinct from 'deleted'
+    ),
+    count(*) filter (
+      where counterpart.record_id is not null
+        and counterpart.linked_record_id = records.record_id
+    ) / 2
+  into v_count, v_effective_count, v_pair_count
+  from public.season_flight_records records
+  left join public.season_modifications modifications
+    on modifications.season_id = records.season_id
+   and modifications.leg_id = records.record_id
+  left join public.season_flight_records counterpart
+    on counterpart.season_id = records.season_id
+   and counterpart.record_id = records.linked_record_id
+  where records.season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+    and records.turnaround_id = 'TRN_MANUAL_RF_531_532_2026_07_19_LEG_A_2026_07_19_618_RF_RF531_CJJ_23_55_320_LEG_D_2026_07_19_619_RF_RF532_CJJ_00_55_320'
+    and records.record_id in (
+      'LEG_A_2026-07-19_618_RF_RF531_CJJ_23_55_320',
+      'LEG_D_2026-07-19_619_RF_RF532_CJJ_00_55_320',
+      'F_NEW_1783648329496_a90ngi_1',
+      'F_NEW_1783648329496_a90ngi_2'
+    );
+  if v_count <> 4 or v_effective_count <> 4 or v_pair_count <> 2 then
+    raise exception 'RF turnaround drifted: underlying %, effective %, reciprocal pairs %',
+      v_count, v_effective_count, v_pair_count;
+  end if;
+
+  select count(*) into v_count
+  from public.season_flight_records records
+  where records.record_id in (
+    'LEG_A_2026-08-23_943_HX_HX542_HKG_03_00_320',
+    'LEG_D_2026-08-23_943_HX_HX543_HKG_04_00_320',
+    'F_NEW_1784417194491_ojlo5j_1',
+    'F_NEW_1784417194491_ojlo5j_2',
+    'F_NEW_1784417194495_2zf5s7_1',
+    'F_NEW_1784417194495_2zf5s7_2',
+    'LEG_A_2026-07-19_618_RF_RF531_CJJ_23_55_320',
+    'LEG_D_2026-07-19_619_RF_RF532_CJJ_00_55_320',
+    'F_NEW_1783648329496_a90ngi_1',
+    'F_NEW_1783648329496_a90ngi_2'
+  )
+    and not exists (
+      select 1
+      from public.season_flight_records counterpart
+      where counterpart.season_id = records.season_id
+        and counterpart.record_id = records.linked_record_id
+        and counterpart.linked_record_id = records.record_id
+    );
+  if v_count <> 0 then
+    raise exception 'One or more audited turnaround members are no longer reciprocal';
+  end if;
+end;
+$$;
+
+\echo 'REPAIR 04 - assert W25 JX703 orphan and missing JX704'
+do $$
+declare
+  v_count bigint;
+begin
+  if not exists (
+    select 1
+    from public.season_flight_records records
+    left join public.season_modifications modifications
+      on modifications.season_id = records.season_id
+     and modifications.leg_id = records.record_id
+    where records.season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+      and records.record_id = 'DAILY_IMPORT_A_2025_10_31_JX703_TPE_17_15_32Q'
+      and records.type = 'A'
+      and records.flight_number = 'JX703'
+      and records.source_kind = 'added'
+      and records.status = 'active'
+      and records.linked_record_id = 'DAILY_IMPORT_D_2025_10_31_JX704_TPE_18_25_32Q'
+      and records.turnaround_id = 'TRN_MANUAL_JX_703_704_2025_10_31_DAILY_IMPORT_A_2025_10_31_JX703_TPE_17_15_32Q_DAILY_IMPORT_D_2025_10_31_JX704_TPE_18_25_32Q'
+      and modifications.leg_id is null
+  ) then
+    raise exception 'Audited W25 JX703 orphan state drifted';
+  end if;
+
+  select count(*) into v_count
+  from public.season_flight_records
+  where season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+    and record_id = 'DAILY_IMPORT_D_2025_10_31_JX704_TPE_18_25_32Q';
+  if v_count <> 0 then
+    raise exception 'W25 JX704 counterpart now exists; re-audit instead of clearing metadata';
+  end if;
+end;
+$$;
+
+-- Capture the effective PR identity before removing the already-hidden rows.
+create temporary table task9_repair_metrics (
+  metric text primary key,
+  value text not null
+) on commit drop;
+
+insert into task9_repair_metrics(metric, value)
+select
+  's26_pr585_pr586_effective_hash',
+  pg_catalog.md5(pg_catalog.string_agg(
+    pg_catalog.concat_ws('|',
+      records.record_id,
+      records.type,
+      coalesce(nullif(records.scheduled_date, ''), records.date),
+      records.airline,
+      records.flight_number,
+      records.route,
+      records.schedule,
+      records.aircraft,
+      records.linked_record_id,
+      records.turnaround_id
+    ),
+    '||' order by records.record_id
+  ))
+from public.season_flight_records records
+left join public.season_modifications modifications
+  on modifications.season_id = records.season_id
+ and modifications.leg_id = records.record_id
+where records.season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+  and coalesce(nullif(records.scheduled_date, ''), records.date) = '2026-06-10'
+  and records.flight_number in ('PR585', 'PR586')
+  and records.status = 'active'
+  and records.action is distinct from 'deleted'
+  and modifications.action is distinct from 'deleted';
+
+\echo 'REPAIR 05 - create timestamped maintenance backups'
+create schema if not exists maintenance;
+
+do $$
+declare
+  v_tag text := pg_catalog.lower(pg_catalog.to_char(
+    pg_catalog.transaction_timestamp() at time zone 'UTC',
+    'YYYYMMDD"t"HH24MISS"z"'
+  ));
+  v_affected_ids text[] := array[
+    'LEG_A_2026-06-10_110_PR_PR585_MNL_15_20_321',
+    'LEG_D_2026-06-10_110_PR_PR586_MNL_16_30_321',
+    'LEG_A_2026-08-23_943_HX_HX542_HKG_03_00_320',
+    'LEG_D_2026-08-23_943_HX_HX543_HKG_04_00_320',
+    'F_NEW_1784417194491_ojlo5j_1',
+    'F_NEW_1784417194491_ojlo5j_2',
+    'F_NEW_1784417194495_2zf5s7_1',
+    'F_NEW_1784417194495_2zf5s7_2',
+    'LEG_A_2026-07-19_618_RF_RF531_CJJ_23_55_320',
+    'LEG_D_2026-07-19_619_RF_RF532_CJJ_00_55_320',
+    'F_NEW_1783648329496_a90ngi_1',
+    'F_NEW_1783648329496_a90ngi_2',
+    'DAILY_IMPORT_A_2025_10_31_JX703_TPE_17_15_32Q'
+  ];
+  v_name text;
+  v_count bigint;
+begin
+  perform pg_catalog.set_config('seasonal.repair_backup_tag', v_tag, true);
+
+  v_name := 'seasonal_fix_' || v_tag || '_seasons';
+  execute pg_catalog.format(
+    'create table maintenance.%I as select seasons.*, transaction_timestamp() as backed_up_at from public.seasons seasons where seasons.id = any($1)',
+    v_name
+  ) using array[
+    'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+    'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+  ];
+  execute pg_catalog.format('select count(*) from maintenance.%I', v_name) into v_count;
+  if v_count <> 2 then raise exception 'Season backup expected 2 rows, found %', v_count; end if;
+
+  v_name := 'seasonal_fix_' || v_tag || '_records';
+  execute pg_catalog.format(
+    'create table maintenance.%I as select records.*, transaction_timestamp() as backed_up_at from public.season_flight_records records where records.record_id = any($1)',
+    v_name
+  ) using v_affected_ids;
+  execute pg_catalog.format('select count(*) from maintenance.%I', v_name) into v_count;
+  if v_count <> 13 then raise exception 'Record backup expected 13 rows, found %', v_count; end if;
+
+  v_name := 'seasonal_fix_' || v_tag || '_record_counters';
+  execute pg_catalog.format(
+    'create table maintenance.%I as select child.*, transaction_timestamp() as backed_up_at from public.season_flight_record_counters child where child.record_id = any($1)',
+    v_name
+  ) using v_affected_ids;
+  execute pg_catalog.format('select count(*) from maintenance.%I', v_name) into v_count;
+  if v_count <> 0 then raise exception 'Record-counter backup expected 0 rows, found %', v_count; end if;
+
+  v_name := 'seasonal_fix_' || v_tag || '_record_windows';
+  execute pg_catalog.format(
+    'create table maintenance.%I as select child.*, transaction_timestamp() as backed_up_at from public.season_flight_record_checkin_windows child where child.record_id = any($1)',
+    v_name
+  ) using v_affected_ids;
+  execute pg_catalog.format('select count(*) from maintenance.%I', v_name) into v_count;
+  if v_count <> 0 then raise exception 'Record-window backup expected 0 rows, found %', v_count; end if;
+
+  v_name := 'seasonal_fix_' || v_tag || '_modifications';
+  execute pg_catalog.format(
+    'create table maintenance.%I as select modifications.*, transaction_timestamp() as backed_up_at from public.season_modifications modifications where modifications.leg_id = any($1)',
+    v_name
+  ) using v_affected_ids;
+  execute pg_catalog.format('select count(*) from maintenance.%I', v_name) into v_count;
+  if v_count <> 4 then raise exception 'Modification backup expected 4 rows, found %', v_count; end if;
+
+  v_name := 'seasonal_fix_' || v_tag || '_mod_counters';
+  execute pg_catalog.format(
+    'create table maintenance.%I as select child.*, transaction_timestamp() as backed_up_at from public.season_modification_counters child where child.leg_id = any($1)',
+    v_name
+  ) using v_affected_ids;
+  execute pg_catalog.format('select count(*) from maintenance.%I', v_name) into v_count;
+  if v_count <> 0 then raise exception 'Modification-counter backup expected 0 rows, found %', v_count; end if;
+
+  v_name := 'seasonal_fix_' || v_tag || '_mod_windows';
+  execute pg_catalog.format(
+    'create table maintenance.%I as select child.*, transaction_timestamp() as backed_up_at from public.season_modification_checkin_windows child where child.leg_id = any($1)',
+    v_name
+  ) using v_affected_ids;
+  execute pg_catalog.format('select count(*) from maintenance.%I', v_name) into v_count;
+  if v_count <> 0 then raise exception 'Modification-window backup expected 0 rows, found %', v_count; end if;
+
+  v_name := 'seasonal_fix_' || v_tag || '_added_legs';
+  execute pg_catalog.format(
+    'create table maintenance.%I as select child.*, transaction_timestamp() as backed_up_at from public.season_modification_added_legs child where child.leg_id = any($1)',
+    v_name
+  ) using v_affected_ids;
+  execute pg_catalog.format('select count(*) from maintenance.%I', v_name) into v_count;
+  if v_count <> 0 then raise exception 'Added-leg backup expected 0 rows, found %', v_count; end if;
+end;
+$$;
+
+select
+  current_setting('seasonal.repair_backup_tag') as backup_tag,
+  'maintenance.seasonal_fix_' || current_setting('seasonal.repair_backup_tag') || '_*' as backup_name_pattern;
+
+\echo 'REPAIR 06 - remove only hidden S26 duplicate rows and overlays'
+do $$
+declare
+  v_count bigint;
+begin
+  delete from public.season_modifications
+  where season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+    and leg_id in (
+      'LEG_A_2026-06-10_110_PR_PR585_MNL_15_20_321',
+      'LEG_D_2026-06-10_110_PR_PR586_MNL_16_30_321'
+    )
+    and action = 'deleted'
+    and changed_fields = '{}'::text[];
+  get diagnostics v_count = row_count;
+  if v_count <> 2 then raise exception 'Expected to delete 2 hidden PR overlays, deleted %', v_count; end if;
+
+  delete from public.season_flight_records
+  where season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+    and record_id in (
+      'LEG_A_2026-06-10_110_PR_PR585_MNL_15_20_321',
+      'LEG_D_2026-06-10_110_PR_PR586_MNL_16_30_321'
+    )
+    and source_kind = 'imported'
+    and status = 'active'
+    and action is null;
+  get diagnostics v_count = row_count;
+  if v_count <> 2 then raise exception 'Expected to delete 2 hidden PR records, deleted %', v_count; end if;
+end;
+$$;
+
+\echo 'REPAIR 07 - split S26 turnaround groups by verified reciprocal IDs'
+do $$
+declare
+  v_count bigint;
+begin
+  update public.season_flight_records records
+  set turnaround_id = mapping.new_turnaround_id
+  from (values
+    ('LEG_A_2026-08-23_943_HX_HX542_HKG_03_00_320'::text, 'TRN_V2_2026-08-24_HX542_HX543_LEG'::text),
+    ('LEG_D_2026-08-23_943_HX_HX543_HKG_04_00_320', 'TRN_V2_2026-08-24_HX542_HX543_LEG'),
+    ('F_NEW_1784417194491_ojlo5j_1', 'TRN_V2_2026-09-02_HX542_HX543_FNEW1784417194491'),
+    ('F_NEW_1784417194491_ojlo5j_2', 'TRN_V2_2026-09-02_HX542_HX543_FNEW1784417194491'),
+    ('F_NEW_1784417194495_2zf5s7_1', 'TRN_V2_2026-09-18_HX542_HX543_FNEW1784417194495'),
+    ('F_NEW_1784417194495_2zf5s7_2', 'TRN_V2_2026-09-18_HX542_HX543_FNEW1784417194495'),
+    ('LEG_A_2026-07-19_618_RF_RF531_CJJ_23_55_320', 'TRN_V2_2026-07-19_RF531_RF532_LEG'),
+    ('LEG_D_2026-07-19_619_RF_RF532_CJJ_00_55_320', 'TRN_V2_2026-07-19_RF531_RF532_LEG'),
+    ('F_NEW_1783648329496_a90ngi_1', 'TRN_V2_2026-07-20_RF531_RF532_FNEW1783648329496'),
+    ('F_NEW_1783648329496_a90ngi_2', 'TRN_V2_2026-07-20_RF531_RF532_FNEW1783648329496')
+  ) mapping(record_id, new_turnaround_id)
+  where records.season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+    and records.record_id = mapping.record_id;
+  get diagnostics v_count = row_count;
+  if v_count <> 10 then raise exception 'Expected to split 10 turnaround members, updated %', v_count; end if;
+end;
+$$;
+
+\echo 'REPAIR 08 - clear only verified orphan JX703 pair pointers'
+do $$
+declare
+  v_count bigint;
+begin
+  update public.season_flight_records
+  set linked_record_id = null,
+      turnaround_id = null
+  where season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+    and record_id = 'DAILY_IMPORT_A_2025_10_31_JX703_TPE_17_15_32Q'
+    and linked_record_id = 'DAILY_IMPORT_D_2025_10_31_JX704_TPE_18_25_32Q'
+    and turnaround_id = 'TRN_MANUAL_JX_703_704_2025_10_31_DAILY_IMPORT_A_2025_10_31_JX703_TPE_17_15_32Q_DAILY_IMPORT_D_2025_10_31_JX704_TPE_18_25_32Q';
+  get diagnostics v_count = row_count;
+  if v_count <> 1 then raise exception 'Expected to clear one JX703 orphan, updated %', v_count; end if;
+end;
+$$;
+
+-- Bump only seasons whose committed server state would change. total_legs is
+-- retained: the deleted PR rows were already excluded from effective output.
+update public.seasons
+set data_version = data_version + 1,
+    last_synced_at = (extract(epoch from pg_catalog.clock_timestamp()) * 1000)::bigint
+where id in (
+  'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+  'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+);
+
+-- The active imported occurrence index is intentionally created only after
+-- the additive Task 12 migration has installed the scalar canonicalizer. The
+-- Task 9 dry-run runs against the current schema and therefore reports defer.
+do $$
+begin
+  if pg_catalog.to_regprocedure(
+    'public.finalize_seasonal_occurrence_constraints_v2()'
+  ) is not null then
+    perform public.finalize_seasonal_occurrence_constraints_v2();
+  else
+    raise notice 'Occurrence unique index deferred until additive Task 12 migration is installed';
+  end if;
+end;
+$$;
+
+\echo 'REPAIR 09 - verify repaired state inside transaction'
+do $$
+declare
+  v_count bigint;
+  v_hash text;
+begin
+  select count(*) into v_count
+  from public.season_flight_records
+  where record_id in (
+    'LEG_A_2026-06-10_110_PR_PR585_MNL_15_20_321',
+    'LEG_D_2026-06-10_110_PR_PR586_MNL_16_30_321'
+  );
+  if v_count <> 0 then raise exception 'Discarded PR duplicate rows remain: %', v_count; end if;
+
+  select pg_catalog.md5(pg_catalog.string_agg(
+    pg_catalog.concat_ws('|',
+      records.record_id,
+      records.type,
+      coalesce(nullif(records.scheduled_date, ''), records.date),
+      records.airline,
+      records.flight_number,
+      records.route,
+      records.schedule,
+      records.aircraft,
+      records.linked_record_id,
+      records.turnaround_id
+    ),
+    '||' order by records.record_id
+  ))
+  into v_hash
+  from public.season_flight_records records
+  left join public.season_modifications modifications
+    on modifications.season_id = records.season_id
+   and modifications.leg_id = records.record_id
+  where records.season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+    and coalesce(nullif(records.scheduled_date, ''), records.date) = '2026-06-10'
+    and records.flight_number in ('PR585', 'PR586')
+    and records.status = 'active'
+    and records.action is distinct from 'deleted'
+    and modifications.action is distinct from 'deleted';
+
+  if v_hash is distinct from (
+    select value from task9_repair_metrics
+    where metric = 's26_pr585_pr586_effective_hash'
+  ) then
+    raise exception 'Effective PR585/PR586 output changed while removing hidden duplicates';
+  end if;
+
+  select count(*) into v_count
+  from (
+    select
+      records.season_id,
+      coalesce(nullif(records.scheduled_date, ''), nullif(records.date, '')) as scheduled_date,
+      pg_catalog.upper(pg_catalog.btrim(records.airline)) as airline,
+      pg_catalog.upper(pg_catalog.btrim(records.flight_number)) as flight_number
+    from public.season_flight_records records
+    where records.source_kind = 'imported'
+      and records.status = 'active'
+      and records.action is distinct from 'deleted'
+    group by
+      records.season_id,
+      coalesce(nullif(records.scheduled_date, ''), nullif(records.date, '')),
+      pg_catalog.upper(pg_catalog.btrim(records.airline)),
+      pg_catalog.upper(pg_catalog.btrim(records.flight_number))
+    having count(*) > 1
+  ) duplicates;
+  if v_count <> 0 then raise exception 'Blocking imported base duplicates remain: %', v_count; end if;
+
+  select count(*) into v_count
+  from (
+    select effective.season_id, effective.turnaround_id
+    from public.season_flight_records effective
+    left join public.season_modifications modifications
+      on modifications.season_id = effective.season_id
+     and modifications.leg_id = effective.record_id
+    where effective.status = 'active'
+      and effective.action is distinct from 'deleted'
+      and modifications.action is distinct from 'deleted'
+      and nullif(pg_catalog.btrim(effective.turnaround_id), '') is not null
+    group by effective.season_id, effective.turnaround_id
+    having count(*) <> 2
+  ) invalid_turnarounds;
+  if v_count <> 0 then raise exception 'Blocking turnaround groups remain: %', v_count; end if;
+
+  select count(*) into v_count
+  from public.season_flight_records effective
+  left join public.season_modifications modifications
+    on modifications.season_id = effective.season_id
+   and modifications.leg_id = effective.record_id
+  left join public.season_flight_records counterpart
+    on counterpart.season_id = effective.season_id
+   and counterpart.record_id = effective.linked_record_id
+  where effective.status = 'active'
+    and effective.action is distinct from 'deleted'
+    and modifications.action is distinct from 'deleted'
+    and nullif(pg_catalog.btrim(effective.linked_record_id), '') is not null
+    and counterpart.record_id is null;
+  if v_count <> 0 then raise exception 'Blocking orphan links remain: %', v_count; end if;
+
+  select count(*) into v_count
+  from public.season_flight_records effective
+  left join public.season_modifications modifications
+    on modifications.season_id = effective.season_id
+   and modifications.leg_id = effective.record_id
+  join public.season_flight_records counterpart
+    on counterpart.season_id = effective.season_id
+   and counterpart.record_id = effective.linked_record_id
+  where effective.status = 'active'
+    and effective.action is distinct from 'deleted'
+    and modifications.action is distinct from 'deleted'
+    and counterpart.linked_record_id is distinct from effective.record_id;
+  if v_count <> 0 then raise exception 'Blocking non-reciprocal links remain: %', v_count; end if;
+
+  select count(*) into v_count
+  from public.season_modifications modifications
+  left join public.season_flight_records base
+    on base.season_id = modifications.season_id
+   and base.record_id = modifications.leg_id
+  left join public.season_modification_added_legs added
+    on added.season_id = modifications.season_id
+   and added.leg_id = modifications.leg_id
+  where base.record_id is null and added.leg_id is null;
+  if v_count <> 0 then raise exception 'Orphan modifications remain: %', v_count; end if;
+
+  select count(*) into v_count
+  from public.season_flight_records
+  where season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+    and source_kind = 'added';
+  if v_count <> 8165 then
+    raise exception 'W25 legacy source_kind changed unexpectedly: % added rows', v_count;
+  end if;
+
+  if not exists (
+    select 1 from public.seasons
+    where id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+      and data_version = 16573
+  ) or not exists (
+    select 1 from public.seasons
+    where id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+      and data_version = 8228
+  ) then
+    raise exception 'Expected repaired S26/W25 data versions were not produced';
+  end if;
+end;
+$$;
+
+select
+  (select count(*) from public.season_flight_records
+    where season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6') as s26_records_after,
+  (select count(*) from public.season_modifications
+    where season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6') as s26_modifications_after,
+  (select count(*) from public.season_flight_records
+    where season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451') as w25_records_after,
+  (select count(*) from public.season_flight_records
+    where season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
+      and source_kind = 'added') as w25_legacy_added_after,
+  (select value from task9_repair_metrics
+    where metric = 's26_pr585_pr586_effective_hash') as effective_pr_hash_preserved;
+
+-- TASK 9 DRY RUN: keep this as the final executable statement.
+rollback;
+-- TASK 12 APPLY ONLY, after additive deploy and shadow parity approval:
+-- commit;

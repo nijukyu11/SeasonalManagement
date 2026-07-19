@@ -4763,4 +4763,96 @@ $$;
 reset role;
 select set_config('request.jwt.claim.sub', 'a2a8ee9c-8e84-4cb7-aef6-358af42c3b31', true);
 
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_indexes indexes
+    where indexes.schemaname = 'public'
+      and indexes.indexname in (
+        'season_flight_records_season_date_identity_v2_idx',
+        'season_flight_records_season_operational_date_v2_idx',
+        'season_flight_records_season_turnaround_v2_idx',
+        'season_modification_added_legs_occurrence_v2_idx'
+      )
+    group by indexes.schemaname
+    having count(*) = 4
+  ) then
+    raise exception 'Task 9 supporting occurrence indexes are incomplete';
+  end if;
+
+  if not exists (
+    select 1
+    from pg_trigger triggers
+    join pg_class tables on tables.oid = triggers.tgrelid
+    join pg_namespace namespaces on namespaces.oid = tables.relnamespace
+    where namespaces.nspname = 'public'
+      and tables.relname = 'season_modification_added_legs'
+      and triggers.tgname = 'guard_seasonal_manual_added_occurrence_v2'
+      and not triggers.tgisinternal
+  ) then
+    raise exception 'Task 9 manual-added occurrence guard trigger is missing';
+  end if;
+end
+$$;
+
+insert into public.seasons (
+  id, season_code, name, file_name, uploaded_at, effective_start, effective_end,
+  total_legs, total_source_rows, data_version
+) values (
+  'task9-manual-guard-season', 'T9G', 'Task 9 manual guard', '', 0,
+  '2027-01-01', '2027-01-01', 1, 0, 1
+);
+
+insert into public.season_flight_records (
+  season_id, record_id, link_id, type, airline, flight_number, raw_flight_number,
+  route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+  operational_date, day_of_week, source_kind, source_side, status
+) values (
+  'task9-manual-guard-season', 'task9-imported-owner', 'task9-imported-owner',
+  'A', 'VN', 'VN123', '123', 'HAN', '08:00', '321', 'J', '2027-01-01',
+  '2027-01-01', '08:00', '2027-01-01', 5, 'imported', 'ARR', 'active'
+);
+
+insert into public.season_modifications (season_id, leg_id, action, changed_fields)
+values (
+  'task9-manual-guard-season', 'task9-manual-collision', 'added', array['addedLeg']
+);
+
+do $$
+begin
+  begin
+    insert into public.season_modification_added_legs (
+      season_id, leg_id, record_id, type, airline, flight_number, raw_flight_number,
+      route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+      operational_date, day_of_week, action, source_kind, source_side, status
+    ) values (
+      'task9-manual-guard-season', 'task9-manual-collision', 'task9-manual-record',
+      'A', 'VN', 'VN123', '123', 'HAN', '09:00', '321', 'J', '2027-01-01',
+      '2027-01-01', '09:00', '2027-01-01', 5, 'added', 'added', 'ARR', 'active'
+    );
+    raise exception 'manual-added occurrence collision was not rejected by the server guard';
+  exception
+    when unique_violation then
+      if position('manual added occurrence collision' in lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  if exists (
+    select 1 from public.season_modification_added_legs
+    where leg_id = 'task9-manual-collision'
+  ) then
+    raise exception 'rejected manual-added occurrence persisted a child row';
+  end if;
+
+  begin
+    perform public.finalize_seasonal_occurrence_constraints_v2();
+    raise exception 'occurrence finalizer accepted intentionally dirty test fixtures';
+  exception
+    when unique_violation then null;
+  end;
+end
+$$;
+
 rollback;
