@@ -8,6 +8,11 @@ import { performance } from 'node:perf_hooks';
 import { Client } from 'pg';
 import * as XLSX from 'xlsx';
 
+import {
+  parseDisposableDatabaseConfig,
+  verifyConnectedDatabaseIdentity,
+} from './seasonal-test-database-guard.mjs';
+
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if ((specifier.startsWith('./') || specifier.startsWith('../')) && !/\.[cm]?[jt]sx?$/.test(specifier)) {
@@ -59,7 +64,6 @@ const { fromSeasonRow } = await import('../src/lib/supabaseRelationalMappers.ts'
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_DIR = path.join(SCRIPT_DIR, 'fixtures');
 const MAX_REQUEST_BYTES = 5 * 1024 * 1024;
-const DISPOSABLE_DATABASE_PATTERN = /^seasonal_task11_[a-z0-9_]+$/;
 const FIXTURE_FILES = Object.freeze({
   S26: path.join(FIXTURE_DIR, 'seasonal-s26-source.json'),
   W26: path.join(FIXTURE_DIR, 'seasonal-w26-source.json'),
@@ -257,17 +261,7 @@ export async function loadVerifiedFixture(seasonCode) {
 }
 
 function requireDatabaseUrl() {
-  const connectionString = process.env.SEASONAL_TEST_DATABASE_URL;
-  if (!connectionString) throw new Error('SEASONAL_TEST_DATABASE_URL is required');
-  if (process.env.SEASONAL_TEST_TEMP_DB !== '1') {
-    throw new Error('Refusing to run without SEASONAL_TEST_TEMP_DB=1');
-  }
-  const parsed = new URL(connectionString);
-  const databaseName = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
-  if (!DISPOSABLE_DATABASE_PATTERN.test(databaseName)) {
-    throw new Error(`Refusing non-Task11 database name ${databaseName || '<empty>'}`);
-  }
-  return { connectionString, databaseName };
+  return parseDisposableDatabaseConfig(process.env);
 }
 
 export async function connectTestDatabase(applicationName) {
@@ -279,10 +273,29 @@ export async function connectTestDatabase(applicationName) {
     query_timeout: 120_000,
     statement_timeout: 120_000,
   });
-  await client.connect();
-  const identity = await client.query('select current_database() as database_name, version() as engine');
-  assert.equal(identity.rows[0]?.database_name, databaseName, 'connected database differs from URL');
-  return { client, databaseName, engine: String(identity.rows[0]?.engine ?? 'PostgreSQL') };
+  let connected = false;
+  try {
+    await client.connect();
+    connected = true;
+    await verifyConnectedDatabaseIdentity(client, databaseName);
+    const engineResult = await client.query('select version() as engine');
+    return {
+      client,
+      databaseName,
+      engine: String(engineResult.rows[0]?.engine ?? 'PostgreSQL'),
+    };
+  } catch (primaryError) {
+    if (!connected) throw primaryError;
+    try {
+      await client.end();
+    } catch (closeError) {
+      throw new AggregateError(
+        [primaryError, closeError],
+        'Database connection verification and client close both failed',
+      );
+    }
+    throw primaryError;
+  }
 }
 
 export async function authenticatedQuery(client, userId, text, params = []) {
@@ -412,6 +425,30 @@ export async function fetchExportSnapshot(client, userId, seasonId, dataVersion)
   return result.rows[0]?.result;
 }
 
+async function runInTransaction(client, operation) {
+  await client.query('begin');
+  try {
+    const result = await operation();
+    await client.query('commit');
+    return result;
+  } catch (primaryError) {
+    try {
+      await client.query('rollback');
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [primaryError, rollbackError],
+        'Cleanup operation and transaction rollback both failed',
+      );
+    }
+    throw primaryError;
+  }
+}
+
+async function setAuthenticatedContext(client, userId) {
+  await client.query('set local role authenticated');
+  await client.query("select pg_catalog.set_config('request.jwt.claim.sub', $1, true)", [userId]);
+}
+
 async function loadAuthoritativeSeasons(client, userId) {
   const result = await authenticatedQuery(
     client,
@@ -425,37 +462,84 @@ async function loadAuthoritativeSeasons(client, userId) {
 }
 
 export async function removeBatchAndSeason(client, userId, batchId, seasonId) {
-  if (batchId) await client.query('delete from public.season_import_batches where batch_id = $1::uuid', [batchId]);
-  if (seasonId) {
-    await authenticatedQuery(
-      client,
-      userId,
-      "select public.manage_season_metadata_v2('delete', $1, '{}'::jsonb)",
-      [seasonId],
-    );
-  }
+  await runInTransaction(client, async () => {
+    if (batchId) {
+      await client.query(
+        'delete from public.season_import_batches where batch_id = $1::uuid',
+        [batchId],
+      );
+    }
+    if (seasonId) {
+      await setAuthenticatedContext(client, userId);
+      await client.query(
+        "select public.manage_season_metadata_v2('delete', $1, '{}'::jsonb)",
+        [seasonId],
+      );
+      await client.query('reset role');
+    }
+  });
 }
 
 export async function cleanupTestPrincipals(client, userIds) {
-  const seasonRows = await client.query(
-    `select distinct season_id
-     from public.season_import_batches
-     where created_by = any($1::uuid[]) and season_id is not null`,
-    [userIds],
-  );
-  await client.query('delete from public.season_import_batches where created_by = any($1::uuid[])', [userIds]);
-  const seasonIds = seasonRows.rows.map((row) => row.season_id);
-  for (const seasonId of seasonIds) {
-    await authenticatedQuery(
-      client,
-      userIds[0],
-      "select public.manage_season_metadata_v2('delete', $1, '{}'::jsonb)",
-      [seasonId],
+  assert.ok(userIds.length > 0, 'cleanup requires at least one test user');
+  await runInTransaction(client, async () => {
+    const seasonRows = await client.query(
+      `select distinct season_id
+       from public.season_import_batches
+       where created_by = any($1::uuid[]) and season_id is not null`,
+      [userIds],
     );
+    await client.query(
+      'delete from public.season_import_batches where created_by = any($1::uuid[])',
+      [userIds],
+    );
+    const seasonIds = [...new Set(seasonRows.rows.map((row) => row.season_id))];
+    if (seasonIds.length > 0) {
+      await setAuthenticatedContext(client, userIds[0]);
+      for (const seasonId of seasonIds) {
+        await client.query(
+          "select public.manage_season_metadata_v2('delete', $1, '{}'::jsonb)",
+          [seasonId],
+        );
+      }
+      await client.query('reset role');
+    }
+    await client.query(
+      'delete from public.app_operator_permission_overrides where user_id = any($1::uuid[])',
+      [userIds],
+    );
+    await client.query(
+      'delete from public.app_operators where user_id = any($1::uuid[])',
+      [userIds],
+    );
+    await client.query('delete from auth.users where id = any($1::uuid[])', [userIds]);
+  });
+}
+
+export async function runWithCleanupAndClose({ run, cleanup, close }) {
+  let result;
+  const errors = [];
+  try {
+    result = await run();
+  } catch (error) {
+    errors.push(error);
   }
-  await client.query('delete from public.app_operator_permission_overrides where user_id = any($1::uuid[])', [userIds]);
-  await client.query('delete from public.app_operators where user_id = any($1::uuid[])', [userIds]);
-  await client.query('delete from auth.users where id = any($1::uuid[])', [userIds]);
+  try {
+    await cleanup();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await close();
+  } catch (error) {
+    errors.push(error);
+  }
+
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(errors, 'Task 11 operation, cleanup, or client close failed');
+  }
+  return result;
 }
 
 function sqlState(error) {
@@ -721,74 +805,82 @@ export async function runLoadTest() {
   const fixtureData = await loadVerifiedFixture('W26');
   const { client, databaseName, engine } = await connectTestDatabase('seasonal-task11-load');
   let principals;
-  try {
-    principals = await createTestPrincipals(client);
-    const attempt = await prepareSeasonalImportV2Attempt({
-      seasonId: null,
-      seasonCode: 'W26',
-      expectedDataVersion: 0,
-      fileName: fixtureData.fixture.source.basename,
-      uploadedAt: 0,
-      sourceRows: fixtureData.sourceRows,
-    });
-    const requestJson = JSON.stringify(attempt);
-    const requestBytes = Buffer.byteLength(requestJson, 'utf8');
-    assert.equal(Object.hasOwn(attempt, 'flightRecords'), false, 'source-row request must not contain flightRecords');
-    assert.doesNotMatch(requestJson, /"flightRecords"\s*:/);
-    assert.ok(requestBytes > 0 && requestBytes <= MAX_REQUEST_BYTES, `request is ${requestBytes} bytes; limit is ${MAX_REQUEST_BYTES}`);
-
-    const staged = await stageAttempt(client, principals.primaryUserId, attempt);
-    assert.equal(staged.result.generatedRecordCount, fixtureData.fixture.verification.expectedGeneratedCount);
-    const preview = await previewBatch(client, staged.result.batchId);
-    assert.equal(preview.generated_count, fixtureData.fixture.verification.expectedGeneratedCount);
-    assert.equal(preview.diagnostic_count, 0);
-    assert.equal(preview.duplicate_count, 0);
-    const committed = await commitBatch(client, principals.primaryUserId, staged.result.batchId, 0);
-    assert.equal(committed.result.flightRecordCount, fixtureData.fixture.verification.expectedGeneratedCount);
-
-    const retryStage = await stageAttempt(client, principals.primaryUserId, attempt);
-    const retryCommit = await commitBatch(client, principals.primaryUserId, retryStage.result.batchId, 0);
-    assert.equal(retryStage.result.batchId, staged.result.batchId);
-    assert.deepEqual(retryCommit.result, committed.result);
-    const persisted = await client.query(
-      `select
-         (select count(*)::integer from public.season_import_batches where request_id = $1) as batch_count,
-         (select count(*)::integer from public.season_flight_records where season_id = $2 and source_kind = 'imported' and status = 'active') as record_count`,
-      [attempt.requestId, committed.result.seasonId],
-    );
-    assert.equal(persisted.rows[0].batch_count, 1);
-    assert.equal(persisted.rows[0].record_count, fixtureData.fixture.verification.expectedGeneratedCount);
-
-    const faults = await runFaultInjection(client, principals, { ...committed.result, attempt });
-    const metrics = {
-      fixture: {
+  return runWithCleanupAndClose({
+    run: async () => {
+      principals = await createTestPrincipals(client);
+      const attempt = await prepareSeasonalImportV2Attempt({
+        seasonId: null,
         seasonCode: 'W26',
-        sourceBasename: fixtureData.fixture.source.basename,
-        sourceSha256: fixtureData.fixture.source.sha256,
-        sourceRowsSha256: fixtureData.fixture.verification.sourceRowsSha256,
-        sourceRowCount: fixtureData.sourceRows.length,
-        expectedGeneratedCount: fixtureData.fixture.verification.expectedGeneratedCount,
-        coverage: fixtureData.fixture.verification.coverage,
-        parityLabel: 'fixture-derived count; production shadow parity is separate',
-      },
-      requestBytes,
-      parseDurationMs: Number(fixtureData.parseDurationMs.toFixed(2)),
-      stageDurationMs: Number(staged.durationMs.toFixed(2)),
-      previewDurationMs: Number(preview.durationMs.toFixed(2)),
-      commitDurationMs: Number(committed.durationMs.toFixed(2)),
-      generatedCount: committed.result.flightRecordCount,
-      duplicateCount: preview.duplicate_count,
-      databaseName,
-      databaseEngine: engine.split('\n')[0],
-      idempotentRetry: true,
-      faults,
-    };
-    console.log(JSON.stringify(metrics));
-    return metrics;
-  } finally {
-    if (principals) await cleanupTestPrincipals(client, [principals.primaryUserId, principals.secondaryUserId]);
-    await client.end();
-  }
+        expectedDataVersion: 0,
+        fileName: fixtureData.fixture.source.basename,
+        uploadedAt: 0,
+        sourceRows: fixtureData.sourceRows,
+      });
+      const requestJson = JSON.stringify(attempt);
+      const requestBytes = Buffer.byteLength(requestJson, 'utf8');
+      assert.equal(Object.hasOwn(attempt, 'flightRecords'), false, 'source-row request must not contain flightRecords');
+      assert.doesNotMatch(requestJson, /"flightRecords"\s*:/);
+      assert.ok(requestBytes > 0 && requestBytes <= MAX_REQUEST_BYTES, `request is ${requestBytes} bytes; limit is ${MAX_REQUEST_BYTES}`);
+
+      const staged = await stageAttempt(client, principals.primaryUserId, attempt);
+      assert.equal(staged.result.generatedRecordCount, fixtureData.fixture.verification.expectedGeneratedCount);
+      const preview = await previewBatch(client, staged.result.batchId);
+      assert.equal(preview.generated_count, fixtureData.fixture.verification.expectedGeneratedCount);
+      assert.equal(preview.diagnostic_count, 0);
+      assert.equal(preview.duplicate_count, 0);
+      const committed = await commitBatch(client, principals.primaryUserId, staged.result.batchId, 0);
+      assert.equal(committed.result.flightRecordCount, fixtureData.fixture.verification.expectedGeneratedCount);
+
+      const retryStage = await stageAttempt(client, principals.primaryUserId, attempt);
+      const retryCommit = await commitBatch(client, principals.primaryUserId, retryStage.result.batchId, 0);
+      assert.equal(retryStage.result.batchId, staged.result.batchId);
+      assert.deepEqual(retryCommit.result, committed.result);
+      const persisted = await client.query(
+        `select
+           (select count(*)::integer from public.season_import_batches where request_id = $1) as batch_count,
+           (select count(*)::integer from public.season_flight_records where season_id = $2 and source_kind = 'imported' and status = 'active') as record_count`,
+        [attempt.requestId, committed.result.seasonId],
+      );
+      assert.equal(persisted.rows[0].batch_count, 1);
+      assert.equal(persisted.rows[0].record_count, fixtureData.fixture.verification.expectedGeneratedCount);
+
+      const faults = await runFaultInjection(client, principals, { ...committed.result, attempt });
+      const metrics = {
+        fixture: {
+          seasonCode: 'W26',
+          sourceBasename: fixtureData.fixture.source.basename,
+          sourceSha256: fixtureData.fixture.source.sha256,
+          sourceRowsSha256: fixtureData.fixture.verification.sourceRowsSha256,
+          sourceRowCount: fixtureData.sourceRows.length,
+          expectedGeneratedCount: fixtureData.fixture.verification.expectedGeneratedCount,
+          coverage: fixtureData.fixture.verification.coverage,
+          parityLabel: 'fixture-derived count; production shadow parity is separate',
+        },
+        requestBytes,
+        parseDurationMs: Number(fixtureData.parseDurationMs.toFixed(2)),
+        stageDurationMs: Number(staged.durationMs.toFixed(2)),
+        previewDurationMs: Number(preview.durationMs.toFixed(2)),
+        commitDurationMs: Number(committed.durationMs.toFixed(2)),
+        generatedCount: committed.result.flightRecordCount,
+        duplicateCount: preview.duplicate_count,
+        databaseName,
+        databaseEngine: engine.split('\n')[0],
+        idempotentRetry: true,
+        faults,
+      };
+      console.log(JSON.stringify(metrics));
+      return metrics;
+    },
+    cleanup: async () => {
+      if (principals) {
+        await cleanupTestPrincipals(
+          client,
+          [principals.primaryUserId, principals.secondaryUserId],
+        );
+      }
+    },
+    close: () => client.end(),
+  });
 }
 
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

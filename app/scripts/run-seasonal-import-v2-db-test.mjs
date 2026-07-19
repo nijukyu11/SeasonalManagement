@@ -2,6 +2,8 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parseDisposableDatabaseConfig } from './seasonal-test-database-guard.mjs';
+
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SCHEMA_FILE = path.join(APP_DIR, 'supabase', 'schema.sql');
 const MIGRATION_FILE = path.join(
@@ -17,7 +19,6 @@ const CONCURRENCY_TEST_FILE = path.join(
   'tests',
   'seasonal_source_import_v2_concurrency.mjs',
 );
-const DISPOSABLE_DATABASE_PATTERN = /^seasonal_task11_[a-z0-9_]+$/;
 const SUPABASE_TEST_BOOTSTRAP = `
 do $$ begin
   create role anon nologin;
@@ -61,23 +62,9 @@ grant usage on schema auth to authenticated;
 grant execute on function auth.uid() to authenticated;
 `;
 
-function requiredDatabaseUrl() {
-  const value = process.env.SEASONAL_TEST_DATABASE_URL;
-  if (!value) throw new Error('SEASONAL_TEST_DATABASE_URL is required');
-  if (process.env.SEASONAL_TEST_TEMP_DB !== '1') {
-    throw new Error('Refusing to run without SEASONAL_TEST_TEMP_DB=1');
-  }
-  const url = new URL(value);
-  const database = decodeURIComponent(url.pathname.replace(/^\//, ''));
-  if (!DISPOSABLE_DATABASE_PATTERN.test(database)) {
-    throw new Error(`Refusing non-Task11 database name ${database || '<empty>'}`);
-  }
-  return { value, url, database };
-}
-
-function psqlEnvironment(url, database) {
+function psqlEnvironment(env, url, database) {
   const environment = {
-    ...process.env,
+    ...env,
     PGHOST: url.hostname,
     PGPORT: url.port || '5432',
     PGDATABASE: database,
@@ -92,35 +79,105 @@ function psqlEnvironment(url, database) {
 }
 
 function runChild(command, args, options = {}) {
-  const child = spawnSync(command, args, {
+  const { spawnSyncImpl = spawnSync, ...childOptions } = options;
+  const child = spawnSyncImpl(command, args, {
     cwd: APP_DIR,
     encoding: 'utf8',
     stdio: 'inherit',
     windowsHide: true,
-    ...options,
+    ...childOptions,
   });
   if (child.error) {
-    console.error(`${command} could not start: ${child.error.message}`);
-    process.exit(child.status ?? 1);
+    const error = new Error(`${command} could not start: ${child.error.message}`, {
+      cause: child.error,
+    });
+    error.exitCode = child.status ?? 1;
+    throw error;
   }
-  if (child.status !== 0) process.exit(child.status ?? 1);
+  if (child.status !== 0) {
+    const error = new Error(`${command} exited with status ${child.status ?? 1}`);
+    error.exitCode = child.status ?? 1;
+    throw error;
+  }
+  return child;
 }
 
-const database = requiredDatabaseUrl();
-const psqlEnv = psqlEnvironment(database.url, database.database);
-const commonPsqlArgs = ['--no-psqlrc', '--set', 'ON_ERROR_STOP=1'];
-
-runChild('psql', [...commonPsqlArgs, '--command', `select current_database() = '${database.database}' as disposable_database_verified`], {
-  env: psqlEnv,
-});
-runChild('psql', [...commonPsqlArgs, '--command', SUPABASE_TEST_BOOTSTRAP], { env: psqlEnv });
-for (const sqlFile of [SCHEMA_FILE, MIGRATION_FILE, SQL_TEST_FILE]) {
-  runChild('psql', [...commonPsqlArgs, '--file', sqlFile], { env: psqlEnv });
+function normalizePsqlIdentity(stdout) {
+  if (typeof stdout !== 'string') {
+    throw new Error('Database identity preflight returned no captured output');
+  }
+  const normalizedLineEndings = stdout.replaceAll('\r\n', '\n');
+  const identity = normalizedLineEndings.endsWith('\n')
+    ? normalizedLineEndings.slice(0, -1)
+    : normalizedLineEndings;
+  if (
+    identity.length === 0
+    || identity.includes('\n')
+    || identity.includes('\r')
+    || identity.trim() !== identity
+  ) {
+    throw new Error('Database identity preflight did not return exactly one unadorned value');
+  }
+  return identity;
 }
-runChild(process.execPath, [CONCURRENCY_TEST_FILE], {
-  env: {
-    ...process.env,
-    SEASONAL_TEST_DATABASE_URL: database.value,
-    SEASONAL_TEST_TEMP_DB: '1',
-  },
-});
+
+export function runSeasonalImportV2DbTest({
+  env = process.env,
+  spawnSyncImpl = spawnSync,
+} = {}) {
+  const database = parseDisposableDatabaseConfig(env);
+  const psqlEnv = psqlEnvironment(env, database.url, database.databaseName);
+  const commonPsqlArgs = ['--no-psqlrc', '--set', 'ON_ERROR_STOP=1'];
+
+  const identityChild = runChild(
+    'psql',
+    [
+      ...commonPsqlArgs,
+      '--tuples-only',
+      '--no-align',
+      '--command',
+      'select current_database()',
+    ],
+    {
+      env: psqlEnv,
+      spawnSyncImpl,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  const actualDatabaseName = normalizePsqlIdentity(identityChild.stdout);
+  if (actualDatabaseName !== database.databaseName) {
+    throw new Error(
+      `Database identity mismatch: expected ${database.databaseName}, got ${actualDatabaseName}`,
+    );
+  }
+
+  runChild('psql', [...commonPsqlArgs, '--command', SUPABASE_TEST_BOOTSTRAP], {
+    env: psqlEnv,
+    spawnSyncImpl,
+  });
+  for (const sqlFile of [SCHEMA_FILE, MIGRATION_FILE, SQL_TEST_FILE]) {
+    runChild('psql', [...commonPsqlArgs, '--file', sqlFile], {
+      env: psqlEnv,
+      spawnSyncImpl,
+    });
+  }
+  runChild(process.execPath, [CONCURRENCY_TEST_FILE], {
+    env: {
+      ...env,
+      SEASONAL_TEST_DATABASE_URL: database.connectionString,
+      SEASONAL_TEST_TEMP_DB: '1',
+    },
+    spawnSyncImpl,
+  });
+}
+
+const isDirectRun = process.argv[1]
+  && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isDirectRun) {
+  try {
+    runSeasonalImportV2DbTest();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = Number.isInteger(error?.exitCode) ? error.exitCode : 1;
+  }
+}

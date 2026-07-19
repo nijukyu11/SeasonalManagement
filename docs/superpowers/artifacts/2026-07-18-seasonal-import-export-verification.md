@@ -228,6 +228,11 @@ Observed RED checkpoints before the final implementation:
   Node as `spawnSync psql ENOENT`, proving that a `.cmd` shim did not satisfy
   the direct executable contract. A temporary compiled `psql.exe` wrapper
   outside the repository subsequently made the unchanged package command pass.
+- The identity/cleanup quality tests were RED because the database runner had
+  no import-safe entry point and the load harness had no shared lifecycle
+  helper. The test process failed while importing the missing
+  `runSeasonalImportV2DbTest` and `runWithCleanupAndClose` exports. The GREEN
+  implementation and behavioral evidence are recorded below.
 
 The follow-up spec review initially found all three required behaviors absent:
 the load harness did not invoke the shared committed-refresh helper, the
@@ -304,6 +309,38 @@ database, `seasonal_task11_finalpair_20260719_130607_fda16e`. The package
 command exited `0` in 9.8 seconds and again completed the SQL and multi-session
 suite before the final S26/W26 round-trip.
 
+The identity/cleanup quality follow-up first exposed an infrastructure mistake
+on disposable database
+`seasonal_task11_quality_1784468810191_7deb2b`. The direct package runner
+correctly verified and loaded schema/migration/SQL through container-local
+`psql`, but the Node tunnel pointed at the host's PostgreSQL listener instead
+of the unexposed `opsdata-supabase-db` container. Concurrency stopped with
+`28P01` before creating its test rows. After the tunnel target was corrected,
+Node verified the exact disposable database identity; the run was paused and
+the database was dropped rather than claiming an incomplete success. This was
+a test-infrastructure endpoint error, not a product or migration failure.
+
+The successful corrected rerun used fresh disposable PostgreSQL 17.6 database
+`seasonal_task11_quality_1784469485743_ebaab6`. Before `CREATE DATABASE`, the
+orchestrator queried `current_database()` through container-local `psql` and
+required the exact value `postgres`. It then obtained the current Docker
+container IP, created the disposable database, required its exact identity,
+opened a tunnel to that verified container IP, and required an exact Node `pg`
+identity match before package DDL. The actual package command exited `0` in
+14.42 seconds. The concurrency result reported the same verified database,
+one batch, 250 rows, `advisory`, `transactionid`, and `relation` lock waits,
+and the expected fail-closed `21000 Ambiguous seasonCode` conflict.
+
+The checked-in runner now captures `psql --tuples-only --no-align` output from
+`select current_database()`, accepts exactly one unadorned value, and compares
+it in Node to the validated URL database name before schema, migration, or
+tests. Fake-`psql` cases prove false, mismatched, empty, and multi-line output
+all stop after one preflight invocation with no SQL file call. Both the runner
+and concurrency harness require `SEASONAL_TEST_TEMP_DB=1`, localhost, and the
+`seasonal_task11_*` namespace. Concurrency independently queries the connected
+database before any test DDL or row operation and closes the client on a
+mismatch.
+
 ## Load and Fault Metrics
 
 The W26 load harness ran against PostgreSQL 17.6 with a clean test season and
@@ -312,10 +349,10 @@ batch:
 | Metric | Result |
 |---|---:|
 | Canonical request bytes | 60,896 |
-| Client parse | 29.39 ms |
-| Stage | 2,902.29 ms |
-| Preview | 2,664.29 ms |
-| Commit | 14,529.35 ms |
+| Client parse | 34.87 ms |
+| Stage | 2,938.89 ms |
+| Preview | 2,704.34 ms |
+| Commit | 14,561.96 ms |
 | Generated occurrences | 26,370 |
 | Duplicate occurrences | 0 |
 
@@ -342,7 +379,16 @@ restage or recommit. The receipt contained no source rows, workbook bytes,
 filename, or upload payload. This claim is receipt-scoped; normal server
 staging still persists canonical source rows by design. Owner, cross-mode, and
 version conflicts remained fail-closed (`42501`, `23505`, and version conflict
-respectively). The corrected W26 load/fault command exited `0` in 27.5 seconds.
+respectively). The latest corrected W26 load/fault command exited `0` in 27.21
+seconds.
+
+Harness cleanup now runs season, batch, operator, permission, and user cleanup
+inside one database transaction. A season-delete failure rolls back the prior
+batch delete, preserving ownership links for retry. The shared lifecycle
+helper always attempts `client.end()` and reports primary, cleanup, and close
+errors together when needed. Mock tests prove failure rollback plus close,
+successful `BEGIN`/delete/`COMMIT`/close ordering, atomic batch/season rollback,
+and preservation of all three simultaneous errors.
 
 ## Round-Trip Results
 
@@ -353,8 +399,8 @@ respectively). The corrected W26 load/fault command exited `0` in 27.5 seconds.
 
 | Season | Original committed season ID | Authoritative reimport season ID |
 |---|---|---|
-| S26 | `season-96b219c9-f4de-43cf-baf3-5551f85b4e67` | `season-3db9982b-f56f-43e7-b7a8-47f93c9b19b8` |
-| W26 | `season-80daaef2-fbbb-44b7-b878-0e38b690691b` | `season-95cf79d1-620a-48b3-a416-c07cf60de951` |
+| S26 | `season-fc804486-14fb-4214-98ae-736eb1d84c06` | `season-a3d5475b-580e-49b6-8c1e-aeaf1936444b` |
+| W26 | `season-7347c871-cea8-4404-8cfe-980d1c475bc7` | `season-e9d72144-6122-4ec8-86eb-5081aca34df3` |
 
 Each path staged and committed into an isolated season, fetched a versioned
 export snapshot, built canonical rows and an in-memory workbook, strict-parsed
@@ -377,8 +423,8 @@ checks measured zero. Sorted operational pair signatures, per-pair turnaround
 cardinality, turnaround group count, and complete occurrence signatures still
 matched the pre-export canonical data. Neither authoritative snapshot was
 truncated; neither workbook was empty; missing, extra, duplicate, and count
-deltas were zero. The final two-season round-trip command exited `0` in
-224.8 seconds. The harnesses do not read production rows or SQLite.
+deltas were zero. The latest two-season round-trip command exited `0` in
+238.36 seconds. The harnesses do not read production rows or SQLite.
 
 A local negative test constructs identical baseline and reimport diagnostic
 objects with one nonzero field at a time. Equality succeeds by construction,
@@ -439,35 +485,59 @@ same fingerprint and zero Task 11 RPCs.
   `pg_database` returned zero rows. Tunnel PID 8308 was stopped, port 55434 had
   zero listeners, all nine final wrapper/askpass/secret/log/marker items were
   deleted, and the all-Task-11 temporary-item count was zero.
+- The first quality-follow-up database was terminated and dropped after the
+  tunnel endpoint incident; `pg_database` returned zero, its verified tunnel
+  had zero listeners, and all wrapper/askpass/secret files were removed.
+- The successful quality database had exact zero residue across seasons,
+  batches, batch rows, source rows, flight records, operators, and auth users
+  before drop (`0|0|0|0|0|0|0`). Cleanup revalidated the admin connection as
+  `postgres`, terminated matching sessions, dropped the database, and observed
+  zero matching `pg_database` rows. Verified tunnel PID 1072 was stopped, port
+  55437 had zero listeners, and the complete temporary directory was deleted.
+  A separate post-run check found zero matching tunnel processes, listeners,
+  or temporary files. The quality run connected to admin database `postgres`
+  only for exact identity/catalog checks and creation/drop of the disposable
+  database. No schema, migration, fixture DDL, or fixture DML ran in production
+  `postgres/public`.
 
 ## Final Verification Matrix
 
-- Focused parser/import/export/selection/pairing/recovery/snapshot tests:
-  90 passed, 0 failed in 983 ms, including the identical-nonzero diagnostic
-  rejection test.
+- Focused parser/import/export/selection/pairing/recovery/snapshot and quality
+  regression tests: 108 passed, 0 failed in 1,101 ms. This includes the
+  identical-nonzero diagnostic rejection plus exact identity, no-schema-on-
+  mismatch, concurrency entry guard, atomic rollback, and client-close cases.
 - `npm run test:rules`: passed.
 - `npx tsc --noEmit --pretty false`: passed.
-- Targeted ESLint, including all three Task 11 scripts and the concurrency
-  harness: passed.
-- `node --check` for all three Task 11 scripts and the concurrency harness:
-  passed.
+- Targeted ESLint, including all four Task 11 runtime scripts/harnesses, the
+  shared database guard, and both quality regression files: passed.
+- `node --check` for those seven JavaScript files: passed.
 - `npm run test:seasonal-import-sql`: passed on PGlite; tracked migration ran
   twice in 4,375 ms.
 - `npm run test:seasonal-schema-twice`: passed; full schema ran twice.
-- `npm run test:seasonal-import-v2-db`: passed on real PostgreSQL through the
-  temporary executable wrapper.
-- `npm run test:seasonal-import-v2-load`: passed on real PostgreSQL with the
-  metrics above.
-- `npm run test:seasonal-roundtrip`: passed for real S26 and W26 fixtures.
-- `npm run build`: passed in 55.1 seconds with Next.js 16.2.4; compilation
-  completed in 21.8 seconds and all 12 static pages generated.
-- Strict UTF-8 decoding passed for all nine intended files. Mojibake, hardcoded
-  external host/credential/personal-path, and trailing-whitespace scans found
-  zero matches; `git diff --check` passed.
+- `npm run test:seasonal-import-v2-db`: passed on real PostgreSQL in 14.42
+  seconds through the temporary executable wrapper, including concurrency.
+- `npm run test:seasonal-import-v2-load`: passed on real PostgreSQL in 27.21
+  seconds with the metrics above.
+- `npm run test:seasonal-roundtrip`: passed for real S26 and W26 fixtures in
+  238.36 seconds.
+- `npm run build`: passed in 57.54 seconds with Next.js 16.2.4; compilation
+  completed in 27.9 seconds and all 12 static pages generated.
+- Strict UTF-8 decoding passed for all ten pre-quality Task 11 files.
+  Mojibake, hardcoded external host/credential/personal-path, and
+  trailing-whitespace scans found zero matches; `git diff --check` passed.
 - The follow-up repeated strict UTF-8, mojibake, secret, external-host,
   personal-path, trailing-whitespace, stale-claim, and `git diff --check` scans
   over exactly the two corrected harnesses and this verification artifact; all
   scans passed with zero findings.
+- The quality follow-up adds one shared guard and two regression files, making
+  the cumulative Task 11 boundary exactly 13 files. Final strict UTF-8,
+  mojibake, secret, external-host, personal-path, trailing-whitespace, and diff
+  scans covered all 13 files; the current follow-up diff itself contains
+  exactly eight intended files. All scans passed with zero findings.
+- The exact eight follow-up files are the DB runner, DB runner regression,
+  shared DB guard, load harness, cleanup regression, round-trip harness,
+  concurrency harness, and this verification artifact. No package metadata,
+  fixture, migration, schema, production repair, or release file changed.
 - Fixture-boundary verification found zero `flightRecords`, `record_id`, or
   `seasonId` keys in either JSON, and zero `.xls` or `.xlsx` files in the Task
   11 Git changes. Both JSON source-row byte counts and SHA-256 values matched

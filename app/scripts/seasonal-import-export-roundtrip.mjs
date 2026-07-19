@@ -15,6 +15,7 @@ import {
   previewBatch,
   previewSignatures,
   removeBatchAndSeason,
+  runWithCleanupAndClose,
   stageAttempt,
 } from './seasonal-import-v2-load-test.mjs';
 
@@ -344,31 +345,39 @@ async function verifySeasonRoundTrip(client, userId, seasonCode) {
 export async function runRoundTripTest() {
   const { client, databaseName, engine } = await connectTestDatabase('seasonal-task11-roundtrip');
   let principals;
-  try {
-    principals = await createTestPrincipals(client);
-    const results = [];
-    for (const seasonCode of ['S26', 'W26']) {
-      results.push(await verifySeasonRoundTrip(client, principals.primaryUserId, seasonCode));
-    }
-    const remainingCommitted = await authenticatedQuery(
-      client,
-      principals.primaryUserId,
-      `select count(*)::integer as count
-       from public.seasons
-       where season_code in ('S26', 'W26')`,
-    );
-    assert.equal(remainingCommitted.rows[0].count, 0, 'round-trip must not leave committed fixture seasons');
-    const output = {
-      databaseName,
-      databaseEngine: engine.split('\n')[0],
-      seasons: results,
-    };
-    console.log(JSON.stringify(output));
-    return output;
-  } finally {
-    if (principals) await cleanupTestPrincipals(client, [principals.primaryUserId, principals.secondaryUserId]);
-    await client.end();
-  }
+  return runWithCleanupAndClose({
+    run: async () => {
+      principals = await createTestPrincipals(client);
+      const results = [];
+      for (const seasonCode of ['S26', 'W26']) {
+        results.push(await verifySeasonRoundTrip(client, principals.primaryUserId, seasonCode));
+      }
+      const remainingCommitted = await authenticatedQuery(
+        client,
+        principals.primaryUserId,
+        `select count(*)::integer as count
+         from public.seasons
+         where season_code in ('S26', 'W26')`,
+      );
+      assert.equal(remainingCommitted.rows[0].count, 0, 'round-trip must not leave committed fixture seasons');
+      const output = {
+        databaseName,
+        databaseEngine: engine.split('\n')[0],
+        seasons: results,
+      };
+      console.log(JSON.stringify(output));
+      return output;
+    },
+    cleanup: async () => {
+      if (principals) {
+        await cleanupTestPrincipals(
+          client,
+          [principals.primaryUserId, principals.secondaryUserId],
+        );
+      }
+    },
+    close: () => client.end(),
+  });
 }
 
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

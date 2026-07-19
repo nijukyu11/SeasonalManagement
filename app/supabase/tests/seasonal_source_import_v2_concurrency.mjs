@@ -8,19 +8,14 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 
-const connectionString = process.env.SEASONAL_TEST_DATABASE_URL;
-if (!connectionString) {
-  throw new Error('SEASONAL_TEST_DATABASE_URL is required');
-}
+import {
+  parseDisposableDatabaseConfig,
+  verifyDatabaseIdentityOrClose,
+} from '../../scripts/seasonal-test-database-guard.mjs';
 
-if (process.env.SEASONAL_TEST_TEMP_DB !== '1') {
-  throw new Error('Refusing to run without SEASONAL_TEST_TEMP_DB=1');
-}
-
-const databaseUrl = new URL(connectionString);
-if (!['127.0.0.1', 'localhost', '::1'].includes(databaseUrl.hostname)) {
-  throw new Error('Concurrency test only runs against a localhost temporary PostgreSQL server');
-}
+const databaseConfig = parseDisposableDatabaseConfig(process.env);
+const connectionString = databaseConfig.connectionString;
+const expectedDatabaseName = databaseConfig.databaseName;
 
 const HARD_TIMEOUT_MS = 60_000;
 const CLEANUP_RESERVE_MS = 10_000;
@@ -73,6 +68,7 @@ const clientOptions = {
 const abortController = new AbortController();
 const backgroundErrors = [];
 let cleanupStarted = false;
+let databaseIdentityVerified = false;
 
 function createClientState(name) {
   const client = new Client({ ...clientOptions, application_name: `seasonal-import-v2-${name}` });
@@ -211,6 +207,13 @@ async function waitForLock(processId, label) {
 
 async function runScenario() {
   await connectClient(janitor);
+  try {
+    await verifyDatabaseIdentityOrClose(janitor.client, expectedDatabaseName);
+  } catch (error) {
+    if (error?.databaseClientClosed === true) janitor.connected = false;
+    throw error;
+  }
+  databaseIdentityVerified = true;
   await Promise.all(scenarioClients.map(connectClient));
 
   await query(
@@ -380,6 +383,8 @@ async function runScenario() {
   await rollback(clientA);
 
   console.log(JSON.stringify({
+    databaseName: expectedDatabaseName,
+    databaseIdentityVerified,
     batchId: firstResponse.batchId,
     batchCount: persisted.rows[0].batch_count,
     rowCount: persisted.rows[0].row_count,
@@ -415,7 +420,7 @@ async function cleanup() {
     }
   }
 
-  if (janitor.connected) {
+  if (janitor.connected && databaseIdentityVerified) {
     for (const state of scenarioClients) {
       if (
         state.connected
@@ -467,7 +472,7 @@ async function cleanup() {
       [userId],
       'delete test user cleanup'
     );
-  } else {
+  } else if (databaseIdentityVerified) {
     cleanupErrors.push(new Error('janitor connection unavailable for database cleanup'));
   }
 
