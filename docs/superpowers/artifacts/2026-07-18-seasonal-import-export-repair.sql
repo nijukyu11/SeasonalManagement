@@ -598,6 +598,301 @@ begin
 end;
 $$;
 
+\echo 'REPAIR 05 - assert exact W26 SQ173 reciprocal route proof'
+create temporary table task9_w26_sq173_route_repair on commit drop as
+select
+  target.season_id,
+  target.record_id as target_record_id,
+  target.date as target_date,
+  target.flight_number as target_flight_number,
+  target.raw_flight_number as target_raw_flight_number,
+  target.route as target_route,
+  target.schedule as target_schedule,
+  target.aircraft as target_aircraft,
+  target.category as target_category,
+  target.source_row_index as target_source_row_index,
+  target.linked_source_row_index as target_linked_source_row_index,
+  target.link_type as target_link_type,
+  target.pair_anchor_date as target_pair_anchor_date,
+  target.linked_record_id as target_linked_record_id,
+  target.turnaround_id as target_turnaround_id,
+  counterpart.record_id as counterpart_record_id,
+  counterpart.date as counterpart_date,
+  counterpart.type as counterpart_type,
+  counterpart.airline as counterpart_airline,
+  counterpart.flight_number as counterpart_flight_number,
+  counterpart.raw_flight_number as counterpart_raw_flight_number,
+  counterpart.route as counterpart_route,
+  counterpart.schedule as counterpart_schedule,
+  counterpart.aircraft as counterpart_aircraft,
+  counterpart.category as counterpart_category,
+  counterpart.source_kind as counterpart_source_kind,
+  counterpart.status as counterpart_status,
+  counterpart.action as counterpart_action,
+  counterpart.source_row_index as counterpart_source_row_index,
+  counterpart.linked_source_row_index as counterpart_linked_source_row_index,
+  counterpart.link_type as counterpart_link_type,
+  counterpart.pair_anchor_date as counterpart_pair_anchor_date,
+  counterpart.linked_record_id as counterpart_linked_record_id,
+  counterpart.turnaround_id as counterpart_turnaround_id,
+  (
+    select pg_catalog.count(*)
+    from public.season_flight_records inbound
+    where inbound.season_id = target.season_id
+      and inbound.source_kind = 'imported'
+      and inbound.status = 'active'
+      and inbound.action is distinct from 'deleted'
+      and inbound.linked_record_id = counterpart.record_id
+  ) as target_to_counterpart_reference_count,
+  (
+    select pg_catalog.count(*)
+    from public.season_flight_records inbound
+    where inbound.season_id = target.season_id
+      and inbound.source_kind = 'imported'
+      and inbound.status = 'active'
+      and inbound.action is distinct from 'deleted'
+      and inbound.linked_record_id = target.record_id
+  ) as counterpart_to_target_reference_count,
+  (
+    select pg_catalog.count(*)
+    from public.season_flight_records members
+    where members.season_id = target.season_id
+      and members.source_kind = 'imported'
+      and members.status = 'active'
+      and members.action is distinct from 'deleted'
+      and members.turnaround_id = target.turnaround_id
+  ) as turnaround_member_count
+from public.seasons seasons
+join public.season_flight_records target on target.season_id = seasons.id
+left join public.season_flight_records counterpart
+  on counterpart.season_id = target.season_id
+ and counterpart.record_id = target.linked_record_id
+where seasons.id = 'season-f77c5ea9-be54-4615-ab0a-d83062b9b854'
+  and seasons.season_code = 'W26'
+  and target.source_kind = 'imported'
+  and target.status = 'active'
+  and target.action is null
+  and target.type = 'D'
+  and public.seasonal_occurrence_airline_v2(target.airline) = 'SQ'
+  and public.seasonal_occurrence_flight_number_v2(
+    target.airline,
+    target.flight_number,
+    target.raw_flight_number
+  ) = 'SQ173'
+  and pg_catalog.btrim(target.route) = '';
+
+do $$
+declare
+  v_count bigint;
+  v_hash text;
+  v_min_date text;
+  v_max_date text;
+begin
+  select
+    pg_catalog.count(*),
+    pg_catalog.min(proof.target_date),
+    pg_catalog.max(proof.target_date),
+    pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.string_agg(
+      pg_catalog.concat_ws(chr(31),
+        proof.target_record_id,
+        proof.target_date,
+        proof.target_flight_number,
+        proof.target_raw_flight_number,
+        proof.target_route,
+        proof.target_schedule,
+        proof.target_aircraft,
+        proof.target_category,
+        proof.target_source_row_index,
+        proof.target_linked_source_row_index,
+        proof.target_link_type,
+        proof.target_pair_anchor_date,
+        proof.target_linked_record_id,
+        proof.target_turnaround_id,
+        proof.counterpart_record_id,
+        proof.counterpart_date,
+        proof.counterpart_flight_number,
+        proof.counterpart_raw_flight_number,
+        proof.counterpart_route,
+        proof.counterpart_schedule,
+        proof.counterpart_aircraft,
+        proof.counterpart_category,
+        proof.counterpart_source_row_index,
+        proof.counterpart_linked_source_row_index,
+        proof.counterpart_link_type,
+        proof.counterpart_pair_anchor_date,
+        proof.counterpart_linked_record_id,
+        proof.counterpart_turnaround_id
+      ),
+      chr(30) order by proof.target_record_id
+    ), 'UTF8')), 'hex')
+  into v_count, v_min_date, v_max_date, v_hash
+  from task9_w26_sq173_route_repair proof;
+
+  if v_count <> 154
+    or v_min_date <> '2026-10-25'
+    or v_max_date <> '2027-03-27'
+    or (select pg_catalog.count(distinct target_date)
+        from task9_w26_sq173_route_repair) <> 154
+    or (v_max_date::date - v_min_date::date + 1) <> 154
+  then
+    raise exception 'Expected 154 continuous W26 SQ173 targets from 2026-10-25 through 2027-03-27, found % over %..%',
+      v_count, v_min_date, v_max_date;
+  end if;
+
+  if v_hash is distinct from 'cf04250dc6f37a3a6a85075f71d39a847f3d58d7f34b2091dad4153c3b10bf5e' then
+    raise exception 'W26 SQ173 exact reciprocal pair set drifted: %', v_hash;
+  end if;
+
+  if exists (
+    select 1
+    from task9_w26_sq173_route_repair proof
+    where proof.counterpart_record_id is null
+      or proof.counterpart_type is distinct from 'A'
+      or proof.counterpart_airline is distinct from 'SQ'
+      or proof.counterpart_flight_number is distinct from 'SQ174'
+      or proof.counterpart_source_kind is distinct from 'imported'
+      or proof.counterpart_status is distinct from 'active'
+      or proof.counterpart_action is not null
+      or proof.target_linked_record_id is distinct from proof.counterpart_record_id
+      or proof.counterpart_linked_record_id is distinct from proof.target_record_id
+      or proof.target_to_counterpart_reference_count <> 1
+      or proof.counterpart_to_target_reference_count <> 1
+      or proof.target_turnaround_id is null
+      or proof.counterpart_turnaround_id is distinct from proof.target_turnaround_id
+      or proof.turnaround_member_count <> 2
+      or proof.counterpart_date is distinct from proof.target_date
+      or proof.target_pair_anchor_date is distinct from proof.target_date
+      or proof.counterpart_pair_anchor_date is distinct from proof.target_date
+      or proof.target_link_type is distinct from 'sameday'
+      or proof.counterpart_link_type is distinct from 'sameday'
+      or proof.target_source_row_index is distinct from proof.counterpart_source_row_index
+      or proof.target_linked_source_row_index is distinct from proof.counterpart_source_row_index
+      or proof.counterpart_linked_source_row_index is distinct from proof.target_source_row_index
+      or pg_catalog.btrim(proof.counterpart_route) is distinct from 'SIN'
+  ) then
+    raise exception 'W26 SQ173 reciprocal SQ174 topology or route proof failed';
+  end if;
+
+  if (select pg_catalog.count(distinct counterpart_record_id)
+      from task9_w26_sq173_route_repair) <> 154
+    or (select pg_catalog.count(distinct target_turnaround_id)
+        from task9_w26_sq173_route_repair) <> 154
+    or exists (
+      select 1 from task9_w26_sq173_route_repair
+      group by target_date having pg_catalog.count(*) <> 1
+    )
+  then
+    raise exception 'W26 SQ173 reciprocal mapping is ambiguous';
+  end if;
+
+  select pg_catalog.count(*) into v_count
+  from public.season_modifications modifications
+  join task9_w26_sq173_route_repair proof
+    on proof.season_id = modifications.season_id
+   and proof.target_record_id = modifications.leg_id;
+  if v_count <> 5 then
+    raise exception 'Expected 5 W26 SQ173 non-route modifications, found %', v_count;
+  end if;
+
+  select pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(coalesce(
+    pg_catalog.string_agg(
+      pg_catalog.md5(pg_catalog.to_jsonb(modifications)::text),
+      '' order by modifications.leg_id
+    ), ''
+  ), 'UTF8')), 'hex')
+  into v_hash
+  from public.season_modifications modifications
+  join task9_w26_sq173_route_repair proof
+    on proof.season_id = modifications.season_id
+   and proof.target_record_id = modifications.leg_id;
+  if v_hash is distinct from 'b44046f3a7a4e0fd202a7658d0d6240e1deea4e478a83f195d219a7c1df624f6' then
+    raise exception 'W26 SQ173 modification set drifted: %', v_hash;
+  end if;
+
+  if exists (
+    select 1
+    from public.season_modifications modifications
+    join task9_w26_sq173_route_repair proof
+      on proof.season_id = modifications.season_id
+     and modifications.leg_id in (proof.target_record_id, proof.counterpart_record_id)
+    where 'route' = any(coalesce(modifications.changed_fields, '{}'::text[]))
+       or modifications.route is not null
+  ) then
+    raise exception 'W26 SQ173/SQ174 route modification conflict exists';
+  end if;
+
+  select pg_catalog.count(*) into v_count
+  from public.season_modification_counters counters
+  join task9_w26_sq173_route_repair proof on proof.target_record_id = counters.leg_id;
+  if v_count <> 23 then
+    raise exception 'Expected 23 W26 SQ173 modification-counter rows, found %', v_count;
+  end if;
+
+  select
+    (select pg_catalog.count(*)
+      from public.season_flight_record_counters child
+      join task9_w26_sq173_route_repair proof
+        on child.record_id in (proof.target_record_id, proof.counterpart_record_id))
+    + (select pg_catalog.count(*)
+      from public.season_flight_record_checkin_windows child
+      join task9_w26_sq173_route_repair proof
+        on child.record_id in (proof.target_record_id, proof.counterpart_record_id))
+    + (select pg_catalog.count(*)
+      from public.season_modification_checkin_windows child
+      join task9_w26_sq173_route_repair proof
+        on child.leg_id in (proof.target_record_id, proof.counterpart_record_id))
+    + (select pg_catalog.count(*)
+      from public.season_modification_added_legs child
+      join task9_w26_sq173_route_repair proof
+        on child.season_id = proof.season_id
+       and child.leg_id in (proof.target_record_id, proof.counterpart_record_id))
+  into v_count;
+  if v_count <> 0 then
+    raise exception 'Unexpected W26 SQ173/SQ174 related child rows found: %', v_count;
+  end if;
+
+  if exists (
+    select 1
+    from public.season_flight_records other
+    join task9_w26_sq173_route_repair proof
+      on proof.season_id = other.season_id
+     and proof.target_date = other.date
+    where other.record_id <> proof.target_record_id
+      and other.status = 'active'
+      and other.action is distinct from 'deleted'
+      and other.type = 'D'
+      and public.seasonal_occurrence_airline_v2(other.airline) = 'SQ'
+      and public.seasonal_occurrence_flight_number_v2(
+        other.airline,
+        other.flight_number,
+        other.raw_flight_number
+      ) = 'SQ173'
+  ) or exists (
+    select 1
+    from public.season_modification_added_legs added
+    join public.season_modifications parent
+      on parent.season_id = added.season_id
+     and parent.leg_id = added.leg_id
+    join task9_w26_sq173_route_repair proof
+      on proof.season_id = added.season_id
+     and proof.target_date = added.date
+    where parent.action = 'added'
+      and 'addedLeg' = any(coalesce(parent.changed_fields, '{}'::text[]))
+      and added.status = 'active'
+      and added.action = 'added'
+      and added.type = 'D'
+      and public.seasonal_occurrence_airline_v2(added.airline) = 'SQ'
+      and public.seasonal_occurrence_flight_number_v2(
+        added.airline,
+        added.flight_number,
+        added.raw_flight_number
+      ) = 'SQ173'
+  ) then
+    raise exception 'W26 SQ173 occurrence ambiguity exists';
+  end if;
+end;
+$$;
+
 -- Capture the effective PR identity before removing the already-hidden rows.
 create temporary table task9_repair_metrics (
   metric text primary key,
@@ -633,7 +928,7 @@ where records.season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
   and records.action is distinct from 'deleted'
   and modifications.action is distinct from 'deleted';
 
-\echo 'REPAIR 05 - create timestamped maintenance backups'
+\echo 'REPAIR 06 - create timestamped maintenance backups'
 create schema if not exists maintenance;
 
 do $$
@@ -657,10 +952,30 @@ declare
     'F_NEW_1783648329496_a90ngi_2',
     'DAILY_IMPORT_A_2025_10_31_JX703_TPE_17_15_32Q'
   ];
+  v_route_ids text[];
   v_name text;
   v_count bigint;
 begin
   perform pg_catalog.set_config('seasonal.repair_backup_tag', v_tag, true);
+
+  select pg_catalog.array_agg(related.record_id order by related.record_id)
+  into v_route_ids
+  from (
+    select proof.target_record_id as record_id
+    from task9_w26_sq173_route_repair proof
+    union
+    select proof.counterpart_record_id
+    from task9_w26_sq173_route_repair proof
+  ) related;
+  if pg_catalog.array_length(v_route_ids, 1) <> 308 then
+    raise exception 'W26 SQ173/SQ174 backup ID set expected 308 rows, found %',
+      pg_catalog.array_length(v_route_ids, 1);
+  end if;
+  v_affected_ids := v_affected_ids || v_route_ids;
+  if pg_catalog.array_length(v_affected_ids, 1) <> 321 then
+    raise exception 'Combined backup ID set expected 321 rows, found %',
+      pg_catalog.array_length(v_affected_ids, 1);
+  end if;
 
   v_name := 'seasonal_fix_' || v_tag || '_seasons';
   execute pg_catalog.format(
@@ -668,10 +983,11 @@ begin
     v_name
   ) using array[
     'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+    'season-f77c5ea9-be54-4615-ab0a-d83062b9b854',
     'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
   ];
   execute pg_catalog.format('select count(*) from maintenance.%I', v_name) into v_count;
-  if v_count <> 2 then raise exception 'Season backup expected 2 rows, found %', v_count; end if;
+  if v_count <> 3 then raise exception 'Season backup expected 3 rows, found %', v_count; end if;
 
   v_name := 'seasonal_fix_' || v_tag || '_records';
   execute pg_catalog.format(
@@ -679,7 +995,7 @@ begin
     v_name
   ) using v_affected_ids;
   execute pg_catalog.format('select count(*) from maintenance.%I', v_name) into v_count;
-  if v_count <> 13 then raise exception 'Record backup expected 13 rows, found %', v_count; end if;
+  if v_count <> 321 then raise exception 'Record backup expected 321 rows, found %', v_count; end if;
 
   v_name := 'seasonal_fix_' || v_tag || '_record_counters';
   execute pg_catalog.format(
@@ -703,7 +1019,7 @@ begin
     v_name
   ) using v_affected_ids;
   execute pg_catalog.format('select count(*) from maintenance.%I', v_name) into v_count;
-  if v_count <> 4 then raise exception 'Modification backup expected 4 rows, found %', v_count; end if;
+  if v_count <> 9 then raise exception 'Modification backup expected 9 rows, found %', v_count; end if;
 
   v_name := 'seasonal_fix_' || v_tag || '_mod_counters';
   execute pg_catalog.format(
@@ -711,7 +1027,7 @@ begin
     v_name
   ) using v_affected_ids;
   execute pg_catalog.format('select count(*) from maintenance.%I', v_name) into v_count;
-  if v_count <> 0 then raise exception 'Modification-counter backup expected 0 rows, found %', v_count; end if;
+  if v_count <> 23 then raise exception 'Modification-counter backup expected 23 rows, found %', v_count; end if;
 
   v_name := 'seasonal_fix_' || v_tag || '_mod_windows';
   execute pg_catalog.format(
@@ -735,7 +1051,7 @@ select
   current_setting('seasonal.repair_backup_tag') as backup_tag,
   'maintenance.seasonal_fix_' || current_setting('seasonal.repair_backup_tag') || '_*' as backup_name_pattern;
 
-\echo 'REPAIR 06 - remove only hidden S26 duplicate rows and overlays'
+\echo 'REPAIR 07 - remove only hidden S26 duplicate rows and overlays'
 do $$
 declare
   v_count bigint;
@@ -765,7 +1081,7 @@ begin
 end;
 $$;
 
-\echo 'REPAIR 07 - split S26 turnaround groups by verified reciprocal IDs'
+\echo 'REPAIR 08 - split S26 turnaround groups by verified reciprocal IDs'
 do $$
 declare
   v_count bigint;
@@ -791,7 +1107,7 @@ begin
 end;
 $$;
 
-\echo 'REPAIR 08 - clear only verified orphan JX703 pair pointers'
+\echo 'REPAIR 09 - clear only verified orphan JX703 pair pointers'
 do $$
 declare
   v_count bigint;
@@ -808,6 +1124,28 @@ begin
 end;
 $$;
 
+\echo 'REPAIR 10 - fill only verified W26 SQ173 routes from reciprocal SQ174'
+do $$
+declare
+  v_count bigint;
+begin
+  update public.season_flight_records target
+  set route = proof.counterpart_route
+  from task9_w26_sq173_route_repair proof
+  where target.season_id = proof.season_id
+    and target.record_id = proof.target_record_id
+    and target.route = proof.target_route
+    and pg_catalog.btrim(target.route) = ''
+    and target.linked_record_id = proof.counterpart_record_id
+    and target.turnaround_id = proof.target_turnaround_id
+    and proof.counterpart_route = 'SIN';
+  get diagnostics v_count = row_count;
+  if v_count <> 154 then
+    raise exception 'Expected to fill exactly 154 W26 SQ173 routes, updated %', v_count;
+  end if;
+end;
+$$;
+
 -- Bump only seasons whose committed server state would change. total_legs is
 -- retained: the deleted PR rows were already excluded from effective output.
 update public.seasons
@@ -815,6 +1153,7 @@ set data_version = data_version + 1,
     last_synced_at = (extract(epoch from pg_catalog.clock_timestamp()) * 1000)::bigint
 where id in (
   'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+  'season-f77c5ea9-be54-4615-ab0a-d83062b9b854',
   'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
 );
 
@@ -838,7 +1177,7 @@ begin
 end;
 $$;
 
-\echo 'REPAIR 09 - verify repaired state inside transaction'
+\echo 'REPAIR 11 - verify repaired state inside transaction'
 do $$
 declare
   v_count bigint;
@@ -885,6 +1224,46 @@ begin
     where metric = 's26_pr585_pr586_effective_hash'
   ) then
     raise exception 'Effective PR585/PR586 output changed while removing hidden duplicates';
+  end if;
+
+  select pg_catalog.count(*) into v_count
+  from public.season_flight_records target
+  join task9_w26_sq173_route_repair proof
+    on proof.season_id = target.season_id
+   and proof.target_record_id = target.record_id
+  join public.season_flight_records counterpart
+    on counterpart.season_id = proof.season_id
+   and counterpart.record_id = proof.counterpart_record_id
+  where target.source_kind = 'imported'
+    and target.status = 'active'
+    and target.action is null
+    and target.type = 'D'
+    and target.route = 'SIN'
+    and target.route = counterpart.route
+    and target.linked_record_id = counterpart.record_id
+    and counterpart.linked_record_id = target.record_id
+    and target.turnaround_id = counterpart.turnaround_id
+    and target.turnaround_id = proof.target_turnaround_id
+    and target.date = counterpart.date
+    and target.date = proof.target_date
+    and target.pair_anchor_date = counterpart.pair_anchor_date
+    and target.pair_anchor_date = target.date
+    and target.link_type = 'sameday'
+    and counterpart.link_type = 'sameday';
+  if v_count <> 154 then
+    raise exception 'Expected 154 repaired reciprocal W26 SQ173/SQ174 pairs, found %', v_count;
+  end if;
+
+  if exists (
+    select 1
+    from public.season_modifications modifications
+    join task9_w26_sq173_route_repair proof
+      on proof.season_id = modifications.season_id
+     and modifications.leg_id in (proof.target_record_id, proof.counterpart_record_id)
+    where 'route' = any(coalesce(modifications.changed_fields, '{}'::text[]))
+       or modifications.route is not null
+  ) then
+    raise exception 'W26 SQ173/SQ174 route modification conflict appeared during repair';
   end if;
 
   with
@@ -1033,6 +1412,18 @@ begin
         base.canonical_flight_number
       having pg_catalog.count(*) > 1
     ) duplicates
+
+    union all
+
+    select
+      'active-imported-required-route-empty',
+      base.season_id || '|' || base.record_id
+    from base_records base
+    where base.source_kind = 'imported'
+      and base.status = 'active'
+      and base.action is distinct from 'deleted'
+      and base.type in ('A', 'D')
+      and nullif(pg_catalog.btrim(base.route), '') is null
 
     union all
 
@@ -1226,10 +1617,14 @@ begin
       and data_version = 16573
   ) or not exists (
     select 1 from public.seasons
+    where id = 'season-f77c5ea9-be54-4615-ab0a-d83062b9b854'
+      and data_version = 396
+  ) or not exists (
+    select 1 from public.seasons
     where id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
       and data_version = 8228
   ) then
-    raise exception 'Expected repaired S26/W25 data versions were not produced';
+    raise exception 'Expected repaired S26/W25/W26 data versions were not produced';
   end if;
 end;
 $$;
@@ -1244,6 +1639,21 @@ select
   (select count(*) from public.season_flight_records
     where season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
       and source_kind = 'added') as w25_legacy_added_after,
+  (select count(*) from public.season_flight_records
+    where season_id = 'season-f77c5ea9-be54-4615-ab0a-d83062b9b854') as w26_records_after,
+  (select count(*) from public.season_flight_records
+    where season_id = 'season-f77c5ea9-be54-4615-ab0a-d83062b9b854'
+      and source_kind = 'imported'
+      and status = 'active'
+      and action is null
+      and type = 'D'
+      and public.seasonal_occurrence_airline_v2(airline) = 'SQ'
+      and public.seasonal_occurrence_flight_number_v2(
+        airline,
+        flight_number,
+        raw_flight_number
+      ) = 'SQ173'
+      and route = 'SIN') as w26_sq173_routes_after,
   (select value from task9_repair_metrics
     where metric = 's26_pr585_pr586_effective_hash') as effective_pr_hash_preserved;
 

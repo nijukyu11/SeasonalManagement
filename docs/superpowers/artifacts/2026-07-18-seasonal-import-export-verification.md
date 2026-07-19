@@ -615,3 +615,189 @@ same fingerprint and zero Task 11 RPCs.
 Task 11 is verification-only. Task 12 remains responsible for additive
 production deployment, shadow parity approval, any authorized repair, native
 canary build, version bump, updater release, and production smoke testing.
+
+## Task 12 Phase 1: Additive Deploy and Production Repair Gate
+
+### Additive migration deployment
+
+The V2 migration was applied directly to the self-hosted Supabase PostgreSQL
+container before any repair. Its SHA-256 was
+`225fd7a648a5c5a7c28f7116a8bfc9a788d5454de06dd237038138384bee93be`.
+Deployment ran from `2026-07-19T15:09:18.645Z` through
+`2026-07-19T15:09:19.718Z` against PostgreSQL 17.6 in container
+`976a7258ca2594951c429b33d933b49257b5d9c1ec761c15af4b18ad83fa4f37`.
+
+Post-deploy catalog verification proved:
+
+- The V2 batch/source-row tables, indexes, triggers, helper functions, and RPC
+  signatures exist with the tracked definitions.
+- RLS and grants deny direct authenticated baseline writes while allowing only
+  the permission-checked RPC surface.
+- V1 remains defined, execute-granted, and callable during the compatibility
+  window.
+- `anon` and `authenticated` role statement timeouts remain 3 seconds and 8
+  seconds. The deployment did not raise either timeout.
+- A one-row source-only stage/preview smoke passed and rolled back without
+  changing a season. The repair permission path passed and the ordinary
+  authenticated path remained denied where expected.
+- The final occurrence index was intentionally absent after additive deploy;
+  it is created only by the approved repair finalizer.
+
+No season, source row, flight record, or modification changed during the
+additive smoke. The first post-deploy execution of the previously approved
+repair artifact also reached zero blockers inside its transaction in 38.963
+seconds and ended in `ROLLBACK`.
+
+### Production baseline before repair
+
+The read-only audit after adding the required-route category produced the
+following unchanged baseline:
+
+| Season | Data version | Flight records | Modifications | State fingerprint |
+|---|---:|---:|---:|---|
+| S26 | 16,572 | 26,182 | 1,426 | `097e4e976fb8106343c93f366cdc9ea2` |
+| W25 | 8,227 | 8,165 | 25 | `0c1b151941e3c08707fe040152890631` |
+| W26 | 395 | 26,641 | 627 | `7bd171520a385ec980bff2216e4b1a35` |
+
+The audit now reports `blocking_count=7`:
+
+- Two S26 active imported duplicate occurrence groups, PR585 and PR586.
+- Two invalid S26 turnaround groups.
+- One invalid W25 turnaround group.
+- One W25 JX703 orphan link.
+- One W26 required-route group containing exactly 154 SQ173 departures with
+  empty route values.
+
+The route group is one blocking audit finding with `finding_count=154`, not 154
+independent blocker categories. S26 and W26 raw-flight padding counts remain
+informational at 1,616 and 1,492. Both seasons still have zero canonical airline
+or canonical flight-number mismatches.
+
+### W26 reciprocal route proof
+
+The repair extension derives the missing SQ173 route only from persisted
+reciprocal records. A read-only proof found exactly 154 active imported SQ173
+departures on 154 continuous dates from 2026-10-25 through 2027-03-27. Every
+target has exactly one active imported SQ174 arrival counterpart with:
+
+- The same date, source-row topology, pair anchor, and turnaround ID.
+- Reciprocal `linked_record_id` values and a two-member turnaround group.
+- `sameday` link type and a unique counterpart route of `SIN`.
+- No route-changing modification, route overlay, competing SQ173 occurrence,
+  child-row ambiguity, or added-leg collision.
+
+The exact target/counterpart set SHA-256 is
+`cf04250dc6f37a3a6a85075f71d39a847f3d58d7f34b2091dad4153c3b10bf5e`.
+Five non-route modifications and 23 modification-counter rows were also hashed
+and guarded. Any count, date, topology, route, child-row, modification, or hash
+drift aborts before mutation.
+
+The extended repair backs up all three affected seasons and exactly 321 flight
+records: the original 13 S26/W25 repair records plus 154 SQ173 targets and 154
+SQ174 counterparts. It also backs up exactly 9 modifications and 23
+modification-counter rows, with exact zero assertions for the other child
+tables. The route update copies `counterpart_route` only for the verified 154
+targets and asserts an update count of 154.
+
+### Production-derived post-repair shadows
+
+A repeatable-read extraction captured 52,663 active imported production rows:
+26,065 for S26 and 26,598 for W26. The NDJSON was 59,286,193 bytes with SHA-256
+`eab107af765a34bfaae81dfe24e4492eaf2cf739dd0320036d50a5d99a4255ea`.
+It was used locally only and did not contain SQLite data.
+
+The local reconstruction first simulated the exact repair. S26 removed only the
+two hidden duplicate `LEG_*` records, preserved the canonical `F_NEW` PR585 and
+PR586 occurrences, and applied the audited turnaround splits. W26 filled only
+the verified SQ173 targets from their SQ174 counterparts.
+
+| Metric | S26 | W26 |
+|---|---:|---:|
+| Post-repair imported records | 26,063 | 26,598 |
+| Reconstructed canonical source rows | 999 | 212 |
+| Generated records | 26,063 | 26,598 |
+| Duplicate occurrence keys | 0 | 0 |
+| Resolved pairs | 9,028 | 9,808 |
+| Pair diagnostics | 0 | 0 |
+| Request bytes | 469,169 | 99,176 |
+| Occurrence-key SHA-256 | `410ab133855d9d7531dfed9810cf5e927865d9731e2e91582be8bd0dd505e75b` | `cda3296d1ad8c2ee52173becee97e678b26029cebcfbaaacd69c64324fd20e58` |
+| Pair-topology SHA-256 | `196ae98853cfed1749d5c1a5aff70c7377ee7d75b591065cd4f0ee7c397c17a7` | `f1b60547fafd1aa6c8c7552cd783577aba23d9e9f21ae493b54fca79b9b5a651` |
+| Source-row SHA-256 | `b21c2fbeb2308e6b78643dcf97662401ae9659cbeca692873a1524c228a18732` | `e1410ec6716a799a3940ad74a350fe07fe8527e2a63d08a5a92cb03fd342acb4` |
+| Request SHA-256 | `aadb37966ad226be2c994f92122e76f6e13a562356755f91452c570fdf552db8` | `e7f85dcb527bd1e02b4b00e81b1122753e13e7a1cb5cfb197f4a2067c742d28` |
+
+Canonical business fields and pair topology matched the simulated repaired
+baseline exactly. The only full-field differences were the already audited raw
+padding values: S26 had exactly 1,616 and W26 exactly 1,492. Every difference
+normalized to the same canonical flight identity, with zero non-padding raw
+differences. The proof hashes were
+`6a01c770c2a2624f6d2f776eedbbd600defac9ebd664aa408545170ea66359dd`
+and `fec88498472769ced2b7bbac61e74de69993439a4098bd107a78fe9f56ebdcf8`.
+
+Each server shadow then ran the full repair inside a transaction, called the
+normal V2 stage validator, materialized `generate_seasonal_import_records_v2`
+exactly once, and compared every generated row to the local expected row. The
+comparison included canonical occurrence identity, raw value produced by V2,
+route, schedule, aircraft, category, code shares, international/domestic flag,
+scheduled and operational dates, day of week, source-row indexes, pair anchor,
+link type, and reciprocal counterpart occurrence. It did not bypass validation
+or call a forced preview.
+
+| Server result | S26 | W26 |
+|---|---:|---:|
+| Stage status | `validated` | `validated` |
+| Source rows accepted | 999 | 212 |
+| Preview records | 26,063 | 26,598 |
+| Row differences | 0 | 0 |
+| Exact reciprocal pairs | 9,028 | 9,808 |
+| Diagnostics | 0 | 0 |
+| Occurrence hash matched | Yes | Yes |
+| End-to-end duration | 50.6 s | 51.9 s |
+
+Both shadows ended in `ROLLBACK`. Their post-rollback assertions reported zero
+stage batches, stage rows, backup tables, finalizer indexes, test principals,
+test auth users, and persisted SQ173 route fills.
+
+Earlier diagnostic attempts were not product failures. One comparator used the
+server occurrence key with the wrong prefix; another recomputed a large preview
+view and reached `57014`; later setup attempts exposed a missing test auth-user
+row and PowerShell `COPY` newline framing. Each connection was terminated or
+closed, PostgreSQL rolled back automatically, and an immediate residue check
+returned zero before the corrected materialized comparator ran.
+
+### Repair dry-run and log review
+
+The final repair dry-run reached zero blocking findings inside the transaction.
+It produced the expected simulated versions S26 16,573, W25 8,228, and W26 396;
+S26 had 26,180 total records and 1,424 modifications, W25 retained 8,165 total
+records, W26 retained 26,641 total records, and exactly 154 SQ173 routes were
+`SIN`. The effective PR585/PR586 hash remained
+`478ad5ba37d374861ed9cb0e82639d64`. The finalizer index was created only inside
+the transaction and disappeared on rollback.
+
+Kong, PostgREST, and PostgreSQL logs were reviewed from the additive deploy
+through the corrected shadows. No HTTP call to a V2 stage, preview, or commit
+endpoint failed; the production-derived shadows used direct `psql` transactions.
+Three PostgREST/Kong `57014` responses at 15:45, 16:43, and 17:41 UTC belonged
+to the unrelated periodic `get_season_schedule_allocation_window_v1` RPC. Two
+PostgreSQL `FATAL: terminating connection due to administrator command` entries
+at 15:31 UTC corresponded to intentionally stopping the earlier investigation
+workers. No malformed V2 snapshot, duplicate V2 diagnostic, 409 version
+conflict, PostgreSQL panic, or unexpected V2 server error was present.
+
+### Phase 1 cleanup and gate
+
+The final production cleanup query returned:
+
+- Task-specific active sessions: 0.
+- Shadow batches and batch rows: 0 and 0.
+- Test operators and auth users: 0 and 0.
+- Maintenance backup tables and finalizer index: 0 and 0.
+- Persisted W26 SQ173 route fills: 0.
+- Production versions, record counts, modification counts, and fingerprints:
+  unchanged from the pre-repair table above.
+
+**Gate: GO for independent spec and SQL quality review of the extended repair
+artifact. Production repair COMMIT remains NO-GO until both reviews approve the
+exact assertions, backup coverage, rollback boundary, and postconditions.**
+There has been no production repair commit, native build, version bump, tag,
+push, updater release, V1 revoke, or canary install in this phase.

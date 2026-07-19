@@ -327,6 +327,30 @@ active_imported_duplicates as (
     base.canonical_flight_number
   having pg_catalog.count(*) > 1
 ),
+active_imported_required_route_empty as (
+  select
+    base.season_code,
+    base.season_id,
+    base.type,
+    base.normalized_airline,
+    base.canonical_flight_number,
+    pg_catalog.count(*)::bigint as finding_count,
+    (pg_catalog.array_agg(base.record_id order by base.record_id))[1:10] as record_ids,
+    pg_catalog.min(base.occurrence_date) as min_date,
+    pg_catalog.max(base.occurrence_date) as max_date
+  from base_records base
+  where base.source_kind = 'imported'
+    and base.status = 'active'
+    and base.action is distinct from 'deleted'
+    and base.type in ('A', 'D')
+    and nullif(pg_catalog.btrim(base.route), '') is null
+  group by
+    base.season_code,
+    base.season_id,
+    base.type,
+    base.normalized_airline,
+    base.canonical_flight_number
+),
 effective_duplicates as (
   select
     effective.season_code,
@@ -688,6 +712,24 @@ audit_results as (
   union all
 
   select
+    'active-imported-required-route-empty',
+    invalid.season_code,
+    invalid.season_id,
+    invalid.record_ids,
+    pg_catalog.format(
+      'type=%s flight=%s empty route rows=%s dates=%s..%s',
+      invalid.type,
+      invalid.canonical_flight_number,
+      invalid.finding_count,
+      invalid.min_date,
+      invalid.max_date
+    ),
+    invalid.finding_count
+  from active_imported_required_route_empty invalid
+
+  union all
+
+  select
     'duplicate-effective-occurrence',
     duplicates.season_code,
     duplicates.season_id,
@@ -894,6 +936,7 @@ classified_results as (
     case
       when audit_results.category in (
         'duplicate-active-imported-baseline-occurrence',
+        'active-imported-required-route-empty',
         'duplicate-effective-occurrence',
         'orphan-link',
         'nonreciprocal-link',
@@ -917,6 +960,7 @@ classified_results as (
     (
       audit_results.category in (
         'duplicate-active-imported-baseline-occurrence',
+        'active-imported-required-route-empty',
         'duplicate-effective-occurrence',
         'orphan-link',
         'nonreciprocal-link',
