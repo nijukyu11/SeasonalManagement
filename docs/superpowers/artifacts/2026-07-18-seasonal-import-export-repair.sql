@@ -15,8 +15,42 @@ begin;
 set local statement_timeout = '120s';
 set local lock_timeout = '10s';
 
--- Serialize against V2 season commits and maintenance in one deterministic
--- lexical ID order before any count, version, or fingerprint assertion.
+-- Block INSERT/UPDATE/DELETE across the complete audited seasonal FK graph
+-- while allowing ordinary SELECT readers. The order is fixed and parent-first
+-- for every Task 9 run. lock_timeout keeps the maintenance window bounded.
+lock table public.seasons in share row exclusive mode;
+lock table public.season_source_rows in share row exclusive mode;
+lock table public.season_source_row_days in share row exclusive mode;
+lock table public.season_flight_records in share row exclusive mode;
+lock table public.season_flight_record_counters in share row exclusive mode;
+lock table public.season_flight_record_checkin_windows in share row exclusive mode;
+lock table public.season_modifications in share row exclusive mode;
+lock table public.season_modification_added_legs in share row exclusive mode;
+lock table public.season_modification_counters in share row exclusive mode;
+lock table public.season_modification_checkin_windows in share row exclusive mode;
+lock table public.season_mod_history_entries in share row exclusive mode;
+lock table public.season_mod_history_changes in share row exclusive mode;
+lock table public.season_mod_history_record_changes in share row exclusive mode;
+lock table public.season_change_events in share row exclusive mode;
+lock table public.schedule_notification_deliveries in share row exclusive mode;
+lock table public.season_entity_versions in share row exclusive mode;
+
+-- These staging tables are installed by the additive Task 12 migration. They
+-- do not exist on the current predeploy production schema, so the predeploy
+-- rollback-only dry run locks them only when present.
+do $$
+begin
+  if pg_catalog.to_regclass('public.season_import_batches') is not null then
+    execute 'lock table public.season_import_batches in share row exclusive mode';
+  end if;
+  if pg_catalog.to_regclass('public.season_import_batch_rows') is not null then
+    execute 'lock table public.season_import_batch_rows in share row exclusive mode';
+  end if;
+end;
+$$;
+
+-- Retain the prior W26 race fix: lock all three audited season rows together
+-- in deterministic lexical ID order before fingerprints and backups.
 select id, season_code, data_version
 from public.seasons
 where id in (
@@ -273,8 +307,8 @@ begin
   -- proven complete season. Preserve that classification rather than guessing.
   select
     count(*),
-    min(coalesce(nullif(scheduled_date, ''), date)),
-    max(coalesce(nullif(scheduled_date, ''), date))
+    min(date),
+    max(date)
   into v_count, v_min_date, v_max_date
   from public.season_flight_records
   where season_id = 'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
@@ -548,7 +582,7 @@ select
     pg_catalog.concat_ws('|',
       records.record_id,
       records.type,
-      coalesce(nullif(records.scheduled_date, ''), records.date),
+      records.date,
       records.airline,
       records.flight_number,
       records.route,
@@ -564,7 +598,7 @@ left join public.season_modifications modifications
   on modifications.season_id = records.season_id
  and modifications.leg_id = records.record_id
 where records.season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
-  and coalesce(nullif(records.scheduled_date, ''), records.date) = '2026-06-10'
+  and records.date = '2026-06-10'
   and records.flight_number in ('PR585', 'PR586')
   and records.status = 'active'
   and records.action is distinct from 'deleted'
@@ -755,6 +789,11 @@ where id in (
   'season-fbe44d36-5c64-4cca-97c3-00a2a6b36451'
 );
 
+-- This is the actual commit boundary for every deferrable invariant installed
+-- by the additive migration. On current predeploy production it can only fire
+-- constraints already deployed; Task 12 must rerun after additive deployment.
+set constraints all immediate;
+
 -- The active imported occurrence index is intentionally created only after
 -- the additive Task 12 migration has installed the scalar canonicalizer. The
 -- Task 9 dry-run runs against the current schema and therefore reports defer.
@@ -789,7 +828,7 @@ begin
     pg_catalog.concat_ws('|',
       records.record_id,
       records.type,
-      coalesce(nullif(records.scheduled_date, ''), records.date),
+      records.date,
       records.airline,
       records.flight_number,
       records.route,
@@ -806,7 +845,7 @@ begin
     on modifications.season_id = records.season_id
    and modifications.leg_id = records.record_id
   where records.season_id = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
-    and coalesce(nullif(records.scheduled_date, ''), records.date) = '2026-06-10'
+    and records.date = '2026-06-10'
     and records.flight_number in ('PR585', 'PR586')
     and records.status = 'active'
     and records.action is distinct from 'deleted'
@@ -823,10 +862,13 @@ begin
   base_prepared as (
     select
       records.*,
-      coalesce(nullif(records.scheduled_date, ''), nullif(records.date, '')) as occurrence_date,
+      records.date as occurrence_date,
       pg_catalog.upper(pg_catalog.btrim(records.airline)) as normalized_airline,
       pg_catalog.upper(pg_catalog.btrim(
-        coalesce(nullif(records.flight_number, ''), records.raw_flight_number)
+        coalesce(
+          nullif(pg_catalog.btrim(records.flight_number), ''),
+          pg_catalog.btrim(records.raw_flight_number)
+        )
       )) as normalized_input
     from public.season_flight_records records
   ),
@@ -859,10 +901,13 @@ begin
       added_legs.*,
       modifications.action as parent_action,
       modifications.changed_fields as parent_changed_fields,
-      coalesce(nullif(added_legs.scheduled_date, ''), nullif(added_legs.date, '')) as occurrence_date,
+      added_legs.date as occurrence_date,
       pg_catalog.upper(pg_catalog.btrim(added_legs.airline)) as normalized_airline,
       pg_catalog.upper(pg_catalog.btrim(
-        coalesce(nullif(added_legs.flight_number, ''), added_legs.raw_flight_number)
+        coalesce(
+          nullif(pg_catalog.btrim(added_legs.flight_number), ''),
+          pg_catalog.btrim(added_legs.raw_flight_number)
+        )
       )) as normalized_input
     from public.season_modification_added_legs added_legs
     left join public.season_modifications modifications
@@ -1038,12 +1083,14 @@ begin
 
     select
       'added-relation-anomaly',
-      modifications.season_id || '|' || modifications.leg_id
+      coalesce(modifications.season_id, added.season_id) || '|'
+        || coalesce(modifications.leg_id, added.leg_id)
     from public.season_modifications modifications
-    left join public.season_modification_added_legs added
+    full join public.season_modification_added_legs added
       on added.season_id = modifications.season_id
      and added.leg_id = modifications.leg_id
-    where (modifications.action = 'added' and added.leg_id is null)
+    where modifications.leg_id is null
+       or (modifications.action = 'added' and added.leg_id is null)
        or (modifications.action <> 'added' and added.leg_id is not null)
        or (added.leg_id is not null and added.leg_id is distinct from added.record_id)
        or (added.leg_id is not null and added.action is distinct from 'added')
@@ -1088,6 +1135,32 @@ begin
     from effective_added_records added
     where added.airline is distinct from added.normalized_airline
        or added.flight_number is distinct from added.canonical_flight_number
+
+    union all
+
+    select
+      'source-row-generates-no-occurrence',
+      source_rows.season_id || '|' || source_rows.row_index::text
+    from public.season_source_rows source_rows
+    where (
+      select pg_catalog.count(*)::bigint
+      from pg_catalog.generate_series(
+        source_rows.effective::date,
+        source_rows.discontinue::date,
+        interval '1 day'
+      ) occurrence_date
+      join public.season_source_row_days days
+        on days.season_id = source_rows.season_id
+       and days.row_index = source_rows.row_index
+       and days.iso_dow = extract(isodow from occurrence_date)::integer
+    ) * (
+      case when nullif(source_rows.sta, '') is not null
+        and nullif(source_rows.arr_flight, '') is not null
+        and nullif(source_rows.arr_route, '') is not null then 1 else 0 end
+      + case when nullif(source_rows.std, '') is not null
+        and nullif(source_rows.dep_flight, '') is not null
+        and nullif(source_rows.dep_route, '') is not null then 1 else 0 end
+    ) = 0
   ),
   blocker_counts as (
     select blockers.category, pg_catalog.count(*)::bigint as finding_count

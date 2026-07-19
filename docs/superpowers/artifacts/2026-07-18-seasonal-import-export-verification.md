@@ -4,9 +4,10 @@
 
 - Production inspection target: self-hosted Supabase PostgreSQL reached through the approved SSH host. Credentials are intentionally omitted.
 - PostgreSQL commands used `psql -X -v ON_ERROR_STOP=1` against database `postgres` as `supabase_admin` in container `opsdata-supabase-db`.
-- Follow-up full read-only audit before the dry run: `2026-07-19 06:49:43.583930 UTC`.
-- Follow-up full read-only audit after the dry run: `2026-07-19 06:52:08.397060 UTC`.
+- Quality follow-up full read-only audit before the dry run: `2026-07-19 07:42:32.403287 UTC`.
+- Quality follow-up full read-only audit after the dry run: `2026-07-19 07:44:52.644219 UTC`.
 - The repair artifact ended with executable `rollback;`; structural validation found zero uncommented `commit;` statements. No production data or schema mutation was committed.
+- A separate read-only production catalog check at `2026-07-19 07:45:14.924110 UTC` found zero Task 9 backup tables and zero deployed copies of the new occurrence-date helper, occurrence-flight helper, or final-state validator. The production dry run is therefore accurately classified as predeploy.
 
 ## Live Season Baseline
 
@@ -19,6 +20,17 @@
 All S26/W25/W26 modifications are owned by base `season_flight_records`. There are zero `action='added'` modifications and zero `season_modification_added_legs`. Existing `source_kind='added'` rows are legacy base records, not reconstructable added-modification payloads. The repair does not fabricate source rows or added legs.
 
 ## Blocking Findings
+
+The audit emits `severity`, `blocking`, and `blocking_count` on every result row, followed by a machine-readable `__blocking_summary__` row. Both production audits returned `blocking_count=6`, representing these six blocking finding rows:
+
+| Category | Season | Finding rows | Members |
+|---|---|---:|---|
+| `duplicate-active-imported-baseline-occurrence` | S26 | 2 | PR585 and PR586 duplicate groups |
+| `invalid-turnaround-cardinality` | S26 | 2 | HX and RF effective turnaround groups |
+| `invalid-turnaround-cardinality` | W25 | 1 | JX703 singleton group |
+| `orphan-link` | W25 | 1 | JX703 points to absent JX704 |
+
+Inventory, completeness proof, legacy classification, broad base-duplicate inventory, and raw-padding categories are explicitly non-blocking. Only active imported-baseline duplicates are blocking; deleted, inactive, and legacy-state base duplicates are not promoted into that gate.
 
 ### S26 PR585/PR586 duplicate base occurrences
 
@@ -87,18 +99,44 @@ maintenance.seasonal_fix_<UTC YYYYMMDDtHHMMSSz>_mod_windows
 maintenance.seasonal_fix_<UTC YYYYMMDDtHHMMSSz>_added_legs
 ```
 
-Follow-up dry-run tag: `20260719t065112z`. Backups contained 2 season rows, 13 affected base records, 4 affected modifications, and zero child/added-leg rows, matching assertions.
+Quality follow-up dry-run tag: `20260719t074437z`. Backups contained 2 season rows, 13 affected base records, 4 affected modifications, and zero child/added-leg rows, matching assertions.
 
 Inside the transaction after repair simulation:
 
 - S26 base records: 26,180.
 - S26 modifications: 1,424.
 - W25 base and legacy-added records: 8,165, unchanged.
-- The consolidated postcondition reported `0` blocking findings. It includes imported-base duplicates, duplicate effective occurrences, strict effective added legs, added-relation anomalies, base/added ID collisions, orphan modifications, effective orphan/non-reciprocal links, invalid effective turnaround groups, and canonical identity mismatches.
+- The consolidated postcondition reported `0` blocking findings. It includes active imported-baseline duplicates, duplicate effective occurrences, strict effective added legs, added-relation anomalies, base/added ID collisions, orphan modifications, source rows that generate no occurrence, effective orphan/non-reciprocal links, invalid effective turnaround groups, and canonical identity mismatches.
 - Effective link validation joins only the effective materialized set; hidden or deleted counterparts cannot satisfy a link.
 - S26/W25 simulated data versions: 16,573 and 8,228.
+- `SET CONSTRAINTS ALL IMMEDIATE` ran before the final postcondition, finalizer boundary, and rollback. Because the additive migration is not installed on production, this predeploy execution could fire only currently deployed constraints; it did not and could not exercise the new deferred Task 9 triggers.
 
-The final `ROLLBACK` succeeded. At `2026-07-19 06:52:11.814845 UTC`, a separate catalog query found zero tables matching `maintenance.seasonal_fix_20260719t065112z_%` and zero tables matching any `maintenance.seasonal_fix_%` tag.
+The final `ROLLBACK` succeeded. At `2026-07-19 07:45:14.924110 UTC`, a separate read-only catalog query found zero tables matching `maintenance.seasonal_fix_20260719t074437z_%` and zero tables matching any `maintenance.seasonal_fix_%` tag.
+
+## Repair Lock Boundary
+
+Before fingerprints or backups, the repair takes `SHARE ROW EXCLUSIVE` locks in a fixed parent-first order on the exact mutable seasonal FK graph observed in the live catalog:
+
+```text
+seasons
+season_source_rows
+season_source_row_days
+season_flight_records
+season_flight_record_counters
+season_flight_record_checkin_windows
+season_modifications
+season_modification_added_legs
+season_modification_counters
+season_modification_checkin_windows
+season_mod_history_entries
+season_mod_history_changes
+season_mod_history_record_changes
+season_change_events
+schedule_notification_deliveries
+season_entity_versions
+```
+
+The production catalog exposed 17 relevant FK edges. Gates and remarks are columns, not separate seasonal child tables. Task 12 staging tables are locked in the same transaction when they exist. These locks allow ordinary `SELECT` readers while blocking concurrent `INSERT`/`UPDATE`/`DELETE`; `lock_timeout=10s` and `statement_timeout=120s` bound the maintenance window. S26, W26, and W25 season rows are then locked in deterministic lexical ID order and held through deferred checks, postcondition, and rollback or explicit Task 12 commit.
 
 ## Persistent-State Proof
 
@@ -109,13 +147,15 @@ The final `ROLLBACK` succeeded. At `2026-07-19 06:52:11.814845 UTC`, a separate 
 | W25 | `0c1b151941e3c08707fe040152890631` | `0c1b151941e3c08707fe040152890631` | Yes |
 | W26 | `7bd171520a385ec980bff2216e4b1a35` | `7bd171520a385ec980bff2216e4b1a35` | Yes |
 
-The complete audit output from `AUDIT 01B` through `ROLLBACK`, covering fingerprints, category rows, exact IDs, and detail queries, produced `0` differing lines before versus after the dry run. Production remains in the pre-repair state.
+The complete audit output from `AUDIT 01B` through `ROLLBACK`, covering fingerprints, category rows, `blocking_count=6`, exact IDs, and detail queries, produced `0` differing lines before versus after the dry run. Production remains in the pre-repair state.
 
 ## Follow-Up Spec Review
 
 - Collision protection now covers both mutation surfaces. The child trigger validates direct child inserts/updates, while the parent trigger locks the season and validates an existing child whenever a parent becomes `action='added'`.
-- Deferrable, initially deferred constraint triggers on both parent and child enforce the final transaction state without rejecting the server RPC's parent-first, replace-child write order. SQL coverage proves the child-first/non-added-parent bypass is rejected when the parent transitions to `added`, and the valid atomic parent-first creation succeeds.
+- Deferrable, initially deferred constraint triggers on both parent and child reject every final non-added-parent/child relation, added parent without exactly one valid child, identity/action/status/source-kind/source-side mismatch, and missing parent marker. SQL coverage proves malformed final states fail at `SET CONSTRAINTS`, while valid parent-first and child-first atomic sequences both succeed.
+- The base-record guard covers the reverse mutation surface: an inserted or updated active imported baseline cannot collide with a valid effective manual-added leg. Non-colliding base writes remain valid.
 - The repair locks S26, W26, and W25 season rows together in deterministic lexical ID order before count, version, or fingerprint assertions. W26 is therefore protected from changing between its assertion and the repair finalizer.
+- Occurrence identity matches `atomicSchedule.ts`: `record.date` is authoritative, airline and candidate flight strings are trimmed before fallback, and canonical flight identity follows `cleanFlightNumber`, including prefixed values and numeric padding. The helper, guards, finalizer index, audit, and repair postcondition use these semantics for both base and effective added legs.
 - The postcondition and audit share the same effective-base/effective-added concepts. The known incomplete W25 legacy classification remains an explicit non-action and is not weakened into a guessed repair.
 
 ## Constraint Deployment Order
@@ -128,17 +168,18 @@ The additive migration and schema install:
 - Deferrable parent/child constraint triggers that preserve the atomic parent-first write order while preventing a transaction from committing an `added` parent without its matching child.
 - `finalize_seasonal_occurrence_constraints_v2()`, which refuses dirty data and creates the active imported occurrence unique index only after cleanup.
 
-The additive migration does not invoke the finalizer, so the known PR duplicates cannot make Task 12 deployment fail. The repair invokes it after removing the asserted duplicates. Current Task 9 production dry-run reports the finalizer as deferred because the additive migration is not deployed yet.
+The additive migration does not invoke the finalizer, so the known PR duplicates cannot make Task 12 deployment fail. The repair invokes it after removing the asserted duplicates. Current Task 9 production dry-run reports the finalizer as deferred because the additive migration is not deployed yet; the production catalog check independently confirmed all three sampled Task 9 helper/validator counts are zero.
 
 ## Local Verification
 
-- `npm run test:seasonal-import-sql`: passed; PGlite migration ran twice, direct-child and parent-transition collision paths were rejected, and valid atomic parent-first added creation passed deferred validation.
+- `npm run test:seasonal-import-sql`: passed in 3,604 ms; PGlite migration ran twice. Its migrated dry-run-equivalent transaction exercised the new deferred triggers, rejected malformed final states and both base/added collision directions, accepted valid parent-first and child-first creation, forced `SET CONSTRAINTS ALL IMMEDIATE`, verified post-state assertions, and ended with `rollback;`.
 - `npm run test:seasonal-schema-twice`: passed; full schema ran twice.
-- Focused import/export snapshot, selection, migration/schema parity, and source contract tests: 38 passed, 0 failed.
+- Focused parser/import/export/selection/pairing tests: 64 passed, 0 failed.
+- Export snapshot, source-boundary, raw-flight parity, and Supabase source contract tests: 39 passed, 0 failed.
 - `npm run test:rules`: passed.
-- Migration/schema occurrence-constraint blocks are byte-for-byte equal, and the focused source parity assertions passed.
+- Migration/schema occurrence-constraint blocks are byte-for-byte equal: 625 lines each, SHA-256 `e0ca324fda1e2eeb1d8d2012be0021fd1962d1b3705ff9ad54d5ac5fbf211e46`.
 - Structural audit check: zero DML/DDL statements and a repeatable-read read-only transaction.
-- Structural repair check: final executable statement is `rollback;` and uncommented `commit;` count is zero.
+- Structural repair check: one executable `SET CONSTRAINTS ALL IMMEDIATE`, final executable statement is `rollback;`, and uncommented `commit;` count is zero.
 - `git diff --check`: passed.
 
 ## Deferred Task 12 Commit
@@ -146,7 +187,8 @@ The additive migration does not invoke the finalizer, so the known PR duplicates
 1. Deploy the additive migration without invoking the occurrence finalizer.
 2. Stage S26 and W26 source rows in preview-only mode and approve shadow parity.
 3. Rerun the read-only audit. If any asserted count, ID, data version, or state changed, regenerate this repair rather than weakening assertions.
-4. Change only the repair artifact's final executable `rollback;` to `commit;` and run it with `psql -X -v ON_ERROR_STOP=1`.
-5. Confirm the timestamped maintenance tables persist, the finalizer created `season_flight_records_active_imported_occurrence_v2_key`, and the post-commit audit has zero repaired blocking categories.
+4. Rerun the complete repair dry run after deployment so `SET CONSTRAINTS ALL IMMEDIATE` exercises the newly deployed deferred triggers; require postcondition zero, unchanged persistent fingerprints after rollback, and zero leaked backups.
+5. Change only the repair artifact's final executable `rollback;` to `commit;` and run it with `psql -X -v ON_ERROR_STOP=1`.
+6. Confirm the timestamped maintenance tables persist, the finalizer created `season_flight_records_active_imported_occurrence_v2_key`, and the post-commit machine audit reports `blocking_count=0`.
 
 No production `COMMIT` is authorized or performed in Task 9 or this follow-up.

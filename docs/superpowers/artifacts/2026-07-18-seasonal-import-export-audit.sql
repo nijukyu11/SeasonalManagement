@@ -120,10 +120,13 @@ base_prepared as (
   select
     seasons.season_code,
     records.*,
-    coalesce(nullif(records.scheduled_date, ''), nullif(records.date, '')) as occurrence_date,
+    records.date as occurrence_date,
     pg_catalog.upper(pg_catalog.btrim(records.airline)) as normalized_airline,
     pg_catalog.upper(pg_catalog.btrim(
-      coalesce(nullif(records.flight_number, ''), records.raw_flight_number)
+      coalesce(
+        nullif(pg_catalog.btrim(records.flight_number), ''),
+        pg_catalog.btrim(records.raw_flight_number)
+      )
     )) as normalized_input
   from public.season_flight_records records
   join public.seasons seasons on seasons.id = records.season_id
@@ -158,10 +161,13 @@ added_prepared as (
     added_legs.*,
     modifications.action as parent_action,
     modifications.changed_fields as parent_changed_fields,
-    coalesce(nullif(added_legs.scheduled_date, ''), nullif(added_legs.date, '')) as occurrence_date,
+    added_legs.date as occurrence_date,
     pg_catalog.upper(pg_catalog.btrim(added_legs.airline)) as normalized_airline,
     pg_catalog.upper(pg_catalog.btrim(
-      coalesce(nullif(added_legs.flight_number, ''), added_legs.raw_flight_number)
+      coalesce(
+        nullif(pg_catalog.btrim(added_legs.flight_number), ''),
+        pg_catalog.btrim(added_legs.raw_flight_number)
+      )
     )) as normalized_input
   from public.season_modification_added_legs added_legs
   join public.seasons seasons on seasons.id = added_legs.season_id
@@ -298,6 +304,29 @@ base_duplicates as (
     base.canonical_flight_number
   having pg_catalog.count(*) > 1
 ),
+active_imported_duplicates as (
+  select
+    base.season_code,
+    base.season_id,
+    base.occurrence_date,
+    base.normalized_airline,
+    base.canonical_flight_number,
+    pg_catalog.count(*)::bigint as finding_count,
+    pg_catalog.array_agg(base.record_id order by base.record_id) as record_ids
+  from base_records base
+  where base.source_kind = 'imported'
+    and base.status = 'active'
+    and base.action is distinct from 'deleted'
+    and nullif(base.occurrence_date, '') is not null
+    and nullif(base.canonical_flight_number, '') is not null
+  group by
+    base.season_code,
+    base.season_id,
+    base.occurrence_date,
+    base.normalized_airline,
+    base.canonical_flight_number
+  having pg_catalog.count(*) > 1
+),
 effective_duplicates as (
   select
     effective.season_code,
@@ -385,11 +414,12 @@ orphan_modifications as (
 added_relation_anomalies as (
   select
     seasons.season_code,
-    modifications.season_id,
-    modifications.leg_id,
+    coalesce(modifications.season_id, added.season_id) as season_id,
+    coalesce(modifications.leg_id, added.leg_id) as leg_id,
     modifications.action,
     added.record_id,
     case
+      when modifications.leg_id is null then 'child-parent-identity-mismatch'
       when modifications.action = 'added' and added.leg_id is null then 'added-parent-missing-child'
       when modifications.action <> 'added' and added.leg_id is not null then 'non-added-parent-has-child'
       when added.leg_id is not null and added.leg_id is distinct from added.record_id then 'child-id-mismatch'
@@ -403,11 +433,13 @@ added_relation_anomalies as (
         then 'parent-changed-fields-missing-added-leg'
     end as anomaly
   from public.season_modifications modifications
-  join public.seasons seasons on seasons.id = modifications.season_id
-  left join public.season_modification_added_legs added
+  full join public.season_modification_added_legs added
     on added.season_id = modifications.season_id
    and added.leg_id = modifications.leg_id
-  where (modifications.action = 'added' and added.leg_id is null)
+  join public.seasons seasons
+    on seasons.id = coalesce(modifications.season_id, added.season_id)
+  where modifications.leg_id is null
+     or (modifications.action = 'added' and added.leg_id is null)
      or (modifications.action <> 'added' and added.leg_id is not null)
      or (added.leg_id is not null and added.leg_id is distinct from added.record_id)
      or (added.leg_id is not null and added.action is distinct from 'added')
@@ -594,9 +626,8 @@ legacy_added_base_counts as (
   from base_records base
   where base.source_kind = 'added'
   group by base.season_code, base.season_id
-)
-select *
-from (
+),
+audit_results as (
   select
     'baseline-count'::text as category,
     counts.season_code,
@@ -625,7 +656,7 @@ from (
   union all
 
   select
-    'duplicate-base-occurrence',
+    'duplicate-base-occurrence-inventory',
     duplicates.season_code,
     duplicates.season_id,
     duplicates.record_ids,
@@ -637,6 +668,22 @@ from (
     ),
     duplicates.finding_count
   from base_duplicates duplicates
+
+  union all
+
+  select
+    'duplicate-active-imported-baseline-occurrence',
+    duplicates.season_code,
+    duplicates.season_id,
+    duplicates.record_ids,
+    pg_catalog.format(
+      '%s %s active imported baseline rows=%s',
+      duplicates.occurrence_date,
+      duplicates.canonical_flight_number,
+      duplicates.finding_count
+    ),
+    duplicates.finding_count
+  from active_imported_duplicates duplicates
 
   union all
 
@@ -816,7 +863,7 @@ from (
       coalesce(generation.arr_flight, '<null>'),
       coalesce(generation.dep_flight, '<null>')
     ),
-    generation.generated_occurrence_count
+    1::bigint
   from source_row_generation generation
   where generation.generated_occurrence_count = 0
 
@@ -840,7 +887,102 @@ from (
     ),
     proof.record_count
   from w25_baseline_proof proof
-) audit_results
-order by audit_results.season_code, audit_results.category, audit_results.label;
+),
+classified_results as (
+  select
+    audit_results.category,
+    case
+      when audit_results.category in (
+        'duplicate-active-imported-baseline-occurrence',
+        'duplicate-effective-occurrence',
+        'orphan-link',
+        'nonreciprocal-link',
+        'invalid-turnaround-cardinality',
+        'orphan-modification',
+        'added-relation-anomaly',
+        'base-added-id-collision',
+        'source-row-generates-no-occurrence'
+      ) or audit_results.category like 'canonical-identity-mismatch-%'
+        then 'error'
+      when audit_results.category = 'w25-baseline-proof' then 'proof'
+      when audit_results.category in (
+        'baseline-count',
+        'effective-count',
+        'duplicate-base-occurrence-inventory',
+        'legacy-added-base-records',
+        'source-row-count'
+      ) then 'inventory'
+      else 'info'
+    end::text as severity,
+    (
+      audit_results.category in (
+        'duplicate-active-imported-baseline-occurrence',
+        'duplicate-effective-occurrence',
+        'orphan-link',
+        'nonreciprocal-link',
+        'invalid-turnaround-cardinality',
+        'orphan-modification',
+        'added-relation-anomaly',
+        'base-added-id-collision',
+        'source-row-generates-no-occurrence'
+      ) or audit_results.category like 'canonical-identity-mismatch-%'
+    ) as blocking,
+    audit_results.season_code,
+    audit_results.season_id,
+    audit_results.record_ids,
+    audit_results.label,
+    audit_results.finding_count
+  from audit_results
+),
+blocking_summary as (
+  select pg_catalog.count(*) filter (where classified.blocking)::bigint as blocking_count
+  from classified_results classified
+),
+audit_output as (
+  select
+    classified.category,
+    classified.severity,
+    classified.blocking,
+    classified.season_code,
+    classified.season_id,
+    classified.record_ids,
+    classified.label,
+    classified.finding_count,
+    summary.blocking_count,
+    0 as output_order
+  from classified_results classified
+  cross join blocking_summary summary
+
+  union all
+
+  select
+    '__blocking_summary__'::text,
+    'summary'::text,
+    false,
+    null::text,
+    null::text,
+    '{}'::text[],
+    pg_catalog.format('blocking_count=%s', summary.blocking_count),
+    summary.blocking_count,
+    summary.blocking_count,
+    1
+  from blocking_summary summary
+)
+select
+  audit_output.category,
+  audit_output.severity,
+  audit_output.blocking,
+  audit_output.season_code,
+  audit_output.season_id,
+  audit_output.record_ids,
+  audit_output.label,
+  audit_output.finding_count,
+  audit_output.blocking_count
+from audit_output
+order by
+  audit_output.output_order,
+  audit_output.season_code,
+  audit_output.category,
+  audit_output.label;
 
 rollback;

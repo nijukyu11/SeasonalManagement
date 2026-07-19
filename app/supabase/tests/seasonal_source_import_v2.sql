@@ -4773,7 +4773,7 @@ begin
         'season_flight_records_season_date_identity_v2_idx',
         'season_flight_records_season_operational_date_v2_idx',
         'season_flight_records_season_turnaround_v2_idx',
-        'season_modification_added_legs_occurrence_v2_idx'
+        'season_modification_added_legs_occurrence_identity_v2_idx'
       )
     group by indexes.schemaname
     having count(*) = 4
@@ -4796,10 +4796,12 @@ begin
           'guard_seasonal_added_modification_v2',
           'enforce_seasonal_added_modification_parent_v2'
         ))
+        or (tables.relname = 'season_flight_records' and triggers.tgname =
+          'guard_seasonal_imported_base_occurrence_v2')
       )
       and not triggers.tgisinternal
     group by namespaces.nspname
-    having count(*) = 4
+    having count(*) = 5
   ) then
     raise exception 'Task 9 manual-added occurrence guard triggers are incomplete';
   end if;
@@ -4837,7 +4839,7 @@ begin
       route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
       operational_date, day_of_week, action, source_kind, source_side, status
     ) values (
-      'task9-manual-guard-season', 'task9-manual-collision', 'task9-manual-record',
+      'task9-manual-guard-season', 'task9-manual-collision', 'task9-manual-collision',
       'A', 'VN', 'VN123', '123', 'HAN', '09:00', '321', 'J', '2027-01-01',
       '2027-01-01', '09:00', '2027-01-01', 5, 'added', 'added', 'ARR', 'active'
     );
@@ -4868,8 +4870,8 @@ $$;
 rollback;
 
 -- Isolate deferred-constraint coverage from the intentionally malformed Task 5
--- fixtures above. The production RPC writes parent first, replaces the child,
--- then reaches the transaction boundary where both constraint triggers run.
+-- fixtures above. Final-state validation must reject every malformed relation,
+-- while allowing both transaction-safe write orders.
 begin;
 
 insert into public.seasons (
@@ -4877,7 +4879,7 @@ insert into public.seasons (
   total_legs, total_source_rows, data_version
 ) values (
   'task9-parent-guard-season', 'T9P', 'Task 9 parent guard', '', 0,
-  '2027-01-02', '2027-01-02', 1, 0, 1
+  '2027-01-02', '2027-01-31', 1, 0, 1
 );
 
 insert into public.season_flight_records (
@@ -4896,19 +4898,21 @@ values (
   'task9-parent-guard-season', 'task9-parent-bypass', 'modified', array['addedLeg']
 );
 
-insert into public.season_modification_added_legs (
-  season_id, leg_id, record_id, type, airline, flight_number, raw_flight_number,
-  route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
-  operational_date, day_of_week, action, source_kind, source_side, status
-) values (
-  'task9-parent-guard-season', 'task9-parent-bypass', 'task9-parent-bypass',
-  'A', 'VN', 'VN123', '123', 'HAN', '09:00', '321', 'J', '2027-01-02',
-  '2027-01-02', '09:00', '2027-01-02', 6, 'added', 'added', 'ARR', 'active'
-);
-
 do $$
+declare
+  v_probe record;
 begin
   begin
+    insert into public.season_modification_added_legs (
+      season_id, leg_id, record_id, type, airline, flight_number, raw_flight_number,
+      route, schedule, aircraft, category, date, scheduled_date, scheduled_time,
+      operational_date, day_of_week, action, source_kind, source_side, status
+    ) values (
+      'task9-parent-guard-season', 'task9-parent-bypass', 'task9-parent-bypass',
+      'A', 'VN', 'VN123', '123', 'HAN', '09:00', '321', 'J', '2027-01-02',
+      '2099-01-02', '09:00', '2027-01-02', 6, 'added', 'added', 'ARR', 'active'
+    );
+
     update public.season_modifications
     set action = 'added'
     where leg_id = 'task9-parent-bypass';
@@ -4925,20 +4929,85 @@ begin
     from public.season_modifications
     where leg_id = 'task9-parent-bypass'
       and action = 'modified'
+  ) or exists (
+    select 1
+    from public.season_modification_added_legs
+    where leg_id = 'task9-parent-bypass'
   ) then
-    raise exception 'rejected parent transition did not roll back atomically';
+    raise exception 'rejected parent transition did not roll back its child atomically';
   end if;
 
+  -- Every probe is fully rolled back by its inner exception block. The failing
+  -- SET CONSTRAINTS statement proves the final-state trigger, not a table check.
+  for v_probe in
+    select *
+    from (values
+      ('non-added-child', 'modified', array['addedLeg']::text[], true,
+        'same', 'added', 'added', 'ARR', 'active', 'non-added modification'),
+      ('missing-marker', 'added', '{}'::text[], true,
+        'same', 'added', 'added', 'ARR', 'active', 'changed_fields'),
+      ('child-id', 'added', array['addedLeg']::text[], true,
+        'different', 'added', 'added', 'ARR', 'active', 'record_id'),
+      ('child-action', 'added', array['addedLeg']::text[], true,
+        'same', 'modified', 'added', 'ARR', 'active', 'action'),
+      ('child-source-kind', 'added', array['addedLeg']::text[], true,
+        'same', 'added', 'imported', 'ARR', 'active', 'source_kind'),
+      ('child-status', 'added', array['addedLeg']::text[], true,
+        'same', 'added', 'added', 'ARR', 'deleted', 'status'),
+      ('child-source-side', 'added', array['addedLeg']::text[], true,
+        'same', 'added', 'added', 'DEP', 'active', 'source_side'),
+      ('missing-child', 'added', array['addedLeg']::text[], false,
+        'same', 'added', 'added', 'ARR', 'active', 'exactly one')
+    ) probes(
+      probe_name, parent_action, changed_fields, has_child, record_identity,
+      child_action, source_kind, source_side, status, expected_message
+    )
+  loop
+    begin
+      insert into public.season_modifications (
+        season_id, leg_id, action, changed_fields
+      ) values (
+        'task9-parent-guard-season', 'task9-probe-' || v_probe.probe_name,
+        v_probe.parent_action, v_probe.changed_fields
+      );
+
+      if v_probe.has_child then
+        insert into public.season_modification_added_legs (
+          season_id, leg_id, record_id, type, airline, flight_number,
+          raw_flight_number, route, schedule, aircraft, category, date,
+          scheduled_date, scheduled_time, operational_date, day_of_week,
+          action, source_kind, source_side, status
+        ) values (
+          'task9-parent-guard-season',
+          'task9-probe-' || v_probe.probe_name,
+          case when v_probe.record_identity = 'same'
+            then 'task9-probe-' || v_probe.probe_name
+            else 'task9-probe-' || v_probe.probe_name || '-wrong' end,
+          'A', 'QH', 'QH' || (200 + pg_catalog.char_length(v_probe.probe_name))::text,
+          (200 + pg_catalog.char_length(v_probe.probe_name))::text,
+          'HAN', '11:00', '321', 'J', '2027-01-10', '2099-01-10',
+          '11:00', '2027-01-10', 7, v_probe.child_action,
+          v_probe.source_kind, v_probe.source_side, v_probe.status
+        );
+      end if;
+
+      set constraints all immediate;
+      raise exception 'malformed final-state probe % was accepted', v_probe.probe_name;
+    exception
+      when check_violation then
+        if position(v_probe.expected_message in pg_catalog.lower(sqlerrm)) = 0 then
+          raise;
+        end if;
+    end;
+  end loop;
+
+  -- Parent first, matching the current atomic RPC write order.
   insert into public.season_modifications (
     season_id, leg_id, action, changed_fields
   ) values (
     'task9-parent-guard-season', 'task9-valid-atomic-added',
     'added', array['addedLeg']
   );
-
-  -- Mirrors upsert_season_modification_from_json: parent first, replace child.
-  delete from public.season_modification_added_legs
-  where leg_id = 'task9-valid-atomic-added';
 
   insert into public.season_modification_added_legs (
     season_id, leg_id, record_id, type, airline, flight_number,
@@ -4948,16 +5017,58 @@ begin
   ) values (
     'task9-parent-guard-season', 'task9-valid-atomic-added',
     'task9-valid-atomic-added', 'D', 'VN', 'VN124', '124', 'HAN', '10:00',
-    '321', 'J', '2027-01-02', '2027-01-02', '10:00', '2027-01-02', 6,
+    '321', 'J', '2027-01-02', '2099-01-02', '10:00', '2027-01-02', 6,
+    'added', 'added', 'DEP', 'active'
+  );
+
+  -- Child then parent transition, used by direct atomic SQL callers that stage
+  -- a child under an existing non-added parent in the same transaction.
+  insert into public.season_modifications (
+    season_id, leg_id, action, changed_fields
+  ) values (
+    'task9-parent-guard-season', 'task9-valid-child-first',
+    'modified', array['addedLeg']
+  );
+
+  insert into public.season_modification_added_legs (
+    season_id, leg_id, record_id, type, airline, flight_number,
+    raw_flight_number, route, schedule, aircraft, category, date,
+    scheduled_date, scheduled_time, operational_date, day_of_week,
+    action, source_kind, source_side, status
+  ) values (
+    'task9-parent-guard-season', 'task9-valid-child-first',
+    'task9-valid-child-first', 'A', 'VN', 'VN125', '125', 'HAN', '10:30',
+    '321', 'J', '2027-01-02', '2099-01-02', '10:30', '2027-01-02', 6,
+    'added', 'added', 'ARR', 'active'
+  );
+
+  update public.season_modifications
+  set action = 'added'
+  where leg_id = 'task9-valid-child-first';
+
+  -- Manual LJ081 provides the canonical target for reverse base-write probes.
+  insert into public.season_modifications (
+    season_id, leg_id, action, changed_fields
+  ) values (
+    'task9-parent-guard-season', 'task9-manual-lj081',
+    'added', array['addedLeg']
+  );
+
+  insert into public.season_modification_added_legs (
+    season_id, leg_id, record_id, type, airline, flight_number,
+    raw_flight_number, route, schedule, aircraft, category, date,
+    scheduled_date, scheduled_time, operational_date, day_of_week,
+    action, source_kind, source_side, status
+  ) values (
+    'task9-parent-guard-season', 'task9-manual-lj081',
+    'task9-manual-lj081', 'D', ' lj ', 'LJ081', '081', 'ICN', '12:00',
+    '738', 'J', '2027-01-03', '2099-01-03', '12:00', '2027-01-03', 7,
     'added', 'added', 'DEP', 'active'
   );
 end
 $$;
 
-set constraints
-  enforce_seasonal_added_modification_parent_v2,
-  enforce_seasonal_added_modification_child_v2
-immediate;
+set constraints all immediate;
 
 do $$
 begin
@@ -4975,8 +5086,144 @@ begin
       and added_legs.action = 'added'
       and added_legs.source_kind = 'added'
       and added_legs.status = 'active'
+  ) or not exists (
+    select 1
+    from public.season_modifications modifications
+    join public.season_modification_added_legs added_legs
+      on added_legs.season_id = modifications.season_id
+     and added_legs.leg_id = modifications.leg_id
+    where modifications.leg_id = 'task9-valid-child-first'
+      and modifications.action = 'added'
+      and added_legs.record_id = modifications.leg_id
+      and added_legs.flight_number = 'VN125'
   ) then
-    raise exception 'valid atomic parent-first added creation did not survive deferred validation';
+    raise exception 'a valid atomic added creation order did not survive deferred validation';
+  end if;
+end
+$$;
+
+select public.finalize_seasonal_occurrence_constraints_v2();
+
+do $$
+begin
+  -- flight_number whitespace must fall back to raw_flight_number, LJ81 must
+  -- canonicalize to LJ081, and record.date must win over scheduled_date.
+  begin
+    insert into public.season_flight_records (
+      season_id, record_id, link_id, type, airline, flight_number,
+      raw_flight_number, route, schedule, aircraft, category, date,
+      scheduled_date, scheduled_time, operational_date, day_of_week,
+      source_kind, source_side, status
+    ) values (
+      'task9-parent-guard-season', 'task9-reverse-insert-collision',
+      'task9-reverse-insert-collision', 'D', ' LJ ', '   ', '81', 'ICN',
+      '12:05', '738', 'J', '2027-01-03', '2027-01-30', '12:05',
+      '2027-01-03', 7, 'imported', 'DEP', 'active'
+    );
+    raise exception 'reverse base insert collision was accepted';
+  exception
+    when unique_violation then
+      if position('imported base occurrence collision' in pg_catalog.lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  -- Matching scheduled_date with a different record.date is not a collision.
+  insert into public.season_flight_records (
+    season_id, record_id, link_id, type, airline, flight_number,
+    raw_flight_number, route, schedule, aircraft, category, date,
+    scheduled_date, scheduled_time, operational_date, day_of_week,
+    source_kind, source_side, status
+  ) values (
+    'task9-parent-guard-season', 'task9-date-contract-valid',
+    'task9-date-contract-valid', 'D', 'LJ', 'LJ081', '081', 'ICN',
+    '12:10', '738', 'J', '2027-01-04', '2027-01-03', '12:10',
+    '2027-01-04', 1, 'imported', 'DEP', 'active'
+  );
+
+  insert into public.season_flight_records (
+    season_id, record_id, link_id, type, airline, flight_number,
+    raw_flight_number, route, schedule, aircraft, category, date,
+    scheduled_date, scheduled_time, operational_date, day_of_week,
+    source_kind, source_side, status
+  ) values (
+    'task9-parent-guard-season', 'task9-reverse-update-source',
+    'task9-reverse-update-source', 'D', 'LJ', 'LJ082', '082', 'ICN',
+    '12:20', '738', 'J', '2027-01-05', '2027-01-05', '12:20',
+    '2027-01-05', 2, 'imported', 'DEP', 'active'
+  );
+
+  begin
+    update public.season_flight_records
+    set date = '2027-01-03', flight_number = 'LJ81', raw_flight_number = '81'
+    where record_id = 'task9-reverse-update-source';
+    raise exception 'reverse base update collision was accepted';
+  exception
+    when unique_violation then
+      if position('imported base occurrence collision' in pg_catalog.lower(sqlerrm)) = 0 then
+        raise;
+      end if;
+  end;
+
+  insert into public.season_flight_records (
+    season_id, record_id, link_id, type, airline, flight_number,
+    raw_flight_number, route, schedule, aircraft, category, date,
+    scheduled_date, scheduled_time, operational_date, day_of_week,
+    source_kind, source_side, status
+  ) values (
+    'task9-parent-guard-season', 'task9-valid-base-write',
+    'task9-valid-base-write', 'D', 'LJ', 'LJ083', '083', 'ICN',
+    '12:30', '738', 'J', '2027-01-06', '2027-01-06', '12:30',
+    '2027-01-06', 3, 'imported', 'DEP', 'active'
+  );
+
+  update public.season_flight_records
+  set flight_number = 'LJ084', raw_flight_number = '084'
+  where record_id = 'task9-valid-base-write';
+
+  -- The finalized unique index uses the same canonical helper as both guards.
+  insert into public.season_flight_records (
+    season_id, record_id, link_id, type, airline, flight_number,
+    raw_flight_number, route, schedule, aircraft, category, date,
+    scheduled_date, scheduled_time, operational_date, day_of_week,
+    source_kind, source_side, status
+  ) values (
+    'task9-parent-guard-season', 'task9-lj-index-owner',
+    'task9-lj-index-owner', 'A', 'LJ', 'LJ81', '81', 'ICN', '13:00',
+    '738', 'J', '2027-01-07', '2027-01-08', '13:00', '2027-01-07', 4,
+    'imported', 'ARR', 'active'
+  );
+
+  begin
+    insert into public.season_flight_records (
+      season_id, record_id, link_id, type, airline, flight_number,
+      raw_flight_number, route, schedule, aircraft, category, date,
+      scheduled_date, scheduled_time, operational_date, day_of_week,
+      source_kind, source_side, status
+    ) values (
+      'task9-parent-guard-season', 'task9-lj-index-duplicate',
+      'task9-lj-index-duplicate', 'A', ' lj ', 'LJ081', '081', 'ICN',
+      '13:05', '738', 'J', '2027-01-07', '2099-01-07', '13:05',
+      '2027-01-07', 4, 'imported', 'ARR', 'active'
+    );
+    raise exception 'LJ81/LJ081 unique-index collision was accepted';
+  exception
+    when unique_violation then null;
+  end;
+
+  if not exists (
+    select 1
+    from public.season_flight_records
+    where record_id = 'task9-date-contract-valid'
+      and date = '2027-01-04'
+      and scheduled_date = '2027-01-03'
+  ) or not exists (
+    select 1
+    from public.season_flight_records
+    where record_id = 'task9-valid-base-write'
+      and flight_number = 'LJ084'
+  ) then
+    raise exception 'non-colliding base write contract did not persist';
   end if;
 end
 $$;
