@@ -19,7 +19,7 @@ import type {
   RouteCountryMapping,
   Season,
   StandGateMapping,
-} from './types';
+} from './types.ts';
 import {
   hydrateFlightModificationFromPersistence,
   hydrateFlightRecordFromPersistence,
@@ -29,9 +29,9 @@ import {
   serializeFlightRecordForPersistence,
   serializeModHistoryEntryForPersistence,
   serializeSourceRowForPersistence,
-} from './persistenceSchema';
-import { withOperationalFlightMetadata } from './iataSeason';
-import { hydrateOperationalSettings, validateOperationalSettings } from './settingsRules';
+} from './persistenceSchema.ts';
+import { withOperationalFlightMetadata } from './iataSeason.ts';
+import { hydrateOperationalSettings, validateOperationalSettings } from './settingsRules.ts';
 
 type JsonSnapshot = Record<string, unknown> | null;
 

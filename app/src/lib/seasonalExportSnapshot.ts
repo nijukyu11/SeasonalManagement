@@ -215,16 +215,31 @@ export function parseSeasonalExportSnapshotRows(
   }
   const recordIds = uniqueOwnerIds(arrays.flightRecords, 'record_id', 'flightRecords');
   const modificationIds = uniqueOwnerIds(arrays.modifications, 'leg_id', 'modifications');
-  uniqueOwnerIds(arrays.modificationAddedLegs, 'leg_id', 'modificationAddedLegs');
+  const addedLegIds = uniqueOwnerIds(arrays.modificationAddedLegs, 'leg_id', 'modificationAddedLegs');
   assertRelations(arrays.flightRecordCounters, 'record_id', recordIds, 'flightRecordCounters');
   assertRelations(arrays.flightRecordWindows, 'record_id', recordIds, 'flightRecordWindows');
   assertRelations(arrays.modificationCounters, 'leg_id', modificationIds, 'modificationCounters');
   assertRelations(arrays.modificationWindows, 'leg_id', modificationIds, 'modificationWindows');
   assertRelations(arrays.modificationAddedLegs, 'leg_id', modificationIds, 'modificationAddedLegs');
+  const modificationsById = new Map(arrays.modifications.map((modification) => [
+    modification.leg_id as string,
+    modification,
+  ]));
   arrays.modificationAddedLegs.forEach((row, index) => {
-    const owner = arrays.modifications.find((modification) => modification.leg_id === row.leg_id);
+    const owner = modificationsById.get(row.leg_id as string);
     if (owner?.action !== 'added') {
       throw new Error(`modificationAddedLegs[${index}].leg_id must reference an added modification.`);
+    }
+  });
+  arrays.modifications.forEach((modification) => {
+    if (modification.action !== 'added') return;
+    const legId = modification.leg_id as string;
+    const changedFields = modification.changed_fields as string[];
+    if (!changedFields.includes('addedLeg')) {
+      throw new Error(`Added modification ${legId} changed_fields must include addedLeg.`);
+    }
+    if (!addedLegIds.has(legId)) {
+      throw new Error(`Added modification ${legId} must have exactly one matching added-leg child.`);
     }
   });
 

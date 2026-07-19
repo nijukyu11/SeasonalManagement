@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { materializeEffectiveSeasonalLegs } from './effectiveSeasonalLegs.ts';
+import { validateSeasonalExportSelection } from './seasonalExportSelection.ts';
 import { parseSeasonalExportSnapshotRows } from './seasonalExportSnapshot.ts';
+import {
+  fromModificationRows,
+  type ModificationAddedLegRelationalRow,
+  type ModificationRelationalRow,
+} from './supabaseRelationalMappers.ts';
 
 function record(recordId = 'record-1') {
   return {
@@ -92,6 +99,25 @@ function modification(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function addedModification(legId = 'added-record', changedFields: unknown[] = ['addedLeg']) {
+  return modification({
+    leg_id: legId,
+    action: 'added',
+    changed_fields: changedFields,
+    gate: null,
+  });
+}
+
+function addedLeg(legId = 'added-record') {
+  return {
+    ...record(legId),
+    leg_id: legId,
+    action: 'added',
+    source_row_index: 0,
+    source_kind: 'added',
+  };
+}
+
 test('accepts one complete exact export snapshot', () => {
   const parsed = parseSeasonalExportSnapshotRows(payload(), {
     seasonId: 'season-s26',
@@ -160,4 +186,81 @@ test('rejects malformed counts, entries, count mismatch, season mismatch, and ve
     () => parseSeasonalExportSnapshotRows(payload({ modifications: [modification({ changed_fields: ['gate', 42] })] }), { seasonId: 'season-s26', dataVersion: 7 }),
     /modifications\[0\].*changed_fields/i,
   );
+});
+
+test('rejects an added modification without an added-leg child', () => {
+  assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({
+      modifications: [addedModification()],
+      modificationAddedLegs: [],
+    }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /added-record.*exactly one.*added-leg/i,
+  );
+});
+
+test("rejects an added modification whose changed_fields omit 'addedLeg'", () => {
+  assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({
+      modifications: [addedModification('added-record', [])],
+      modificationAddedLegs: [addedLeg()],
+    }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /added-record.*changed_fields.*addedLeg/i,
+  );
+});
+
+test('rejects orphan, duplicate, and non-added-parent added-leg children', () => {
+  assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({
+      modifications: [],
+      modificationAddedLegs: [addedLeg('orphan-record')],
+    }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /modificationAddedLegs\[0\].*snapshot owner/i,
+  );
+
+  assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({
+      modifications: [addedModification()],
+      modificationAddedLegs: [addedLeg(), addedLeg()],
+    }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /modificationAddedLegs\[1\].*duplicates added-record/i,
+  );
+
+  assert.throws(
+    () => parseSeasonalExportSnapshotRows(payload({
+      modifications: [modification({ leg_id: 'modified-record' })],
+      modificationAddedLegs: [addedLeg('modified-record')],
+    }), { seasonId: 'season-s26', dataVersion: 7 }),
+    /modificationAddedLegs\[0\].*added modification/i,
+  );
+});
+
+test("mode='all' materializes a valid added modification from its marked child", () => {
+  const snapshot = parseSeasonalExportSnapshotRows(payload({
+    totalCount: 0,
+    flightRecords: [],
+    modifications: [addedModification()],
+    modificationAddedLegs: [addedLeg()],
+  }), { seasonId: 'season-s26', dataVersion: 7 });
+  const modificationRow = snapshot.modifications[0] as unknown as ModificationRelationalRow;
+  const addedLegRow = snapshot.modificationAddedLegs[0] as unknown as ModificationAddedLegRelationalRow;
+  const modifications = new Map([
+    [modificationRow.leg_id, fromModificationRows(modificationRow, [], [], addedLegRow)],
+  ]);
+  const effectiveLegs = materializeEffectiveSeasonalLegs([], modifications);
+  const selection = validateSeasonalExportSelection({
+    selection: {
+      seasonId: snapshot.seasonId,
+      dataVersion: snapshot.dataVersion,
+      mode: 'all',
+      recordIds: [],
+    },
+    snapshotSeasonId: snapshot.seasonId,
+    snapshotDataVersion: snapshot.dataVersion,
+    effectiveLegs,
+  });
+
+  assert.equal(modifications.get('added-record')?.addedLeg?.id, 'added-record');
+  assert.deepEqual(effectiveLegs.map((leg) => leg.id), ['added-record']);
+  assert.equal(selection.valid, true);
+  assert.deepEqual(selection.recordIds, ['added-record']);
 });

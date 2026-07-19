@@ -4626,7 +4626,7 @@ insert into public.season_modifications (
   season_id, leg_id, action, changed_fields, gate, check_in_allocation_mode
 ) values
   ('task8-export-season', 'a-record', 'modified', array['gate'], 3, 'grouped'),
-  ('task8-export-season', 'added-record', 'added', array[]::text[], null, null);
+  ('task8-export-season', 'added-record', 'added', array['addedLeg'], null, null);
 
 insert into public.season_modification_counters (
   leg_id, counter_group, item_index, counter_value
@@ -4712,6 +4712,12 @@ begin
     or jsonb_array_length(v_snapshot->'modificationCounters') <> 1
     or jsonb_array_length(v_snapshot->'modificationWindows') <> 1
     or jsonb_array_length(v_snapshot->'modificationAddedLegs') <> 1
+    or not exists (
+      select 1
+      from jsonb_array_elements(v_snapshot->'modifications') modification
+      where modification->>'leg_id' = 'added-record'
+        and (modification->'changed_fields') ? 'addedLeg'
+    )
   then
     raise exception 'export snapshot relations are incomplete or non-deterministic: %', v_snapshot;
   end if;
