@@ -835,8 +835,146 @@ The final production cleanup query returned:
 - Production versions, record counts, modification counts, and fingerprints:
   unchanged from the pre-repair table above.
 
-**Gate: GO for independent spec and SQL quality review of the extended repair
-artifact. Production repair COMMIT remains NO-GO until both reviews approve the
-exact assertions, backup coverage, rollback boundary, and postconditions.**
-There has been no production repair commit, native build, version bump, tag,
-push, updater release, V1 revoke, or canary install in this phase.
+This gate was the pre-commit checkpoint. Both independent reviews subsequently
+approved the corrected artifact: the spec review found no residual contract
+gap, and the SQL quality review found no remaining actionable issue. The only
+recorded operational gap is that a destructive restore rehearsal was not run
+against production; the committed backups and their exact row counts were
+verified independently after repair.
+
+### Production repair commit
+
+Immediately before commit, the full read-only audit reproduced the approved
+baseline fingerprints and `blocking_count=7`. There were no Task 12 sessions,
+and the repair source at commit `3b9e30d` was clean. The operator changed only
+the final executable transaction boundary from `rollback;` to `commit;` in the
+in-memory execution stream; the tracked recovery artifact remains fail-safe and
+still ends in `rollback;`.
+
+The production execution SHA-256 was
+`8924083c1a17ee3f109f1b5897589a6c4644492e26174d1bd9987a5a5773eb65`.
+It completed successfully in 42.2 seconds and committed backup tag
+`20260719t184033z`. All executable preconditions, deferred constraints,
+full-table postconditions, and the occurrence finalizer passed before
+`COMMIT`.
+
+The independent post-commit audit returned `blocking_count=0` with these
+persisted states:
+
+| Season | Data version | Flight records | Modifications | State fingerprint |
+|---|---:|---:|---:|---|
+| S26 | 16,573 | 26,180 | 1,424 | `a6abff1480129c3c9d816e3c9a1eede9` |
+| W25 | 8,228 | 8,165 | 25 | `d3a0d7622002afbc5564f2ffa23c5266` |
+| W26 | 396 | 26,641 | 627 | `7316ce6f20c40149482a445d6d396292` |
+
+The complete active imported W26 SQ173 set contains exactly 154 rows. All 154
+now have route `SIN`, all 154 have
+`flight_series_id=SER_D_SQ_SQ173_SIN`, and zero have an empty route. The
+`season_flight_records_active_imported_occurrence_v2_key` index exists and is
+unique, valid, and ready with the approved canonical partial-index definition.
+
+Eight persistent maintenance backup tables were verified independently:
+
+| Backup suffix | Rows |
+|---|---:|
+| `seasons` | 3 |
+| `records` | 321 |
+| `record_counters` | 0 |
+| `record_windows` | 0 |
+| `modifications` | 9 |
+| `mod_counters` | 23 |
+| `mod_windows` | 0 |
+| `added_legs` | 0 |
+
+The final remote check found zero Task 12 sessions. The production repair gate
+is complete. Native canary verification, version bump, updater publication,
+post-release smoke testing, and the later V1 compatibility revoke remain Task
+12 release work.
+
+## Task 12 Release Candidate Verification
+
+### Regression and real PostgreSQL gates
+
+The final source audit found one stale assertion in
+`seasonalDetailedDraftSave.source.test.ts`: it still searched the page for the
+old direct checksum helper after checksum generation moved into
+`prepareSeasonalImportV2Attempt`. Runtime ordering was already correct. The
+test now asserts the shared preparation boundary and proves parser issues are
+rejected before both preparation and commit. The corrected file passes all 8
+tests.
+
+Release-candidate local gates passed:
+
+- Focused parser/import/export/selection/pairing: 65 passed, 0 failed.
+- Updater behavior: 8 passed, 0 failed.
+- Seasonal/Detailed draft and file-action source contract: 8 passed, 0 failed.
+- `npm run test:rules`, TypeScript, targeted ESLint, PGlite migration-twice,
+  schema-twice, Next production build, and `cargo check`: passed.
+
+A fresh disposable PostgreSQL 17.6 database with the required
+`seasonal_task11_*` identity was created through an SSH tunnel. The checked-in
+identity guards verified the admin database, disposable database, localhost
+tunnel, Node connection, and package runner before any schema DDL. Results:
+
+- DB/concurrency gate: 12,006 ms. The 250-row race observed the expected
+  advisory, transaction, and relation waits plus fail-closed ambiguous-season
+  conflict.
+- W26 load/fault gate: 29,437 ms. The 60,896-byte request generated 26,370
+  fixture occurrences with zero duplicates; retry was idempotent and all
+  injected network/version/ownership conflicts remained fail-closed.
+- S26/W26 workbook round-trip gate: 133,328 ms. Both seasons preserved sorted
+  occurrence signatures, pair signatures, turnaround cardinality, and zero
+  duplicate, unresolved, ambiguous, non-reciprocal, or missing-counterpart
+  diagnostics.
+- Final disposable residue was `0|0|0|0|0` for seasons, batches, batch rows,
+  operators, and auth users. The database was dropped, the local listener count
+  was zero, and no tunnel remained.
+
+The fixture occurrence totals, 25,849 for S26 and 26,370 for W26, are fixture
+contracts and are not substituted for the separate production shadow totals of
+26,063 and 26,598 approved before repair.
+
+### Version and native canary
+
+The release script synchronized version `0.1.11` across `package.json`,
+`package-lock.json`, `tauri.conf.json`, and `Cargo.toml`. `cargo check` updated
+the root package entry in `Cargo.lock` to `0.1.11`; all five version surfaces
+now agree.
+
+The first local `npm run native:build` at `0.1.10` compiled the Rust release
+binary and produced the NSIS installer, then correctly stopped at updater
+signing because this workstation has the public key but not the private signing
+key. This is an environment boundary, not a compile or installer failure.
+
+The `0.1.11` canary was rebuilt with only an ephemeral CLI override disabling
+local updater-artifact creation. The tracked Tauri configuration still requires
+signed updater artifacts. The command exited zero after the Python sidecar,
+Next production build, optimized Rust build, and NSIS bundle completed.
+
+| Local canary artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `seasonal-management.exe` | 21,905,920 | `0B6FAEE3AC37F0A27500F2887B32810208925B686A4FD7274787278903364911` |
+| `SeasonalManagement_0.1.11_x64-setup.exe` | 25,253,142 | `7AE9904FFC58A4A4FD10BDF2DCD9A51498A6C83169F880B0443661A848204812` |
+
+The release executable stayed alive for a 20-second startup smoke and was then
+stopped; no application process remained. This proves startup stability, not a
+clean-machine UX canary.
+
+The following acceptance work still requires the signed installed release:
+native file-picker import, same-season re-import, Save/Discard draft workflow,
+full and subset production export, restart persistence, update discovery and
+installation from `0.1.10`, and a before/after check that neither file action
+creates or changes `seasonal-management-local.db`. V1 execute permission remains
+intentionally available until those canary checks pass; the client has no V1 or
+SQLite fallback.
+
+### Pre-release server log scan
+
+PostgreSQL, PostgREST, and Kong logs from `2026-07-19 18:30 UTC` through the
+release-candidate build contained zero V2 stage/commit/resume/export-snapshot
+failure, version conflict, malformed/truncated snapshot, duplicate diagnostic,
+panic, or fatal entry. One PostgREST `57014` occurred at `18:39:11 UTC`; its
+request line identifies the unrelated periodic
+`get_season_schedule_allocation_window_v1` RPC from the installed client. It is
+not a Seasonal V2 import/export request and matches the previously observed
+allocation-window timeout series.
