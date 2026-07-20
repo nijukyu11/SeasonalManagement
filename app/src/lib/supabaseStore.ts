@@ -16,6 +16,7 @@ import type {
   RemoteSeasonalExportSnapshot,
   RemoteSeasonalExportSnapshotInput,
   RemoteSeasonSyncCursorState,
+  RemoteRequestOptions,
   RemoteSeasonWorkspaceWindowInput,
   RemoteSeasonWorkspaceWindowResult,
   RemoteSeasonWorkspaceSnapshot,
@@ -87,6 +88,9 @@ import { splitModHistoryEntriesForFirestore } from './modHistorySizing';
 import { splitAuditDeltaChunks } from './auditLog';
 import type { LocalEntityVersionMap } from './localSeasonStore';
 import { materializeSeasonalExportSnapshot } from './seasonalExportSnapshot';
+import type { OperatorSessionCheckpointOptions } from './operatorSessionCacheRegistry';
+import { isStatementTimeoutError, shouldUseLegacyWorkspaceWindowRpc } from './supabaseErrorPolicy';
+import { loadWorkspaceWindowV2 } from './seasonWorkspaceWindowV2Assembler';
 
 type SupabaseError = { message: string; code?: string | null; details?: string | null; hint?: string | null };
 type SupabaseResult<T> = { data: T | null; error: SupabaseError | null };
@@ -226,23 +230,6 @@ function isMissingDashboardAlertColumnError(error: unknown): boolean {
   );
 }
 
-function isMissingRpcSignatureError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error ?? '');
-  return /could not find the function|schema cache|PGRST202|function .* does not exist/i.test(message);
-}
-
-function isStatementTimeoutError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error ?? '');
-  return /statement timeout|canceling statement due to statement timeout/i.test(message);
-}
-
-function isTransientFetchFailureError(error: unknown): boolean {
-  const message = error instanceof Error
-    ? `${error.name}: ${error.message} ${String((error as { cause?: unknown }).cause ?? '')}`
-    : String(error ?? '');
-  return /failed to fetch|fetch failed|networkerror|network request failed|load failed|terminated/i.test(message);
-}
-
 function randomId(prefix: string): string {
   const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
@@ -281,8 +268,14 @@ type FilterableQuery = {
 };
 
 type SelectAllQuery<T> = FilterableQuery & {
+  abortSignal(signal: AbortSignal): SelectAllQuery<T>;
   range(from: number, to: number): Promise<SupabaseResult<T[]>>;
 };
+
+interface SelectAllRowsOptions {
+  signal?: AbortSignal;
+  limit?: number;
+}
 
 function applySelectFilters<TQuery extends FilterableQuery>(query: TQuery, filters: SelectFilter[]): TQuery {
   let next: FilterableQuery = query;
@@ -296,17 +289,28 @@ function applySelectFilters<TQuery extends FilterableQuery>(query: TQuery, filte
   return next as TQuery;
 }
 
-async function selectAllRows<T>(table: string, filters: SelectFilter[] = [], action = `load ${table}`): Promise<T[]> {
+async function selectAllRows<T>(
+  table: string,
+  filters: SelectFilter[] = [],
+  action = `load ${table}`,
+  options: SelectAllRowsOptions = {}
+): Promise<T[]> {
   const rows: T[] = [];
-  for (let from = 0; ; from += SUPABASE_SELECT_PAGE_SIZE) {
-    const to = from + SUPABASE_SELECT_PAGE_SIZE - 1;
-    const query = applySelectFilters(
+  const requestedLimit = options.limit === undefined
+    ? Number.MAX_SAFE_INTEGER
+    : Math.max(0, Math.floor(options.limit));
+  for (let from = 0; rows.length < requestedLimit; from += SUPABASE_SELECT_PAGE_SIZE) {
+    const remaining = requestedLimit - rows.length;
+    const pageLimit = Math.min(SUPABASE_SELECT_PAGE_SIZE, remaining);
+    const to = from + pageLimit - 1;
+    let query = applySelectFilters(
       client().from(table).select('*') as unknown as SelectAllQuery<T>,
       filters
     );
+    if (options.signal) query = query.abortSignal(options.signal);
     const page = assertOk(await query.range(from, to), action) as T[];
     rows.push(...page);
-    if (page.length < SUPABASE_SELECT_PAGE_SIZE) break;
+    if (rows.length >= requestedLimit || page.length < pageLimit) break;
   }
   return rows;
 }
@@ -315,14 +319,20 @@ async function readRowsByInFilter<T>(
   table: string,
   column: string,
   values: string[],
-  action: string
+  action: string,
+  options: RemoteRequestOptions = {}
 ): Promise<T[]> {
   const uniqueValues = uniqueStrings(values);
   if (uniqueValues.length === 0) return [];
   const rows: T[] = [];
   for (let i = 0; i < uniqueValues.length; i += SUPABASE_IN_FILTER_BATCH_SIZE) {
     const chunk = uniqueValues.slice(i, i + SUPABASE_IN_FILTER_BATCH_SIZE);
-    const page = await selectAllRows<T>(table, [{ type: 'in', column, values: chunk }], action);
+    const page = await selectAllRows<T>(
+      table,
+      [{ type: 'in', column, values: chunk }],
+      action,
+      { signal: options.signal }
+    );
     rows.push(...page);
   }
   return rows;
@@ -448,7 +458,8 @@ function toServerWorkspaceWindowSyncMeta(
 
 function mapWorkspaceWindow(
   input: RemoteSeasonWorkspaceWindowInput,
-  payload: SeasonWorkspaceWindowRpc
+  payload: SeasonWorkspaceWindowRpc,
+  dataVersion = 0,
 ): RemoteSeasonWorkspaceWindowResult {
   const snapshot = mapWorkspaceSnapshot({
     ...payload,
@@ -476,39 +487,8 @@ function mapWorkspaceWindow(
     sourceRows: [],
     records: snapshot?.records ?? [],
     modifications: snapshot?.modifications ?? new Map(),
-    cursor: { serverHighWater },
+    cursor: { dataVersion, serverHighWater },
     syncMeta: toServerWorkspaceWindowSyncMeta(input.seasonId, serverHighWater),
-  };
-}
-
-async function loadSeasonWorkspaceWindowPaged(
-  input: RemoteSeasonWorkspaceWindowInput
-): Promise<RemoteSeasonWorkspaceWindowResult | null> {
-  const filters: SelectFilter[] = [
-    { type: 'eq', column: 'season_id', value: input.seasonId },
-    { type: 'order', column: 'date', ascending: true },
-  ];
-  if (input.dateFrom) filters.push({ type: 'gte', column: 'date', value: input.dateFrom });
-  if (input.dateTo) filters.push({ type: 'lte', column: 'date', value: input.dateTo });
-
-  const flightRows = (await selectAllRows<FlightRecordRelationalRow>(
-    'season_flight_records',
-    filters,
-    'load server workspace window'
-  )).slice(0, input.limit ?? Number.MAX_SAFE_INTEGER);
-  const [records, modifications, cursorState] = await Promise.all([
-    hydrateFlightRecordRows(flightRows),
-    readModificationsForDashboardSeason(input.seasonId, flightRows.map((row) => row.record_id)),
-    supabaseStore.getSeasonSyncCursorState
-      ? supabaseStore.getSeasonSyncCursorState(input.seasonId)
-      : Promise.resolve({ serverHighWater: 0, entityVersions: {} }),
-  ]);
-  return {
-    sourceRows: [],
-    records,
-    modifications,
-    cursor: { serverHighWater: cursorState.serverHighWater },
-    syncMeta: toServerWorkspaceWindowSyncMeta(input.seasonId, cursorState.serverHighWater),
   };
 }
 
@@ -540,10 +520,17 @@ async function loadSeasonWorkspaceSnapshotPaged(
   };
 }
 
-async function upsertRows(table: string, rows: JsonRecord[], onConflict: string, onProgress?: (written: number, total: number) => void): Promise<void> {
+async function upsertRows(
+  table: string,
+  rows: JsonRecord[],
+  onConflict: string,
+  onProgress?: (written: number, total: number) => void,
+  options?: OperatorSessionCheckpointOptions,
+): Promise<void> {
   if (rows.length === 0) return;
   for (let i = 0; i < rows.length; i += FIRESTORE_WRITE_BATCH_SIZE) {
     const chunk = rows.slice(i, i + FIRESTORE_WRITE_BATCH_SIZE);
+    options?.assertOperatorSessionCurrent();
     assertOk(await client().from(table).upsert(chunk, { onConflict }), `upsert ${table}`);
     onProgress?.(Math.min(i + FIRESTORE_WRITE_BATCH_SIZE, rows.length), rows.length);
     await pauseBetweenFirestoreWriteBatches();
@@ -572,11 +559,14 @@ async function readFlightRecordRowsForDashboardSeason(seasonId: string): Promise
   return { season, rows: Array.from(rowsById.values()) };
 }
 
-async function hydrateFlightRecordRows(rows: FlightRecordRelationalRow[]): Promise<FlightRecord[]> {
+async function hydrateFlightRecordRows(
+  rows: FlightRecordRelationalRow[],
+  options: RemoteRequestOptions = {}
+): Promise<FlightRecord[]> {
   const recordIds = uniqueStrings(rows.map((row) => row.record_id));
   const [counterRows, windowRows] = await Promise.all([
-    readFlightRecordCounters(recordIds),
-    readFlightRecordWindows(recordIds),
+    readFlightRecordCounters(recordIds, options),
+    readFlightRecordWindows(recordIds, options),
   ]);
   const countersByRecord = groupRowsByKey(counterRows, (row) => row.record_id);
   const windowsByRecord = groupRowsByKey(windowRows, (row) => row.record_id);
@@ -626,8 +616,12 @@ async function readOperationalSettingsRowWithDashboardAlertFallback(): Promise<S
     .maybeSingle() as unknown as SupabaseResult<OperationalSettingsRow>;
 }
 
-async function upsertOperationalSettingsRowWithDashboardAlertFallback(settings: OperationalSettings): Promise<void> {
+async function upsertOperationalSettingsRowWithDashboardAlertFallback(
+  settings: OperationalSettings,
+  options?: OperatorSessionCheckpointOptions,
+): Promise<void> {
   const normalized = validateOperationalSettings(settings);
+  options?.assertOperatorSessionCurrent();
   const fullResult = await client()
     .from('operational_settings')
     .upsert(toOperationalSettingsRow(normalized), { onConflict: 'id' });
@@ -635,6 +629,7 @@ async function upsertOperationalSettingsRowWithDashboardAlertFallback(settings: 
     assertOk(fullResult, 'save operational settings');
     return;
   }
+  options?.assertOperatorSessionCurrent();
   assertOk(
     await client()
       .from('operational_settings')
@@ -708,68 +703,74 @@ async function readOperationalSettingsRelational(): Promise<OperationalSettings>
   });
 }
 
-async function clearTableRows(table: string, clearColumn = 'id'): Promise<void> {
+async function clearTableRows(table: string, clearColumn = 'id', options?: OperatorSessionCheckpointOptions): Promise<void> {
+  options?.assertOperatorSessionCurrent();
   assertOk(await client().from(table).delete().not(clearColumn, 'is', null), `clear ${table}`);
 }
 
-async function upsertTableRows(table: string, rows: JsonRecord[], onConflict: string): Promise<void> {
-  if (rows.length > 0) assertOk(await client().from(table).upsert(rows, { onConflict }), `save ${table}`);
+async function upsertTableRows(table: string, rows: JsonRecord[], onConflict: string, options?: OperatorSessionCheckpointOptions): Promise<void> {
+  if (rows.length > 0) {
+    options?.assertOperatorSessionCurrent();
+    assertOk(await client().from(table).upsert(rows, { onConflict }), `save ${table}`);
+  }
 }
 
-async function replaceTableRows(table: string, rows: JsonRecord[], onConflict: string, clearColumn = 'id'): Promise<void> {
-  await clearTableRows(table, clearColumn);
-  await upsertTableRows(table, rows, onConflict);
+async function replaceTableRows(table: string, rows: JsonRecord[], onConflict: string, clearColumn = 'id', options?: OperatorSessionCheckpointOptions): Promise<void> {
+  await clearTableRows(table, clearColumn, options);
+  await upsertTableRows(table, rows, onConflict, options);
 }
 
-async function writeOperationalSettingsRelational(settings: OperationalSettings): Promise<void> {
+async function writeOperationalSettingsRelational(settings: OperationalSettings, options?: OperatorSessionCheckpointOptions): Promise<void> {
   const normalized = validateOperationalSettings(settings);
-  await upsertOperationalSettingsRowWithDashboardAlertFallback(normalized);
-  await clearTableRows('operational_aircraft_group_types', 'group_id');
-  await clearTableRows('operational_checkin_counter_group_members', 'group_id');
-  await clearTableRows('operational_checkin_counter_lock_members', 'lock_id');
-  await clearTableRows('operational_gate_group_members', 'group_id');
-  await clearTableRows('operational_gate_lock_members', 'lock_id');
+  await upsertOperationalSettingsRowWithDashboardAlertFallback(normalized, options);
+  await clearTableRows('operational_aircraft_group_types', 'group_id', options);
+  await clearTableRows('operational_checkin_counter_group_members', 'group_id', options);
+  await clearTableRows('operational_checkin_counter_lock_members', 'lock_id', options);
+  await clearTableRows('operational_gate_group_members', 'group_id', options);
+  await clearTableRows('operational_gate_lock_members', 'lock_id', options);
 
-  await replaceTableRows('operational_route_countries', toRouteCountryRows(normalized), 'route', 'route');
-  await replaceTableRows('operational_airline_colors', toAirlineColorRows(normalized), 'airline_code', 'airline_code');
-  await replaceTableRows('operational_aircraft_groups', toAircraftGroupRows(normalized), 'id');
-  await replaceTableRows('operational_counter_rules', toCounterRuleRows(normalized), 'id');
-  await replaceTableRows('operational_checkin_counters', toCheckInCounterRows(normalized), 'id');
-  await replaceTableRows('operational_checkin_counter_groups', toCheckInCounterGroupRows(normalized), 'id');
-  await replaceTableRows('operational_checkin_counter_locks', toCheckInCounterLockRows(normalized), 'id');
-  await replaceTableRows('operational_gate_resources', toGateResourceRows(normalized), 'id');
-  await replaceTableRows('operational_gate_groups', toGateGroupRows(normalized), 'id');
-  await replaceTableRows('operational_gate_locks', toGateLockRows(normalized), 'id');
-  await replaceTableRows('operational_stand_gate_mappings', toStandGateMappingRows(normalized), 'id');
-  await replaceTableRows('operational_ai_models', toAiModelRows(normalized), 'id');
-  await replaceTableRows('operational_ai_context_documents', toAiContextDocumentRows(normalized), 'id');
+  await replaceTableRows('operational_route_countries', toRouteCountryRows(normalized), 'route', 'route', options);
+  await replaceTableRows('operational_airline_colors', toAirlineColorRows(normalized), 'airline_code', 'airline_code', options);
+  await replaceTableRows('operational_aircraft_groups', toAircraftGroupRows(normalized), 'id', 'id', options);
+  await replaceTableRows('operational_counter_rules', toCounterRuleRows(normalized), 'id', 'id', options);
+  await replaceTableRows('operational_checkin_counters', toCheckInCounterRows(normalized), 'id', 'id', options);
+  await replaceTableRows('operational_checkin_counter_groups', toCheckInCounterGroupRows(normalized), 'id', 'id', options);
+  await replaceTableRows('operational_checkin_counter_locks', toCheckInCounterLockRows(normalized), 'id', 'id', options);
+  await replaceTableRows('operational_gate_resources', toGateResourceRows(normalized), 'id', 'id', options);
+  await replaceTableRows('operational_gate_groups', toGateGroupRows(normalized), 'id', 'id', options);
+  await replaceTableRows('operational_gate_locks', toGateLockRows(normalized), 'id', 'id', options);
+  await replaceTableRows('operational_stand_gate_mappings', toStandGateMappingRows(normalized), 'id', 'id', options);
+  await replaceTableRows('operational_ai_models', toAiModelRows(normalized), 'id', 'id', options);
+  await replaceTableRows('operational_ai_context_documents', toAiContextDocumentRows(normalized), 'id', 'id', options);
 
-  await upsertTableRows('operational_aircraft_group_types', toAircraftGroupTypeRows(normalized), 'group_id,aircraft_type');
-  await upsertTableRows('operational_checkin_counter_group_members', toCheckInCounterGroupMemberRows(normalized), 'group_id,counter_id');
-  await upsertTableRows('operational_checkin_counter_lock_members', toCheckInCounterLockMemberRows(normalized), 'lock_id,counter_id');
-  await upsertTableRows('operational_gate_group_members', toGateGroupMemberRows(normalized), 'group_id,gate_id');
-  await upsertTableRows('operational_gate_lock_members', toGateLockMemberRows(normalized), 'lock_id,gate_id');
+  await upsertTableRows('operational_aircraft_group_types', toAircraftGroupTypeRows(normalized), 'group_id,aircraft_type', options);
+  await upsertTableRows('operational_checkin_counter_group_members', toCheckInCounterGroupMemberRows(normalized), 'group_id,counter_id', options);
+  await upsertTableRows('operational_checkin_counter_lock_members', toCheckInCounterLockMemberRows(normalized), 'lock_id,counter_id', options);
+  await upsertTableRows('operational_gate_group_members', toGateGroupMemberRows(normalized), 'group_id,gate_id', options);
+  await upsertTableRows('operational_gate_lock_members', toGateLockMemberRows(normalized), 'lock_id,gate_id', options);
 }
 
-async function readFlightRecordCounters(recordIds?: string[]): Promise<FlightRecordCounterRelationalRow[]> {
+async function readFlightRecordCounters(recordIds?: string[], options: RemoteRequestOptions = {}): Promise<FlightRecordCounterRelationalRow[]> {
   if (recordIds) {
     return readRowsByInFilter<FlightRecordCounterRelationalRow>(
       'season_flight_record_counters',
       'record_id',
       recordIds,
-      'load flight record counters'
+      'load flight record counters',
+      options
     );
   }
   return selectAllRows<FlightRecordCounterRelationalRow>('season_flight_record_counters', [], 'load flight record counters');
 }
 
-async function readFlightRecordWindows(recordIds?: string[]): Promise<FlightRecordWindowRelationalRow[]> {
+async function readFlightRecordWindows(recordIds?: string[], options: RemoteRequestOptions = {}): Promise<FlightRecordWindowRelationalRow[]> {
   if (recordIds) {
     return readRowsByInFilter<FlightRecordWindowRelationalRow>(
       'season_flight_record_checkin_windows',
       'record_id',
       recordIds,
-      'load flight record windows'
+      'load flight record windows',
+      options
     );
   }
   return selectAllRows<FlightRecordWindowRelationalRow>('season_flight_record_checkin_windows', [], 'load flight record windows');
@@ -798,7 +799,7 @@ async function writeModificationChildren(seasonId: string, mods: FlightModificat
   }
 }
 
-async function readModificationChildren(seasonId: string, legIds?: string[]): Promise<{
+async function readModificationChildren(seasonId: string, legIds?: string[], options: RemoteRequestOptions = {}): Promise<{
   counterRows: ModificationCounterRelationalRow[];
   windowRows: ModificationWindowRelationalRow[];
   addedLegRows: ModificationAddedLegRelationalRow[];
@@ -809,9 +810,9 @@ async function readModificationChildren(seasonId: string, legIds?: string[]): Pr
       return { counterRows: [], windowRows: [], addedLegRows: [] };
     }
     const [counterRows, windowRows, addedLegRows] = await Promise.all([
-      readRowsByInFilter<ModificationCounterRelationalRow>('season_modification_counters', 'leg_id', uniqueLegIds, 'load modification counters'),
-      readRowsByInFilter<ModificationWindowRelationalRow>('season_modification_checkin_windows', 'leg_id', uniqueLegIds, 'load modification windows'),
-      readRowsByInFilter<ModificationAddedLegRelationalRow>('season_modification_added_legs', 'leg_id', uniqueLegIds, 'load modification added legs'),
+      readRowsByInFilter<ModificationCounterRelationalRow>('season_modification_counters', 'leg_id', uniqueLegIds, 'load modification counters', options),
+      readRowsByInFilter<ModificationWindowRelationalRow>('season_modification_checkin_windows', 'leg_id', uniqueLegIds, 'load modification windows', options),
+      readRowsByInFilter<ModificationAddedLegRelationalRow>('season_modification_added_legs', 'leg_id', uniqueLegIds, 'load modification added legs', options),
     ]);
     return { counterRows, windowRows, addedLegRows };
   }
@@ -831,19 +832,21 @@ async function readModificationChildren(seasonId: string, legIds?: string[]): Pr
 
 async function readModificationRowsForDashboardSeason(
   seasonId: string,
-  recordIds: string[]
+  recordIds: string[],
+  options: RemoteRequestOptions = {}
 ): Promise<ModificationRelationalRow[]> {
   const rowsByLegId = new Map<string, ModificationRelationalRow>();
   const seasonRows = await selectAllRows<ModificationRelationalRow>('season_modifications', [
     { type: 'eq', column: 'season_id', value: seasonId },
-  ], 'load season modifications');
+  ], 'load season modifications', { signal: options.signal });
   for (const row of seasonRows) rowsByLegId.set(row.leg_id, row);
 
   const recordScopedRows = await readRowsByInFilter<ModificationRelationalRow>(
     'season_modifications',
     'leg_id',
     recordIds,
-    'load record-scoped modifications'
+    'load record-scoped modifications',
+    options
   );
   for (const row of recordScopedRows) rowsByLegId.set(row.leg_id, row);
 
@@ -852,11 +855,12 @@ async function readModificationRowsForDashboardSeason(
 
 async function readModificationsForDashboardSeason(
   seasonId: string,
-  recordIds: string[]
+  recordIds: string[],
+  options: RemoteRequestOptions = {}
 ): Promise<Map<string, FlightModification>> {
-  const rows = await readModificationRowsForDashboardSeason(seasonId, recordIds);
+  const rows = await readModificationRowsForDashboardSeason(seasonId, recordIds, options);
   const legIds = rows.map((row) => row.leg_id);
-  const children = await readModificationChildren(seasonId, legIds);
+  const children = await readModificationChildren(seasonId, legIds, options);
   const countersByLeg = groupRowsByKey(children.counterRows, (row) => row.leg_id);
   const windowsByLeg = groupRowsByKey(children.windowRows, (row) => row.leg_id);
   const addedLegsByLeg = new Map(children.addedLegRows.map((row) => [row.leg_id, row]));
@@ -933,11 +937,11 @@ export const supabaseStore: RemoteStore = {
     return readOperationalSettingsRelational();
   },
 
-  async saveOperationalSettings(settings: OperationalSettings): Promise<void> {
-    await writeOperationalSettingsRelational(settings);
+  async saveOperationalSettings(settings: OperationalSettings, options?: OperatorSessionCheckpointOptions): Promise<void> {
+    await writeOperationalSettingsRelational(settings, options);
   },
 
-  async saveAuditLogEntry(session: AuditSession, entry: AuditLogEntry): Promise<void> {
+  async saveAuditLogEntry(session: AuditSession, entry: AuditLogEntry, options?: OperatorSessionCheckpointOptions): Promise<void> {
     const exactDeltas = entry.syncDelta?.exactChanges ?? entry.deltas;
     const deltaChunks = splitAuditDeltaChunks(exactDeltas);
     const entryPayload: AuditLogEntry = {
@@ -947,6 +951,7 @@ export const supabaseStore: RemoteStore = {
       deltaChunkCount: deltaChunks.length,
     };
 
+    options?.assertOperatorSessionCurrent();
     assertOk(
       await client().from('audit_sessions').upsert({
         id: session.id,
@@ -956,6 +961,7 @@ export const supabaseStore: RemoteStore = {
       }, { onConflict: 'id' }),
       'save audit session'
     );
+    options?.assertOperatorSessionCurrent();
     assertOk(
       await client().from('audit_entries').upsert({
         session_id: session.id,
@@ -974,7 +980,9 @@ export const supabaseStore: RemoteStore = {
         chunk_index: chunk.chunkIndex,
         payload: stripUndefinedDeep(chunk),
       })),
-      'session_id,entry_id,id'
+      'session_id,entry_id,id',
+      undefined,
+      options
     );
   },
 
@@ -1017,7 +1025,10 @@ export const supabaseStore: RemoteStore = {
     return hydrateSourceRowsFromRelationalPages([rows], [dayRows]);
   },
 
-  async applySeasonalImportRemote(input: RemoteSeasonalImportInput): Promise<RemoteSeasonalImportResult> {
+  async applySeasonalImportRemote(
+    input: RemoteSeasonalImportInput,
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<RemoteSeasonalImportResult> {
     const expectedDataVersion = normalizeSeasonalImportExpectedDataVersion(
       input.seasonId,
       input.expectedDataVersion,
@@ -1033,19 +1044,28 @@ export const supabaseStore: RemoteStore = {
       uploadedAt: input.uploadedAt,
       sourceRows: canonicalizeSeasonalImportSourceRows(input.sourceRows),
     };
-    return runSeasonalImportV2RpcFlow(payload, {
-      stage: async (attempt) => assertSeasonalImportRpcOk(
-        await client().rpc('stage_seasonal_import_v2', { p_import: attempt }),
-        'stage seasonal import',
-      ),
-      commit: async (batchId, version) => assertSeasonalImportRpcOk(
-        await client().rpc('commit_seasonal_import_v2', {
-          p_batch_id: batchId,
-          p_expected_data_version: version,
-        }),
-        'commit seasonal import',
-      ),
+    options.assertOperatorSessionCurrent();
+    const result = await runSeasonalImportV2RpcFlow(payload, {
+      stage: async (attempt) => {
+        options.assertOperatorSessionCurrent();
+        return assertSeasonalImportRpcOk(
+          await client().rpc('stage_seasonal_import_v2', { p_import: attempt }),
+          'stage seasonal import',
+        );
+      },
+      commit: async (batchId, version) => {
+        options.assertOperatorSessionCurrent();
+        return assertSeasonalImportRpcOk(
+          await client().rpc('commit_seasonal_import_v2', {
+            p_batch_id: batchId,
+            p_expected_data_version: version,
+          }),
+          'commit seasonal import',
+        );
+      },
     });
+    options.assertOperatorSessionCurrent();
+    return result;
   },
 
   async resumeSeasonalImportRemote(input: RemoteSeasonalImportResumeInput): Promise<RemoteSeasonalImportResult> {
@@ -1100,25 +1120,48 @@ export const supabaseStore: RemoteStore = {
   },
 
   async getSeasonWorkspaceWindow(
-    input: RemoteSeasonWorkspaceWindowInput
+    input: RemoteSeasonWorkspaceWindowInput,
+    options: RemoteRequestOptions = {}
   ): Promise<RemoteSeasonWorkspaceWindowResult | null> {
     try {
-      const payload = assertOk(
-        await client().rpc('get_season_schedule_allocation_window_v1', {
-          p_season_id: input.seasonId,
-          p_start_date: input.dateFrom ?? null,
-          p_end_date: input.dateTo ?? null,
-          p_resource_type: input.resourceType ?? 'all',
-          p_limit: input.limit ?? null,
-        }),
-        'load server workspace window'
-      ) as SeasonWorkspaceWindowRpc | null;
-      return payload ? mapWorkspaceWindow(input, payload) : null;
+      const payload = await loadWorkspaceWindowV2(input, {
+        signal: options.signal,
+        expectedSnapshot: options.expectedSnapshot,
+        requestPage: async ({ query, pageSize, cursor, expectedSnapshot, signal }) => {
+          let request = client().rpc('get_season_schedule_allocation_window_v2', {
+            p_season_id: query.seasonId,
+            p_start_date: query.dateFrom ?? null,
+            p_end_date: query.dateTo ?? null,
+            p_resource_type: query.resourceType ?? 'all',
+            p_page_size: pageSize,
+            p_after_effective_date: cursor?.effectiveDate ?? null,
+            p_after_root_id: cursor?.rootId ?? null,
+            p_after_root_kind: cursor?.rootKind ?? null,
+            p_expected_data_version: expectedSnapshot?.dataVersion ?? null,
+            p_expected_server_high_water: expectedSnapshot?.serverHighWater ?? null,
+          });
+          if (signal) request = request.abortSignal(signal);
+          return assertOk(await request, 'load server workspace window V2');
+        },
+      });
+      return mapWorkspaceWindow(input, {
+        ...payload,
+        cursor: { serverHighWater: payload.snapshot.serverHighWater },
+      }, payload.snapshot.dataVersion);
     } catch (error) {
-      if (isMissingRpcSignatureError(error) || isStatementTimeoutError(error) || isTransientFetchFailureError(error)) {
-        return loadSeasonWorkspaceWindowPaged(input);
-      }
-      throw error;
+      if (options.signal?.aborted) throw error;
+      if (!shouldUseLegacyWorkspaceWindowRpc(error)) throw error;
+
+      let request = client().rpc('get_season_schedule_allocation_window_v1', {
+        p_season_id: input.seasonId,
+        p_start_date: input.dateFrom ?? null,
+        p_end_date: input.dateTo ?? null,
+        p_resource_type: input.resourceType ?? 'all',
+        p_limit: input.limit ?? null,
+      });
+      if (options.signal) request = request.abortSignal(options.signal);
+      const payload = assertOk(await request, 'load legacy server workspace window') as SeasonWorkspaceWindowRpc | null;
+      return payload ? mapWorkspaceWindow(input, payload) : null;
     }
   },
 

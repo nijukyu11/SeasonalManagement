@@ -31,7 +31,7 @@ test('workspace transport has no direct-table paged fallback helper', () => {
 });
 
 test('selectAllRows stops at the requested limit and attaches an abort signal', () => {
-  const helper = sliceBetween('async function selectAllRows', 'type CountResult');
+  const helper = sliceBetween('async function selectAllRows', 'async function readRowsByInFilter');
   assert.match(helper, /remaining = requestedLimit - rows\.length/);
   assert.match(helper, /Math\.min\(SUPABASE_SELECT_PAGE_SIZE, remaining\)/);
   assert.match(helper, /query = query\.abortSignal\(options\.signal\)/);

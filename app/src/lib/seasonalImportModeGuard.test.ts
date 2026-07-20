@@ -31,10 +31,11 @@ test('main Seasonal import sends canonical source rows and never builds client a
   assert.match(contractSource, /canonicalizeSeasonalImportSourceRows\(input\.sourceRows\)/);
   assert.match(contractSource, /buildSeasonalImportV2Checksum\(input\.seasonCode, sourceRows\)/);
   assert.match(contractSource, /deriveSeasonalImportV2RequestId\(\{/);
-  assert.match(importSource, /setPendingImportAttempt\(attemptedImport\)[\s\S]*applySeasonalImportRemote\(attemptedImport\)/);
+  assert.match(importSource, /setPendingImportAttempt\(attemptedImport\)[\s\S]*applySeasonalImportRemote\(attemptedImport, \{ operatorSessionEpoch \}\)/);
   assert.match(rpcInputSource, /sourceRows/);
-  assert.match(refreshSource, /refreshed\.window\.records/);
-  assert.match(refreshSource, /refreshed\.window\.modifications/);
+  assert.match(refreshSource, /revalidateSeasonWorkspaceAfterMutation\(/);
+  assert.match(refreshSource, /refreshedWindow\.records/);
+  assert.match(refreshSource, /refreshedWindow\.modifications/);
   assert.doesNotMatch(importSource, /flattenRowsToFlightRecords/);
   assert.doesNotMatch(importSource, /mergeDuplicateImportRecords/);
   assert.doesNotMatch(importSource, /buildSeasonalImportPatch/);
@@ -61,7 +62,7 @@ test('remote store performs the exact stage-then-commit V2 RPC sequence without 
   });
 
   assert.match(remoteStoreSource, /type RemoteSeasonalImportInput = SeasonalImportV2RpcAttempt/);
-  assert.match(remoteStoreSource, /applySeasonalImportRemote\(input: RemoteSeasonalImportInput\): Promise<RemoteSeasonalImportResult>/);
+  assert.match(remoteStoreSource, /applySeasonalImportRemote\?\(input: RemoteSeasonalImportInput, options\?: OperatorSessionCheckpointOptions\): Promise<RemoteSeasonalImportResult>/);
   assert.deepEqual(payloadKeys, [
     'requestId',
     'checksum',
@@ -114,40 +115,43 @@ test('seasonal import recovery exposes explicit resume and targeted read-only re
   const refreshSource = source.slice(refreshStart, refreshEnd);
   const targetedSource = source.slice(targetedStart, targetedEnd);
 
-  assert.match(resumeSource, /resumeSeasonalImportAttemptOnce\(attempt, applySeasonalImportRemote\)/);
+  assert.match(resumeSource, /resumeSeasonalImportAttemptOnce\([\s\S]*applySeasonalImportRemote\(storedAttempt, \{ operatorSessionEpoch \}\)/);
   assert.match(resumeSource, /SeasonalImportV2StatusUnknownError/);
   assert.match(resumeSource, /setPendingImportAttempt\(attempt\)/);
   assert.doesNotMatch(resumeSource, /while\s*\(|for\s*\(|retry/i);
-  assert.match(refreshSource, /applyTargetedCommittedImportRefresh\(committedImport, operation\)/);
+  assert.match(refreshSource, /applyTargetedCommittedImportRefresh\(committedImport, operation, operatorSessionEpoch\)/);
   assert.doesNotMatch(
     refreshSource,
     /applySeasonalImportRemote|resumeSeasonalImportAttemptOnce|stage_seasonal_import_v2|commit_seasonal_import_v2/,
   );
-  assert.match(targetedSource, /loadTargetedCommittedImportRefresh/);
+  assert.match(targetedSource, /revalidateSeasonWorkspaceAfterMutation/);
+  assert.doesNotMatch(targetedSource, /loadTargetedCommittedImportRefresh/);
   assert.match(targetedSource, /setPendingCommittedImport\(null\)/);
   assert.doesNotMatch(source, /buildCommittedSeasonFallback|replaceSeasonInList/);
   assert.match(source, />\s*Resume\/Check\s*</);
   assert.match(source, />\s*Refresh\s*</);
 });
 
-test('server workspace window uses paged server fallback for transient RPC fetch failures', () => {
+test('server workspace window never fans out to direct-table fallback', () => {
   const supabaseStoreSource = readFileSync(join(root, 'lib', 'supabaseStore.ts'), 'utf8');
-  assert.match(supabaseStoreSource, /function isTransientFetchFailureError\(error: unknown\): boolean/);
-  assert.match(
-    supabaseStoreSource,
-    /isMissingRpcSignatureError\(error\) \|\| isStatementTimeoutError\(error\) \|\| isTransientFetchFailureError\(error\)/
-  );
-  assert.match(supabaseStoreSource, /return loadSeasonWorkspaceWindowPaged\(input\)/);
+  const methodStart = supabaseStoreSource.indexOf('async getSeasonWorkspaceWindow');
+  const methodEnd = supabaseStoreSource.indexOf('async getSeasonWorkspaceSnapshot', methodStart);
+  const method = supabaseStoreSource.slice(methodStart, methodEnd);
+  assert.match(method, /shouldUseLegacyWorkspaceWindowRpc\(error\)/);
+  assert.doesNotMatch(method, /loadSeasonWorkspaceWindowPaged\(/);
+  assert.doesNotMatch(method, /isStatementTimeoutError\(error\)/);
+  assert.doesNotMatch(method, /isTransientFetchFailureError\(error\)/);
 });
 
-test('Supabase auth survives self-hosted cutover storage and JWT refresh', () => {
+test('Supabase auth survives self-hosted cutover without remounting on token refresh', () => {
   const supabaseSource = readFileSync(join(root, 'lib', 'supabase.ts'), 'utf8');
   const authGateSource = readFileSync(join(root, 'app', 'components', 'OperatorAuthGate.tsx'), 'utf8');
   assert.match(supabaseSource, /seasonal-management-supabase-auth-token/);
   assert.match(supabaseSource, /sb-rhmehiinfchiiuqmdukz-auth-token/);
   assert.match(supabaseSource, /sb-supabase-auth-token/);
-  assert.match(authGateSource, /refreshSession\(data\.session\)/);
-  assert.match(authGateSource, /refreshSession\(refreshed\.data\.session \?\? data\.session\)/);
+  assert.match(authGateSource, /resolveOperatorAuthSessionAction\(/);
+  assert.match(authGateSource, /createOperatorVerificationSingleFlight/);
+  assert.doesNotMatch(authGateSource, /supabase\.auth\.refreshSession\(/);
   assert.match(authGateSource, /resolveOperatorLoginIdentity/);
   assert.match(authGateSource, /username,display_name/);
   assert.match(authGateSource, /operatorLabel/);
@@ -206,13 +210,14 @@ test('Settings Seasonal Full Replace uses the permissioned V2 source-row pipelin
   assert.match(settingsSource, /access\.permissions\.has\('season\.repair'\)/);
   assert.match(handlerSource, /prepareSeasonalImportV2Attempt\(\{/);
   assert.match(handlerSource, /mode:\s*'repair'/);
-  assert.match(handlerSource, /applySeasonalImportRemote\(attemptedImport\)/);
-  assert.match(settingsSource, /loadTargetedCommittedImportRefresh\(\{/);
+  assert.match(handlerSource, /applySeasonalImportRemote\(attemptedImport, \{ operatorSessionEpoch \}\)/);
+  assert.match(settingsSource, /revalidateSeasonWorkspaceAfterMutation\(\{/);
+  assert.doesNotMatch(settingsSource, /loadTargetedCommittedImportRefresh\(\{/);
   assert.match(handlerSource, /buildSeasonalImportRecoveryReceipt\(attemptedImport, currentOperatorUserId\)/);
   assert.match(handlerSource, /persistSeasonalImportRecoveryReceipt\(sessionStorage, recoveryReceipt\)/);
   assert.ok(
     handlerSource.indexOf('persistSeasonalImportRecoveryReceipt(sessionStorage, recoveryReceipt)')
-      < handlerSource.indexOf('applySeasonalImportRemote(attemptedImport)'),
+      < handlerSource.indexOf('applySeasonalImportRemote(attemptedImport, { operatorSessionEpoch })'),
     'the minimal recovery receipt must be durable before Settings issues commit',
   );
   assert.match(handlerSource, /resumeSeasonalImportRemote\(\{[\s\S]*requestId:\s*receipt\.requestId[\s\S]*expectedDataVersion:\s*receipt\.expectedDataVersion/);

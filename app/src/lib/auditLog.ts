@@ -3,7 +3,7 @@ import {
   getOperatorSessionEpoch,
   isOperatorSessionEpochCurrent,
   type OperatorSessionRemoteOptions,
-} from './operatorSessionCacheRegistry';
+} from './operatorSessionCacheRegistry.ts';
 import type { FlightModification, FlightRecord, OperationalSettings, Season } from './types';
 
 export const FIRESTORE_AUDIT_DELTA_SAFE_BYTES = 850000;

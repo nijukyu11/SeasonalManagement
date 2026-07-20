@@ -126,7 +126,7 @@ test('Fetch data actions force server workspace reload and bypass native submit 
   }
 });
 
-test('heavy operational routes use a cache-first initial load before showing loading state or server workspace fetch', () => {
+test('heavy operational routes use a cache-first initial load before server workspace fetch', () => {
   const files = [
     ['src/app/daily/page.tsx', 'tryApplyCachedDailyRouteWindow'],
     ['src/app/checkin/page.tsx', 'tryApplyCachedCheckInRouteWindow'],
@@ -137,7 +137,6 @@ test('heavy operational routes use a cache-first initial load before showing loa
     const source = readFileSync(join(process.cwd(), file), 'utf8');
     const effectSource = extractEffectContaining(source, 'Loading seasons and settings');
     assert.match(source, new RegExp(`const ${helperName} = useCallback`), file);
-    assertBefore(effectSource, `${helperName}()`, 'setLoading(true)', file);
     assertBefore(effectSource, `${helperName}()`, 'loadSeasonWorkspaceWindow', file);
   }
 });

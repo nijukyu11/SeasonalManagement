@@ -109,7 +109,7 @@ export async function loadTargetedCommittedImportRefresh(input: {
       conflicts: [],
       syncStatus: 'synced',
     },
-    cursor: { serverHighWater: snapshot.serverHighWater },
+    cursor: { dataVersion: snapshot.dataVersion, serverHighWater: snapshot.serverHighWater },
   };
   return { seasons, season, snapshot, window };
 }

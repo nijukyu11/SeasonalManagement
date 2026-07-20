@@ -35,7 +35,6 @@ import {
 } from '@/lib/seasonalImportRpcContract';
 import {
   buildSeasonalImportStatusUnknownNotice,
-  loadTargetedCommittedImportRefresh,
   resumeSeasonalImportAttemptOnce,
 } from '@/lib/seasonalImportRecovery';
 import {
@@ -73,6 +72,8 @@ import { matchesSeasonalFlightFilter } from '@/lib/seasonalFlightFilter';
 import type { LocalSyncMeta } from '@/lib/localSeasonStore';
 import { appendAuditLogEntry, createFlightActionAuditFromHistory } from '@/lib/auditLog';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
+import { getOperatorSessionEpoch, isOperatorSessionEpochCurrent } from '@/lib/operatorSessionCacheRegistry';
+import { revalidateSeasonWorkspaceAfterMutation } from '@/lib/seasonWorkspaceWindowCoordinator';
 import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import type { Season, DisplayRow, FlightRecord, FlightLeg, FlightModification, ParsedRow, ModHistoryEntry } from '@/lib/types';
 import { withScheduleNotificationPayload } from '@/lib/scheduleNotifications';
@@ -456,6 +457,7 @@ export default function HomePage() {
   const applyTargetedCommittedImportRefresh = useCallback(async (
     remoteImport: RemoteSeasonalImportResult,
     operation: SeasonalFileActionOperation,
+    operatorSessionEpoch: number,
   ): Promise<boolean> => {
     const windowKey = buildSeasonalWindowKey({
       dateFrom: debouncedFilters.dateFrom || null,
@@ -463,13 +465,32 @@ export default function HomePage() {
       flight: debouncedFilters.flight || null,
       route: debouncedFilters.route || null,
     });
-    const refreshed = await loadTargetedCommittedImportRefresh({
-      committedImport: remoteImport,
-      loadSeasons: getSeasons,
-      loadSnapshot: getSeasonalExportSnapshot,
-    });
-    const refreshedRecords = refreshed.window.records;
-    const refreshedModifications = refreshed.window.modifications;
+    const [refreshedSeasons, refreshedWindow] = await Promise.all([
+      getSeasons({ operatorSessionEpoch }),
+      revalidateSeasonWorkspaceAfterMutation({
+        seasonId: remoteImport.seasonId,
+        dateFrom: debouncedFilters.dateFrom || null,
+        dateTo: debouncedFilters.dateTo || null,
+        resourceType: 'schedule',
+        limit: 100000,
+      }, {
+        operatorSessionEpoch,
+        generationAlreadyAdvanced: false,
+        expectedSnapshot: {
+          dataVersion: remoteImport.dataVersion,
+          serverHighWater: remoteImport.serverHighWater,
+        },
+      }),
+    ]);
+    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return false;
+    if (!refreshedWindow) throw new Error('Server seasonal schedule window is unavailable after import.');
+    const refreshedSeason = refreshedSeasons.find((season) => season.id === remoteImport.seasonId);
+    if (!refreshedSeason) throw new Error(`Committed season ${remoteImport.seasonId} is missing from the authoritative season list.`);
+    if (refreshedSeason.dataVersion !== remoteImport.dataVersion) {
+      throw new Error(`Committed refresh dataVersion mismatch for season ${remoteImport.seasonId}.`);
+    }
+    const refreshedRecords = refreshedWindow.records;
+    const refreshedModifications = refreshedWindow.modifications;
     const patternRows = buildPatternRowsFromRecords(refreshedRecords, refreshedModifications);
     const affectedRecordIds = refreshedRecords.map((record) => record.id);
     const applyInvalidation = validateSeasonalFileAction(operation);
@@ -478,29 +499,14 @@ export default function HomePage() {
       return false;
     }
 
-    setCachedSeasons(refreshed.seasons);
+    setCachedSeasons(refreshedSeasons);
     setCachedSeasonData(remoteImport.seasonId, {
       rows: patternRows,
       records: refreshedRecords,
       modifications: refreshedModifications,
-      seasonDataVersion: refreshed.season.dataVersion,
+      seasonDataVersion: refreshedSeason.dataVersion,
     });
-    useSeasonWorkspaceStore.getState().setSeasons(refreshed.seasons);
-    useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-      seasonId: remoteImport.seasonId,
-      season: refreshed.season,
-      rows: patternRows,
-      records: refreshedRecords,
-      modifications: refreshedModifications,
-      syncMeta: refreshed.window.syncMeta,
-      windowKey,
-    });
-    publishSeasonalWorkspaceChange(
-      remoteImport.seasonId,
-      remoteImport.serverHighWater,
-      affectedRecordIds,
-      refreshed.window.syncMeta,
-    );
+    useSeasonWorkspaceStore.getState().setSeasons(refreshedSeasons, operatorSessionEpoch);
 
     const finalApplyInvalidation = validateSeasonalFileAction(operation);
     if (finalApplyInvalidation) {
@@ -508,16 +514,16 @@ export default function HomePage() {
       return false;
     }
     loadedWindowKeyRef.current = windowKey;
-    setSeasons(refreshed.seasons);
-    setActiveSeason(refreshed.season);
+    setSeasons(refreshedSeasons);
+    setActiveSeason(refreshedSeason);
     sessionStorage.setItem('activeSeasonId', remoteImport.seasonId);
     applySeasonData(patternRows, refreshedRecords, refreshedModifications);
     setSelectedRecordIds(new Set());
     setModHistory([]);
     setDraftState(null);
     setSyncSummary({
-      pendingCount: refreshed.window.syncMeta.pendingCount,
-      lastLocalChangeAt: refreshed.window.syncMeta.lastLocalChangeAt,
+      pendingCount: refreshedWindow.syncMeta?.pendingCount ?? 0,
+      lastLocalChangeAt: refreshedWindow.syncMeta?.lastLocalChangeAt ?? null,
     });
     setLoadError(null);
     setLoading(false);
@@ -551,7 +557,7 @@ export default function HomePage() {
           preservedOperationalRecords: remoteImport.preservedOperationalCount,
           removedImportedRecords: remoteImport.removedImportedCount,
           dataVersion: remoteImport.dataVersion,
-          fileName: refreshed.season.fileName,
+          fileName: refreshedSeason.fileName,
           batchId: remoteImport.batchId,
         },
       }],
@@ -581,7 +587,6 @@ export default function HomePage() {
     debouncedFilters.dateTo,
     debouncedFilters.flight,
     debouncedFilters.route,
-    publishSeasonalWorkspaceChange,
     setActiveSeason,
     setDraftState,
     setPendingCommittedImport,
@@ -1661,10 +1666,11 @@ export default function HomePage() {
     }
     const operation = beginSeasonalFileAction('import');
     if (!operation) return;
+    const operatorSessionEpoch = getOperatorSessionEpoch();
     setUploading(true);
     setUploadProgress(buildImportProgress('Refreshing committed import', 90, committedImport.seasonCode));
     try {
-      await applyTargetedCommittedImportRefresh(committedImport, operation);
+      await applyTargetedCommittedImportRefresh(committedImport, operation, operatorSessionEpoch);
     } catch (error) {
       const failure = buildSeasonalImportCommittedRefreshFailure(committedImport, error);
       void showAlert({ title: failure.title, message: failure.message, tone: 'warning' });
@@ -1695,6 +1701,7 @@ export default function HomePage() {
     }
     const operation = beginSeasonalFileAction('import');
     if (!operation) return;
+    const operatorSessionEpoch = getOperatorSessionEpoch();
     setUploading(true);
     setUploadProgress(buildImportProgress('Checking import status', 55, attempt.requestId));
     try {
@@ -1703,12 +1710,16 @@ export default function HomePage() {
         showSeasonalFileActionInvalidation('import', commitInvalidation);
         return;
       }
-      const remoteImport = await resumeSeasonalImportAttemptOnce(attempt, applySeasonalImportRemote);
+      const remoteImport = await resumeSeasonalImportAttemptOnce(
+        attempt,
+        (storedAttempt) => applySeasonalImportRemote(storedAttempt, { operatorSessionEpoch }),
+      );
+      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
       setPendingImportAttempt(null);
       setPendingCommittedImport(remoteImport);
       setUploadProgress(buildImportProgress('Refreshing schedule', 90, remoteImport.seasonCode));
       try {
-        await applyTargetedCommittedImportRefresh(remoteImport, operation);
+        await applyTargetedCommittedImportRefresh(remoteImport, operation, operatorSessionEpoch);
       } catch (refreshError) {
         const failure = buildSeasonalImportCommittedRefreshFailure(remoteImport, refreshError);
         void showAlert({ title: failure.title, message: failure.message, tone: 'warning' });
@@ -1766,6 +1777,7 @@ export default function HomePage() {
       });
       return;
     }
+    const operatorSessionEpoch = getOperatorSessionEpoch();
     setUploading(true);
     let attemptedImport: RemoteSeasonalImportInput | null = null;
     try {
@@ -1792,7 +1804,8 @@ export default function HomePage() {
       }
 
       setUploadProgress(buildImportProgress('Checking local changes', 24));
-      const existing = await findSeasonByCode(seasonCode);
+      const existing = await findSeasonByCode(seasonCode, { operatorSessionEpoch });
+      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
       if (existing) {
         const targetPendingCount = existing.id === activeSeason?.id ? syncPendingCount : 0;
         const dirtyGuard = getDirtyImportGuard({
@@ -1830,12 +1843,13 @@ export default function HomePage() {
       }
       setPendingImportAttempt(attemptedImport);
       setUploadProgress(buildImportProgress('Committing seasonal import', 55, `${attemptedImport.sourceRows.length} source rows`));
-      const remoteImport = await applySeasonalImportRemote(attemptedImport);
+      const remoteImport = await applySeasonalImportRemote(attemptedImport, { operatorSessionEpoch });
+      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
       setPendingImportAttempt(null);
       setPendingCommittedImport(remoteImport);
       try {
         setUploadProgress(buildImportProgress('Refreshing schedule', 90, remoteImport.seasonCode));
-        await applyTargetedCommittedImportRefresh(remoteImport, operation);
+        await applyTargetedCommittedImportRefresh(remoteImport, operation, operatorSessionEpoch);
       } catch (refreshError) {
         const failure = buildSeasonalImportCommittedRefreshFailure(remoteImport, refreshError);
         void showAlert({ title: failure.title, message: failure.message, tone: 'warning' });

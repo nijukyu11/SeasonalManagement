@@ -16,6 +16,14 @@ import type {
   SeasonalImportV2CommittedResult,
   SeasonalImportV2RpcAttempt,
 } from './seasonalImportRpcContract';
+import {
+  createOperatorSessionAbortError,
+  getOperatorSessionEpoch,
+  isOperatorSessionEpochCurrent,
+  runOperatorSessionResourceOperation,
+  type OperatorSessionCheckpointOptions,
+  type OperatorSessionRemoteOptions,
+} from './operatorSessionCacheRegistry';
 
 export interface RemoteActor {
   uid?: string | null;
@@ -124,9 +132,18 @@ export interface RemoteSeasonWorkspaceWindowInput {
   limit?: number;
 }
 
+export interface RemoteRequestOptions {
+  signal?: AbortSignal;
+  expectedSnapshot?: {
+    dataVersion: number;
+    serverHighWater: number;
+  };
+}
+
 export interface RemoteSeasonWorkspaceWindowResult extends RemoteDashboardSeasonData {
   syncMeta: LocalSyncMeta;
   cursor: {
+    dataVersion: number;
     serverHighWater: number;
   };
 }
@@ -160,20 +177,23 @@ export interface RemoteStore {
   updateSeason(id: string, data: Partial<Season>): Promise<void>;
   deleteSeason(id: string): Promise<void>;
   getOperationalSettings(): Promise<OperationalSettings>;
-  saveOperationalSettings(settings: OperationalSettings): Promise<void>;
-  saveAuditLogEntry(session: AuditSession, entry: AuditLogEntry): Promise<void>;
+  saveOperationalSettings(settings: OperationalSettings, options?: OperatorSessionCheckpointOptions): Promise<void>;
+  saveAuditLogEntry(session: AuditSession, entry: AuditLogEntry, options?: OperatorSessionCheckpointOptions): Promise<void>;
   getAuditSessions(maxSessions?: number): Promise<AuditSession[]>;
   getAuditLogEntries(sessionId: string, maxEntries?: number): Promise<AuditLogEntry[]>;
   getAuditDeltaChunks(sessionId: string, entryId: string): Promise<AuditDeltaChunk[]>;
   getSourceRows(seasonId: string): Promise<ParsedRow[]>;
-  applySeasonalImportRemote?(input: RemoteSeasonalImportInput): Promise<RemoteSeasonalImportResult>;
+  applySeasonalImportRemote?(input: RemoteSeasonalImportInput, options?: OperatorSessionCheckpointOptions): Promise<RemoteSeasonalImportResult>;
   resumeSeasonalImportRemote?(input: RemoteSeasonalImportResumeInput): Promise<RemoteSeasonalImportResult>;
   getFlightRecords(seasonId: string): Promise<FlightRecord[]>;
   getSeasonalExportSnapshot?(
     input: RemoteSeasonalExportSnapshotInput
   ): Promise<RemoteSeasonalExportSnapshot>;
   getDashboardSeasonData?(seasonId: string): Promise<RemoteDashboardSeasonData>;
-  getSeasonWorkspaceWindow?(input: RemoteSeasonWorkspaceWindowInput): Promise<RemoteSeasonWorkspaceWindowResult | null>;
+  getSeasonWorkspaceWindow?(
+    input: RemoteSeasonWorkspaceWindowInput,
+    options?: RemoteRequestOptions
+  ): Promise<RemoteSeasonWorkspaceWindowResult | null>;
   getSeasonWorkspaceSnapshot?(
     seasonId: string,
     options?: { modHistoryLimit?: number; transport?: 'auto' | 'rpc' | 'paged' }
@@ -258,56 +278,146 @@ export function getRemoteStore(): Promise<RemoteStore> {
   return cachedStore;
 }
 
-export async function getSeasons(): Promise<Season[]> {
-  return (await getRemoteStore()).getSeasons();
+export function getSeasons(
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<Season[]> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => store.getSeasons(),
+  });
 }
 export async function getSeason(id: string): Promise<Season | null> {
   return (await getRemoteStore()).getSeason(id);
 }
-export async function findSeasonByCode(code: string): Promise<Season | null> {
-  return (await getRemoteStore()).findSeasonByCode(code);
+export function findSeasonByCode(
+  code: string,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<Season | null> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => store.findSeasonByCode(code),
+  });
 }
-export async function createSeason(season: Omit<Season, 'id'>): Promise<string> {
-  return (await getRemoteStore()).createSeason(season);
+export function createSeason(
+  season: Omit<Season, 'id'>,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<string> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => store.createSeason(season),
+  });
 }
-export async function updateSeason(id: string, data: Partial<Season>): Promise<void> {
-  return (await getRemoteStore()).updateSeason(id, data);
+export function updateSeason(
+  id: string,
+  data: Partial<Season>,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<void> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => store.updateSeason(id, data),
+  });
 }
 export async function deleteSeason(id: string): Promise<void> {
   return (await getRemoteStore()).deleteSeason(id);
 }
-export async function getOperationalSettings(): Promise<OperationalSettings> {
+export async function getOperationalSettings(
+  options: { force?: boolean; operatorSessionEpoch?: number } = {},
+): Promise<OperationalSettings> {
+  const operatorSessionEpoch = options.operatorSessionEpoch ?? getOperatorSessionEpoch();
+  if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) throw createOperatorSessionAbortError();
   const cached = getCachedOperationalSettings();
-  if (cached) return cached;
-  const settings = await (await getRemoteStore()).getOperationalSettings();
+  if (cached && !options.force) return cached;
+  const settings = await runOperatorSessionResourceOperation({
+    operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => store.getOperationalSettings(),
+  });
+  if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) throw createOperatorSessionAbortError();
   setCachedOperationalSettings(settings);
   return settings;
 }
-export async function saveOperationalSettings(settings: OperationalSettings): Promise<void> {
-  await (await getRemoteStore()).saveOperationalSettings(settings);
+export async function saveOperationalSettings(
+  settings: OperationalSettings,
+  options: OperatorSessionRemoteOptions,
+): Promise<void> {
+  if (!isOperatorSessionEpochCurrent(options.operatorSessionEpoch)) throw createOperatorSessionAbortError();
+  await runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store, assertOperatorSessionCurrent) => store.saveOperationalSettings(
+      settings,
+      { assertOperatorSessionCurrent },
+    ),
+  });
+  if (!isOperatorSessionEpochCurrent(options.operatorSessionEpoch)) throw createOperatorSessionAbortError();
   setCachedOperationalSettings(settings);
 }
-export async function saveAuditLogEntry(session: AuditSession, entry: AuditLogEntry): Promise<void> {
-  return (await getRemoteStore()).saveAuditLogEntry(session, entry);
+export function saveAuditLogEntry(
+  session: AuditSession,
+  entry: AuditLogEntry,
+  options: OperatorSessionRemoteOptions,
+): Promise<void> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store, assertOperatorSessionCurrent) => store.saveAuditLogEntry(
+      session,
+      entry,
+      { assertOperatorSessionCurrent },
+    ),
+  });
 }
-export async function getAuditSessions(maxSessions?: number): Promise<AuditSession[]> {
-  return (await getRemoteStore()).getAuditSessions(maxSessions);
+export function getAuditSessions(
+  options: OperatorSessionRemoteOptions & { maxSessions?: number },
+): Promise<AuditSession[]> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => store.getAuditSessions(options.maxSessions),
+  });
 }
-export async function getAuditLogEntries(sessionId: string, maxEntries?: number): Promise<AuditLogEntry[]> {
-  return (await getRemoteStore()).getAuditLogEntries(sessionId, maxEntries);
+export function getAuditLogEntries(
+  sessionId: string,
+  options: OperatorSessionRemoteOptions & { maxEntries?: number },
+): Promise<AuditLogEntry[]> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => store.getAuditLogEntries(sessionId, options.maxEntries),
+  });
 }
-export async function getAuditDeltaChunks(sessionId: string, entryId: string): Promise<AuditDeltaChunk[]> {
-  return (await getRemoteStore()).getAuditDeltaChunks(sessionId, entryId);
+export function getAuditDeltaChunks(
+  sessionId: string,
+  entryId: string,
+  options: OperatorSessionRemoteOptions,
+): Promise<AuditDeltaChunk[]> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => store.getAuditDeltaChunks(sessionId, entryId),
+  });
 }
 export async function getSourceRows(seasonId: string): Promise<ParsedRow[]> {
   return (await getRemoteStore()).getSourceRows(seasonId);
 }
-export async function applySeasonalImportRemote(input: RemoteSeasonalImportInput): Promise<RemoteSeasonalImportResult> {
-  const store = await getRemoteStore();
-  if (!store.applySeasonalImportRemote) {
-    throw new Error('Server-side seasonal import RPC is unavailable for the configured backend.');
-  }
-  return store.applySeasonalImportRemote(input);
+export function applySeasonalImportRemote(
+  input: RemoteSeasonalImportInput,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<RemoteSeasonalImportResult> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store, assertOperatorSessionCurrent) => {
+      if (!store.applySeasonalImportRemote) {
+        throw new Error('Server-side seasonal import RPC is unavailable for the configured backend.');
+      }
+      return store.applySeasonalImportRemote(input, { assertOperatorSessionCurrent });
+    },
+  });
 }
 export async function applySeasonServerMutationV1(
   payload: ServerSeasonMutationPayload
@@ -404,13 +514,17 @@ function recordMatchesWorkspaceWindow(record: FlightRecord, input: RemoteSeasonW
   return true;
 }
 
-export async function loadSeasonWorkspaceWindow(
-  input: RemoteSeasonWorkspaceWindowInput
+export async function loadSeasonWorkspaceWindowTransport(
+  input: RemoteSeasonWorkspaceWindowInput,
+  options: RemoteRequestOptions = {}
 ): Promise<RemoteSeasonWorkspaceWindowResult | null> {
+  options.signal?.throwIfAborted();
   const store = await getRemoteStore();
-  if (store.getSeasonWorkspaceWindow) return store.getSeasonWorkspaceWindow(input);
+  if (store.getSeasonWorkspaceWindow) return store.getSeasonWorkspaceWindow(input, options);
 
+  options.signal?.throwIfAborted();
   const snapshot = await getSeasonWorkspaceSnapshot(input.seasonId, { modHistoryLimit: 0 });
+  options.signal?.throwIfAborted();
   if (!snapshot) return null;
   const records = snapshot.records
     .filter((record) => recordMatchesWorkspaceWindow(record, input))
@@ -420,7 +534,7 @@ export async function loadSeasonWorkspaceWindow(
     sourceRows: snapshot.sourceRows,
     records,
     modifications: snapshot.modifications,
-    cursor: { serverHighWater },
+    cursor: { dataVersion: 0, serverHighWater },
     syncMeta: {
       seasonId: input.seasonId,
       baseServerVersion: serverHighWater,
@@ -432,6 +546,40 @@ export async function loadSeasonWorkspaceWindow(
       syncStatus: 'synced',
     },
   };
+}
+
+export function loadSeasonWorkspaceWindow(
+  input: RemoteSeasonWorkspaceWindowInput,
+  options: RemoteRequestOptions = {}
+): Promise<RemoteSeasonWorkspaceWindowResult | null> {
+  return import('./seasonWorkspaceWindowCoordinator.ts').then(async ({ revalidateSeasonWorkspaceWindow }) => {
+    const snapshot = await revalidateSeasonWorkspaceWindow(input, {
+      signal: options.signal,
+      initiator: 'automatic',
+    });
+    if (!snapshot) return null;
+    const serverHighWater = snapshot.metadata.serverHighWater ?? snapshot.syncMeta?.lastServerSeq ?? 0;
+    const syncMeta = snapshot.syncMeta ?? {
+      seasonId: input.seasonId,
+      baseServerVersion: serverHighWater,
+      lastServerSeq: serverHighWater,
+      localRevision: serverHighWater,
+      pendingCount: 0,
+      lastLocalChangeAt: null,
+      conflicts: [],
+      syncStatus: 'synced' as const,
+    };
+    return {
+      sourceRows: snapshot.rows,
+      records: snapshot.records,
+      modifications: snapshot.modifications,
+      cursor: {
+        dataVersion: snapshot.metadata.dataVersion ?? 0,
+        serverHighWater,
+      },
+      syncMeta,
+    };
+  });
 }
 export async function getModifications(seasonId: string): Promise<Map<string, FlightModification>> {
   return (await getRemoteStore()).getModifications(seasonId);
@@ -465,6 +613,12 @@ export async function getModHistory(seasonId: string, limit?: number): Promise<M
 export async function undoModHistoryEntries(seasonId: string, entries: ModHistoryEntry[]): Promise<void> {
   return (await getRemoteStore()).undoModHistoryEntries(seasonId, entries);
 }
-export async function getCurrentRemoteActor(): Promise<RemoteActor | null> {
-  return (await getRemoteStore()).getCurrentRemoteActor();
+export function getCurrentRemoteActor(
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<RemoteActor | null> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => store.getCurrentRemoteActor(),
+  });
 }

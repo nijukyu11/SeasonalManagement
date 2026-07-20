@@ -1,6 +1,6 @@
 {
   "name": "app",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,7 @@
     "test:seasonal-schema-twice": "node supabase/tests/seasonal_schema_twice.mjs",
     "test:seasonal-import-v2-db": "node scripts/run-seasonal-import-v2-db-test.mjs",
     "test:seasonal-import-v2-load": "node scripts/seasonal-import-v2-load-test.mjs",
-    "test:seasonal-roundtrip": "node scripts/seasonal-import-export-roundtrip.mjs",
+    "test:seasonal-roundtrip": "node --experimental-strip-types scripts/seasonal-import-export-roundtrip.mjs",
     "test:updater": "node --experimental-strip-types --test src/lib/appUpdater.test.ts",
     "release:repo": "node scripts/configure-release-repo.cjs",
     "release:version": "node scripts/sync-release-version.cjs",
@@ -20,11 +20,8 @@
     "skawld:dashboard-harness": "node scripts/skawld-dashboard-agent-harness.mjs",
     "test:skawld-dashboard-harness": "node scripts/test-skawld-dashboard-agent-harness.mjs",
     "test:notifications": "node --experimental-strip-types --test src/lib/scheduleNotifications.test.ts",
-    "test:seasonal-import-v2-db": "node scripts/run-seasonal-import-v2-db-test.mjs",
     "test:workspace-window-v2-db": "node scripts/run-workspace-window-v2-db-test.mjs",
-    "test:seasonal-import-v2-load": "node scripts/seasonal-import-v2-load-test.mjs",
     "test:workspace-window-v2-load": "node scripts/workspace-window-v2-load-test.mjs",
-    "test:seasonal-roundtrip": "node --experimental-strip-types scripts/seasonal-import-export-roundtrip.mjs",
     "python:agent:install": "python -m pip install -r ai-agent/requirements.txt",
     "python:agent:bundle": "node scripts/build-python-agent.cjs",
     "python:agent:test": "python -m unittest discover -s ai-agent/tests -t ai-agent",

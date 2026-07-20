@@ -26,13 +26,18 @@ Updated: 2026-07-20
 | `npm run build` | PASS; all 10 application routes statically generated |
 | Script syntax checks | PASS |
 | Workspace V2/RLS source contracts after production profiling fixes | PASS, 4/4 |
+| Full TypeScript/Node regression suite | PASS, 371/371 |
+| Seasonal Import V2 PGlite SQL suite | PASS; migration/schema exercised twice |
+| Canonical schema rerun | PASS, 2/2 clean-schema runs |
+| Native production-like build | PASS; all 10 application routes generated and NSIS bundled |
 
 ## Production database and native canary
 
 - PostgreSQL 17.6 retained the authenticated role's existing `statement_timeout=8s`.
 - Workspace V2 and Import V2 were deployed additively. Follow-up migrations removed the authenticated locking incompatibility, bounded both root branches before merge, retained cursor keyset ordering, and changed stable RLS permission checks into statement-level InitPlans.
 - The RLS profile diagnosed 1,289 repeated `seasonal.read` checks before an 8-second timeout. After the InitPlan migration, the profiled late page completed in 43.153 ms with the workspace keyset index, no temp-file spill, and no `57014`.
-- The native canary built and installed successfully at version `0.1.10`. Installer SHA-256: `D4CDEB223779778094F9F2B545CC8306B2AD7D1519C669748F60007AB28E730F`.
+- The production-like native canary built with the same Supabase variables as the release workflow and installed successfully at version `0.1.12`. Installer size: `25,285,344` bytes. SHA-256: `B1A2A1159F1562B90349FF1C029BD31CC5E575441469B3745FA3EA3C32C28971`.
+- The clean-schema mirror applies the RLS InitPlan optimization after every policy-creation block. The twice-applied canonical schema regression passed after this ordering was fixed.
 
 ## Production Gate 7 capacity result
 
@@ -55,12 +60,14 @@ The seven-client container CPU peaked at 463.1% across multiple cores, but the i
 ## Remaining release operations
 
 - `npm run test:workspace-window-v2-db` still requires `psql` and `SEASONAL_TEST_DATABASE_URL` for an isolated database.
-- Complete the real installed-canary navigation/import smoke and the non-destructive rollback drill before updater publication.
+- The non-destructive installer rollback drill passed: the published signed `0.1.11` installer (SHA-256 `B1E31F5B7A302A88F5650EF613F453888D14E96A75C006056A84DC88663278F1`) installed successfully, opened the operator login shell, and the production-like `0.1.12` installer then restored the installed version to `0.1.12`.
+- The installed `0.1.12` canary reaches the production operator login through the configured self-hosted Supabase endpoint. Authenticated route navigation is still pending because the SSH/database password is not the Supabase Auth password for the `admin` operator. Do not reset that operator or synthesize an impersonated session solely for this smoke test.
+- Complete the authenticated installed-canary navigation smoke before updater publication. No production import mutation will be used without a designated disposable canary season.
 - Keep workspace-read V1 available through the compatibility window.
 
 ## Release gate
 
-The production capacity portion of the release gate passed. Do not publish the updater until the remaining installed-canary and rollback checks are recorded. Preserve these accepted limits:
+The production capacity and rollback portions of the release gate passed. Do not publish the updater until the remaining authenticated installed-canary navigation check is recorded. Preserve these accepted limits:
 
 - zero `57014`;
 - page p95 below 2 seconds and maximum below 4 seconds;
