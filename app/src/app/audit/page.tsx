@@ -1,9 +1,17 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { getAuditDeltaChunks, getAuditLogEntries, getAuditSessions } from '@/lib/remoteStore';
 import { getOrCreateAuditSessionId, type AuditDeltaItem, type AuditLogEntry, type AuditSession } from '@/lib/auditLog';
+import {
+  readAuditDeltaState,
+  readAuditEntriesState,
+  readAuditSessionsState,
+  revalidateAuditDeltas,
+  revalidateAuditEntries,
+  revalidateAuditSessions,
+} from '@/lib/auditReadModel';
 import { buildLoadProgress } from '@/lib/importProgress';
+import { getOperatorSessionEpoch, isOperatorSessionEpochCurrent } from '@/lib/operatorSessionCacheRegistry';
 import LoadingStatusPanel from '../components/LoadingStatusPanel';
 
 type AuditFilters = {
@@ -49,14 +57,20 @@ function formatValue(value: unknown): string {
 }
 
 export default function AuditLogPage() {
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<AuditSession[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [entries, setEntries] = useState<AuditLogEntry[]>([]);
+  const [currentSessionId] = useState(() => getOrCreateAuditSessionId());
+  const initialSessionsState = readAuditSessionsState();
+  const [sessions, setSessions] = useState<AuditSession[]>(() => initialSessionsState.snapshot ?? []);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => {
+    const initialSessions = initialSessionsState.snapshot ?? [];
+    return initialSessions.some((session) => session.id === currentSessionId)
+      ? currentSessionId
+      : initialSessions[0]?.id ?? currentSessionId;
+  });
+  const [entries, setEntries] = useState<AuditLogEntry[]>(() => readAuditEntriesState(selectedSessionId ?? currentSessionId).snapshot ?? []);
   const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null);
   const [expandedDeltas, setExpandedDeltas] = useState<Record<string, AuditDeltaItem[]>>({});
-  const [loadingSessions, setLoadingSessions] = useState(true);
-  const [loadingEntries, setLoadingEntries] = useState(false);
+  const [loadingSessions, setLoadingSessions] = useState(initialSessionsState.snapshot === null);
+  const [loadingEntries, setLoadingEntries] = useState(() => readAuditEntriesState(selectedSessionId ?? currentSessionId).snapshot === null);
   const [filters, setFilters] = useState<AuditFilters>({
     season: '',
     module: '',
@@ -66,48 +80,59 @@ export default function AuditLogPage() {
 
   useEffect(() => {
     let cancelled = false;
-    let timeoutId: number | null = null;
+    const operatorSessionEpoch = getOperatorSessionEpoch();
+    const snapshotState = readAuditSessionsState();
 
-    async function loadSessions(sessionId: string): Promise<void> {
-      setLoadingSessions(true);
+    async function loadSessions(): Promise<void> {
+      await Promise.resolve();
+      if (cancelled || !isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+      if (snapshotState.snapshot) setSessions(snapshotState.snapshot);
+      if (!snapshotState.shouldRevalidate) {
+        setLoadingSessions(false);
+        return;
+      }
+      setLoadingSessions(snapshotState.snapshot === null);
       try {
-        const nextSessions = await getAuditSessions();
-        if (cancelled) return;
+        const nextSessions = await revalidateAuditSessions();
+        if (cancelled || !isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
         setSessions(nextSessions);
         setSelectedSessionId((current) => {
           if (current) return current;
-          if (nextSessions.some((session) => session.id === sessionId)) return sessionId;
-          return nextSessions[0]?.id ?? sessionId;
+          if (nextSessions.some((session) => session.id === currentSessionId)) return currentSessionId;
+          return nextSessions[0]?.id ?? currentSessionId;
         });
       } finally {
-        if (!cancelled) setLoadingSessions(false);
+        if (!cancelled && isOperatorSessionEpochCurrent(operatorSessionEpoch)) setLoadingSessions(false);
       }
     }
-
-    timeoutId = window.setTimeout(() => {
-      const sessionId = getOrCreateAuditSessionId();
-      setCurrentSessionId(sessionId);
-      void loadSessions(sessionId);
-    }, 0);
+    void loadSessions();
 
     return () => {
       cancelled = true;
-      if (timeoutId !== null) window.clearTimeout(timeoutId);
     };
-  }, []);
+  }, [currentSessionId]);
 
   useEffect(() => {
     if (!selectedSessionId) return undefined;
     let cancelled = false;
     const sessionId = selectedSessionId;
+    const operatorSessionEpoch = getOperatorSessionEpoch();
+    const snapshotState = readAuditEntriesState(sessionId);
 
     async function loadEntries(): Promise<void> {
-      setLoadingEntries(true);
+      await Promise.resolve();
+      if (cancelled || !isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+      if (snapshotState.snapshot) setEntries(snapshotState.snapshot);
+      if (!snapshotState.shouldRevalidate) {
+        setLoadingEntries(false);
+        return;
+      }
+      setLoadingEntries(snapshotState.snapshot === null);
       try {
-        const nextEntries = await getAuditLogEntries(sessionId);
-        if (!cancelled) setEntries(nextEntries);
+        const nextEntries = await revalidateAuditEntries(sessionId);
+        if (!cancelled && isOperatorSessionEpochCurrent(operatorSessionEpoch)) setEntries(nextEntries);
       } finally {
-        if (!cancelled) setLoadingEntries(false);
+        if (!cancelled && isOperatorSessionEpochCurrent(operatorSessionEpoch)) setLoadingEntries(false);
       }
     }
 
@@ -145,10 +170,17 @@ export default function AuditLogPage() {
 
     setExpandedEntryId(entry.id);
     if (expandedDeltas[entry.id] || !selectedSessionId) return;
-    const chunks = await getAuditDeltaChunks(selectedSessionId, entry.id);
+    const operatorSessionEpoch = getOperatorSessionEpoch();
+    const cached = readAuditDeltaState(selectedSessionId, entry.id);
+    if (cached.snapshot) {
+      setExpandedDeltas((current) => ({ ...current, [entry.id]: cached.snapshot ?? [] }));
+      if (!cached.shouldRevalidate) return;
+    }
+    const deltas = await revalidateAuditDeltas(selectedSessionId, entry);
+    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
     setExpandedDeltas((current) => ({
       ...current,
-      [entry.id]: chunks.flatMap((chunk) => chunk.items).concat(entry.deltas ?? []),
+      [entry.id]: deltas,
     }));
   }
 
@@ -167,7 +199,14 @@ export default function AuditLogPage() {
           <button
             type="button"
             onClick={() => {
-              if (selectedSessionId) void getAuditLogEntries(selectedSessionId).then(setEntries);
+              if (!selectedSessionId) return;
+              const operatorSessionEpoch = getOperatorSessionEpoch();
+              setLoadingEntries(entries.length === 0);
+              void revalidateAuditEntries(selectedSessionId, { force: true }).then((nextEntries) => {
+                if (isOperatorSessionEpochCurrent(operatorSessionEpoch)) setEntries(nextEntries);
+              }).finally(() => {
+                if (isOperatorSessionEpochCurrent(operatorSessionEpoch)) setLoadingEntries(false);
+              });
             }}
             className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
           >

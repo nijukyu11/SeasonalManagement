@@ -23,6 +23,8 @@ import {
 } from '@/lib/seasonDataCache';
 import { getRemoteStore } from '@/lib/remoteStore';
 import { getOrCreateSeasonClientId } from '@/lib/seasonChangeEvents';
+import { getOperatorSessionEpoch, isOperatorSessionEpochCurrent } from '@/lib/operatorSessionCacheRegistry';
+import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import { useCachedRouteActivity } from './RouteCacheContext';
 
 // Server-authoritative live refresh replaces user-facing conflict review in online-first mode.
@@ -207,6 +209,8 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
   const statesRef = useRef<Record<string, SeasonAutoSyncState>>({});
   const liveUnsubscribersRef = useRef(new Map<string, () => void>());
   const liveSubscribingRef = useRef(new Set<string>());
+  const liveSubscriptionAttemptsRef = useRef(new Map<string, { cancelled: boolean; operatorSessionEpoch: number }>());
+  const providerMountedRef = useRef(true);
   const sessionPendingSeasonIdsRef = useRef(new Set<string>());
   const clientIdRef = useRef<string | null>(null);
   const onlineRef = useRef(true);
@@ -262,14 +266,25 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
   const ensureLiveSeason = useCallback((seasonId: string) => {
     if (!clientIdRef.current) clientIdRef.current = getOrCreateSeasonClientId();
     if (liveUnsubscribersRef.current.has(seasonId) || liveSubscribingRef.current.has(seasonId)) return;
+    const subscriptionAttempt = { cancelled: false, operatorSessionEpoch: getOperatorSessionEpoch() };
+    liveSubscriptionAttemptsRef.current.set(seasonId, subscriptionAttempt);
     liveSubscribingRef.current.add(seasonId);
     void getRemoteStore().then(async (remoteStore) => {
+      if (subscriptionAttempt.cancelled || !providerMountedRef.current) return;
       if (!remoteStore.subscribeToSeasonEvents) {
         liveUnsubscribersRef.current.set(seasonId, () => undefined);
         return;
       }
       const unsubscribe = await remoteStore.subscribeToSeasonEvents(seasonId, (event) => {
+        if (subscriptionAttempt.cancelled || !providerMountedRef.current) return;
+        if (!isOperatorSessionEpochCurrent(subscriptionAttempt.operatorSessionEpoch)) return;
         if (event.clientId === clientIdRef.current) return;
+        const invalidated = useSeasonWorkspaceStore.getState().markSeasonWorkspaceStale(
+          event.seasonId || seasonId,
+          'realtime',
+          subscriptionAttempt.operatorSessionEpoch,
+        );
+        if (!invalidated) return;
         publishSeasonWorkspaceChanged({
           seasonId: event.seasonId || seasonId,
           source: 'server-live',
@@ -279,8 +294,14 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
           syncMeta: null,
         });
       });
+      if (subscriptionAttempt.cancelled || !providerMountedRef.current) {
+        unsubscribe();
+        return;
+      }
       liveUnsubscribersRef.current.set(seasonId, unsubscribe);
     }).catch((error) => {
+      if (subscriptionAttempt.cancelled || !providerMountedRef.current) return;
+      if (!isOperatorSessionEpochCurrent(subscriptionAttempt.operatorSessionEpoch)) return;
       const message = syncFailureMessageWithContext(error, 'Live season subscription failed.');
       patchSeasonState(seasonId, {
         status: 'failed',
@@ -288,7 +309,10 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
         progress: null,
       });
     }).finally(() => {
-      liveSubscribingRef.current.delete(seasonId);
+      if (liveSubscriptionAttemptsRef.current.get(seasonId) === subscriptionAttempt) {
+        liveSubscriptionAttemptsRef.current.delete(seasonId);
+        liveSubscribingRef.current.delete(seasonId);
+      }
     });
   }, [patchSeasonState]);
 
@@ -335,6 +359,7 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
       onState: setSeasonState,
     });
     setScheduler(nextScheduler);
+    return () => nextScheduler.dispose();
   }, [setSeasonState]);
 
   const registerGuard = useCallback((seasonId: string, source: string, options: SeasonSyncGuardOptions) => {
@@ -437,9 +462,19 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
     };
   }, [scheduler]);
 
-  useEffect(() => () => {
-    for (const unsubscribe of liveUnsubscribersRef.current.values()) unsubscribe();
-    liveUnsubscribersRef.current.clear();
+  useEffect(() => {
+    const subscriptionAttempts = liveSubscriptionAttemptsRef.current;
+    const subscribingSeasons = liveSubscribingRef.current;
+    const liveUnsubscribers = liveUnsubscribersRef.current;
+    providerMountedRef.current = true;
+    return () => {
+      providerMountedRef.current = false;
+      for (const attempt of subscriptionAttempts.values()) attempt.cancelled = true;
+      subscriptionAttempts.clear();
+      subscribingSeasons.clear();
+      for (const unsubscribe of liveUnsubscribers.values()) unsubscribe();
+      liveUnsubscribers.clear();
+    };
   }, []);
 
   const contextValue = useMemo<SeasonSyncContextValue>(() => ({

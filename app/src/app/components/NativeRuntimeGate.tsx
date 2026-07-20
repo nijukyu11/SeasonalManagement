@@ -13,7 +13,7 @@ function NativeAppRequiredPlaceholder() {
         </div>
         <h1 className="text-xl font-semibold">Native app required</h1>
         <p className="mt-3 text-sm leading-6 text-on-surface-variant">
-          Seasonal Management now uses the native SQLite engine as the only operational data store. Open this workspace in the Tauri desktop app to load schedules, sync, and make allocation changes.
+          Seasonal Management uses authenticated Supabase as the operational data source. Open this workspace in the Tauri desktop app to load schedules and make allocation changes with the supported native runtime.
         </p>
       </div>
     </div>

@@ -1,6 +1,6 @@
 # SeasonalManagement Architecture
 
-Last updated: 2026-07-13
+Last updated: 2026-07-20
 
 ## Purpose
 
@@ -18,10 +18,12 @@ User action
   -> season_change_events / relational tables
   -> route cache/store update
 
-Route cache miss read path
-  -> readCachedWorkspaceWindow()
-  -> loadSeasonWorkspaceWindow()
-  -> Supabase window RPC or table read fallback
+Route mount read path
+  -> readWorkspaceWindowSnapshot() from operator-scoped Zustand memory
+  -> render fresh or stale server snapshot immediately when present
+  -> shared seasonWorkspaceWindowCoordinator (one promise per key + generation)
+  -> sequential keyset pages from get_season_schedule_allocation_window_v2
+  -> one complete token-fenced snapshot commit
 
 Explicit legacy repair only
   -> legacyNativeSyncAdapter.ts
@@ -34,11 +36,11 @@ Browser/static mode is not the operational source of truth. Legacy IndexedDB and
 
 The 2026-06-22 self-hosted cutover uses Cloudflare Tunnel to expose the restored self-hosted Supabase endpoint at `https://supabase.ahtops.xyz`. The endpoint cutover itself was no-schema-change: release variables point signed builds at the self-hosted endpoint, while the restored database starts from the cloud server dump.
 
-Server-side write hardening is implemented through `opsdata-supabase/supabase/migrations/20260622_server_side_write_hardening.sql`. Seasonal import/re-import calls `apply_seasonal_import_remote(jsonb)` through the remote store so season metadata, imported flight records, change events, and commit cursors are written atomically. Normal schedule/allocation saves use `apply_season_server_mutation_v1(jsonb)`; `sync_season_workspace_v2` is legacy repair/rollback only. Anon execute remains intentionally revoked, so live smoke requires an authenticated operator session.
+Server-side write hardening is implemented through tracked Supabase migrations. Seasonal import/re-import sends normalized source rows to `stage_seasonal_import_v2(jsonb)` and commits the validated batch with `commit_seasonal_import_v2(uuid, integer)`. `season_source_rows` is imported baseline provenance, `season_flight_records` contains server-generated atomic occurrences, and `season_modifications` remains the operational overlay. The client never sends a pre-expanded atomic-record array and does not fall back to Import V1 or SQLite. Normal schedule/allocation saves use `apply_season_server_mutation_v1(jsonb)`; `sync_season_workspace_v2` is legacy repair/rollback only. Anon execute remains intentionally revoked, so live smoke requires an authenticated operator session.
 
 Online-first server-authoritative writes are staged through `opsdata-supabase/supabase/migrations/20260622_online_first_server_mutation_v1.sql`. Normal route mutation seams call `apply_season_server_mutation_v1(jsonb)` via `applySeasonServerMutationV1()` and update the active route/cache from server-authoritative responses or server-window reloads. `sync_season_workspace_v2`, native catch-up, native entity-version comparison, and native conflict review are legacy repair/rollback paths, not the main workflow. `season_mutation_receipts` provides idempotency by `(season_id, client_id, client_mutation_id)`.
 
-Online-first reads use `loadSeasonWorkspaceWindow()` in `remoteStore`. Primary route cache misses ask Supabase for the requested schedule/allocation window. The frontend uses `get_season_schedule_allocation_window_v1(...)` when available, with bounded Supabase table reads as the server-side fallback. A failed server read surfaces as a route fetch/load error; native SQLite viewport queries are not a normal fallback.
+Online-first reads use `loadSeasonWorkspaceWindow()` in `remoteStore`, which delegates to the shared coordinator. Existing snapshots remain visible while stale data revalidates. The V2 transport composes the logical window from bounded sequential keyset pages pinned to one `dataVersion` and `serverHighWater`; partial or mixed-version assemblies are never committed. Workspace-read V1 is called only when the V2 RPC signature is confirmed missing during additive rollout. Timeout and network failures do not fan out to V1, direct-table reads, or SQLite.
 
 ### Sync vs Fetch data
 

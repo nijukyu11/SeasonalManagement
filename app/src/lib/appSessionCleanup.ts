@@ -1,4 +1,7 @@
 import { clearSeasonDataCache } from './seasonDataCache';
+import { resetAuditSessionId } from './auditLog';
+import { advanceOperatorSessionEpochAndClearRegisteredCaches } from './operatorSessionCacheRegistry';
+import { useSeasonWorkspaceStore } from './seasonWorkspaceStore';
 import { resetUiUndoSession } from './uiUndoMemory';
 
 const APP_LOCAL_STORAGE_KEYS = new Set([
@@ -50,5 +53,12 @@ export function clearNativeAppEphemeralData(
 ): void {
   const preserveAuth = input.preserveAuth ?? true;
   clearAppOwnedWebStorage(preserveAuth);
+  clearOperatorScopedMemoryCaches();
+}
+
+export function clearOperatorScopedMemoryCaches(): void {
+  advanceOperatorSessionEpochAndClearRegisteredCaches();
   clearSeasonDataCache();
+  useSeasonWorkspaceStore.getState().resetSeasonWorkspaceStore();
+  resetAuditSessionId();
 }

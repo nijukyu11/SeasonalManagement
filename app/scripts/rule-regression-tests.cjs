@@ -20,7 +20,7 @@ function compileFixtureModules() {
   fs.mkdirSync(tempDir, { recursive: true });
   fs.writeFileSync(path.join(tempDir, 'package.json'), '{"type":"commonjs"}\n');
 
-  for (const name of ['types', 'importSeasonRules', 'iataSeason', 'flightPairIntegrity', 'parser', 'exporter', 'canonicalSeasonalRows', 'sourceRowPatterns', 'atomicSchedule', 'firestoreWritePlanner', 'importProgress', 'settingsRules', 'settingsPageActions', 'modHistorySizing', 'auditLog', 'detailedScheduleState', 'dailySchedule', 'dailyScheduleImport', 'dailyScheduleExport', 'checkinAllocation', 'checkInCounterSettings', 'gateAllocation', 'checkinPdfExport', 'gatePdfExport', 'seasonDataCache', 'seasonalLinkActions', 'nativeRuntime', 'serverAuthoritativeMode', 'nativeSeasonCatchup', 'nativeLocalSeasonStore', 'localSeasonStore', 'localSeasonSqlStore', 'seasonWorkspaceBootstrap', 'seasonChangeEvents', 'appSessionCleanup', 'exportSave', 'remoteStore', 'supabase', 'supabaseRelationalMappers', 'supabaseStore', 'seasonSync', 'seasonAutoSync', 'seasonalDisplayAggregator', 'routeCountry', 'dashboardAnalysis', 'dashboardAiShared', 'dashboardAiAnalysis', 'dashboardReportExport', 'persistenceSchema']) {
+  for (const name of ['types', 'importSeasonRules', 'iataSeason', 'flightPairIntegrity', 'seasonalSourceRowValidation', 'parser', 'seasonalFileActionGuard', 'seasonalPairing', 'atomicSchedule', 'effectiveSeasonalLegs', 'seasonalExportSelection', 'exporter', 'canonicalSeasonalRows', 'sourceRowPatterns', 'firestoreWritePlanner', 'importProgress', 'settingsRules', 'settingsPageActions', 'modHistorySizing', 'auditLog', 'auditReadModel', 'operationalSettingsReadModel', 'detailedScheduleState', 'dailySchedule', 'dailyScheduleImport', 'dailyScheduleExport', 'checkinAllocation', 'checkInCounterSettings', 'gateAllocation', 'checkinPdfExport', 'gatePdfExport', 'seasonDataCache', 'seasonWorkspaceStore', 'seasonalLinkActions', 'nativeRuntime', 'serverAuthoritativeMode', 'nativeSeasonCatchup', 'nativeLocalSeasonStore', 'localSeasonStore', 'localSeasonSqlStore', 'seasonWorkspaceBootstrap', 'seasonChangeEvents', 'operatorSessionCacheRegistry', 'appSessionCleanup', 'exportSave', 'remoteStore', 'supabase', 'supabaseErrorPolicy', 'seasonWorkspaceWindowRpcV2Contract', 'seasonWorkspaceWindowV2Assembler', 'seasonalImportRpcContract', 'supabaseRelationalMappers', 'supabaseStore', 'seasonSync', 'seasonAutoSync', 'seasonalDisplayAggregator', 'routeCountry', 'dashboardAnalysis', 'dashboardAiShared', 'dashboardAiAnalysis', 'dashboardReportExport', 'persistenceSchema']) {
     const sourcePath = name === 'dashboardAiShared'
       ? path.join(root, 'supabase', 'functions', '_shared', 'dashboardAiShared.ts')
       : path.join(root, 'src', 'lib', `${name}.ts`);
@@ -9488,7 +9488,9 @@ async function run() {
     `App UI must use dynamic viewport height (h-dvh) instead of h-screen, got ${fixedViewportViolations.slice(0, 12).map(({ relativePath, lineNumber }) => `${relativePath}:${lineNumber}`).join(', ')}`
   );
   assert(
-    seasonalPageSource.includes('if (selectedRecordIds.size === 0)') &&
+    seasonalPageSource.includes("action: 'export'") &&
+      seasonalPageSource.includes('getSeasonalFileActionBlock({') &&
+      seasonalPageSource.includes('selectedCount: selectedRecordIds.size') &&
       seasonalPageSource.includes('Select flights to export') &&
       !seasonalPageSource.includes('selectedRecordIds.size > 0 ? Array.from(selectedRecordIds) : undefined') &&
       !seasonalPageSource.includes('Export Updated Schedule'),
@@ -9749,14 +9751,16 @@ async function run() {
     'App route cache must stay a lightweight active-route boundary while read-model/session cache preserves tab state'
   );
   assert(
-    seasonWorkspaceStoreSource.includes('const recordsById = new Map(previous.recordsById);') &&
-      seasonWorkspaceStoreSource.includes('const previousWindowIds = input.windowKey ? previous.windowIds.get(input.windowKey) ?? [] : [];') &&
-      seasonWorkspaceStoreSource.includes('const retainedWindowIds = new Set<string>();') &&
-      seasonWorkspaceStoreSource.includes('const previousRecordOrderSet = new Set(previous.recordOrder);') &&
-      seasonWorkspaceStoreSource.includes('const recordOrder = [') &&
-      seasonWorkspaceStoreSource.includes('const modificationsByLegId = new Map(previous.modificationsByLegId);') &&
-      seasonWorkspaceReadModelSource.includes('if (records.length !== cachedWindowIds.length) return null;'),
-    'Season workspace read-model cache must preserve multiple route windows per season and reject incomplete cached windows'
+    seasonWorkspaceStoreSource.includes('windowSnapshots: Map<SeasonWindowKey, SeasonWorkspaceWindowSnapshot>;') &&
+      seasonWorkspaceStoreSource.includes('windowMetadata: Map<SeasonWindowKey, SeasonWorkspaceWindowMetadata>;') &&
+      seasonWorkspaceStoreSource.includes('const windowSnapshots = new Map(previous.windowSnapshots);') &&
+      seasonWorkspaceStoreSource.includes('const windowMetadata = new Map(previous.windowMetadata);') &&
+      seasonWorkspaceStoreSource.includes('recordServerHighWater') &&
+      seasonWorkspaceStoreSource.includes('modificationServerHighWater') &&
+      seasonWorkspaceReadModelSource.includes('workspace?.windowSnapshots.get(windowKey)') &&
+      seasonWorkspaceReadModelSource.includes('workspace?.windowMetadata.get(windowKey)') &&
+      seasonWorkspaceReadModelSource.includes('cachedAt: snapshot.metadata.fetchedAt'),
+    'Season workspace read-model cache must preserve independent route snapshots, TTL metadata, and entity high-water overlays'
   );
   assert(
     homePageSource.includes("import DashboardPage from './dashboard/page';") &&
@@ -10285,19 +10289,23 @@ async function run() {
     'Workspace-change metadata must patch provider pending state before scheduler notification without native summary refresh'
   );
   assert(
-    settingsPageSource.includes('This clears existing server records, modifications, and history') &&
+    settingsPageSource.includes('The server will reconcile the imported schedule atomically') &&
+      settingsPageSource.includes('applySeasonalImportRemote({') &&
       !settingsPageSource.includes('queryNativeSyncSummary') &&
       !settingsPageSource.includes('pending local change'),
-    'Settings repair import must describe the server replacement and ignore stale native pending metadata'
+    'Settings repair import must describe atomic server reconciliation and ignore stale native pending metadata'
   );
   const settingsRepairImportStart = settingsPageSource.indexOf('const handleSeasonRepairImport');
-  const settingsRepairPublishStart = settingsPageSource.indexOf('publishSeasonWorkspaceChanged({', settingsRepairImportStart);
-  const settingsRepairPublishBlock = settingsPageSource.slice(settingsRepairPublishStart, settingsRepairPublishStart + 260);
+  const settingsRepairEnd = settingsPageSource.indexOf('const updateAirlineColor', settingsRepairImportStart);
+  const settingsRepairBody = settingsPageSource.slice(settingsRepairImportStart, settingsRepairEnd);
   assert(
     settingsRepairImportStart >= 0 &&
-      settingsRepairPublishStart > settingsRepairImportStart &&
-      settingsRepairPublishBlock.includes('syncMeta: refreshedWindow.syncMeta'),
-    'Settings repair import must publish server-window syncMeta so sync badges update immediately after replacement'
+      settingsRepairEnd > settingsRepairImportStart &&
+      settingsRepairBody.includes('revalidateSeasonWorkspaceAfterMutation({') &&
+      settingsRepairBody.includes('expectedSnapshot: {') &&
+      !settingsRepairBody.includes('publishSeasonWorkspaceChanged({') &&
+      !settingsRepairBody.includes('loadSeasonWorkspaceWindow({'),
+    'Settings repair import must use one token-fenced coordinated refresh without publishing a duplicate trigger'
   );
   assert(
     seasonalPageSource.includes('const targetPendingCount = existing.id === activeSeason?.id ? syncPendingCount : 0') &&
@@ -10527,16 +10535,27 @@ async function run() {
       supabaseStoreSource.includes('.range(from, to)') &&
       supabaseStoreSource.includes('async function countRows') &&
       supabaseStoreSource.includes("select('*', { count: 'exact', head: true })") &&
-      supabaseStoreSource.includes("rpc('apply_seasonal_import_remote'") &&
+      supabaseStoreSource.includes("rpc('stage_seasonal_import_v2'") &&
+      supabaseStoreSource.includes("rpc('commit_seasonal_import_v2'") &&
       supabaseStoreSource.includes('p_import') &&
-      supabaseStoreSource.includes('normalizeSeasonalImportResult') &&
+      supabaseStoreSource.includes('parseSeasonalImportV2Result') &&
       remoteStoreSource.includes('applySeasonalImportRemote?') &&
       seasonalPageSource.includes('applySeasonalImportRemote') &&
       !seasonalPageSource.includes('await batchWriteFlightRecords(seasonId, recordsToWrite') &&
       !seasonalPageSource.includes('await clearSourceRows(seasonId)') &&
-      supabaseStoreSource.includes("selectAllRows<FlightRecordRelationalRow>('season_flight_records'") &&
+      supabaseStoreSource.includes('selectAllRows<FlightRecordRelationalRow>(') &&
       supabaseStoreSource.includes('readRowsByInFilter') &&
-      supabaseStoreSource.includes('selectAllRows<T>(table') &&
+      supabaseStoreSource.includes('async function selectAllRows<T>(') &&
+      supabaseStoreSource.includes('remaining = requestedLimit - rows.length') &&
+      supabaseStoreSource.includes('query = query.abortSignal(options.signal)') &&
+      !supabaseStoreSource.includes('async function loadSeasonWorkspaceWindowPaged') &&
+      supabaseStoreSource.includes('shouldUseLegacyWorkspaceWindowRpc(error)') &&
+      supabaseStoreSource.includes("rpc('get_season_schedule_allocation_window_v2'") &&
+      supabaseStoreSource.includes("rpc('get_season_schedule_allocation_window_v1'") &&
+      !supabaseStoreSource.slice(
+        supabaseStoreSource.indexOf('async getSeasonWorkspaceWindow'),
+        supabaseStoreSource.indexOf('async getSeasonWorkspaceSnapshot')
+      ).includes('loadSeasonWorkspaceWindowPaged') &&
       seasonSyncSource.includes('export function isSeasonWorkspaceStale') &&
       seasonWorkspaceBootstrapSource.includes('isSeasonWorkspaceStale') &&
       seasonWorkspaceBootstrapSource.includes('loadOrSeedSeasonWorkspace') &&
@@ -10547,9 +10566,11 @@ async function run() {
       [seasonalPageSource, detailedPageSource, dailyPageSource, dashboardPageSource, checkInPageSource, gatePageSource].every((source) =>
         source.includes('loadSeasonWorkspaceWindow') && !source.includes('queryNativeScheduleWindow') && !source.includes('queryNativeAllocationWindow')
       ) &&
-      seasonalPageSource.includes('sourceRows: []') &&
-      seasonalPageSource.includes('sourceRows: 0'),
-    'Supabase large season reads must be paginated, imports must verify remote counts, and operational routes must use server windows without native fallback'
+      seasonalPageSource.includes('sourceRows: rows') &&
+      seasonalPageSource.includes('revalidateSeasonWorkspaceAfterMutation') &&
+      seasonalPageSource.includes('remoteImport.sourceRowCount') &&
+      !seasonalPageSource.includes('buildSeasonalImportPatch'),
+    'Supabase large season reads must be paginated, V2 imports must reconcile once, and operational routes must use server windows without native fallback'
   );
   const supabaseInFilterBatchMatch = supabaseStoreSource.match(/const SUPABASE_IN_FILTER_BATCH_SIZE = (\d+)/);
   const supabaseInFilterBatchSize = Number(supabaseInFilterBatchMatch?.[1] ?? 0);
@@ -10628,7 +10649,7 @@ async function run() {
       [seasonalPageSource, detailedPageSource, dailyPageSource, checkInPageSource, gatePageSource].every((source) =>
         source.includes('loadSeasonWorkspaceWindow') && !source.includes('queryNative') && !source.includes('ensureNativeSeasonBaseline')
       ) &&
-      seasonalPageSource.includes('sourceRows: 0') &&
+      seasonalPageSource.includes('sourceRows: remoteImport.sourceRowCount') &&
       !seasonSyncProviderSource.includes('applySeasonEventRange') &&
       seasonSyncProviderSource.includes('subscribeToSeasonEvents') &&
       !seasonSyncProviderSource.includes('loadSeasonEventPage') &&
@@ -10671,14 +10692,15 @@ async function run() {
   const seasonalImportHandlerBody = seasonalImportHandlerStart >= 0 && seasonalImportHandlerEnd > seasonalImportHandlerStart
     ? seasonalPageSource.slice(seasonalImportHandlerStart, seasonalImportHandlerEnd)
     : '';
-  const seasonalImportButtonStart = seasonalPageSource.indexOf('onClick={() => fileInputRef.current?.click()}');
+  const seasonalImportButtonStart = seasonalPageSource.indexOf('onClick={handleImportClick}');
   const seasonalImportButtonBody = seasonalImportButtonStart >= 0
     ? seasonalPageSource.slice(Math.max(0, seasonalImportButtonStart - 300), seasonalImportButtonStart + 200)
     : '';
   assert(
-    seasonalImportHandlerBody.includes('if (uploading || syncInProgress || fetchingServerData) return;') &&
+    seasonalImportHandlerBody.includes("action: 'import'") &&
+      seasonalImportHandlerBody.includes('busy: uploading || syncInProgress || fetchingServerData') &&
       seasonalImportHandlerBody.includes('fetchingServerData,') &&
-      seasonalImportButtonBody.includes('disabled={uploading || syncInProgress || fetchingServerData}'),
+      seasonalImportButtonBody.includes('disabled={uploading || syncInProgress || fetchingServerData || hasDraftChanges}'),
     'Seasonal import must be disabled and guarded while save or Fetch data is active so baseline replacement cannot race server reads'
   );
   const dailyImportHandlerStart = dailyPageSource.indexOf('const handleDailyImportFile = useCallback(async (file: File | null) => {');
@@ -10811,7 +10833,8 @@ async function run() {
       seasonSyncSource.match(/nativeFullSaveReason: 'sync-baseline'/g)?.length >= 5 &&
       !seasonalPageSource.includes('importNativeSeasonSnapshot({') &&
       seasonalPageSource.includes('loadSeasonWorkspaceWindow({') &&
-      seasonalPageSource.includes('sourceRows: []') &&
+      seasonalPageSource.includes('sourceRows: rows') &&
+      !seasonalPageSource.includes('buildSeasonalImportPatch') &&
       !seasonalPageSource.includes("nativeFullSaveReason: 'undo-reset'") &&
       detailedPageSource.includes('runNativeScheduleMutation') &&
       !detailedPageSource.includes("nativeFullSaveReason: 'undo-reset'") &&
@@ -11038,7 +11061,9 @@ async function run() {
       operatorAuthGateSource.includes('NEXT_PUBLIC_REMOTE_BACKEND') &&
       operatorAuthGateSource.includes("backend === 'supabase'") &&
       operatorAuthGateSource.includes('auth.getSession()') &&
-      operatorAuthGateSource.includes('auth.refreshSession(data.session)') &&
+      !operatorAuthGateSource.includes('auth.refreshSession(') &&
+      operatorAuthGateSource.includes('resolveOperatorAuthSessionAction') &&
+      operatorAuthGateSource.includes('createOperatorVerificationSingleFlight') &&
       supabaseClientSource.includes('seasonal-management-supabase-auth-token') &&
       supabaseClientSource.includes('sb-rhmehiinfchiiuqmdukz-auth-token') &&
       operatorAuthGateSource.includes('auth.onAuthStateChange') &&
@@ -11356,9 +11381,10 @@ async function run() {
   assert(
     appSidebarSource.includes("{ href: '/audit', label: 'Audit Log'") &&
       !appRouteCacheSource.includes("import AuditLogPage from '../audit/page';") &&
-      auditPageSource.includes('getAuditSessions') &&
-      auditPageSource.includes('getAuditLogEntries') &&
-      auditPageSource.includes('getAuditDeltaChunks') &&
+      auditPageSource.includes('readAuditSessionsState') &&
+      auditPageSource.includes('revalidateAuditSessions') &&
+      auditPageSource.includes('revalidateAuditEntries') &&
+      auditPageSource.includes('revalidateAuditDeltas') &&
       auditPageSource.includes('getOrCreateAuditSessionId') &&
       auditPageSource.includes('Audit Log') &&
       !auditPageSource.includes('<aside') &&

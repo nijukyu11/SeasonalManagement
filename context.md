@@ -4,16 +4,17 @@
 
 A web-based aviation operations app for importing seasonal Excel schedules, reviewing aggregated flight patterns, editing individual operating legs, and exporting a system-recognizable Excel schedule.
 
-**Stack:** Next.js, React, Tailwind CSS, Tauri native desktop, Rust, SQLite local store, Supabase relational backend/Edge Functions, Recharts for dashboard charts, SheetJS (`xlsx`) for Excel workbooks.
+**Stack:** Next.js, React, Tailwind CSS, Tauri native desktop, Supabase relational backend/Edge Functions, Rust/SQLite legacy repair tooling, Recharts for dashboard charts, SheetJS (`xlsx`) for Excel workbooks.
 
 ---
 
-## Current Server-First Context - 2026-07-13
+## Current Server-First Context - 2026-07-20
 
 This section is the current runtime contract and supersedes the legacy native-first notes below.
 
 - The Tauri desktop app is fully server-first against self-hosted Supabase. Supabase relational tables, mutation RPCs, and server change events are the only durable operational authority.
-- Normal route reads use the in-memory workspace cache first, then `loadSeasonWorkspaceWindow()` against Supabase. A server read failure surfaces as an error; Seasonal, Detailed, Daily, Check-in, Gate, Dashboard, export, rollback, and import must not fall back to SQLite.
+- Normal route reads render any existing operator-scoped Zustand snapshot first, including stale snapshots, then revalidate through one shared coordinator promise per canonical window and invalidation generation. `get_season_schedule_allocation_window_v2` loads bounded keyset pages sequentially under one snapshot token; a server read failure preserves stale content when available and never falls back to direct-table fan-out or SQLite.
+- Seasonal import sends normalized source rows only through staged/committed Import V2. Supabase generates atomic occurrences, commits one import event, and the initiating client performs exactly one post-mutation coordinated workspace revalidation. Export reads one version-fenced server snapshot rather than exporting the currently mounted route subset.
 - Normal route writes call `apply_season_server_mutation_v1(jsonb)` through the shared mutation boundary. They do not read `query_sync_summary`, derive `baseServerSeq` from SQLite, run native catch-up, or wait for a local projection after the server commits.
 - `SeasonSyncProvider` coordinates route draft flushes, pending-submit UI state, and Supabase Realtime invalidation. It does not poll native pending state or invoke `sync_pending_changes` in normal operation.
 - Check-in/Gate rollback clears the optimistic view and reloads the bounded server window. Seasonal import, Settings full replace, Daily import collision checks, and Dashboard AI workspace use server read-after-write/window data.

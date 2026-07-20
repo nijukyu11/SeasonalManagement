@@ -112,7 +112,7 @@ function readInitialGateRouteState(input: {
   if (!input.targetSeasonId || input.targetSeasonId !== targetSeason.id) return null;
 
   const windowKey = buildGateWindowKey(input.fromDateTime, input.toDateTime);
-  const cachedWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+  const cachedWindow = readWorkspaceWindowSnapshot(storeState.workspaces[targetSeason.id], windowKey);
   if (!cachedWindow) return null;
 
   return {
@@ -607,7 +607,7 @@ function GateAllocationContent() {
     return snapshot;
   }, [clearOptimisticGateAllocationView, fromDateTime, replaceGateModifications, season, toDateTime]);
 
-  const tryApplyCachedGateRouteWindow = useCallback((): boolean => {
+  const tryApplyCachedGateRouteWindow = useCallback((): false | 'fresh' | 'stale' => {
     const storeState = useSeasonWorkspaceStore.getState();
     const cachedSeasons = getCachedSeasons() ?? storeState.seasons;
     const cachedSettings = storeState.operationalSettings;
@@ -617,7 +617,8 @@ function GateAllocationContent() {
     if (!targetSeasonId || targetSeasonId !== targetSeason.id) return false;
 
     const windowKey = buildGateWindowKey(fromDateTime, toDateTime);
-    const cachedWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+    const freshWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+    const cachedWindow = freshWindow ?? readWorkspaceWindowSnapshot(storeState.workspaces[targetSeason.id], windowKey);
     if (!cachedWindow) return false;
 
     setLoadError(null);
@@ -629,7 +630,7 @@ function GateAllocationContent() {
     setFlightRecords(cachedWindow.records);
     replaceGateModifications(cachedWindow.modifications);
     setLoading(false);
-    return true;
+    return freshWindow ? 'fresh' as const : 'stale' as const;
   }, [clearOptimisticGateAllocationView, fromDateTime, replaceGateModifications, targetSeasonId, toDateTime]);
 
   useSeasonWorkspaceRefresh({
@@ -644,8 +645,9 @@ function GateAllocationContent() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (tryApplyCachedGateRouteWindow()) return;
-      setLoading(true);
+      const cachedState = tryApplyCachedGateRouteWindow();
+      if (cachedState === 'fresh') return;
+      setLoading(cachedState !== 'stale');
       setLoadError(null);
       setLoadProgress(buildLoadProgress('Loading seasons and settings', 15, 'Preparing gate allocation'));
       try {
@@ -677,15 +679,15 @@ function GateAllocationContent() {
         }
         setSeason(targetSeason);
         const windowKey = buildGateWindowKey(fromDateTime, toDateTime);
-        const cachedWindow = readCachedWorkspaceWindow(
-          useSeasonWorkspaceStore.getState().workspaces[targetSeason.id],
-          windowKey
-        );
+        const workspace = useSeasonWorkspaceStore.getState().workspaces[targetSeason.id];
+        const freshWindow = readCachedWorkspaceWindow(workspace, windowKey);
+        const cachedWindow = freshWindow ?? readWorkspaceWindowSnapshot(workspace, windowKey);
         if (cachedWindow) {
           loadedWindowKeyRef.current = windowKey;
           setFlightRecords(cachedWindow.records);
           replaceGateModifications(cachedWindow.modifications);
-          return;
+          if (freshWindow) return;
+          setLoading(false);
         }
 
         setLoadProgress(buildLoadProgress('Loading server workspace', 35, targetSeason.seasonCode));

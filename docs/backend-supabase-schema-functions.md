@@ -1,6 +1,6 @@
 # SeasonalManagement Supabase backend schema and functions
 
-Generated for backend cutover comparison on 2026-06-20 from the current codebase.
+Generated for backend cutover comparison on 2026-06-20 and updated for the 2026-07-20 V2 read/import contracts.
 
 This file is a backend reference built from:
 
@@ -11,6 +11,14 @@ This file is a backend reference built from:
 - `app/scripts/migrate-firestore-to-supabase.mjs`
 
 Do not treat this as a replacement for `app/supabase/schema.sql`. Use it as the human-readable checklist to compare a self-hosted Supabase server against the real application contract.
+
+## 2026-07-20 V2 contracts
+
+- `get_season_schedule_allocation_window_v2(...)` returns one bounded relational root page plus a `dataVersion`/`serverHighWater` snapshot token. The client requests pages sequentially and never commits a partial or mixed-token assembly.
+- `stage_seasonal_import_v2(jsonb)` accepts normalized source rows only. `commit_seasonal_import_v2(uuid, integer)` generates and replaces imported atomic occurrences transactionally and emits one idempotent change event.
+- `get_seasonal_export_snapshot_v2(text, integer)` returns a complete version-fenced base/modification snapshot for validated export.
+- Timeout and network failures do not fall back to workspace V1, direct-table reads, Import V1, or SQLite. Workspace V1 is an additive rollout compatibility path only for a confirmed missing V2 signature.
+- The V2 migrations are `app/supabase/migrations/20260718090000_seasonal_source_import_v2.sql` and `app/supabase/migrations/20260720090000_workspace_window_keyset_v2.sql`.
 
 ## Current object counts
 

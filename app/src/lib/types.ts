@@ -386,8 +386,29 @@ export interface PatternGroup {
   linkType?: 'overnight' | 'sameday' | null;
 }
 
+export type SeasonalSourceRowIssueCode =
+  | 'missing-header'
+  | 'invalid-effective-date'
+  | 'invalid-discontinue-date'
+  | 'reversed-date-range'
+  | 'invalid-time'
+  | 'invalid-day-value'
+  | 'no-operating-days'
+  | 'missing-airline'
+  | 'missing-aircraft'
+  | 'incomplete-flight-side'
+  | 'no-flight-side';
+
+export interface SeasonalSourceRowIssue {
+  code: SeasonalSourceRowIssueCode;
+  rowIndex: number | null;
+  column: string | null;
+  message: string;
+}
+
 /** Parse result with season code */
 export interface ParseResult {
   seasonCode: string;
   rows: ParsedRow[];
+  issues: SeasonalSourceRowIssue[];
 }

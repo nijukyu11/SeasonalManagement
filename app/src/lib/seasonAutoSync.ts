@@ -113,12 +113,14 @@ export function isTransientSyncFailure(message: string): boolean {
 export class SeasonAutoSyncScheduler {
   private readonly records = new Map<string, SeasonAutoSyncRecord>();
   private readonly runtime: SeasonAutoSyncRuntime;
+  private disposed = false;
 
   constructor(runtime: SeasonAutoSyncRuntime) {
     this.runtime = runtime;
   }
 
   notifyLocalChange(seasonId: string, summary: SeasonAutoSyncSummary = {}): void {
+    if (this.disposed) return;
     const record = this.getRecord(seasonId);
     record.source = summary.source ?? record.source;
     const pendingCount = summary.pendingCount ?? record.state.pendingCount ?? 1;
@@ -174,6 +176,7 @@ export class SeasonAutoSyncScheduler {
   }
 
   notifyGuardChanged(seasonId: string): void {
+    if (this.disposed) return;
     const record = this.getRecord(seasonId);
     if (!record.state.pendingCount) return;
     if (record.running) return;
@@ -190,6 +193,7 @@ export class SeasonAutoSyncScheduler {
   }
 
   notifyOnline(): void {
+    if (this.disposed) return;
     for (const [seasonId, record] of this.records) {
       if (
         !record.state.pendingCount ||
@@ -209,6 +213,7 @@ export class SeasonAutoSyncScheduler {
   }
 
   async syncNow(seasonId: string, source: string | null = null): Promise<SeasonAutoSyncRunResult> {
+    if (this.disposed) return { status: 'failed', message: 'Sync coordinator has been disposed.' };
     const record = this.getRecord(seasonId);
     record.source = source ?? record.source;
     this.cancelScheduled(record);
@@ -216,11 +221,22 @@ export class SeasonAutoSyncScheduler {
   }
 
   setProgress(seasonId: string, progress: string | null): void {
+    if (this.disposed) return;
     this.updateState(seasonId, { progress });
   }
 
   getState(seasonId: string): SeasonAutoSyncState {
+    if (this.disposed) return this.records.get(seasonId)?.state ?? createInitialSeasonAutoSyncState();
     return this.getRecord(seasonId).state;
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const record of this.records.values()) {
+      this.cancelScheduled(record);
+      record.queued = false;
+    }
   }
 
   private getRecord(seasonId: string): SeasonAutoSyncRecord {
@@ -240,6 +256,7 @@ export class SeasonAutoSyncScheduler {
   }
 
   private updateState(seasonId: string, patch: Partial<SeasonAutoSyncState>): void {
+    if (this.disposed) return;
     const record = this.getRecord(seasonId);
     record.state = { ...record.state, ...patch };
     this.runtime.onState?.(seasonId, record.state);
@@ -261,10 +278,13 @@ export class SeasonAutoSyncScheduler {
   }
 
   private schedule(seasonId: string, record: SeasonAutoSyncRecord, delay: number): void {
+    if (this.disposed) return;
     if (!this.isOnline() || !shouldAutoSyncSource(record.source)) return;
     record.timeoutHandle = this.runtime.setTimeout(() => {
+      if (this.disposed) return;
       record.timeoutHandle = null;
       const run = () => {
+        if (this.disposed) return;
         record.idleHandle = null;
         void this.runSeason(seasonId, 'auto');
       };
@@ -279,6 +299,7 @@ export class SeasonAutoSyncScheduler {
   }
 
   private async runSeason(seasonId: string, mode: AutoSyncMode): Promise<SeasonAutoSyncRunResult> {
+    if (this.disposed) return { status: 'failed', message: 'Sync coordinator has been disposed.' };
     const record = this.getRecord(seasonId);
     if (record.running) {
       record.queued = true;
@@ -295,6 +316,7 @@ export class SeasonAutoSyncScheduler {
     }
 
     const blockedReason = await this.runtime.getBlockedReason?.(seasonId);
+    if (this.disposed) return { status: 'failed', message: 'Sync coordinator has been disposed.' };
     if (blockedReason) {
       this.updateState(seasonId, {
         status: 'dirty',
@@ -306,6 +328,7 @@ export class SeasonAutoSyncScheduler {
 
     try {
       await this.runtime.prepareSync?.(seasonId, mode, record.source);
+      if (this.disposed) return { status: 'failed', message: 'Sync coordinator has been disposed.' };
     } catch (err) {
       const message = (err as Error).message;
       this.handleFailure(seasonId, message);
@@ -315,6 +338,7 @@ export class SeasonAutoSyncScheduler {
     let pendingCount: number;
     try {
       pendingCount = await this.runtime.getPendingCount(seasonId);
+      if (this.disposed) return { status: 'failed', message: 'Sync coordinator has been disposed.' };
     } catch (err) {
       const message = (err as Error).message;
       this.handleFailure(seasonId, message);
@@ -346,6 +370,7 @@ export class SeasonAutoSyncScheduler {
     const runningPromise = (async (): Promise<SeasonAutoSyncRunResult> => {
       try {
         const result = await this.runtime.run(seasonId, mode, record.source);
+        if (this.disposed) return { status: 'failed', message: 'Sync coordinator has been disposed.' };
         if (result.status === 'busy') {
           this.updateState(seasonId, {
             status: 'syncing',
@@ -362,6 +387,7 @@ export class SeasonAutoSyncScheduler {
         }
 
         const nextPendingCount = await this.runtime.getPendingCount(seasonId);
+        if (this.disposed) return { status: 'failed', message: 'Sync coordinator has been disposed.' };
         this.updateState(seasonId, {
           status: nextPendingCount > 0 ? 'dirty' : 'synced',
           pendingCount: nextPendingCount,
@@ -373,16 +399,17 @@ export class SeasonAutoSyncScheduler {
         });
         return result;
       } catch (err) {
+        if (this.disposed) return { status: 'failed', message: 'Sync coordinator has been disposed.' };
         const message = (err as Error).message;
         this.handleFailure(seasonId, message);
         return { status: 'failed', message };
       } finally {
         record.running = false;
         record.runningPromise = null;
-        if (record.queued) {
+        if (!this.disposed && record.queued) {
           record.queued = false;
           const pendingCount = await this.runtime.getPendingCount(seasonId).catch(() => record.state.pendingCount ?? 0);
-          if (pendingCount > 0) {
+          if (!this.disposed && pendingCount > 0) {
             const canAutoSync = this.isOnline() && shouldAutoSyncSource(record.source);
             this.updateState(seasonId, {
               status: canAutoSync ? 'scheduled' : this.isOnline() ? 'dirty' : 'offline',
@@ -404,6 +431,7 @@ export class SeasonAutoSyncScheduler {
   }
 
   private handleFailure(seasonId: string, message: string): void {
+    if (this.disposed) return;
     this.updateState(seasonId, {
       status: 'failed',
       message,

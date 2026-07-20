@@ -7,6 +7,7 @@ import {
   readWorkspaceWindowSnapshot,
   shouldRefreshWorkspaceWindow,
 } from './seasonWorkspaceReadModel.ts';
+import { getOperatorSessionEpoch } from './operatorSessionCacheRegistry.ts';
 import { useSeasonWorkspaceStore } from './seasonWorkspaceStore.ts';
 import type { FlightRecord } from './types';
 
@@ -139,7 +140,7 @@ test('cached route windows remain readable after another tab loads a different w
   );
 });
 
-test('readCachedWorkspaceWindow rejects incomplete cached window records', () => {
+test('isolated window snapshots remain readable when normalized entities are pruned', () => {
   const store = useSeasonWorkspaceStore;
   store.getState().resetSeasonWorkspaceStore();
   const windowKey = buildWorkspaceWindowCacheKey({
@@ -157,9 +158,9 @@ test('readCachedWorkspaceWindow rejects incomplete cached window records', () =>
   });
   store.getState().workspaces['season-1'].recordsById.delete(staleRecord.id);
 
-  assert.equal(
-    readCachedWorkspaceWindow(store.getState().workspaces['season-1'], windowKey),
-    null
+  assert.deepEqual(
+    readCachedWorkspaceWindow(store.getState().workspaces['season-1'], windowKey)?.records.map((record) => record.id),
+    [staleRecord.id]
   );
 });
 
@@ -196,4 +197,48 @@ test('workspace window snapshot remains readable when cache is stale from a cros
   const snapshot = readWorkspaceWindowSnapshot(store.getState().workspaces['season-1'], windowKey);
   assert.deepEqual(snapshot?.records.map((item) => item.id), [record.id]);
   assert.deepEqual(snapshot?.modifications.get(record.id)?.counter, ['C01', 'C02']);
+});
+
+test('each isolated window uses its own fetchedAt for TTL', () => {
+  const store = useSeasonWorkspaceStore;
+  store.getState().resetSeasonWorkspaceStore();
+  const epoch = getOperatorSessionEpoch();
+  const firstKey = 'server-window-v2|season-1|||gate|all';
+  const secondKey = 'server-window-v2|season-1|||checkin|all';
+  for (const [key, fetchedAt] of [[firstKey, 1000], [secondKey, 5000]] as const) {
+    const generation = store.getState().beginSeasonWindowRequest('season-1', key);
+    store.getState().commitSeasonWindowResult({
+      seasonId: 'season-1', windowKey: key, requestGeneration: generation, operatorSessionEpoch: epoch,
+      rows: [], records: [makeRecord({ id: key })], modifications: new Map(), syncMeta: null,
+      fetchedAt, dataVersion: 1, serverHighWater: 1,
+    });
+  }
+  assert.equal(readCachedWorkspaceWindow(store.getState().workspaces['season-1'], firstKey, 5500, 1000), null);
+  assert.ok(readCachedWorkspaceWindow(store.getState().workspaces['season-1'], secondKey, 5500, 1000));
+});
+
+test('older cross-window results cannot lower overlapping normalized entities', () => {
+  const store = useSeasonWorkspaceStore;
+  store.getState().resetSeasonWorkspaceStore();
+  const epoch = getOperatorSessionEpoch();
+  const gateKey = 'server-window-v2|season-1|||gate|all';
+  const dashboardKey = 'server-window-v2|season-1|||all|all';
+  const overlap = makeRecord({ id: 'OVERLAP', gate: 7 });
+  let generation = store.getState().beginSeasonWindowRequest('season-1', gateKey);
+  store.getState().commitSeasonWindowResult({
+    seasonId: 'season-1', windowKey: gateKey, requestGeneration: generation, operatorSessionEpoch: epoch,
+    rows: [], records: [overlap], modifications: new Map(), syncMeta: null,
+    fetchedAt: 2000, dataVersion: 2, serverHighWater: 11,
+  });
+  generation = store.getState().beginSeasonWindowRequest('season-1', dashboardKey);
+  store.getState().commitSeasonWindowResult({
+    seasonId: 'season-1', windowKey: dashboardKey, requestGeneration: generation, operatorSessionEpoch: epoch,
+    rows: [], records: [{ ...overlap, gate: 1 }, makeRecord({ id: 'DASHBOARD-ONLY' })], modifications: new Map(), syncMeta: null,
+    fetchedAt: 2100, dataVersion: 1, serverHighWater: 10,
+  });
+  assert.equal(readWorkspaceWindowSnapshot(store.getState().workspaces['season-1'], gateKey)?.records[0].gate, 7);
+  const dashboard = readWorkspaceWindowSnapshot(store.getState().workspaces['season-1'], dashboardKey);
+  assert.equal(dashboard?.records.find((item) => item.id === 'OVERLAP')?.gate, 7);
+  assert.ok(dashboard?.records.some((item) => item.id === 'DASHBOARD-ONLY'));
+  assert.equal(store.getState().workspaces['season-1'].recordServerHighWater.get('OVERLAP'), 11);
 });
