@@ -21,6 +21,7 @@ This section is the current runtime contract and supersedes the legacy native-fi
 - Check-in/Gate rollback clears the optimistic view and reloads the bounded server window. Seasonal import, Settings full replace, Daily import collision checks, and Dashboard AI workspace use server read-after-write/window data.
 - Existing SQLite databases are ignored by normal operation, including on a fresh install or a machine with stale historical data. Rust/SQLite code remains packaged temporarily only for explicit legacy repair and rollback tooling guarded by `NEXT_PUBLIC_ENABLE_LEGACY_NATIVE_SYNC_REPAIR=true`.
 - Save remains the user-facing action. Seasonal/Detailed draft guards flush directly to the server mutation RPC; successful server writes cannot be changed into failures by SQLite projection errors.
+- Release `app-v0.1.12` was published on 2026-07-20 after the combined server-first/Import-Export V2 canary, seven-client capacity gate, rollback drill, signed-installer install, and public updater metadata verification all passed.
 
 ## Legacy Native Context - 2026-05-30
 

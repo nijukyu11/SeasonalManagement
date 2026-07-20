@@ -81,3 +81,11 @@ The production capacity, installed-canary navigation, and rollback portions of t
 - sequential pages within each chain;
 - identical complete token/ID/count sets for all clients;
 - no workspace V1/direct-table request after V2 timeout or network failure.
+
+## Published updater verification
+
+- Tag `app-v0.1.12` points to release commit `094e760` and includes the combined Import/Export V2 baseline plus server-first route reload hardening.
+- GitHub Actions run `29757501790` completed successfully in `12m13s`, including updater/rules/Python tests, signed Tauri bundle generation, and release publication.
+- The public release is `Seasonal Management 0.1.12`, not a draft or prerelease, with `latest.json` (756 bytes), `SeasonalManagement_0.1.12_x64-setup.exe` (22,641,555 bytes), and its 432-byte signature asset.
+- The public latest-updater endpoint returned HTTP 200 with version `0.1.12`, a `windows-x86_64` installer URL under tag `app-v0.1.12`, and a non-empty 432-character signature.
+- The published signed installer SHA-256 is `8F17E9405C1893A3CB5908BBD49187AC572BDCE523776FE8DFA8BA7BB9764DA0`. Silent installation exited successfully, the installed binary reported `0.1.12`, and the authenticated Dashboard reopened without load or timeout errors.
