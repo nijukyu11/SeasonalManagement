@@ -18,6 +18,12 @@ import {
   resolveOperatorLoginIdentity,
 } from '@/lib/operatorAuthIdentity';
 import { getSupabaseClient } from '@/lib/supabase';
+import { clearOperatorScopedMemoryCaches } from '@/lib/appSessionCleanup';
+import {
+  createOperatorVerificationSingleFlight,
+  resolveOperatorAuthSessionAction,
+  type OperatorAuthSessionEvent,
+} from '@/lib/operatorAuthSessionPolicy';
 
 type OperatorAuthStatus = 'checking' | 'signedOut' | 'authorized' | 'unauthorized';
 
@@ -196,13 +202,26 @@ function OperatorAuthScreen({
 export default function OperatorAuthGate({ children }: { children: ReactNode }) {
   const enabled = isSupabaseBackendEnabled();
   const refreshIdRef = useRef(0);
+  const authorizedUserIdRef = useRef<string | null>(null);
   const [status, setStatus] = useState<OperatorAuthStatus>(enabled ? 'checking' : 'authorized');
   const [operatorProfile, setOperatorProfile] = useState<OperatorProfile>(EMPTY_OPERATOR_PROFILE);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
 
-  const refreshSession = useCallback(async (session: Session | null) => {
+  const operatorVerification = useMemo(() => createOperatorVerificationSingleFlight(async (userId: string) => {
+    const supabase = getSupabaseClient();
+    return supabase
+      .from('app_operators')
+      .select('user_id,email,username,display_name')
+      .eq('user_id', userId)
+      .maybeSingle();
+  }), []);
+
+  const verifySession = useCallback(async (
+    session: Session | null,
+    options: { blocking: boolean },
+  ) => {
     if (!enabled) return;
 
     const refreshId = refreshIdRef.current + 1;
@@ -210,22 +229,24 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
     setErrorMessage(null);
 
     if (!session?.user) {
+      if (authorizedUserIdRef.current) clearOperatorScopedMemoryCaches();
+      authorizedUserIdRef.current = null;
       setOperatorProfile(EMPTY_OPERATOR_PROFILE);
       setStatus('signedOut');
       return;
     }
 
-    setStatus('checking');
-    const supabase = getSupabaseClient();
-    const { data, error } = await supabase
-      .from('app_operators')
-      .select('user_id,email,username,display_name')
-      .eq('user_id', session.user.id)
-      .maybeSingle();
+    if (options.blocking) setStatus('checking');
+    const { data, error } = await operatorVerification.verify(session.user.id);
 
     if (refreshId !== refreshIdRef.current) return;
 
     if (error) {
+      if (!options.blocking && authorizedUserIdRef.current === session.user.id) {
+        setErrorMessage(error.message);
+        return;
+      }
+      authorizedUserIdRef.current = null;
       setOperatorProfile({
         email: session.user.email ?? null,
         username: null,
@@ -237,6 +258,8 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
     }
 
     if (!data) {
+      if (authorizedUserIdRef.current) clearOperatorScopedMemoryCaches();
+      authorizedUserIdRef.current = null;
       setOperatorProfile({
         email: session.user.email ?? null,
         username: null,
@@ -246,13 +269,37 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
       return;
     }
 
+    authorizedUserIdRef.current = session.user.id;
     setOperatorProfile({
       email: data.email ?? session.user.email ?? null,
       username: data.username ?? null,
       displayName: data.display_name ?? null,
     });
     setStatus('authorized');
-  }, [enabled]);
+  }, [enabled, operatorVerification]);
+
+  const handleAuthSession = useCallback((
+    event: OperatorAuthSessionEvent,
+    session: Session | null,
+  ): void => {
+    const nextUserId = session?.user?.id ?? null;
+    const action = resolveOperatorAuthSessionAction(event, nextUserId, authorizedUserIdRef.current);
+    if (action.kind === 'sign-out') {
+      refreshIdRef.current += 1;
+      operatorVerification.clear();
+      clearOperatorScopedMemoryCaches();
+      authorizedUserIdRef.current = null;
+      setOperatorProfile(EMPTY_OPERATOR_PROFILE);
+      setErrorMessage(null);
+      setStatus('signedOut');
+      return;
+    }
+    if (action.blocking && authorizedUserIdRef.current && authorizedUserIdRef.current !== nextUserId) {
+      clearOperatorScopedMemoryCaches();
+      authorizedUserIdRef.current = null;
+    }
+    void verifySession(session, { blocking: action.blocking });
+  }, [operatorVerification, verifySession]);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -260,36 +307,27 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
     const supabase = getSupabaseClient();
     let active = true;
 
-    supabase.auth.getSession().then(async ({ data, error }) => {
+    supabase.auth.getSession().then(({ data, error }) => {
       if (!active) return;
       if (error) {
         setErrorMessage(error.message);
         setStatus('signedOut');
         return;
       }
-      if (!data.session) {
-        void refreshSession(null);
-        return;
-      }
-      const refreshed = await supabase.auth.refreshSession(data.session);
-      if (!active) return;
-      if (refreshed.error) {
-        setErrorMessage(refreshed.error.message);
-        setStatus('signedOut');
-        return;
-      }
-      void refreshSession(refreshed.data.session ?? data.session);
+      handleAuthSession('BOOTSTRAP', data.session);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      void refreshSession(session);
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      handleAuthSession(event, session);
     });
 
     return () => {
       active = false;
+      refreshIdRef.current += 1;
+      operatorVerification.clear();
       listener.subscription.unsubscribe();
     };
-  }, [enabled, refreshSession]);
+  }, [enabled, handleAuthSession, operatorVerification]);
 
   const signIn = useCallback(async (loginName: string, password: string) => {
     setBusy(true);
@@ -307,14 +345,14 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
         setStatus('signedOut');
         return;
       }
-      await refreshSession(data.session);
+      await verifySession(data.session, { blocking: true });
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Không đăng nhập được. Vui lòng thử lại.');
       setStatus('signedOut');
     } finally {
       setBusy(false);
     }
-  }, [refreshSession]);
+  }, [verifySession]);
 
   const signOut = useCallback(async () => {
     setSigningOut(true);
@@ -322,6 +360,8 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
     try {
       const supabase = getSupabaseClient();
       await supabase.auth.signOut();
+      if (authorizedUserIdRef.current) clearOperatorScopedMemoryCaches();
+      authorizedUserIdRef.current = null;
       setOperatorProfile(EMPTY_OPERATOR_PROFILE);
       setStatus('signedOut');
     } finally {

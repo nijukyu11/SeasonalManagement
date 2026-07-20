@@ -1,4 +1,9 @@
 import type { LocalPendingOp, LocalSeasonWorkspace } from './localSeasonStore';
+import {
+  getOperatorSessionEpoch,
+  isOperatorSessionEpochCurrent,
+  type OperatorSessionRemoteOptions,
+} from './operatorSessionCacheRegistry';
 import type { FlightModification, FlightRecord, OperationalSettings, Season } from './types';
 
 export const FIRESTORE_AUDIT_DELTA_SAFE_BYTES = 850000;
@@ -101,6 +106,11 @@ export type AppendAuditLogEntryInput = Omit<AuditLogEntry, 'id' | 'sessionId' | 
 };
 
 const AUDIT_SESSION_STORAGE_KEY = 'seasonalManagement.audit.sessionId';
+
+export function resetAuditSessionId(): void {
+  if (typeof window === 'undefined') return;
+  window.sessionStorage?.removeItem(AUDIT_SESSION_STORAGE_KEY);
+}
 
 const FLIGHT_DELTA_FIELDS: Array<keyof FlightRecord> = [
   'date',
@@ -567,14 +577,30 @@ export function createAuditLogEntry(input: AppendAuditLogEntryInput): AuditLogEn
   };
 }
 
-export async function appendAuditLogEntry(input: AppendAuditLogEntryInput): Promise<void> {
+export async function appendAuditLogEntry(
+  input: AppendAuditLogEntryInput,
+  options: OperatorSessionRemoteOptions = {
+    operatorSessionEpoch: getOperatorSessionEpoch(),
+  },
+): Promise<void> {
+  const operatorSessionEpoch = options.operatorSessionEpoch;
   try {
     const { getCurrentRemoteActor, saveAuditLogEntry } = await import('./remoteStore');
-    const actor = input.actor ?? resolveAuditActor(await getCurrentRemoteActor());
+    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+    const remoteActor = input.actor
+      ? null
+      : await getCurrentRemoteActor({ operatorSessionEpoch });
+    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+    const actor = input.actor ?? resolveAuditActor(remoteActor);
     const entry = createAuditLogEntry({ ...input, actor });
     const session = buildAuditSession(entry.sessionId, actor, entry.timestamp);
-    await saveAuditLogEntry(session, entry);
+    await saveAuditLogEntry(session, entry, { operatorSessionEpoch });
+    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+    const { patchAuditCacheAfterAppend } = await import('./auditReadModel');
+    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+    patchAuditCacheAfterAppend(session, entry, operatorSessionEpoch);
   } catch (error) {
+    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
     console.debug('[audit-log] append failed', error);
   }
 }

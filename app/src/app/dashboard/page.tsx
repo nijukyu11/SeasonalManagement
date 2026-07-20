@@ -227,6 +227,7 @@ interface DashboardRouteState {
   syncMeta: LocalSyncMeta | null;
   dataSource: 'cache';
   windowKey: string;
+  freshness: 'fresh' | 'stale';
 }
 
 function buildDashboardWindowKey(scope: 'operations' | 'ai-workspace' = 'operations'): string {
@@ -242,7 +243,8 @@ function readInitialDashboardRouteState(targetSeasonId: string | null): Dashboar
   if (!targetSeasonId || targetSeasonId !== targetSeason.id) return null;
 
   const windowKey = buildDashboardWindowKey('operations');
-  const cachedWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+  const freshWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+  const cachedWindow = freshWindow ?? readWorkspaceWindowSnapshot(storeState.workspaces[targetSeason.id], windowKey);
   if (!cachedWindow) return null;
 
   return {
@@ -254,6 +256,7 @@ function readInitialDashboardRouteState(targetSeasonId: string | null): Dashboar
     syncMeta: cachedWindow.syncMeta,
     dataSource: 'cache',
     windowKey,
+    freshness: freshWindow ? 'fresh' : 'stale',
   };
 }
 
@@ -921,7 +924,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     if (dashboardViewState !== dashboardView) setDashboardView(dashboardView);
   }, [dashboardView, dashboardViewState, setDashboardView]);
 
-  const tryApplyCachedDashboardRouteWindow = useCallback((): boolean => {
+  const tryApplyCachedDashboardRouteWindow = useCallback((): false | 'fresh' | 'stale' => {
     const cachedState = readInitialDashboardRouteState(targetSeasonId);
     if (!cachedState) return false;
 
@@ -935,7 +938,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     setSyncMeta(cachedState.syncMeta);
     loadedWindowKeyRef.current = cachedState.windowKey;
     setLoading(false);
-    return true;
+    return cachedState.freshness;
   }, [targetSeasonId]);
 
   const refreshDashboardWindow = useCallback(async () => {
@@ -1069,8 +1072,9 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     let cancelled = false;
 
     async function loadDashboardData() {
-      if (tryApplyCachedDashboardRouteWindow()) return;
-      setLoading(true);
+      const cachedState = tryApplyCachedDashboardRouteWindow();
+      if (cachedState === 'fresh') return;
+      setLoading(cachedState !== 'stale');
       setError(null);
       setLoadProgress(buildLoadProgress('Loading seasons', 15, 'Preparing dashboard'));
       try {
@@ -1098,17 +1102,17 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
 
         setSeason(targetSeason);
         const overviewWindowKey = buildDashboardWindowKey('operations');
-        const cachedWindow = readCachedWorkspaceWindow(
-          useSeasonWorkspaceStore.getState().workspaces[targetSeason.id],
-          overviewWindowKey
-        );
+        const workspace = useSeasonWorkspaceStore.getState().workspaces[targetSeason.id];
+        const freshWindow = readCachedWorkspaceWindow(workspace, overviewWindowKey);
+        const cachedWindow = freshWindow ?? readWorkspaceWindowSnapshot(workspace, overviewWindowKey);
         if (cachedWindow) {
           loadedWindowKeyRef.current = overviewWindowKey;
           setRecords(cachedWindow.records);
           setModifications(cachedWindow.modifications);
           setDataSource('local');
           setSyncMeta(cachedWindow.syncMeta);
-          return;
+          if (freshWindow) return;
+          setLoading(false);
         }
 
         setLoadProgress(buildLoadProgress('Loading server workspace', 35, targetSeason.seasonCode));

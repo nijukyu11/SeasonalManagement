@@ -1243,10 +1243,9 @@ function DetailedScheduleContent() {
           targetDepFlight: activeDep,
         });
         const windowKey = buildDetailedWindowKey(queryWindow);
-        const cachedWindow = readCachedWorkspaceWindow(
-          useSeasonWorkspaceStore.getState().workspaces[found.id],
-          windowKey
-        );
+        const workspace = useSeasonWorkspaceStore.getState().workspaces[found.id];
+        const freshWindow = readCachedWorkspaceWindow(workspace, windowKey);
+        const cachedWindow = freshWindow ?? readWorkspaceWindowSnapshot(workspace, windowKey);
         if (cachedWindow?.syncMeta) {
           loadedWindowKeyRef.current = windowKey;
           setFlightRecords(cachedWindow.records);
@@ -1256,7 +1255,8 @@ function DetailedScheduleContent() {
             lastLocalChangeAt: cachedWindow.syncMeta.lastLocalChangeAt,
           });
           refreshDetailedStateRef.current(cachedWindow.records, cachedWindow.modifications, { preserveSelection: true });
-          return;
+          if (freshWindow) return;
+          setLoading(false);
         }
 
         setLoadProgress(buildLoadProgress('Loading server workspace', 35, found.seasonCode));

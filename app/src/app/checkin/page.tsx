@@ -158,7 +158,7 @@ function readInitialCheckInRouteState(input: {
   if (!input.targetSeasonId || input.targetSeasonId !== targetSeason.id) return null;
 
   const windowKey = buildCheckInWindowKey(input.fromDateTime, input.toDateTime);
-  const cachedWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+  const cachedWindow = readWorkspaceWindowSnapshot(storeState.workspaces[targetSeason.id], windowKey);
   if (!cachedWindow?.syncMeta) return null;
 
   return {
@@ -1038,7 +1038,7 @@ function CheckInAllocationContent() {
     return snapshot;
   }, [clearOptimisticAllocationView, fromDateTime, replaceCheckInModifications, season, toDateTime]);
 
-  const tryApplyCachedCheckInRouteWindow = useCallback((): boolean => {
+  const tryApplyCachedCheckInRouteWindow = useCallback((): false | 'fresh' | 'stale' => {
     const storeState = useSeasonWorkspaceStore.getState();
     const cachedSeasons = getCachedSeasons() ?? storeState.seasons;
     const cachedSettings = storeState.operationalSettings;
@@ -1048,7 +1048,8 @@ function CheckInAllocationContent() {
     if (!targetSeasonId || targetSeasonId !== targetSeason.id) return false;
 
     const windowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
-    const cachedWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+    const freshWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+    const cachedWindow = freshWindow ?? readWorkspaceWindowSnapshot(storeState.workspaces[targetSeason.id], windowKey);
     if (!cachedWindow?.syncMeta) return false;
 
     setLoadError(null);
@@ -1064,7 +1065,7 @@ function CheckInAllocationContent() {
       lastLocalChangeAt: cachedWindow.syncMeta.lastLocalChangeAt,
     });
     setLoading(false);
-    return true;
+    return freshWindow ? 'fresh' as const : 'stale' as const;
   }, [clearOptimisticAllocationView, fromDateTime, replaceCheckInModifications, targetSeasonId, toDateTime]);
 
   const enqueueLocalMutation = useCallback(function enqueueLocalMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -1271,8 +1272,9 @@ function CheckInAllocationContent() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (tryApplyCachedCheckInRouteWindow()) return;
-      setLoading(true);
+      const cachedState = tryApplyCachedCheckInRouteWindow();
+      if (cachedState === 'fresh') return;
+      setLoading(cachedState !== 'stale');
       setLoadError(null);
       setLoadProgress(buildLoadProgress('Loading seasons and settings', 15, 'Preparing check-in allocation'));
       try {
@@ -1307,10 +1309,9 @@ function CheckInAllocationContent() {
 
         setSeason(targetSeason);
         const windowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
-        const cachedWindow = readCachedWorkspaceWindow(
-          useSeasonWorkspaceStore.getState().workspaces[targetSeason.id],
-          windowKey
-        );
+        const workspace = useSeasonWorkspaceStore.getState().workspaces[targetSeason.id];
+        const freshWindow = readCachedWorkspaceWindow(workspace, windowKey);
+        const cachedWindow = freshWindow ?? readWorkspaceWindowSnapshot(workspace, windowKey);
         if (cachedWindow?.syncMeta) {
           loadedWindowKeyRef.current = windowKey;
           setFlightRecords(cachedWindow.records);
@@ -1319,7 +1320,8 @@ function CheckInAllocationContent() {
             pendingCount: cachedWindow.syncMeta.pendingCount,
             lastLocalChangeAt: cachedWindow.syncMeta.lastLocalChangeAt,
           });
-          return;
+          if (freshWindow) return;
+          setLoading(false);
         }
 
         setLoadProgress(buildLoadProgress('Loading server workspace', 35, targetSeason.seasonCode));

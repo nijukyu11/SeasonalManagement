@@ -1,6 +1,6 @@
 # Seasonal Management App
 
-This app is a static Next.js export designed to run either in a browser during development or inside the Tauri Windows desktop shell. The working schedule state remains local-first in IndexedDB; the remote backend is selected through `src/lib/remoteStore.ts`.
+This app is a static Next.js export designed for development in a browser and operational use inside the Tauri Windows desktop shell. Authenticated self-hosted Supabase is the normal durable read/write authority. Zustand keeps operator-scoped server snapshots in memory so route remounts can render immediately; IndexedDB and SQLite are not schedule-read or failure fallbacks.
 
 ## Development
 
@@ -12,7 +12,7 @@ npm run build
 
 ## Remote Backend
 
-The app defaults to Firebase/Firestore when Supabase is not configured, which keeps the current Firebase project usable during migration. To use Managed Supabase, set:
+Operational desktop builds require Supabase configuration:
 
 ```bash
 NEXT_PUBLIC_REMOTE_BACKEND=supabase
@@ -24,7 +24,17 @@ Do not put `SUPABASE_SERVICE_ROLE_KEY`, `TELEGRAM_BOT_TOKEN`, or `TELEGRAM_CHAT_
 
 See `supabase.env.example` for the runtime and operator-only environment keys.
 
-Apply the database schema in `supabase/schema.sql` before enabling Supabase in the app. The schema creates the app tables, indexes, authenticated RLS policies, and `sync_season_workspace` RPC used for atomic sync/version checks.
+Apply the tracked schema/migrations before enabling a new client. Workspace reads use the shared V2 coordinator and bounded `get_season_schedule_allocation_window_v2` keyset pages. Seasonal import sends source rows through `stage_seasonal_import_v2` and `commit_seasonal_import_v2`; export uses `get_seasonal_export_snapshot_v2`. V1 workspace compatibility is allowed only when the V2 signature is confirmed missing, never after timeout/network failure.
+
+Local integration/load commands require isolated test credentials and never default to production:
+
+```bash
+npm run test:seasonal-import-v2-db
+npm run test:workspace-window-v2-db
+npm run test:seasonal-import-v2-load
+npm run test:workspace-window-v2-load
+npm run test:seasonal-roundtrip
+```
 
 ## Migration
 

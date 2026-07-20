@@ -161,7 +161,7 @@ function readInitialDailyRouteState(input: {
   if (!input.targetSeasonId || input.targetSeasonId !== targetSeason.id) return null;
 
   const windowKey = buildDailyWindowKey(input.fromDateTime, input.toDateTime);
-  const cachedWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+  const cachedWindow = readWorkspaceWindowSnapshot(storeState.workspaces[targetSeason.id], windowKey);
   if (!cachedWindow?.syncMeta) return null;
 
   return {
@@ -549,7 +549,7 @@ function DailyScheduleContent() {
     });
   }, [fromDateTime, toDateTime]);
 
-  const tryApplyCachedDailyRouteWindow = useCallback((): boolean => {
+  const tryApplyCachedDailyRouteWindow = useCallback((): false | 'fresh' | 'stale' => {
     const storeState = useSeasonWorkspaceStore.getState();
     const cachedSeasons = getCachedSeasons() ?? storeState.seasons;
     const cachedSettings = storeState.operationalSettings;
@@ -559,7 +559,8 @@ function DailyScheduleContent() {
     if (!targetSeasonId || targetSeasonId !== targetSeason.id) return false;
 
     const windowKey = buildDailyWindowKey(fromDateTime, toDateTime);
-    const cachedWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+    const freshWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
+    const cachedWindow = freshWindow ?? readWorkspaceWindowSnapshot(storeState.workspaces[targetSeason.id], windowKey);
     if (!cachedWindow?.syncMeta) return false;
 
     setLoadError(null);
@@ -572,7 +573,7 @@ function DailyScheduleContent() {
       windowKey,
     });
     setLoading(false);
-    return true;
+    return freshWindow ? 'fresh' as const : 'stale' as const;
   }, [applyDailyNativeState, fromDateTime, targetSeasonId, toDateTime]);
 
   const refreshDailyWindow = useCallback(async () => {
@@ -606,8 +607,9 @@ function DailyScheduleContent() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (tryApplyCachedDailyRouteWindow()) return;
-      setLoading(true);
+      const cachedState = tryApplyCachedDailyRouteWindow();
+      if (cachedState === 'fresh') return;
+      setLoading(cachedState !== 'stale');
       setLoadError(null);
       setLoadProgress(buildLoadProgress('Loading seasons and settings', 15, 'Preparing daily schedule'));
       try {
@@ -640,17 +642,17 @@ function DailyScheduleContent() {
 
         setSeason(targetSeason);
         const windowKey = buildDailyWindowKey(fromDateTime, toDateTime);
-        const cachedWindow = readCachedWorkspaceWindow(
-          useSeasonWorkspaceStore.getState().workspaces[targetSeason.id],
-          windowKey
-        );
+        const workspace = useSeasonWorkspaceStore.getState().workspaces[targetSeason.id];
+        const freshWindow = readCachedWorkspaceWindow(workspace, windowKey);
+        const cachedWindow = freshWindow ?? readWorkspaceWindowSnapshot(workspace, windowKey);
         if (cachedWindow?.syncMeta) {
           loadedWindowKeyRef.current = windowKey;
           applyDailyNativeState(targetSeason.id, cachedWindow.records, cachedWindow.modifications, cachedWindow.syncMeta, {
             season: targetSeason,
             windowKey,
           });
-          return;
+          if (freshWindow) return;
+          setLoading(false);
         }
 
         setLoadProgress(buildLoadProgress('Loading server workspace', 35, targetSeason.seasonCode));
