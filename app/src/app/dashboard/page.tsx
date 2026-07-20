@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getOperationalSettings, getSeasons, loadSeasonWorkspaceWindow } from '@/lib/remoteStore';
+import { revalidateSeasonWorkspaceWindow } from '@/lib/seasonWorkspaceWindowCoordinator';
 import { publishSeasonWorkspaceChanged } from '@/lib/seasonDataCache';
 import { buildSeasonDisplayLabel } from '@/lib/importSeasonRules';
 import {
@@ -1001,12 +1002,15 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     setFetchUpdateNotice(null);
     setLoadProgress(buildLoadProgress('Loading server workspace', 35, season.seasonCode));
     try {
-      const serverWindow = await loadSeasonWorkspaceWindow({
+      const serverWindow = await revalidateSeasonWorkspaceWindow({
         seasonId: season.id,
         resourceType: 'schedule',
         limit: 100000,
+      }, {
+        force: true,
+        initiator: 'immediate',
       });
-      if (!serverWindow) throw new Error('Server dashboard window is unavailable.');
+      if (!serverWindow?.syncMeta) throw new Error('Server dashboard window is unavailable.');
       if (
         fetchServerDataRequestRef.current !== requestId ||
         latestRouteWindowRef.current.seasonId !== requestedSeasonId ||

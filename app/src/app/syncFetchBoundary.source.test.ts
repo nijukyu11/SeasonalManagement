@@ -67,7 +67,8 @@ test('primary route pages expose server fetch separately from Sync submit', () =
     if (file === 'src/app/SeasonalSchedulePage.tsx') {
       assert.match(fetchBody, /loadSeasonRows\([^,]+,\s*true,/, file);
     } else {
-      assert.match(fetchBody, /loadSeasonWorkspaceWindow/, file);
+      assert.match(fetchBody, /revalidateSeasonWorkspaceWindow\([\s\S]*force:\s*true,[\s\S]*initiator:\s*'immediate'/, file);
+      assert.doesNotMatch(fetchBody, /loadSeasonWorkspaceWindow/, file);
     }
     assert.doesNotMatch(fetchBody, /syncNow\(/, file);
     assert.doesNotMatch(fetchBody, /fetchUpdatesNow/, file);

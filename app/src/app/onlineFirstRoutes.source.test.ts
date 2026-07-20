@@ -118,7 +118,8 @@ test('Fetch data actions force server workspace reload and bypass native submit 
     if (file === 'src/app/SeasonalSchedulePage.tsx') {
       assert.match(fetchSource, /loadSeasonRows\(activeSeason,\s*true,/, file);
     } else {
-      assert.match(fetchSource, /loadSeasonWorkspaceWindow/, file);
+      assert.match(fetchSource, /revalidateSeasonWorkspaceWindow\([\s\S]*force:\s*true,[\s\S]*initiator:\s*'immediate'/, file);
+      assert.doesNotMatch(fetchSource, /loadSeasonWorkspaceWindow/, file);
     }
     assert.doesNotMatch(fetchSource, /syncNow\(/, file);
     assert.doesNotMatch(fetchSource, /fetchUpdatesNow/, file);
@@ -211,22 +212,22 @@ test('Seasonal export reads one strict full server snapshot instead of a window 
 test('Fetch data does not submit unsent route-local commits before server reads', () => {
   const dailySource = readFileSync(join(process.cwd(), 'src/app/daily/page.tsx'), 'utf8');
   const dailyFetch = extractFunctionBody(dailySource, 'fetchServerData');
-  assertBefore(dailyFetch, 'await currentMutationRef.current', 'loadSeasonWorkspaceWindow', 'daily');
-  assertBefore(dailyFetch, 'await commitQueueRef.current', 'loadSeasonWorkspaceWindow', 'daily');
+  assertBefore(dailyFetch, 'await currentMutationRef.current', 'revalidateSeasonWorkspaceWindow', 'daily');
+  assertBefore(dailyFetch, 'await commitQueueRef.current', 'revalidateSeasonWorkspaceWindow', 'daily');
 
   const checkInSource = readFileSync(join(process.cwd(), 'src/app/checkin/page.tsx'), 'utf8');
   const checkInFetch = extractFunctionBody(checkInSource, 'fetchServerData');
   assert.doesNotMatch(checkInFetch, /flushPendingCheckInLocalCommit/, 'checkin');
-  assertBefore(checkInFetch, 'checkInCommitAccumulatorRef.current', 'loadSeasonWorkspaceWindow', 'checkin');
-  assertBefore(checkInFetch, 'await currentMutationRef.current', 'loadSeasonWorkspaceWindow', 'checkin');
-  assertBefore(checkInFetch, 'await commitQueueRef.current', 'loadSeasonWorkspaceWindow', 'checkin');
+  assertBefore(checkInFetch, 'checkInCommitAccumulatorRef.current', 'revalidateSeasonWorkspaceWindow', 'checkin');
+  assertBefore(checkInFetch, 'await currentMutationRef.current', 'revalidateSeasonWorkspaceWindow', 'checkin');
+  assertBefore(checkInFetch, 'await commitQueueRef.current', 'revalidateSeasonWorkspaceWindow', 'checkin');
 
   const gateSource = readFileSync(join(process.cwd(), 'src/app/gate/page.tsx'), 'utf8');
   const gateFetch = extractFunctionBody(gateSource, 'fetchServerData');
   assert.doesNotMatch(gateFetch, /flushPendingGateLocalCommit/, 'gate');
-  assertBefore(gateFetch, 'gateCommitAccumulatorRef.current', 'loadSeasonWorkspaceWindow', 'gate');
-  assertBefore(gateFetch, 'await currentMutationRef.current', 'loadSeasonWorkspaceWindow', 'gate');
-  assertBefore(gateFetch, 'await commitQueueRef.current', 'loadSeasonWorkspaceWindow', 'gate');
+  assertBefore(gateFetch, 'gateCommitAccumulatorRef.current', 'revalidateSeasonWorkspaceWindow', 'gate');
+  assertBefore(gateFetch, 'await currentMutationRef.current', 'revalidateSeasonWorkspaceWindow', 'gate');
+  assertBefore(gateFetch, 'await commitQueueRef.current', 'revalidateSeasonWorkspaceWindow', 'gate');
 
   const seasonalSource = readFileSync(join(process.cwd(), 'src/app/SeasonalSchedulePage.tsx'), 'utf8');
   const seasonalFetch = extractFunctionBody(seasonalSource, 'fetchServerData');

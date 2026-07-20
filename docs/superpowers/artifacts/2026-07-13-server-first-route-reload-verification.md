@@ -36,8 +36,16 @@ Updated: 2026-07-20
 - PostgreSQL 17.6 retained the authenticated role's existing `statement_timeout=8s`.
 - Workspace V2 and Import V2 were deployed additively. Follow-up migrations removed the authenticated locking incompatibility, bounded both root branches before merge, retained cursor keyset ordering, and changed stable RLS permission checks into statement-level InitPlans.
 - The RLS profile diagnosed 1,289 repeated `seasonal.read` checks before an 8-second timeout. After the InitPlan migration, the profiled late page completed in 43.153 ms with the workspace keyset index, no temp-file spill, and no `57014`.
-- The production-like native canary built with the same Supabase variables as the release workflow and installed successfully at version `0.1.12`. Installer size: `25,285,344` bytes. SHA-256: `B1A2A1159F1562B90349FF1C029BD31CC5E575441469B3745FA3EA3C32C28971`.
+- The final production-like native canary built with the same Supabase variables as the release workflow and installed successfully at version `0.1.12`. Installer size: `36,020,423` bytes. SHA-256: `E4E09AE771EFBC03F82A12B95545A33BDA3545163E9BD696CDA7A97F13D7986F`.
 - The clean-schema mirror applies the RLS InitPlan optimization after every policy-creation block. The twice-applied canonical schema regression passed after this ordering was fixed.
+
+## Installed canary navigation result
+
+- An authenticated production operator session loaded S26 successfully in the installed `0.1.12` canary.
+- Manual `Fetch data` on Detailed now bypasses a fresh snapshot and starts one immediate coordinated V2 chain. The observed full refresh completed 53 pages with zero overlapping page requests, page p95 `341 ms`, maximum `533 ms`, and no UI error.
+- The final read-only smoke covered Dashboard, Seasonal, Detailed, Daily, Check-in, Gate, Audit, and Settings plus five repeated Seasonal/Detailed cycles. Across 18 route changes only three background workspace RPCs were needed, with zero overlap and no load/timeout error.
+- PostgreSQL container logs for the 15-minute canary interval contained zero `57014` or `canceling statement due to statement timeout` entries.
+- No production import mutation was run because no disposable canary season was designated. Import V2/Export V2 database and PGlite gates remain covered by the combined `0.1.11` baseline and this release's regression suite.
 
 ## Production Gate 7 capacity result
 
@@ -61,13 +69,11 @@ The seven-client container CPU peaked at 463.1% across multiple cores, but the i
 
 - `npm run test:workspace-window-v2-db` still requires `psql` and `SEASONAL_TEST_DATABASE_URL` for an isolated database.
 - The non-destructive installer rollback drill passed: the published signed `0.1.11` installer (SHA-256 `B1E31F5B7A302A88F5650EF613F453888D14E96A75C006056A84DC88663278F1`) installed successfully, opened the operator login shell, and the production-like `0.1.12` installer then restored the installed version to `0.1.12`.
-- The installed `0.1.12` canary reaches the production operator login through the configured self-hosted Supabase endpoint. Authenticated route navigation is still pending because the SSH/database password is not the Supabase Auth password for the `admin` operator. Do not reset that operator or synthesize an impersonated session solely for this smoke test.
-- Complete the authenticated installed-canary navigation smoke before updater publication. No production import mutation will be used without a designated disposable canary season.
 - Keep workspace-read V1 available through the compatibility window.
 
 ## Release gate
 
-The production capacity and rollback portions of the release gate passed. Do not publish the updater until the remaining authenticated installed-canary navigation check is recorded. Preserve these accepted limits:
+The production capacity, installed-canary navigation, and rollback portions of the release gate passed. The updater may be published while the additive workspace-read V1 compatibility window remains available. Preserve these accepted limits:
 
 - zero `57014`;
 - page p95 below 2 seconds and maximum below 4 seconds;

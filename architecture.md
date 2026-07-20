@@ -47,7 +47,7 @@ Online-first reads use `loadSeasonWorkspaceWindow()` in `remoteStore`, which del
 ### Sync vs Fetch data
 
 - `Save` flushes route-owned drafts or debounced mutations directly to the server mutation RPC. There is no SQLite pending upload in normal operation.
-- `Fetch data` means read the latest server workspace window from self-hosted Supabase. It does not submit pending operations and must not call native pending sync.
+- `Fetch data` means force one immediate shared-coordinator read of the latest server workspace window from self-hosted Supabase, even when a fresh snapshot is already visible. It does not submit pending operations and must not call native pending sync.
 - If Check-in or Gate has a debounced local allocation edit that has not started committing yet, `Fetch data` must block and ask the operator to save/settle pending work instead of flushing that edit itself.
 - Normal route refresh uses Supabase server-window reads. Existing SQLite data is ignored.
 

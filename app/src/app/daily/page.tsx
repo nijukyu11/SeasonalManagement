@@ -10,6 +10,7 @@ import {
   getSeasons,
   loadSeasonWorkspaceWindow,
 } from '@/lib/remoteStore';
+import { revalidateSeasonWorkspaceWindow } from '@/lib/seasonWorkspaceWindowCoordinator';
 import {
   assertNoDuplicateFlightNumbersForEffectiveRecords,
   linkFlightRecordPairs,
@@ -1336,14 +1337,17 @@ function DailyScheduleContent() {
     try {
       await currentMutationRef.current;
       await commitQueueRef.current;
-      const serverWindow = await loadSeasonWorkspaceWindow({
+      const serverWindow = await revalidateSeasonWorkspaceWindow({
         seasonId: season.id,
         dateFrom: fromDateTime.slice(0, 10),
         dateTo: toDateTime.slice(0, 10),
         resourceType: 'schedule',
         limit: 100000,
+      }, {
+        force: true,
+        initiator: 'immediate',
       });
-      if (!serverWindow) throw new Error('Server daily schedule window is unavailable.');
+      if (!serverWindow?.syncMeta) throw new Error('Server daily schedule window is unavailable.');
       if (
         fetchServerDataRequestRef.current !== requestId ||
         latestRouteWindowRef.current.seasonId !== requestedSeasonId ||
