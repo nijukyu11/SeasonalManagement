@@ -231,7 +231,7 @@ The server therefore refused to overwrite them. Both live shadows called no
 commit, ended `cancelled`, and left S26 version, record count, event count, and
 high-water unchanged. The temporary corrected workbook was deleted.
 
-## Remaining Release Gates
+## Release and Post-Deploy Verification
 
 - Version `0.1.15` is synchronized across npm, Cargo, Tauri, and lockfiles.
 - Exact-release updater tests, rules, Python tests, PGlite/schema reruns,
@@ -240,6 +240,26 @@ high-water unchanged. The temporary corrected workbook was deleted.
   `SeasonalManagement_0.1.15_x64-setup.exe`. Local updater signing stopped at
   the expected missing-private-key boundary; the private key is available only
   to the GitHub release workflow.
-- Signed GitHub updater publication and public metadata verification remain.
-- A clean-machine installation cannot be performed from this development
-  machine and remains a manual operational check after publication.
+- GitHub Actions run `30023823159` completed successfully from exact release
+  commit `86af15a`; the signed updater release is published at tag
+  `app-v0.1.15` and is neither draft nor prerelease.
+- The public `latest.json` reports version `0.1.15`, exposes only
+  `windows-x86_64`, points to the installer on the same tag, and contains the
+  same non-empty signature as
+  `SeasonalManagement_0.1.15_x64-setup.exe.sig`.
+- Installer size is 22,648,342 bytes. Its verified SHA-256 is
+  `340b37289e872de35b223b755ad4650e851639be72eacef2a37c5157e4fa3fe6`,
+  matching the GitHub asset digest.
+- The post-release production check retained S26 version 16,573, W26 version
+  397, and `authenticated statement_timeout=8s`. Kong, PostgREST, and
+  PostgreSQL logs contained zero `57014` or statement-timeout entries in the
+  preceding 90 minutes.
+
+## Remaining Operational Checks
+
+- Install or update from `0.1.14` on a separate clean Windows machine and
+  confirm the installed application reports `0.1.15`.
+- The corrected Book3 preview remains intentionally blocked by 16 active
+  manual `KE2094` departures. An operator must decide whether to retain,
+  reschedule, or explicitly remove those records before this workbook can
+  reach a zero-diagnostic import preview.

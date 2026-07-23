@@ -22,6 +22,12 @@ This section is the current runtime contract and supersedes the legacy native-fi
 - Existing SQLite databases are ignored by normal operation, including on a fresh install or a machine with stale historical data. Rust/SQLite code remains packaged temporarily only for explicit legacy repair and rollback tooling guarded by `NEXT_PUBLIC_ENABLE_LEGACY_NATIVE_SYNC_REPAIR=true`.
 - Save remains the user-facing action. Seasonal/Detailed draft guards flush directly to the server mutation RPC; successful server writes cannot be changed into failures by SQLite projection errors.
 - Release `app-v0.1.14` is the signed pre-V3 baseline. Import V2 remains deployed for that client during the V3 rollout window, but new clients do not call or fall back to it.
+- Release `app-v0.1.15` was published on 2026-07-23 from commit `86af15a`.
+  Its signed Windows x64 updater manifest and installer were verified publicly;
+  clean-machine update verification remains an operational check. The
+  corrected Book3 preview is still blocked by 16 active manual `KE2094`
+  departures and requires an operator data decision rather than automatic
+  deletion.
 - Production Export V2 contract drift was repaired on 2026-07-21 by `20260721090000_fix_seasonal_export_snapshot_identity_counts.sql`. The live strict snapshot now includes `seasonCode` and `sourceRowCount`; signed client `0.1.12` export smoke passed without a desktop rebuild.
 - Production W26 schedule-time drift was repaired on 2026-07-23 after 154 modifications stored `1025` instead of canonical `10:25`, which produced errors such as `Invalid local datetime 2027-01-07T1025`. The original values are retained in `ops_hotfix.season_modification_schedule_20260723`; migration `20260723090000_normalize_season_modification_schedule.sql` adds server-side normalization and a validated format constraint.
 - Release `app-v0.1.13` was published on 2026-07-23 with client-side schedule normalization/validation. The public updater metadata reports `0.1.13` and points to the signed Windows x64 installer.

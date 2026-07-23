@@ -3,7 +3,10 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Execution status (2026-07-23):** Tasks 1-10 are implemented and verified.
-Task 11 production deployment, updater build, and release are in progress.
+Task 11 production deployment and signed updater publication are complete at
+`app-v0.1.15`. The remaining acceptance items are a clean-machine update and
+an operator decision for 16 legitimate manual `KE2094` collisions found by the
+corrected Book3 preview; V3 intentionally does not delete those records.
 
 **Goal:** Add an explicit, previewed Seasonal import workflow where `merge` upserts only occurrence keys present in the workbook, `replace` remains a separately authorized destructive repair action, and neither path can silently fall back to SQLite or commit through the legacy V2 full-replace contract.
 
