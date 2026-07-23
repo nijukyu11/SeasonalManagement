@@ -53,6 +53,63 @@ test('Seasonal import V3 schema is additive and preserves V2 RPC signatures', ()
   );
 });
 
+test('Seasonal import V3 preview RPCs stay identical in migration and canonical schema', () => {
+  const migrationSource = readFileSync(
+    join(
+      root,
+      '..',
+      'supabase',
+      'migrations',
+      '20260724090000_seasonal_partial_import_v3.sql',
+    ),
+    'utf8',
+  );
+  const schemaSource = readFileSync(join(root, '..', 'supabase', 'schema.sql'), 'utf8');
+  const functionNames = [
+    'seasonal_import_v3_response',
+    'stage_seasonal_import_v3',
+    'get_seasonal_import_v3_status',
+    'cancel_seasonal_import_v3',
+  ] as const;
+
+  for (const functionName of functionNames) {
+    const pattern = new RegExp(
+      `create or replace function public\\.${functionName}\\([\\s\\S]*?\\n\\$\\$;`,
+      'i',
+    );
+    assert.equal(
+      requireSqlSection(schemaSource, pattern, `${functionName} in schema.sql`),
+      requireSqlSection(migrationSource, pattern, `${functionName} in migration`),
+      `${functionName} must stay byte-for-byte equivalent`,
+    );
+  }
+
+  const stageSource = requireSqlSection(
+    migrationSource,
+    /create or replace function public\.stage_seasonal_import_v3\([\s\S]*?\n\$\$;/i,
+    'stage_seasonal_import_v3',
+  );
+  assert.match(stageSource, /public\.stage_seasonal_import_v2\(/);
+  assert.match(stageSource, /public\.generate_seasonal_import_records_v2\(/);
+  assert.match(stageSource, /insert into public\.season_import_batch_records_v3/);
+  assert.match(stageSource, /target_existed_at_stage = v_target_exists/);
+  assert.doesNotMatch(stageSource, /insert into public\.season_flight_records/);
+  assert.doesNotMatch(stageSource, /update public\.seasons/);
+  assert.doesNotMatch(stageSource, /delete from public\.season_flight_records/);
+  assert.match(
+    migrationSource,
+    /grant execute on function public\.stage_seasonal_import_v3\(jsonb\)[\s\S]*to authenticated/,
+  );
+  assert.match(
+    migrationSource,
+    /grant execute on function public\.get_seasonal_import_v3_status\(uuid\)[\s\S]*to authenticated/,
+  );
+  assert.match(
+    migrationSource,
+    /grant execute on function public\.cancel_seasonal_import_v3\(uuid\)[\s\S]*to authenticated/,
+  );
+});
+
 test('main Seasonal import sends canonical source rows and never builds client atomic import arrays', () => {
   const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
   const contractSource = readFileSync(join(root, 'lib', 'seasonalImportRpcContract.ts'), 'utf8');

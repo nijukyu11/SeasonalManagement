@@ -1,4 +1,6 @@
 import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createSupabasePGlite } from './pglite_test_support.mjs';
 
 const migrationUrl = new URL(
@@ -8,7 +10,7 @@ const migrationUrl = new URL(
 const testUrl = new URL('./seasonal_source_import_v2.sql', import.meta.url);
 const compatibilityTestUrl = new URL('./seasonal_source_import_v2_compatibility.sql', import.meta.url);
 const qualityTestUrl = new URL('./seasonal_source_import_v2_quality.sql', import.meta.url);
-const bootstrapFixtureSql = `
+export const bootstrapFixtureSql = `
 create role service_role;
 create table public.app_operators (
   user_id uuid primary key references auth.users(id) on delete cascade,
@@ -268,24 +270,33 @@ grant usage on schema public to authenticated;
 grant execute on function public.app_operator_has_permission(text) to authenticated;
 `;
 
-const db = await createSupabasePGlite();
-const startedAt = Date.now();
+export async function runSeasonalSourceImportV2PGliteSuite() {
+  const db = await createSupabasePGlite();
+  const startedAt = Date.now();
 
-try {
-  await db.exec(bootstrapFixtureSql);
-  const migrationSql = await readFile(migrationUrl, 'utf8');
-  await db.exec(migrationSql);
-  await db.exec(migrationSql);
-  await db.exec(await readFile(testUrl, 'utf8'));
-  await db.exec(await readFile(compatibilityTestUrl, 'utf8'));
-  await db.exec(await readFile(qualityTestUrl, 'utf8'));
-  console.log(JSON.stringify({
-    suite: 'seasonal_source_import_v2.sql',
-    engine: 'PGlite',
-    migrationRuns: 2,
-    elapsedMs: Date.now() - startedAt,
-    status: 'passed',
-  }));
-} finally {
-  await db.close();
+  try {
+    await db.exec(bootstrapFixtureSql);
+    const migrationSql = await readFile(migrationUrl, 'utf8');
+    await db.exec(migrationSql);
+    await db.exec(migrationSql);
+    await db.exec(await readFile(testUrl, 'utf8'));
+    await db.exec(await readFile(compatibilityTestUrl, 'utf8'));
+    await db.exec(await readFile(qualityTestUrl, 'utf8'));
+    console.log(JSON.stringify({
+      suite: 'seasonal_source_import_v2.sql',
+      engine: 'PGlite',
+      migrationRuns: 2,
+      elapsedMs: Date.now() - startedAt,
+      status: 'passed',
+    }));
+  } finally {
+    await db.close();
+  }
+}
+
+const invokedUrl = process.argv[1]
+  ? pathToFileURL(resolve(process.argv[1])).href
+  : null;
+if (invokedUrl === import.meta.url) {
+  await runSeasonalSourceImportV2PGliteSuite();
 }

@@ -1,68 +1,61 @@
 import { readFile } from 'node:fs/promises';
 import { createSupabasePGlite } from './pglite_test_support.mjs';
+import { bootstrapFixtureSql } from './seasonal_source_import_v2_pglite.mjs';
 
-const migrationUrl = new URL(
+const v2MigrationUrl = new URL(
+  '../migrations/20260718090000_seasonal_source_import_v2.sql',
+  import.meta.url,
+);
+const v3MigrationUrl = new URL(
   '../migrations/20260724090000_seasonal_partial_import_v3.sql',
   import.meta.url,
 );
 const testUrl = new URL('./seasonal_partial_import_v3.sql', import.meta.url);
 
-const bootstrapFixtureSql = `
-create table public.seasons (
-  id text primary key,
-  season_code text not null,
-  name text not null default '',
-  file_name text not null default '',
-  uploaded_at bigint not null default 0,
-  effective_start text not null default '',
-  effective_end text not null default '',
-  total_legs integer not null default 0,
-  total_source_rows integer not null default 0,
-  data_version integer not null default 0,
-  last_synced_at bigint
-);
-create unique index seasons_season_code_unique_idx on public.seasons (season_code);
+const preV3FixtureSql = `
+insert into auth.users (id, email) values
+  ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'writer@example.test'),
+  ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'repair@example.test'),
+  ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'reader@example.test');
 
-create table public.season_source_rows (
-  season_id text not null references public.seasons(id) on delete cascade,
-  row_index integer not null,
-  primary key (season_id, row_index)
-);
+insert into public.app_operators (user_id, email, username, display_name) values
+  ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'writer@example.test', 'writer', 'Writer'),
+  ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'repair@example.test', 'repair', 'Repair'),
+  ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'reader@example.test', 'reader', 'Reader');
 
-create table public.season_flight_records (
-  season_id text not null references public.seasons(id) on delete restrict,
-  record_id text primary key,
-  source_row_index integer not null default 0
-);
-
-create table public.season_import_batches (
-  batch_id uuid primary key default gen_random_uuid(),
-  request_id uuid not null unique,
-  season_id text references public.seasons(id) on delete restrict,
-  season_code text not null,
-  expected_data_version integer,
-  file_name text not null default '',
-  checksum text not null,
-  status text not null check (status in ('staged', 'validated', 'committed', 'failed')),
-  source_row_count integer not null default 0,
-  generated_record_count integer not null default 0,
-  diagnostics jsonb not null default '[]'::jsonb,
-  result jsonb,
-  created_by uuid not null,
-  created_at timestamptz not null default now(),
-  committed_at timestamptz
-);
+insert into public.app_operator_permission_overrides (
+  user_id,
+  permission_key,
+  effect
+) values
+  ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'seasonal.write', 'allow'),
+  ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'season.repair', 'allow'),
+  ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'season.repair', 'allow');
 
 insert into public.seasons (
   id,
   season_code,
+  name,
   data_version
 ) values
-  ('season-existing', 'S26', 7),
-  ('season-with-source', 'W26', 9);
+  ('season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6', 'S26', 'S26', 7),
+  ('season-29cbca13-e11d-4b75-bcaa-00a6c5ca68c6', 'W26', 'W26', 9);
 
-insert into public.season_source_rows (season_id, row_index)
-values ('season-with-source', 1);
+insert into public.season_source_rows (
+  season_id,
+  row_index,
+  effective,
+  discontinue,
+  airline,
+  aircraft
+) values (
+  'season-29cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+  1,
+  '2026-10-25',
+  '2027-03-27',
+  'VN',
+  '321'
+);
 
 insert into public.season_import_batches (
   request_id,
@@ -75,7 +68,7 @@ insert into public.season_import_batches (
 ) values
   (
     '10000000-0000-4000-8000-000000000001',
-    'season-existing',
+    'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
     'S26',
     7,
     'existing-before-migration',
@@ -98,14 +91,17 @@ const startedAt = Date.now();
 
 try {
   await db.exec(bootstrapFixtureSql);
-  const migrationSql = await readFile(migrationUrl, 'utf8');
+  await db.exec(await readFile(v2MigrationUrl, 'utf8'));
+  await db.exec(preV3FixtureSql);
+  const migrationSql = await readFile(v3MigrationUrl, 'utf8');
   await db.exec(migrationSql);
   await db.exec(migrationSql);
   await db.exec(await readFile(testUrl, 'utf8'));
   console.log(JSON.stringify({
     suite: 'seasonal_partial_import_v3.sql',
     engine: 'PGlite',
-    migrationRuns: 2,
+    v2MigrationRuns: 1,
+    v3MigrationRuns: 2,
     elapsedMs: Date.now() - startedAt,
     status: 'passed',
   }));
