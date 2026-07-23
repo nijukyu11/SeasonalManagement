@@ -49,3 +49,22 @@ Migration
 - Node/TypeScript tests: 377 passed.
 - Rule regression tests passed.
 - Canonical schema twice test: 2 runs passed.
+
+## Updater release
+
+- Version alignment passed for `package.json`, `package-lock.json`,
+  `tauri.conf.json`, `Cargo.toml`, and `Cargo.lock`: `0.1.13`.
+- Cargo verification passed for `seasonal-management v0.1.13`.
+- Updater unit tests: 8 passed.
+- GitHub Actions release run `29976934381` completed successfully.
+- Public release `app-v0.1.13` is neither draft nor prerelease.
+- Published assets:
+  - `latest.json`: 756 bytes,
+    SHA-256 `ed6b762003c685d512a53cc8b7adeb01d0953edee66a97b14a23a643566c6bf5`
+  - `SeasonalManagement_0.1.13_x64-setup.exe`: 22,646,303 bytes,
+    SHA-256 `c7743ff4e37042cc2f7c85e9d39e0c1319aed66f3652eeb311367f963acd6c6e`
+  - `SeasonalManagement_0.1.13_x64-setup.exe.sig`: 432 bytes,
+    SHA-256 `985b6c944bacbe5ed2b51b67f364d53a8373793b89311620aab9a363e52666be`
+- The public latest-updater endpoint returned version `0.1.13`, the
+  `windows-x86_64` installer URL under tag `app-v0.1.13`, and a non-empty
+  432-character signature.
