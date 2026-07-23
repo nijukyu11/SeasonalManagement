@@ -46,7 +46,7 @@ Migration
   transaction.
 - Production trigger enabled and format constraint validated.
 - TypeScript typecheck passed.
-- Node/TypeScript tests: 377 passed.
+- Node/TypeScript tests: 379 passed.
 - Rule regression tests passed.
 - Canonical schema twice test: 2 runs passed.
 
