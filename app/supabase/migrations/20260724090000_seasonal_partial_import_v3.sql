@@ -230,6 +230,49 @@ revoke execute on function public.set_season_import_target_existence_v3()
 revoke execute on function public.guard_legacy_existing_season_import_v3()
   from public, anon, authenticated;
 
+create or replace function public.normalize_seasonal_import_time_v3(p_value jsonb)
+returns jsonb
+language plpgsql
+immutable
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_value text;
+begin
+  if p_value is null or pg_catalog.jsonb_typeof(p_value) <> 'string' then
+    return p_value;
+  end if;
+
+  v_value := pg_catalog.btrim(p_value #>> '{}');
+  if v_value ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' then
+    return pg_catalog.to_jsonb(v_value);
+  end if;
+  if v_value ~ '^[0-9]:[0-5][0-9]$' then
+    return pg_catalog.to_jsonb('0' || v_value);
+  end if;
+  if v_value ~ '^([01][0-9]|2[0-3])[0-5][0-9]$' then
+    return pg_catalog.to_jsonb(
+      pg_catalog.substr(v_value, 1, 2)
+      || ':'
+      || pg_catalog.substr(v_value, 3, 2)
+    );
+  end if;
+  if v_value ~ '^[0-9][0-5][0-9]$' then
+    return pg_catalog.to_jsonb(
+      '0'
+      || pg_catalog.substr(v_value, 1, 1)
+      || ':'
+      || pg_catalog.substr(v_value, 2, 2)
+    );
+  end if;
+
+  return p_value;
+end;
+$$;
+
+revoke all on function public.normalize_seasonal_import_time_v3(jsonb)
+  from public, anon, authenticated;
+
 create or replace function public.seasonal_import_v3_response(p_batch_id uuid)
 returns jsonb
 language sql
@@ -364,7 +407,26 @@ begin
       'expectedDataVersion', p_import->'expectedDataVersion',
       'fileName', p_import->'fileName',
       'uploadedAt', p_import->'uploadedAt',
-      'sourceRows', p_import->'sourceRows'
+      'sourceRows', case
+        when pg_catalog.jsonb_typeof(p_import->'sourceRows') = 'array' then (
+          select coalesce(
+            pg_catalog.jsonb_agg(
+              source_row.value
+              || pg_catalog.jsonb_build_object(
+                'sta',
+                public.normalize_seasonal_import_time_v3(source_row.value->'sta'),
+                'std',
+                public.normalize_seasonal_import_time_v3(source_row.value->'std')
+              )
+              order by source_row.ordinality
+            ),
+            '[]'::jsonb
+          )
+          from pg_catalog.jsonb_array_elements(p_import->'sourceRows')
+            with ordinality as source_row(value, ordinality)
+        )
+        else p_import->'sourceRows'
+      end
     )
   );
 
@@ -1599,6 +1661,7 @@ begin
     v_matched_count
   from pg_temp.seasonal_import_commit_records_v3 incoming;
 
+  -- seasonal_import_v3_merge_overlay_immutability_begin
   if v_batch.apply_strategy = 'merge' then
     v_preserved_outside_count := v_existing_imported_count - v_matched_count;
   else
@@ -1613,6 +1676,7 @@ begin
   into v_preserved_overlay_count, v_preserved_deleted_overlay_count
   from public.season_modifications modifications
   where modifications.season_id = v_target_season_id;
+  -- seasonal_import_v3_merge_overlay_immutability_end
 
   if v_batch.apply_strategy = 'replace' then
     select

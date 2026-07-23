@@ -386,3 +386,23 @@ test('V3 unknown network status keeps the receipt and never invokes an apply cal
   assert.equal(statusCalls, 1);
   assert.equal(receipt.status, 'validated');
 });
+
+test('V3 status recovery preserves deleted-overlay preview counts exactly', async () => {
+  const stage = {
+    ...v3Stage,
+    counts: {
+      ...v3Stage.counts,
+      preservedOverlayCount: 4,
+      preservedDeletedOverlayCount: 2,
+      clearDeletedOverlayCount: 0,
+    },
+  } satisfies SeasonalImportV3StageResult;
+  const result = await checkSeasonalImportV3RecoveryStatusOnce(
+    buildSeasonalImportV3RecoveryReceipt(stage),
+    async () => stage,
+  );
+
+  assert.equal(result.kind, 'preview');
+  assert.equal(result.result.counts.preservedDeletedOverlayCount, 2);
+  assert.equal(result.result.counts.clearDeletedOverlayCount, 0);
+});

@@ -521,7 +521,137 @@ begin
 end;
 $$;
 
+do $$
+declare
+  v_valid jsonb;
+  v_invalid jsonb;
+begin
+  v_valid := public.stage_seasonal_import_v3(
+    pg_catalog.jsonb_build_object(
+      'contractVersion', 3,
+      'requestId', '30000000-0000-5000-8000-000000000040',
+      'checksum', 'canonical-time-valid',
+      'strategy', 'merge',
+      'seasonId', 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+      'seasonCode', 'S26',
+      'expectedDataVersion', 7,
+      'fileName', 'time-valid.xlsx',
+      'uploadedAt', 1,
+      'sourceRows', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 40,
+          'effective', '2026-06-06',
+          'discontinue', '2026-06-06',
+          'airline', 'TM',
+          'aircraft', '321',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '1025',
+          'arrFlight', '401',
+          'arrRoute', 'ICN'
+        ),
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 41,
+          'effective', '2026-06-06',
+          'discontinue', '2026-06-06',
+          'airline', 'TM',
+          'aircraft', '321',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '925',
+          'arrFlight', '402',
+          'arrRoute', 'ICN'
+        ),
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 42,
+          'effective', '2026-06-06',
+          'discontinue', '2026-06-06',
+          'airline', 'TM',
+          'aircraft', '321',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '10:25',
+          'arrFlight', '403',
+          'arrRoute', 'ICN'
+        )
+      )
+    )
+  );
+
+  if v_valid->>'status' <> 'validated'
+    or (v_valid->>'valid')::boolean is distinct from true
+  then
+    raise exception 'V3 stage rejected compact schedule times: %', v_valid;
+  end if;
+
+  v_invalid := public.stage_seasonal_import_v3(
+    pg_catalog.jsonb_build_object(
+      'contractVersion', 3,
+      'requestId', '30000000-0000-5000-8000-000000000041',
+      'checksum', 'canonical-time-invalid',
+      'strategy', 'merge',
+      'seasonId', 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+      'seasonCode', 'S26',
+      'expectedDataVersion', 7,
+      'fileName', 'time-invalid.xlsx',
+      'uploadedAt', 1,
+      'sourceRows', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 43,
+          'effective', '2026-06-06',
+          'discontinue', '2026-06-06',
+          'airline', 'TM',
+          'aircraft', '321',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '2500',
+          'arrFlight', '404',
+          'arrRoute', 'ICN'
+        )
+      )
+    )
+  );
+
+  if v_invalid->>'status' <> 'failed'
+    or (v_invalid->>'valid')::boolean is distinct from false
+    or not exists (
+      select 1
+      from pg_catalog.jsonb_array_elements(v_invalid->'diagnostics') diagnostics(value)
+      where diagnostics.value->>'code' = 'invalid-time'
+    )
+  then
+    raise exception 'V3 stage accepted invalid compact schedule time: %', v_invalid;
+  end if;
+end;
+$$;
+
 reset role;
+
+do $$
+declare
+  v_schedules text[];
+begin
+  select pg_catalog.array_agg(
+    records.record_data->>'schedule'
+    order by records.source_staging_row_index
+  )
+  into v_schedules
+  from public.season_import_batch_records_v3 records
+  join public.season_import_batches batches
+    on batches.batch_id = records.batch_id
+  where batches.request_id = '30000000-0000-5000-8000-000000000040';
+
+  if v_schedules is distinct from array['10:25', '09:25', '10:25']::text[] then
+    raise exception 'V3 stage did not persist canonical schedule times: %', v_schedules;
+  end if;
+
+  if exists (
+    select 1
+    from public.season_import_batch_records_v3 records
+    join public.season_import_batches batches
+      on batches.batch_id = records.batch_id
+    where batches.request_id = '30000000-0000-5000-8000-000000000041'
+  ) then
+    raise exception 'V3 stage persisted records for an invalid schedule time';
+  end if;
+end;
+$$;
 
 insert into public.seasons (
   id,
@@ -873,6 +1003,8 @@ begin
     or (v_preview #>> '{counts,baselineUpdateCount}')::integer <> 1
     or (v_preview #>> '{counts,unchangedCount}')::integer <> 2
     or (v_preview #>> '{counts,preservedOutsideScopeCount}')::integer <> 1
+    or (v_preview #>> '{counts,preservedDeletedOverlayCount}')::integer <> 1
+    or (v_preview #>> '{counts,clearDeletedOverlayCount}')::integer <> 0
   then
     raise exception 'merge commit fixture preview is incorrect: %', v_preview;
   end if;
@@ -894,6 +1026,8 @@ begin
     or (v_committed->>'dataVersion')::integer <> 4
     or (v_committed->>'importedRecordCount')::integer <> 5
     or (v_committed->>'totalEffectiveRecordCount')::integer <> 5
+    or (v_committed #>> '{counts,preservedDeletedOverlayCount}')::integer <> 1
+    or (v_committed #>> '{counts,clearDeletedOverlayCount}')::integer <> 0
   then
     raise exception 'merge commit result or idempotency is incorrect: %', v_committed;
   end if;
@@ -978,6 +1112,18 @@ begin
       and records.source_kind = 'imported'
   ) then
     raise exception 'merge removed a preserved record or failed to add the new occurrence';
+  end if;
+
+  if exists (
+    select 1
+    from public.season_flight_records records
+    left join public.season_modifications modifications
+      on modifications.season_id = records.season_id
+      and modifications.leg_id = records.record_id
+    where records.record_id = 'LEG_M26_DELETED_OVERLAY'
+      and modifications.action is distinct from 'deleted'
+  ) then
+    raise exception 'merge made a deleted overlay effective after commit';
   end if;
 
   if exists (
@@ -1322,6 +1468,7 @@ begin
     or (v_committed->>'dataVersion')::integer <> 5
     or (v_committed->>'importedRecordCount')::integer <> 4
     or (v_committed->>'totalEffectiveRecordCount')::integer <> 5
+    or (v_committed #>> '{counts,clearDeletedOverlayCount}')::integer <> 1
   then
     raise exception 'replace commit result or idempotency is incorrect: %',
       v_committed;

@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import test from 'node:test';
 import {
   hydrateFlightModificationFromPersistence,
@@ -46,4 +48,16 @@ test('persistence rejects schedule values that cannot be canonicalized', () => {
     }),
     /schedule must use HH:mm format/,
   );
+});
+
+test('Seasonal import V3 canonicalizes compact source times before V2 validation', () => {
+  const migration = readFileSync(
+    join(process.cwd(), 'supabase/migrations/20260724090000_seasonal_partial_import_v3.sql'),
+    'utf8',
+  );
+  assert.match(migration, /normalize_seasonal_import_time_v3/);
+  assert.match(migration, /\^\(\[01\]\[0-9\]\|2\[0-3\]\)\[0-5\]\[0-9\]\$/);
+  assert.match(migration, /\^\[0-9\]\[0-5\]\[0-9\]\$/);
+  assert.match(migration, /'sta',\s*public\.normalize_seasonal_import_time_v3\(source_row\.value->'sta'\)/);
+  assert.match(migration, /'std',\s*public\.normalize_seasonal_import_time_v3\(source_row\.value->'std'\)/);
 });
