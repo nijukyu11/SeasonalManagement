@@ -1,6 +1,6 @@
 # SeasonalManagement Supabase backend schema and functions
 
-Generated for backend cutover comparison on 2026-06-20 and updated for the 2026-07-20 V2 read/import contracts.
+Generated for backend cutover comparison on 2026-06-20 and updated for the 2026-07-23 Seasonal Import V3 contract.
 
 This file is a backend reference built from:
 
@@ -19,6 +19,31 @@ Do not treat this as a replacement for `app/supabase/schema.sql`. Use it as the 
 - `get_seasonal_export_snapshot_v2(text, integer)` returns a complete version-fenced base/modification snapshot for validated export.
 - Timeout and network failures do not fall back to workspace V1, direct-table reads, Import V1, or SQLite. Workspace V1 is an additive rollout compatibility path only for a confirmed missing V2 signature.
 - The V2 migrations are `app/supabase/migrations/20260718090000_seasonal_source_import_v2.sql` and `app/supabase/migrations/20260720090000_workspace_window_keyset_v2.sql`.
+
+## 2026-07-23 Seasonal Import V3 contract
+
+- `stage_seasonal_import_v3(jsonb)` accepts canonical source rows plus explicit
+  `merge|replace` strategy and expected season version. It validates and
+  persists the exact generated atomic set before returning a structured preview.
+- `commit_seasonal_import_v3(uuid, integer, text)` consumes that staged set only
+  when the version and preview hash still match. It never regenerates records.
+- `get_seasonal_import_v3_status(uuid)` and
+  `cancel_seasonal_import_v3(uuid)` are owner-scoped recovery operations.
+  Status is read-only and never commits automatically.
+- `merge` requires `seasonal.write`, preserves omitted records and all overlays,
+  never writes a complete source snapshot, and marks provenance `fragmented`.
+- `replace` requires `season.repair`, reports removal/overlay-clear counts,
+  writes a complete source snapshot, and marks provenance `full`.
+- `season_import_batch_records_v3` stores the staged atomic set;
+  `season_import_batch_preimages_v3` retains reviewed recovery evidence.
+  Authenticated clients have no direct DML grants on either table.
+- `season_flight_records.source_import_batch_id` identifies the V3 batch that
+  last inserted or updated an imported baseline record.
+- V2 signatures remain available for signed older clients, but an existing
+  season V2 commit is blocked after V3 deployment. V3 has no V2, direct-table,
+  or SQLite fallback.
+- Migration:
+  `app/supabase/migrations/20260724090000_seasonal_partial_import_v3.sql`.
 
 ## Current object counts
 

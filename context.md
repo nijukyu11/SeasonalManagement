@@ -8,20 +8,20 @@ A web-based aviation operations app for importing seasonal Excel schedules, revi
 
 ---
 
-## Current Server-First Context - 2026-07-20
+## Current Server-First Context - 2026-07-23
 
 This section is the current runtime contract and supersedes the legacy native-first notes below.
 
 - The Tauri desktop app is fully server-first against self-hosted Supabase. Supabase relational tables, mutation RPCs, and server change events are the only durable operational authority.
 - Normal route reads render any existing operator-scoped Zustand snapshot first, including stale snapshots, then revalidate through one shared coordinator promise per canonical window and invalidation generation. `get_season_schedule_allocation_window_v2` loads bounded keyset pages sequentially under one snapshot token; a server read failure preserves stale content when available and never falls back to direct-table fan-out or SQLite.
 - User-initiated `Fetch data` forces one immediate coordinator revalidation even when the current snapshot is fresh. Repeated callers for the same generation still join one promise, and every V2 page in that chain remains sequential.
-- Seasonal import sends normalized source rows only through staged/committed Import V2. Supabase generates atomic occurrences, commits one import event, and the initiating client performs exactly one post-mutation coordinated workspace revalidation. Export reads one version-fenced server snapshot rather than exporting the currently mounted route subset.
+- Seasonal Import V3 sends canonical source rows only and requires a server-generated preview before commit. `merge` updates only incoming baseline occurrence keys while preserving omitted records and every overlay; `replace` is a separately authorized `season.repair` action that exposes removal/clear counts and requires typed season-code confirmation. Supabase persists the staged atomic set, commits one import event, and the initiating client performs exactly one post-mutation coordinated workspace revalidation. Export reads one version-fenced server snapshot rather than exporting the currently mounted route subset.
 - Normal route writes call `apply_season_server_mutation_v1(jsonb)` through the shared mutation boundary. They do not read `query_sync_summary`, derive `baseServerSeq` from SQLite, run native catch-up, or wait for a local projection after the server commits.
 - `SeasonSyncProvider` coordinates route draft flushes, pending-submit UI state, and Supabase Realtime invalidation. It does not poll native pending state or invoke `sync_pending_changes` in normal operation.
 - Check-in/Gate rollback clears the optimistic view and reloads the bounded server window. Seasonal import, Settings full replace, Daily import collision checks, and Dashboard AI workspace use server read-after-write/window data.
 - Existing SQLite databases are ignored by normal operation, including on a fresh install or a machine with stale historical data. Rust/SQLite code remains packaged temporarily only for explicit legacy repair and rollback tooling guarded by `NEXT_PUBLIC_ENABLE_LEGACY_NATIVE_SYNC_REPAIR=true`.
 - Save remains the user-facing action. Seasonal/Detailed draft guards flush directly to the server mutation RPC; successful server writes cannot be changed into failures by SQLite projection errors.
-- Release `app-v0.1.12` was published on 2026-07-20 after the combined server-first/Import-Export V2 canary, seven-client capacity gate, rollback drill, signed-installer install, and public updater metadata verification all passed.
+- Release `app-v0.1.14` is the signed pre-V3 baseline. Import V2 remains deployed for that client during the V3 rollout window, but new clients do not call or fall back to it.
 - Production Export V2 contract drift was repaired on 2026-07-21 by `20260721090000_fix_seasonal_export_snapshot_identity_counts.sql`. The live strict snapshot now includes `seasonCode` and `sourceRowCount`; signed client `0.1.12` export smoke passed without a desktop rebuild.
 - Production W26 schedule-time drift was repaired on 2026-07-23 after 154 modifications stored `1025` instead of canonical `10:25`, which produced errors such as `Invalid local datetime 2027-01-07T1025`. The original values are retained in `ops_hotfix.season_modification_schedule_20260723`; migration `20260723090000_normalize_season_modification_schedule.sql` adds server-side normalization and a validated format constraint.
 - Release `app-v0.1.13` was published on 2026-07-23 with client-side schedule normalization/validation. The public updater metadata reports `0.1.13` and points to the signed Windows x64 installer.

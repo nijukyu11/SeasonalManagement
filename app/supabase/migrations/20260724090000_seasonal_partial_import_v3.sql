@@ -400,6 +400,7 @@ begin
   v_stage_v2 := public.stage_seasonal_import_v2(
     pg_catalog.jsonb_build_object(
       'requestId', p_import->'requestId',
+      'clientId', 'seasonal-import-v3',
       'checksum', p_import->'checksum',
       'mode', case when v_strategy = 'replace' then 'repair' else 'standard' end,
       'seasonId', p_import->'seasonId',

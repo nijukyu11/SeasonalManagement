@@ -24,12 +24,14 @@ Do not put `SUPABASE_SERVICE_ROLE_KEY`, `TELEGRAM_BOT_TOKEN`, or `TELEGRAM_CHAT_
 
 See `supabase.env.example` for the runtime and operator-only environment keys.
 
-Apply the tracked schema/migrations before enabling a new client. Workspace reads use the shared V2 coordinator and bounded `get_season_schedule_allocation_window_v2` keyset pages. Seasonal import sends source rows through `stage_seasonal_import_v2` and `commit_seasonal_import_v2`; export uses `get_seasonal_export_snapshot_v2`. V1 workspace compatibility is allowed only when the V2 signature is confirmed missing, never after timeout/network failure.
+Apply the tracked schema/migrations before enabling a new client. Workspace reads use the shared V2 coordinator and bounded `get_season_schedule_allocation_window_v2` keyset pages. Seasonal Import V3 sends canonical source rows to `stage_seasonal_import_v3`, displays the server preview, and commits the persisted staged set through `commit_seasonal_import_v3`; export uses `get_seasonal_export_snapshot_v2`. V3 never falls back to Import V2, direct-table writes, or SQLite. V1 workspace compatibility is allowed only when the V2 workspace signature is confirmed missing, never after timeout/network failure.
 
 Local integration/load commands require isolated test credentials and never default to production:
 
 ```bash
 npm run test:seasonal-import-v2-db
+npm run test:seasonal-import-v3-db
+npm run test:seasonal-import-v3-load
 npm run test:workspace-window-v2-db
 npm run test:seasonal-import-v2-load
 npm run test:workspace-window-v2-load

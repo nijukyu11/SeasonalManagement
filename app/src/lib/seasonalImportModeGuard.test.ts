@@ -91,6 +91,11 @@ test('Seasonal import V3 RPCs stay identical in migration and canonical schema',
     'stage_seasonal_import_v3',
   );
   assert.match(stageSource, /public\.stage_seasonal_import_v2\(/);
+  assert.match(
+    stageSource,
+    /'clientId', 'seasonal-import-v3'/,
+    'the V3 server adapter must satisfy deployed V2 staging bodies without widening the client payload',
+  );
   assert.match(stageSource, /public\.generate_seasonal_import_records_v2\(/);
   assert.match(stageSource, /insert into public\.season_import_batch_records_v3/);
   assert.match(stageSource, /target_existed_at_stage = v_target_exists/);
@@ -444,7 +449,7 @@ test('Seasonal remote stores expose provenance reads and no direct source-row/im
   assert.doesNotMatch(supabaseSource, /rpc\('apply_seasonal_import_remote'|\/rest\/v1\/rpc\/apply_seasonal_import_remote/);
 });
 
-test('additive V2 migration keeps V1 callable until Task 12 post-canary revocation', () => {
+test('V2 compatibility remains callable while V3 blocks legacy existing-season commits', () => {
   const migrationSource = readFileSync(
     join(root, '..', 'supabase', 'migrations', '20260718090000_seasonal_source_import_v2.sql'),
     'utf8',
@@ -457,8 +462,10 @@ test('additive V2 migration keeps V1 callable until Task 12 post-canary revocati
   );
   assert.match(migrationSource, /importMode/);
   assert.match(migrationSource, /season\.repair/);
-  assert.match(architectureSource, /post-canary/i);
-  assert.match(architectureSource, /apply_seasonal_import_remote/);
+  assert.match(
+    architectureSource,
+    /leaves Import V2 callable for signed pre-V3 clients[\s\S]*trigger blocks legacy V2 commits against existing seasons/i,
+  );
 });
 
 test('Seasonal baseline and overlay RLS hardening is mirrored in migration and schema', () => {

@@ -1,6 +1,6 @@
 # SeasonalManagement Architecture
 
-Last updated: 2026-07-20
+Last updated: 2026-07-23
 
 ## Purpose
 
@@ -36,9 +36,9 @@ Browser/static mode is not the operational source of truth. Legacy IndexedDB and
 
 The 2026-06-22 self-hosted cutover uses Cloudflare Tunnel to expose the restored self-hosted Supabase endpoint at `https://supabase.ahtops.xyz`. The endpoint cutover itself was no-schema-change: release variables point signed builds at the self-hosted endpoint, while the restored database starts from the cloud server dump.
 
-Server-side write hardening is implemented through `opsdata-supabase/supabase/migrations/20260622_server_side_write_hardening.sql`. Seasonal import/re-import sends canonical source rows to `stage_seasonal_import_v2(jsonb)` and commits the validated server preview through `commit_seasonal_import_v2(uuid, integer)`. The server generates atomic occurrences and commits season metadata, imported records, change events, and cursors in one transaction. Standard imports retain the `seasonal.write` permission; Settings `Seasonal Full Replace` uses mode `repair` and requires `season.repair` at both stage and commit. Normal schedule/allocation saves use `apply_season_server_mutation_v1(jsonb)`; `sync_season_workspace_v2` is legacy repair/rollback only. Anon execute remains intentionally revoked, so live smoke requires an authenticated operator session.
+Seasonal Import V3 sends canonical source rows to `stage_seasonal_import_v3(jsonb)`. The server generates and persists the exact atomic preview consumed by `commit_seasonal_import_v3(uuid, integer, text)`. The default `merge` strategy updates only incoming baseline occurrence keys, preserves omitted baseline records and all overlays, and records fragmented provenance. `replace` requires `season.repair`, reports every destructive count, and requires typed season-code confirmation in the client. Normal schedule/allocation saves use `apply_season_server_mutation_v1(jsonb)`; `sync_season_workspace_v2` is legacy repair/rollback only. Anon execute remains intentionally revoked, so live smoke requires an authenticated operator session.
 
-The additive V2 migration intentionally leaves legacy `apply_seasonal_import_remote(jsonb)` callable during the one-release compatibility window. Task 12 must deploy the additive SQL before the V2 canary client. Only after the canary succeeds may the post-canary deployment revoke authenticated execute on V1; dropping the V1 definition is deferred to a later migration after the rollback window. No V2 client may call or fall back to V1, and the additive pre-canary migration must not revoke V1 early.
+The V3 migration is additive and leaves Import V2 callable for signed pre-V3 clients during the rollout window. New V3 clients never call or fall back to V2, V1, direct-table writes, or SQLite. A server trigger blocks legacy V2 commits against existing seasons so an older client cannot silently perform a full replacement after V3 deployment.
 
 Online-first server-authoritative writes are staged through `opsdata-supabase/supabase/migrations/20260622_online_first_server_mutation_v1.sql`. Normal route mutation seams call `apply_season_server_mutation_v1(jsonb)` via `applySeasonServerMutationV1()` and update the active route/cache from server-authoritative responses or server-window reloads. `sync_season_workspace_v2`, native catch-up, native entity-version comparison, and native conflict review are legacy repair/rollback paths, not the main workflow. `season_mutation_receipts` provides idempotency by `(season_id, client_id, client_mutation_id)`.
 
@@ -104,11 +104,11 @@ Supabase owns the normal data model:
 | Realtime and conflict clocks | `season_change_events`, `season_entity_versions` |
 | AI/settings/audit | operational settings, AI models/context docs, audit tables |
 
-Source rows are immutable import provenance from the client perspective. The client may read them for diagnostics and audit evidence but cannot add, delete, link, split, merge, or patch individual source rows. Atomic records are generated set-wise by the V2 server pipeline. Operational edits remain overlays and are materialized with the imported baseline for schedule reads and exports.
+Source rows are immutable import provenance from the client perspective. The client may read them for diagnostics and audit evidence but cannot add, delete, link, split, merge, or patch individual source rows. V3 `replace` writes a complete `season_source_rows` snapshot and marks provenance `full`; V3 `merge` records batch/record provenance and marks the season `fragmented` because omitted source rows are intentionally not deleted. Operational edits remain overlays and are materialized with the imported baseline for schedule reads and exports.
 
 Seasonal relational writes have two distinct authorization boundaries:
 
-- Baseline/import-owned tables, including `seasons`, source rows/days, generated flight records and their children, import batches, change events, and entity versions, are RPC-only for mutation. Authenticated clients receive permission-gated read access where needed but no direct baseline `INSERT`, `UPDATE`, or `DELETE`. Season metadata changes use `manage_season_metadata_v2`; baseline replacement uses the V2 stage/commit functions.
+- Baseline/import-owned tables, including `seasons`, source rows/days, generated flight records and their children, V3 staged records/preimages, import batches, change events, and entity versions, are RPC-only for mutation. Authenticated clients receive permission-gated read access where needed but no direct baseline `INSERT`, `UPDATE`, or `DELETE`. Season metadata changes use `manage_season_metadata_v2`; import mutation uses the V3 stage/commit functions.
 - Operational overlay parent rows accept operators with `seasonal.write`, `detailed.write`, `daily.write`, `checkin.write`, or `gate.write`. Check-in counter/window children accept `seasonal.write`, `detailed.write`, `daily.write`, or `checkin.write`. Added-leg and modification-history tables accept only `seasonal.write`, `detailed.write`, or `daily.write`. `season.repair` alone never grants direct table DML, and viewers cannot mutate either boundary.
 - Service-role maintenance remains available through server-side administration, but client recovery and import RPCs still require an authenticated operator identity and their exact application permission.
 
@@ -117,9 +117,10 @@ Seasonal relational writes have two distinct authorization boundaries:
 ```text
 Excel workbook
   -> parser.ts validates source rows
-  -> seasonalImportRpcContract.ts canonicalizes rows and binds checksum/request ID/mode
-  -> stage_seasonal_import_v2 validates and previews server-generated atomic occurrences
-  -> commit_seasonal_import_v2 commits the imported baseline atomically
+  -> seasonalImportV3Contract.ts canonicalizes rows and binds checksum/request ID/strategy/version
+  -> stage_seasonal_import_v3 persists and returns the server-generated preview
+  -> operator explicitly confirms merge or authorized replace
+  -> commit_seasonal_import_v3 commits the persisted staged set atomically
   -> route pages parse and materialize one complete authoritative Supabase snapshot
   -> operational edits persist as modification overlays
   -> get_seasonal_export_snapshot_v2 returns one versioned server snapshot
@@ -128,7 +129,7 @@ Excel workbook
 
 `sourceRows` are imported-baseline provenance. `FlightRecord` rows are server-generated occurrences; modifications are the operational edit boundary. Same-day and overnight relationships must be explicit through `turnaroundId`/`linkType`; export must not infer overnight pairings from time similarity. Import, export, retry, ambiguous-commit recovery, and refresh all stay on Supabase and never read or write SQLite as a fallback.
 
-Before Settings issues a repair commit, it persists an owner-scoped minimal receipt containing request/batch identity, mode, checksum, expected version, counts, and committed cursor metadata. It never persists the source-row payload. Storage failure is a blocking precondition before commit. `resume_seasonal_import_v2` resolves only the current authenticated operator's request and returns minimal status/receipt data without staging rows; another operator and the service role cannot use this client RPC to recover that request. After a confirmed commit, receipt-cleanup failure is a warning and cannot change committed success into an ambiguous result.
+Before either V3 import entry point issues a commit, it persists an owner-scoped minimal receipt containing request/batch identity, strategy, checksum, expected version, preview hash, counts, and committed cursor metadata. It never persists the source-row payload. Storage failure is a blocking precondition before commit. `get_seasonal_import_v3_status(uuid)` is status-only and owner-scoped; Resume/Check never stages or auto-commits. `cancel_seasonal_import_v3(uuid)` is also owner-scoped. After a confirmed commit, receipt-cleanup failure is a warning and cannot change committed success into an ambiguous result.
 
 ## Current Save And Realtime Flow
 
@@ -180,7 +181,7 @@ Current sync hardening boundaries:
 - Live season subscription setup must catch remote store or realtime subscription failures and publish a failed sync state. If subscription setup fails, automatic catch-up is unavailable and stale data must be visible as a sync failure.
 - Live season setup must still run background catch-up when the active `RemoteStore` has no realtime subscription API. Realtime is the push channel, not the prerequisite for initial server update fetch. The fallback must register a no-op live marker so repeated `ensureLiveSeason()` calls do not start duplicate catch-up runs for the same season.
 - Manual Save and Fetch Updates must start their manual operation before calling `ensureLiveSeason()`. The live setup path may start background catch-up, so calling it first can race with manual sync/fetch before the manual guard is active.
-- Seasonal import/re-import replaces the server baseline through the strict V2 pipeline. Its handler and visible button use the shared server file-action, unsaved-draft, and pending-submit guards; native catch-up state is not an import prerequisite or fallback.
+- Seasonal import/re-import uses the previewed V3 merge/replace pipeline. Its handler and visible button use the shared server file-action, unsaved-draft, and pending-submit guards; native catch-up state is not an import prerequisite or fallback.
 - Daily OperationalTurns import writes batches of local schedule changes, so its handler and visible button must also be disabled while native catch-up/Fetch Updates is applying server changes.
 - Daily local mutation controls and handlers must use same-season `syncWriteInProgress = syncInProgress || fetchingUpdates`, not manual-only `syncing`, for Add/Link/Unlink/Delete. Auto Save and catch-up are both write paths and should not leave local mutation controls visually or behaviorally active.
 - Check-in and Gate allocation write interactions must also use same-season `syncWriteInProgress` for drag/drop, resize, context actions, unallocate-all, and override apply. Manual-only `syncing` is insufficient because auto Save and catch-up both write native sync state.
@@ -214,7 +215,7 @@ Route shells should use dynamic viewport height (`h-dvh`) rather than fixed `h-s
 
 | Route | Role | Server data access |
 |---|---|---|
-| Seasonal Schedule | Aggregated ARR/DEP macro view, V2 source-row import, versioned export | Supabase import/export RPCs and schedule windows |
+| Seasonal Schedule | Aggregated ARR/DEP macro view, previewed V3 merge import, versioned export | Supabase import/export RPCs and schedule windows |
 | Detailed Schedule | ID-level calendar editing, pair-aware delete, manual link/unlink | Supabase schedule windows and server mutations |
 | Daily Schedule | Daily operational view and OperationalTurns import | Supabase schedule windows and server mutations |
 | Check-in Allocation | Departure-only Gantt, counter assignment/time windows | Supabase allocation windows and server mutations |
@@ -261,7 +262,7 @@ Rust and TypeScript must preserve the full `scheduleNotification` payload. Best-
 - `operational_ai_context_documents` is RLS-protected for authenticated app operators.
 - Native local SQL for AI is read-only and limited to the dashboard temp view.
 - Seasonal baseline tables are SELECT-only for permissioned authenticated clients and mutate only through approved `SECURITY DEFINER` functions. Overlay RLS uses the route permission matrix documented under Data Model; broad `is_app_operator` write policies are not allowed.
-- Seasonal recovery receipts and `resume_seasonal_import_v2` are owner-scoped and expose no source rows. Repair authorization is checked again at the server stage/commit boundary, and mode is part of deterministic request identity.
+- Seasonal V3 recovery receipts and status/cancel RPCs are owner-scoped and expose no source rows. Strategy authorization is checked again at the server stage/commit boundary, and strategy plus expected version are part of deterministic request identity.
 
 ## GitNexus Notes
 
