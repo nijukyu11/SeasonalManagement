@@ -12,7 +12,7 @@ import {
 
 const BATCH_ID = '00000000-0000-4000-8000-000000000001';
 const REQUEST_ID = '11111111-1111-5111-8111-111111111111';
-const SEASON_ID = '22222222-2222-4222-8222-222222222222';
+const SEASON_ID = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6';
 const HASH = 'a'.repeat(64);
 
 function previewCounts(
@@ -132,12 +132,16 @@ test('V3 stage parser is exact and validates identifiers, enums, hashes, and cou
     () => parseSeasonalImportV3StageResult(stageResult({ counts: undefined })),
     /counts/,
   );
-  for (const field of ['batchId', 'requestId', 'seasonId'] as const) {
+  for (const field of ['batchId', 'requestId'] as const) {
     assert.throws(
       () => parseSeasonalImportV3StageResult(stageResult({ [field]: 'not-a-uuid' })),
       new RegExp(field),
     );
   }
+  assert.throws(
+    () => parseSeasonalImportV3StageResult(stageResult({ seasonId: '  ' })),
+    /seasonId/,
+  );
   assert.throws(
     () => parseSeasonalImportV3StageResult(stageResult({ strategy: 'append' })),
     /strategy/,

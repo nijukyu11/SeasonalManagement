@@ -323,7 +323,7 @@ export function parseSeasonalImportV3StageResult(value: unknown): SeasonalImport
   const result: SeasonalImportV3StageResult = {
     batchId: requireUuid(record, 'batchId', label),
     requestId: requireUuid(record, 'requestId', label),
-    seasonId: requireUuid(record, 'seasonId', label),
+    seasonId: requireString(record, 'seasonId', label),
     seasonCode: requireString(record, 'seasonCode', label),
     strategy,
     status: parseStageStatus(record.status),
@@ -352,7 +352,7 @@ export function parseSeasonalImportV3CommittedResult(
   return {
     batchId: requireUuid(record, 'batchId', label),
     requestId: requireUuid(record, 'requestId', label),
-    seasonId: requireUuid(record, 'seasonId', label),
+    seasonId: requireString(record, 'seasonId', label),
     seasonCode: requireString(record, 'seasonCode', label),
     strategy,
     status: 'committed',
@@ -438,8 +438,8 @@ export async function deriveSeasonalImportV3RequestId(input: {
   checksum: string;
 }): Promise<string> {
   const seasonId = input.seasonId?.trim() ?? '';
-  if (seasonId && !UUID_PATTERN.test(seasonId)) {
-    throw new Error('seasonId must be a UUID when provided.');
+  if (input.seasonId !== null && !seasonId) {
+    throw new Error('seasonId must be a non-empty string when provided.');
   }
   if (
     !Number.isSafeInteger(input.expectedDataVersion)
