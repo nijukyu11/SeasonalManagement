@@ -1184,6 +1184,53 @@ begin
 end;
 $$;
 
+create or replace function public.guard_seasonal_effective_base_occurrence_v2()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+begin
+  if pg_catalog.current_setting(
+    'app.seasonal_import_v3_bulk_season_id',
+    true
+  ) = new.season_id then
+    begin
+      if exists (
+        select 1
+        from pg_temp.seasonal_import_commit_records_v3 incoming
+        where incoming.final_record_id = new.record_id
+      ) then
+        return new;
+      end if;
+    exception
+      when undefined_table then null;
+    end;
+  end if;
+
+  if new.status = 'active'
+    and new.action is distinct from 'deleted'
+    and not exists (
+      select 1
+      from public.season_modifications modifications
+      where modifications.season_id = new.season_id
+        and modifications.leg_id = new.record_id
+        and modifications.action = 'deleted'
+    )
+  then
+    perform public.assert_seasonal_effective_base_occurrence_v2(
+      new.season_id,
+      new.record_id,
+      new.date,
+      new.airline,
+      new.flight_number,
+      new.raw_flight_number
+    );
+  end if;
+  return new;
+end;
+$$;
+
 create or replace function public.commit_seasonal_import_v3(
   p_batch_id uuid,
   p_expected_data_version integer,
@@ -1796,6 +1843,70 @@ begin
   left join public.season_flight_records records
     on records.record_id = affected.record_id;
 
+  with manual_candidates as (
+    select
+      records.record_id,
+      v_target_season_id
+        || '|'
+        || coalesce(nullif(records.scheduled_date, ''), records.date)
+        || '|'
+        || pg_catalog.upper(pg_catalog.btrim(records.airline))
+        || '|'
+        || normalized.flight_number as occurrence_key
+    from public.season_flight_records records
+    cross join lateral public.normalize_seasonal_flight_number_v2(
+      records.airline,
+      coalesce(nullif(records.flight_number, ''), records.raw_flight_number)
+    ) normalized
+    left join public.season_modifications modifications
+      on modifications.season_id = records.season_id
+      and modifications.leg_id = records.record_id
+    where records.season_id = v_target_season_id
+      and (records.source_kind = 'added' or records.action = 'added')
+      and records.status = 'active'
+      and records.action is distinct from 'deleted'
+      and modifications.action is distinct from 'deleted'
+    union all
+    select
+      added_legs.record_id,
+      v_target_season_id
+        || '|'
+        || coalesce(nullif(added_legs.scheduled_date, ''), added_legs.date)
+        || '|'
+        || pg_catalog.upper(pg_catalog.btrim(added_legs.airline))
+        || '|'
+        || normalized.flight_number
+    from public.season_modification_added_legs added_legs
+    cross join lateral public.normalize_seasonal_flight_number_v2(
+      added_legs.airline,
+      coalesce(
+        nullif(added_legs.flight_number, ''),
+        added_legs.raw_flight_number
+      )
+    ) normalized
+    join public.season_modifications modifications
+      on modifications.season_id = added_legs.season_id
+      and modifications.leg_id = added_legs.leg_id
+    where added_legs.season_id = v_target_season_id
+      and added_legs.source_kind = 'added'
+      and added_legs.status = 'active'
+      and added_legs.action is distinct from 'deleted'
+      and modifications.action = 'added'
+  )
+  select manual_candidates.record_id
+  into v_conflicting_record_id
+  from pg_temp.seasonal_import_commit_records_v3 incoming
+  join manual_candidates
+    on manual_candidates.occurrence_key = incoming.occurrence_key
+  order by manual_candidates.record_id
+  limit 1;
+
+  if v_conflicting_record_id is not null then
+    raise exception 'Incoming occurrence collides with manual added flight %',
+      v_conflicting_record_id
+      using errcode = '23505';
+  end if;
+
   if v_batch.apply_strategy = 'replace' then
     delete from public.season_modifications modifications
     using pg_temp.seasonal_import_commit_omitted_v3 omitted
@@ -1856,6 +1967,12 @@ begin
       and records.record_id = omitted.record_id
       and records.source_kind = 'imported';
   end if;
+
+  perform pg_catalog.set_config(
+    'app.seasonal_import_v3_bulk_season_id',
+    v_target_season_id,
+    true
+  );
 
   update public.season_flight_records records
   set
@@ -1962,6 +2079,12 @@ begin
     incoming.source_staging_row_index
   from pg_temp.seasonal_import_commit_records_v3 incoming
   where incoming.is_insert;
+
+  perform pg_catalog.set_config(
+    'app.seasonal_import_v3_bulk_season_id',
+    '',
+    true
+  );
 
   if v_batch.apply_strategy = 'replace' then
     delete from public.season_source_rows source_rows

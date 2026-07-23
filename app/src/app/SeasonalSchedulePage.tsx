@@ -307,19 +307,26 @@ export default function HomePage() {
     setPendingCommittedImportState(result);
   }, []);
   useEffect(() => {
-    const receipt = loadSeasonalImportV3RecoveryReceipt(sessionStorage);
-    if (!receipt) return;
-    setPendingImportAttempt(receipt);
-    if (receipt.status === 'committed') {
-      try {
-        const committed = committedSeasonalImportV3FromRecoveryReceipt(receipt);
-        setPendingCommittedImport(committed);
-        setImportPreviewState({ kind: 'committed-refresh-pending', result: committed });
-      } catch {
-        clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-        setPendingImportAttempt(null);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const receipt = loadSeasonalImportV3RecoveryReceipt(sessionStorage);
+      if (!receipt) return;
+      setPendingImportAttempt(receipt);
+      if (receipt.status === 'committed') {
+        try {
+          const committed = committedSeasonalImportV3FromRecoveryReceipt(receipt);
+          setPendingCommittedImport(committed);
+          setImportPreviewState({ kind: 'committed-refresh-pending', result: committed });
+        } catch {
+          clearSeasonalImportV3RecoveryReceipt(sessionStorage);
+          setPendingImportAttempt(null);
+        }
       }
-    }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [setPendingCommittedImport, setPendingImportAttempt]);
   const setActiveSeason = useCallback((nextSeason: Season | null) => {
     latestActiveSeasonRef.current = nextSeason;

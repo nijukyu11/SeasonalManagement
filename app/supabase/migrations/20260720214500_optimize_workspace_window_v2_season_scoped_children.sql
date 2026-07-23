@@ -41,6 +41,17 @@ begin
     return;
   end if;
 
+  if position(
+    'join selected_base_ids ids on ids.root_id = r.record_id'
+    in function_definition
+  ) > 0 and position(
+    'where r.season_id = p_season_id'
+    in function_definition
+  ) > 0 then
+    execute function_definition;
+    return;
+  end if;
+
   if position(old_flight_rows in function_definition) = 0 then
     raise exception 'Workspace window V2 definition did not match the reviewed flight-row hydration predicate';
   end if;

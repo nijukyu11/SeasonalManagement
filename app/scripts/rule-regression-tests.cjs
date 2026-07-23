@@ -9546,6 +9546,9 @@ async function run() {
   const seasonalImportRpcContractSource = fs.existsSync(path.join(root, 'src', 'lib', 'seasonalImportRpcContract.ts'))
     ? fs.readFileSync(path.join(root, 'src', 'lib', 'seasonalImportRpcContract.ts'), 'utf8')
     : '';
+  const seasonalImportV3ContractSource = fs.existsSync(path.join(root, 'src', 'lib', 'seasonalImportV3Contract.ts'))
+    ? fs.readFileSync(path.join(root, 'src', 'lib', 'seasonalImportV3Contract.ts'), 'utf8')
+    : '';
   const nativeSeasonBootstrapSource = fs.existsSync(path.join(root, 'src', 'lib', 'nativeSeasonBootstrap.ts'))
     ? fs.readFileSync(path.join(root, 'src', 'lib', 'nativeSeasonBootstrap.ts'), 'utf8')
     : '';
@@ -10298,14 +10301,17 @@ async function run() {
     'Workspace-change metadata must patch provider pending state before scheduler notification without native summary refresh'
   );
   assert(
-    settingsPageSource.includes('The server will generate atomic flight records and preserve valid operational overlays.') &&
-      settingsPageSource.includes("mode: 'repair'") &&
-      settingsPageSource.includes('prepareSeasonalImportV2Attempt({') &&
+    settingsPageSource.includes("strategy: 'replace'") &&
+      settingsPageSource.includes('prepareSeasonalImportV3Attempt({') &&
+      settingsPageSource.includes('stageSeasonalImportV3(attemptedImport, { operatorSessionEpoch })') &&
+      settingsPageSource.includes('commitSeasonalImportV3({') &&
+      settingsPageSource.includes('canCommitSeasonalImportPreview({') &&
+      settingsPageSource.includes('<SeasonalImportPreviewDialog') &&
       !settingsPageSource.includes('clearSeasonBaseline') &&
       !settingsPageSource.includes('batchWriteFlightRecords') &&
       !settingsPageSource.includes('queryNativeSyncSummary') &&
       !settingsPageSource.includes('pending local change'),
-    'Settings repair import must use the V2 server replacement and ignore stale native pending metadata'
+    'Settings repair import must use the previewed V3 server replacement and ignore stale native pending metadata'
   );
   const settingsRepairRefreshStart = settingsPageSource.indexOf('const applySeasonRepairCommittedRefresh');
   const settingsRepairRefreshEnd = settingsPageSource.indexOf('const handleSeasonRepairImport', settingsRepairRefreshStart);
@@ -10541,6 +10547,9 @@ async function run() {
       !seasonSyncProviderSource.includes('\n      clearTimeout,\n'),
     'SeasonSyncProvider must bind browser timer APIs before passing them to the auto-sync scheduler so manual sync cannot throw WebView Illegal invocation while cancelling a scheduled Detailed sync'
   );
+  const seasonalV3StageStart = seasonalPageSource.indexOf('const stagePreparedSeasonalImport');
+  const seasonalV3StageEnd = seasonalPageSource.indexOf('const handleFile =', seasonalV3StageStart);
+  const seasonalV3StageSource = seasonalPageSource.slice(seasonalV3StageStart, seasonalV3StageEnd);
   assert(
     supabaseStoreSource.includes('const SUPABASE_SELECT_PAGE_SIZE = 1000') &&
       supabaseStoreSource.includes('async function selectAllRows') &&
@@ -10565,7 +10574,23 @@ async function run() {
       seasonalImportRpcContractSource.includes('canonicalizeSeasonalImportSourceRows(input.sourceRows)') &&
       seasonalImportRpcContractSource.includes('buildSeasonalImportV2Checksum(input.seasonCode, sourceRows)') &&
       remoteStoreSource.includes('applySeasonalImportRemote?') &&
-      seasonalPageSource.includes('applySeasonalImportRemote') &&
+      remoteStoreSource.includes('stageSeasonalImportV3?') &&
+      remoteStoreSource.includes('commitSeasonalImportV3?') &&
+      remoteStoreSource.includes('getSeasonalImportV3Status?') &&
+      remoteStoreSource.includes('cancelSeasonalImportV3?') &&
+      supabaseStoreSource.includes("rpc('stage_seasonal_import_v3'") &&
+      supabaseStoreSource.includes("rpc('commit_seasonal_import_v3'") &&
+      supabaseStoreSource.includes("rpc('get_seasonal_import_v3_status'") &&
+      supabaseStoreSource.includes("rpc('cancel_seasonal_import_v3'") &&
+      seasonalImportV3ContractSource.includes('export async function prepareSeasonalImportV3Attempt') &&
+      seasonalImportV3ContractSource.includes('parseSeasonalImportV3StageResult') &&
+      seasonalImportV3ContractSource.includes('parseSeasonalImportV3CommittedResult') &&
+      seasonalPageSource.includes('prepareSeasonalImportV3Attempt({') &&
+      seasonalPageSource.includes("strategy: 'merge'") &&
+      seasonalV3StageStart >= 0 &&
+      seasonalV3StageEnd > seasonalV3StageStart &&
+      seasonalV3StageSource.includes('stageSeasonalImportV3') &&
+      !/applySeasonalImportRemote|stage_seasonal_import_v2|SQLite|native/i.test(seasonalV3StageSource) &&
       !seasonalPageSource.includes('await batchWriteFlightRecords(seasonId, recordsToWrite') &&
       !seasonalPageSource.includes('await clearSourceRows(seasonId)') &&
       supabaseStoreSource.includes("selectAllRows<FlightRecordRelationalRow>('season_flight_records'") &&
@@ -10587,16 +10612,12 @@ async function run() {
       [seasonalPageSource, detailedPageSource, dailyPageSource, dashboardPageSource, checkInPageSource, gatePageSource].every((source) =>
         source.includes('loadSeasonWorkspaceWindow') && !source.includes('queryNativeScheduleWindow') && !source.includes('queryNativeAllocationWindow')
       ) &&
-      seasonalPageSource.includes('prepareSeasonalImportV2Attempt({') &&
-      seasonalPageSource.includes("mode: 'standard'") &&
       seasonalPageSource.includes('sourceRows: parsedRows') &&
-      seasonalPageSource.indexOf('setPendingImportAttempt(attemptedImport)') <
-        seasonalPageSource.indexOf('applySeasonalImportRemote(attemptedImport, { operatorSessionEpoch })') &&
-      seasonalPageSource.includes('remoteImport.sourceRowCount') &&
+      seasonalPageSource.includes('commitSeasonalImportV3({') &&
       !seasonalPageSource.includes('sourceRows: []') &&
       !seasonalPageSource.includes('flightRecords: seasonRecords') &&
       !seasonalPageSource.includes('modificationDeleteRecordIds'),
-    'Supabase large season reads must be paginated, V2 imports must trust strict committed counts, and operational routes must use server windows without native fallback'
+    'Supabase reads must stay paginated, Seasonal Import V3 must remain previewed/server-only, V2 must stay compatible, and operational routes must use server windows without native fallback'
   );
   const supabaseInFilterBatchMatch = supabaseStoreSource.match(/const SUPABASE_IN_FILTER_BATCH_SIZE = (\d+)/);
   const supabaseInFilterBatchSize = Number(supabaseInFilterBatchMatch?.[1] ?? 0);
@@ -10675,7 +10696,7 @@ async function run() {
       [seasonalPageSource, detailedPageSource, dailyPageSource, checkInPageSource, gatePageSource].every((source) =>
         source.includes('loadSeasonWorkspaceWindow') && !source.includes('queryNative') && !source.includes('ensureNativeSeasonBaseline')
       ) &&
-      seasonalPageSource.includes('sourceRows: remoteImport.sourceRowCount') &&
+      seasonalPageSource.includes('sourceRows: remoteImport.counts.sourceRowCount') &&
       !seasonalPageSource.includes('sourceRows: 0') &&
       !seasonSyncProviderSource.includes('applySeasonEventRange') &&
       seasonSyncProviderSource.includes('subscribeToSeasonEvents') &&
@@ -10877,10 +10898,11 @@ async function run() {
       seasonSyncSource.match(/nativeFullSaveReason: 'sync-baseline'/g)?.length >= 5 &&
       !seasonalPageSource.includes('importNativeSeasonSnapshot({') &&
       seasonalPageSource.includes('loadSeasonWorkspaceWindow({') &&
-      seasonalPageSource.includes('prepareSeasonalImportV2Attempt({') &&
-      seasonalPageSource.includes("mode: 'standard'") &&
+      seasonalPageSource.includes('prepareSeasonalImportV3Attempt({') &&
+      seasonalPageSource.includes("strategy: 'merge'") &&
       seasonalPageSource.includes('sourceRows: parsedRows') &&
-      seasonalPageSource.includes('applySeasonalImportRemote(attemptedImport, { operatorSessionEpoch })') &&
+      seasonalPageSource.includes('stageSeasonalImportV3(attemptedImport, { operatorSessionEpoch })') &&
+      seasonalPageSource.includes('commitSeasonalImportV3({') &&
       !seasonalPageSource.includes('sourceRows: []') &&
       !seasonalPageSource.includes("nativeFullSaveReason: 'undo-reset'") &&
       detailedPageSource.includes('runNativeScheduleMutation') &&
@@ -10892,7 +10914,7 @@ async function run() {
       localSeasonSqlStoreSource.includes('db.supportsExplicitTransactions === false') &&
       !seasonSyncProviderSource.includes('saveLocalSeasonWorkspace(currentWorkspace') &&
       !seasonSyncProviderSource.includes("source: publishSource ?? 'paged-catchup'"),
-    'Desktop full-workspace SQLite saves must stay legacy repair/server-baseline only while Seasonal import uses V2 Supabase RPCs'
+    'Desktop full-workspace SQLite saves must stay legacy repair/server-baseline only while Seasonal import uses previewed V3 Supabase RPCs'
   );
   assert(
     syncActionButtonSource.includes('export default function SyncActionButton') &&
