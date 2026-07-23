@@ -12,6 +12,47 @@ function requireSqlSection(source: string, pattern: RegExp, label: string): stri
   return section.replace(/\r\n/g, '\n');
 }
 
+test('Seasonal import V3 schema is additive and preserves V2 RPC signatures', () => {
+  const migrationSource = readFileSync(
+    join(
+      root,
+      '..',
+      'supabase',
+      'migrations',
+      '20260724090000_seasonal_partial_import_v3.sql',
+    ),
+    'utf8',
+  );
+  const schemaSource = readFileSync(join(root, '..', 'supabase', 'schema.sql'), 'utf8');
+
+  for (const source of [migrationSource, schemaSource]) {
+    assert.match(source, /contract_version smallint not null default 2/);
+    assert.match(source, /apply_strategy text/);
+    assert.match(source, /target_existed_at_stage boolean/);
+    assert.match(
+      source,
+      /create table if not exists public\.season_import_batch_records_v3/,
+    );
+    assert.match(
+      source,
+      /create table if not exists public\.season_import_batch_preimages_v3/,
+    );
+    assert.match(source, /source_import_batch_id uuid/);
+    assert.match(source, /source_import_staging_row_index integer/);
+    assert.match(source, /source_provenance_mode text/);
+    assert.match(source, /guard_legacy_existing_season_import_v3/);
+  }
+
+  assert.doesNotMatch(
+    migrationSource,
+    /drop function[^;]*(?:stage|commit|resume)_seasonal_import_v2/i,
+  );
+  assert.doesNotMatch(
+    migrationSource,
+    /create or replace function public\.(?:stage|commit|resume)_seasonal_import_v2/i,
+  );
+});
+
 test('main Seasonal import sends canonical source rows and never builds client atomic import arrays', () => {
   const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
   const contractSource = readFileSync(join(root, 'lib', 'seasonalImportRpcContract.ts'), 'utf8');

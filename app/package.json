@@ -9,6 +9,7 @@
     "test:dashboard-contract": "node --test src/lib/dashboardReportingContract.source.test.ts",
     "test:rules": "node scripts/rule-regression-tests.cjs",
     "test:seasonal-import-sql": "node supabase/tests/seasonal_source_import_v2_pglite.mjs",
+    "test:seasonal-import-v3-sql": "node supabase/tests/seasonal_partial_import_v3_pglite.mjs",
     "test:seasonal-schema-twice": "node supabase/tests/seasonal_schema_twice.mjs",
     "test:seasonal-import-v2-db": "node scripts/run-seasonal-import-v2-db-test.mjs",
     "test:seasonal-import-v2-load": "node scripts/seasonal-import-v2-load-test.mjs",
