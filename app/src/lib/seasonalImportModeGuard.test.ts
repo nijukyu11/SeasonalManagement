@@ -53,7 +53,7 @@ test('Seasonal import V3 schema is additive and preserves V2 RPC signatures', ()
   );
 });
 
-test('Seasonal import V3 preview RPCs stay identical in migration and canonical schema', () => {
+test('Seasonal import V3 RPCs stay identical in migration and canonical schema', () => {
   const migrationSource = readFileSync(
     join(
       root,
@@ -70,6 +70,7 @@ test('Seasonal import V3 preview RPCs stay identical in migration and canonical 
     'stage_seasonal_import_v3',
     'get_seasonal_import_v3_status',
     'cancel_seasonal_import_v3',
+    'commit_seasonal_import_v3',
   ] as const;
 
   for (const functionName of functionNames) {
@@ -96,6 +97,16 @@ test('Seasonal import V3 preview RPCs stay identical in migration and canonical 
   assert.doesNotMatch(stageSource, /insert into public\.season_flight_records/);
   assert.doesNotMatch(stageSource, /update public\.seasons/);
   assert.doesNotMatch(stageSource, /delete from public\.season_flight_records/);
+  const commitSource = requireSqlSection(
+    migrationSource,
+    /create or replace function public\.commit_seasonal_import_v3\([\s\S]*?\n\$\$;/i,
+    'commit_seasonal_import_v3',
+  );
+  assert.match(commitSource, /from public\.season_import_batch_records_v3/);
+  assert.match(commitSource, /insert into public\.season_import_batch_preimages_v3/);
+  assert.match(commitSource, /source_provenance_mode = 'fragmented'/);
+  assert.doesNotMatch(commitSource, /generate_seasonal_import_records_v2/);
+  assert.doesNotMatch(commitSource, /(?:insert into|update|delete from) public\.season_source_rows/i);
   assert.match(
     migrationSource,
     /grant execute on function public\.stage_seasonal_import_v3\(jsonb\)[\s\S]*to authenticated/,
@@ -107,6 +118,10 @@ test('Seasonal import V3 preview RPCs stay identical in migration and canonical 
   assert.match(
     migrationSource,
     /grant execute on function public\.cancel_seasonal_import_v3\(uuid\)[\s\S]*to authenticated/,
+  );
+  assert.match(
+    migrationSource,
+    /grant execute on function public\.commit_seasonal_import_v3\(uuid, integer, text\)[\s\S]*to authenticated/,
   );
 });
 

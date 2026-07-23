@@ -520,6 +520,519 @@ begin
 end;
 $$;
 
+reset role;
+
+insert into public.seasons (
+  id,
+  season_code,
+  name,
+  data_version,
+  total_legs,
+  total_source_rows
+) values (
+  'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+  'M26',
+  'M26 merge fixture',
+  3,
+  5,
+  0
+);
+
+insert into public.season_flight_records (
+  season_id,
+  record_id,
+  link_id,
+  type,
+  airline,
+  flight_number,
+  raw_flight_number,
+  route,
+  schedule,
+  aircraft,
+  category,
+  int_dom_ind,
+  gate,
+  date,
+  scheduled_date,
+  scheduled_time,
+  operational_date,
+  iata_season_code,
+  flight_series_id,
+  day_of_week,
+  source_row_index,
+  source_kind,
+  source_side,
+  status
+) values
+  (
+    'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+    'LEG_M26_UNCHANGED',
+    'LEG_M26_UNCHANGED',
+    'A',
+    'MZ',
+    'MZ101',
+    '101',
+    'ICN',
+    '08:00',
+    '321',
+    'J',
+    'I',
+    null,
+    '2026-08-01',
+    '2026-08-01',
+    '08:00',
+    '2026-08-01',
+    'M26',
+    'SER_A_MZ_MZ101_ICN',
+    6,
+    1,
+    'imported',
+    'ARR',
+    'active'
+  ),
+  (
+    'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+    'LEG_M26_CHANGED',
+    'LEG_M26_CHANGED',
+    'A',
+    'MZ',
+    'MZ102',
+    '102',
+    'OLD',
+    '09:00',
+    '320',
+    'J',
+    'I',
+    24,
+    '2026-08-01',
+    '2026-08-01',
+    '09:00',
+    '2026-08-01',
+    'M26',
+    'SER_A_MZ_MZ102_OLD',
+    6,
+    2,
+    'imported',
+    'ARR',
+    'active'
+  ),
+  (
+    'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+    'LEG_M26_DELETED_OVERLAY',
+    'LEG_M26_DELETED_OVERLAY',
+    'A',
+    'MZ',
+    'MZ103',
+    '103',
+    'ICN',
+    '10:00',
+    '321',
+    'J',
+    'I',
+    null,
+    '2026-08-01',
+    '2026-08-01',
+    '10:00',
+    '2026-08-01',
+    'M26',
+    'SER_A_MZ_MZ103_ICN',
+    6,
+    3,
+    'imported',
+    'ARR',
+    'active'
+  ),
+  (
+    'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+    'LEG_M26_OMITTED',
+    'LEG_M26_OMITTED',
+    'A',
+    'MZ',
+    'MZ104',
+    '104',
+    'ICN',
+    '11:00',
+    '321',
+    'J',
+    'I',
+    null,
+    '2026-08-01',
+    '2026-08-01',
+    '11:00',
+    '2026-08-01',
+    'M26',
+    'SER_A_MZ_MZ104_ICN',
+    6,
+    4,
+    'imported',
+    'ARR',
+    'active'
+  ),
+  (
+    'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+    'LEG_M26_MANUAL',
+    'LEG_M26_MANUAL',
+    'A',
+    'MZ',
+    'MZ999',
+    '999',
+    'ICN',
+    '12:00',
+    '321',
+    'J',
+    'I',
+    30,
+    '2026-08-01',
+    '2026-08-01',
+    '12:00',
+    '2026-08-01',
+    'M26',
+    'SER_A_MZ_MZ999_ICN',
+    6,
+    0,
+    'added',
+    'ARR',
+    'active'
+  );
+
+insert into public.season_modifications (
+  season_id,
+  leg_id,
+  action,
+  changed_fields,
+  schedule,
+  gate,
+  check_in_start,
+  check_in_end,
+  check_in_allocation_mode
+) values
+  (
+    'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+    'LEG_M26_CHANGED',
+    'modified',
+    array[
+      'schedule',
+      'gate',
+      'counter',
+      'checkInStart',
+      'checkInEnd',
+      'checkInAllocationMode',
+      'checkInCounterWindows'
+    ],
+    '09:30',
+    25,
+    '07:00',
+    '08:30',
+    'grouped'
+  ),
+  (
+    'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+    'LEG_M26_DELETED_OVERLAY',
+    'deleted',
+    '{}'::text[],
+    null,
+    null,
+    null,
+    null,
+    null
+  );
+
+insert into public.season_modification_counters (
+  leg_id,
+  counter_group,
+  item_index,
+  counter_value
+) values ('LEG_M26_CHANGED', 'A', 0, '24');
+
+insert into public.season_modification_checkin_windows (
+  leg_id,
+  counter_key,
+  window_start,
+  window_end
+) values ('LEG_M26_CHANGED', '24', '07:00', '08:30');
+
+set local role authenticated;
+select pg_catalog.set_config(
+  'request.jwt.claim.sub',
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  true
+);
+
+do $$
+declare
+  v_preview jsonb;
+  v_committed jsonb;
+  v_retry jsonb;
+  v_batch_id uuid;
+  v_unchanged_before jsonb;
+  v_modifications_before jsonb;
+  v_counters_before jsonb;
+  v_windows_before jsonb;
+begin
+  select pg_catalog.to_jsonb(records)
+  into v_unchanged_before
+  from public.season_flight_records records
+  where records.record_id = 'LEG_M26_UNCHANGED';
+
+  select pg_catalog.jsonb_agg(
+    pg_catalog.to_jsonb(modifications)
+    order by modifications.leg_id
+  )
+  into v_modifications_before
+  from public.season_modifications modifications
+  where modifications.season_id
+    = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6';
+
+  select pg_catalog.jsonb_agg(
+    pg_catalog.to_jsonb(counters)
+    order by counters.leg_id, counters.counter_group, counters.item_index
+  )
+  into v_counters_before
+  from public.season_modification_counters counters
+  where counters.leg_id = 'LEG_M26_CHANGED';
+
+  select pg_catalog.jsonb_agg(
+    pg_catalog.to_jsonb(windows)
+    order by windows.leg_id, windows.counter_key
+  )
+  into v_windows_before
+  from public.season_modification_checkin_windows windows
+  where windows.leg_id = 'LEG_M26_CHANGED';
+
+  v_preview := public.stage_seasonal_import_v3(
+    pg_catalog.jsonb_build_object(
+      'contractVersion', 3,
+      'requestId', '40000000-0000-5000-8000-000000000001',
+      'checksum', 'merge-commit-fixture',
+      'strategy', 'merge',
+      'seasonId', 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+      'seasonCode', 'M26',
+      'expectedDataVersion', 3,
+      'fileName', 'M26-partial.xlsx',
+      'uploadedAt', 1,
+      'sourceRows', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 1,
+          'effective', '2026-08-01',
+          'discontinue', '2026-08-01',
+          'airline', 'MZ',
+          'aircraft', '321',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '08:00',
+          'arrFlight', '101',
+          'arrRoute', 'ICN',
+          'arrFlightCategory', 'J',
+          'arrIntDomInd', 'I'
+        ),
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 2,
+          'effective', '2026-08-01',
+          'discontinue', '2026-08-01',
+          'airline', 'MZ',
+          'aircraft', '738',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '09:00',
+          'arrFlight', '102',
+          'arrRoute', 'HND',
+          'arrFlightCategory', 'J',
+          'arrIntDomInd', 'I'
+        ),
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 3,
+          'effective', '2026-08-01',
+          'discontinue', '2026-08-01',
+          'airline', 'MZ',
+          'aircraft', '321',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '10:00',
+          'arrFlight', '103',
+          'arrRoute', 'ICN',
+          'arrFlightCategory', 'J',
+          'arrIntDomInd', 'I'
+        ),
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 5,
+          'effective', '2026-08-01',
+          'discontinue', '2026-08-01',
+          'airline', 'MZ',
+          'aircraft', '321',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '13:00',
+          'arrFlight', '105',
+          'arrRoute', 'ICN',
+          'arrFlightCategory', 'J',
+          'arrIntDomInd', 'I'
+        )
+      )
+    )
+  );
+
+  if v_preview->>'status' <> 'validated'
+    or (v_preview #>> '{counts,insertCount}')::integer <> 1
+    or (v_preview #>> '{counts,baselineUpdateCount}')::integer <> 1
+    or (v_preview #>> '{counts,unchangedCount}')::integer <> 2
+    or (v_preview #>> '{counts,preservedOutsideScopeCount}')::integer <> 1
+  then
+    raise exception 'merge commit fixture preview is incorrect: %', v_preview;
+  end if;
+
+  v_batch_id := (v_preview->>'batchId')::uuid;
+  v_committed := public.commit_seasonal_import_v3(
+    v_batch_id,
+    3,
+    v_preview->>'previewHash'
+  );
+  v_retry := public.commit_seasonal_import_v3(
+    v_batch_id,
+    3,
+    v_preview->>'previewHash'
+  );
+
+  if v_retry is distinct from v_committed
+    or v_committed->>'status' <> 'committed'
+    or (v_committed->>'dataVersion')::integer <> 4
+    or (v_committed->>'importedRecordCount')::integer <> 5
+    or (v_committed->>'totalEffectiveRecordCount')::integer <> 5
+  then
+    raise exception 'merge commit result or idempotency is incorrect: %', v_committed;
+  end if;
+
+  if (
+    select pg_catalog.to_jsonb(records)
+    from public.season_flight_records records
+    where records.record_id = 'LEG_M26_UNCHANGED'
+  ) is distinct from v_unchanged_before then
+    raise exception 'unchanged incoming record was rewritten';
+  end if;
+
+  if not exists (
+    select 1
+    from public.season_flight_records records
+    where records.record_id = 'LEG_M26_CHANGED'
+      and records.route = 'HND'
+      and records.aircraft = '738'
+      and records.gate = 24
+      and records.source_import_batch_id = v_batch_id
+  ) then
+    raise exception 'changed baseline did not preserve ID/operational values: %',
+      (
+        select pg_catalog.to_jsonb(records)
+        from public.season_flight_records records
+        where records.record_id = 'LEG_M26_CHANGED'
+      );
+  end if;
+
+  if (
+    select pg_catalog.jsonb_agg(
+      pg_catalog.to_jsonb(modifications)
+      order by modifications.leg_id
+    )
+    from public.season_modifications modifications
+    where modifications.season_id
+      = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+  ) is distinct from v_modifications_before then
+    raise exception 'merge changed modification overlays';
+  end if;
+
+  if (
+    select pg_catalog.jsonb_agg(
+      pg_catalog.to_jsonb(counters)
+      order by counters.leg_id, counters.counter_group, counters.item_index
+    )
+    from public.season_modification_counters counters
+    where counters.leg_id = 'LEG_M26_CHANGED'
+  ) is distinct from v_counters_before
+    or (
+      select pg_catalog.jsonb_agg(
+        pg_catalog.to_jsonb(windows)
+        order by windows.leg_id, windows.counter_key
+      )
+      from public.season_modification_checkin_windows windows
+      where windows.leg_id = 'LEG_M26_CHANGED'
+    ) is distinct from v_windows_before
+  then
+    raise exception 'merge changed modification child rows';
+  end if;
+
+  if not exists (
+    select 1
+    from public.season_modifications modifications
+    where modifications.leg_id = 'LEG_M26_DELETED_OVERLAY'
+      and modifications.action = 'deleted'
+  ) or not exists (
+    select 1
+    from public.season_flight_records records
+    where records.record_id = 'LEG_M26_OMITTED'
+  ) or not exists (
+    select 1
+    from public.season_flight_records records
+    where records.record_id = 'LEG_M26_MANUAL'
+      and records.source_kind = 'added'
+  ) or not exists (
+    select 1
+    from public.season_flight_records records
+    where records.season_id
+      = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+      and records.flight_number = 'MZ105'
+      and records.source_kind = 'imported'
+  ) then
+    raise exception 'merge removed a preserved record or failed to add the new occurrence';
+  end if;
+
+  if exists (
+    select 1
+    from public.season_source_rows source_rows
+    where source_rows.season_id
+      = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+  ) or (
+    select total_source_rows
+    from public.seasons
+    where id = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+  ) <> 0 then
+    raise exception 'merge rewrote the full source snapshot';
+  end if;
+
+  if not exists (
+    select 1
+    from public.seasons seasons
+    where seasons.id = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+      and seasons.data_version = 4
+      and seasons.source_provenance_mode = 'fragmented'
+      and seasons.last_import_batch_id = v_batch_id
+      and seasons.total_legs = 5
+  ) then
+    raise exception 'merge season metadata is incorrect';
+  end if;
+
+  if (
+    select pg_catalog.count(*)
+    from public.season_change_events events
+    where events.season_id
+      = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+      and events.op_id = v_batch_id::text
+  ) <> 1 then
+    raise exception 'merge did not persist exactly one change event';
+  end if;
+end;
+$$;
+
+reset role;
+
+do $$
+begin
+  if (
+    select pg_catalog.count(*)
+    from public.season_import_batch_preimages_v3 preimages
+    join public.season_import_batches batches
+      on batches.batch_id = preimages.batch_id
+    where batches.request_id = '40000000-0000-5000-8000-000000000001'
+  ) <> 4 then
+    raise exception 'merge did not persist one preimage per incoming occurrence';
+  end if;
+end;
+$$;
+
+set local role authenticated;
 select pg_catalog.set_config(
   'request.jwt.claim.sub',
   'cccccccc-cccc-4ccc-8ccc-cccccccccccc',

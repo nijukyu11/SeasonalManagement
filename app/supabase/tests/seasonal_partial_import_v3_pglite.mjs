@@ -28,6 +28,7 @@ insert into public.app_operator_permission_overrides (
   permission_key,
   effect
 ) values
+  ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'seasonal.read', 'allow'),
   ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'seasonal.write', 'allow'),
   ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'season.repair', 'allow'),
   ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'season.repair', 'allow');
