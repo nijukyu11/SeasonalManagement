@@ -132,24 +132,28 @@ test('Seasonal import V3 RPCs stay identical in migration and canonical schema',
 
 test('main Seasonal import sends canonical source rows and never builds client atomic import arrays', () => {
   const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
-  const contractSource = readFileSync(join(root, 'lib', 'seasonalImportRpcContract.ts'), 'utf8');
+  const contractSource = readFileSync(join(root, 'lib', 'seasonalImportV3Contract.ts'), 'utf8');
   const importStart = source.indexOf('const handleFile = useCallback');
   const importEnd = source.indexOf('const handleRowDoubleClick', importStart);
   const importSource = source.slice(importStart, importEnd);
+  const commitStart = source.indexOf('const handleCommitImportPreview = useCallback', importStart);
+  const commitSource = source.slice(commitStart, importEnd);
   const refreshStart = source.indexOf('const applyTargetedCommittedImportRefresh = useCallback');
   const refreshEnd = source.indexOf('const loadSeasonRows = useCallback', refreshStart);
   const refreshSource = source.slice(refreshStart, refreshEnd);
-  const rpcStart = importSource.indexOf('attemptedImport = await prepareSeasonalImportV2Attempt');
-  const rpcEnd = importSource.indexOf('setPendingImportAttempt(attemptedImport)', rpcStart);
+  const rpcStart = importSource.indexOf('attemptedImport = await prepareSeasonalImportV3Attempt');
+  const rpcEnd = importSource.indexOf('stagePreparedSeasonalImport(attemptedImport', rpcStart);
   const rpcInputSource = importSource.slice(rpcStart, rpcEnd);
 
-  assert.match(importSource, /prepareSeasonalImportV2Attempt\(\{/);
-  assert.match(importSource, /mode:\s*'standard'/);
-  assert.match(contractSource, /export async function prepareSeasonalImportV2Attempt/);
+  assert.match(importSource, /prepareSeasonalImportV3Attempt\(\{/);
+  assert.match(importSource, /strategy:\s*'merge'/);
+  assert.match(contractSource, /export async function prepareSeasonalImportV3Attempt/);
   assert.match(contractSource, /canonicalizeSeasonalImportSourceRows\(input\.sourceRows\)/);
-  assert.match(contractSource, /buildSeasonalImportV2Checksum\(input\.seasonCode, sourceRows\)/);
-  assert.match(contractSource, /deriveSeasonalImportV2RequestId\(\{/);
-  assert.match(importSource, /setPendingImportAttempt\(attemptedImport\)[\s\S]*applySeasonalImportRemote\(attemptedImport, \{ operatorSessionEpoch \}\)/);
+  assert.match(contractSource, /buildSeasonalImportV2Checksum\(seasonCode, sourceRows\)/);
+  assert.match(contractSource, /deriveSeasonalImportV3RequestId\(\{/);
+  assert.match(importSource, /stagePreparedSeasonalImport\(attemptedImport, operation, operatorSessionEpoch\)/);
+  assert.match(commitSource, /commitSeasonalImportV3\(\{[\s\S]*batchId:\s*preview\.batchId[\s\S]*previewHash:\s*preview\.previewHash/);
+  assert.doesNotMatch(importSource.slice(0, commitStart - importStart), /commitSeasonalImportV3/);
   assert.match(rpcInputSource, /sourceRows/);
   assert.match(refreshSource, /revalidateSeasonWorkspaceAfterMutation\(/);
   assert.match(refreshSource, /refreshedWindow\.records/);
@@ -268,7 +272,7 @@ test('committed seasonal import refresh failures have a dedicated non-retry UI b
 test('seasonal import recovery exposes explicit resume and targeted read-only refresh paths', () => {
   const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
   const resumeStart = source.indexOf('const handleResumeImportAttempt = useCallback');
-  const resumeEnd = source.indexOf('const handleFile = useCallback', resumeStart);
+  const resumeEnd = source.indexOf('const stagePreparedSeasonalImport = useCallback', resumeStart);
   const refreshStart = source.indexOf('const handlePendingCommittedRefresh = useCallback');
   const refreshEnd = source.indexOf('const handleResumeImportAttempt = useCallback', refreshStart);
   const targetedStart = source.indexOf('const applyTargetedCommittedImportRefresh = useCallback');
@@ -277,9 +281,9 @@ test('seasonal import recovery exposes explicit resume and targeted read-only re
   const refreshSource = source.slice(refreshStart, refreshEnd);
   const targetedSource = source.slice(targetedStart, targetedEnd);
 
-  assert.match(resumeSource, /resumeSeasonalImportAttemptOnce\([\s\S]*applySeasonalImportRemote\(storedAttempt, \{ operatorSessionEpoch \}\)/);
-  assert.match(resumeSource, /SeasonalImportV2StatusUnknownError/);
-  assert.match(resumeSource, /setPendingImportAttempt\(attempt\)/);
+  assert.match(resumeSource, /checkSeasonalImportV3RecoveryStatusOnce\([\s\S]*getSeasonalImportV3Status\(requestId, \{ operatorSessionEpoch \}\)/);
+  assert.match(resumeSource, /setPendingImportAttempt\(receipt\)/);
+  assert.doesNotMatch(resumeSource, /stageSeasonalImportV3|commitSeasonalImportV3|applySeasonalImportRemote/);
   assert.doesNotMatch(resumeSource, /while\s*\(|for\s*\(|retry/i);
   assert.match(refreshSource, /applyTargetedCommittedImportRefresh\(committedImport, operation, operatorSessionEpoch\)/);
   assert.doesNotMatch(
@@ -361,7 +365,7 @@ test('operator display uses app profile username and display name when available
   assert.match(auditSource, /session\.actor\.displayName \?\? session\.actor\.email \?\? 'Anonymous'/);
 });
 
-test('Settings Seasonal Full Replace uses the permissioned V2 source-row pipeline only', () => {
+test('Settings Seasonal Full Replace uses the permissioned V3 preview pipeline only', () => {
   const settingsSource = readFileSync(join(root, 'app', 'settings', 'page.tsx'), 'utf8');
   const repairSource = readFileSync(join(root, 'app', 'settings', 'components', 'SeasonRepairTab.tsx'), 'utf8');
   const handlerStart = settingsSource.indexOf('const handleSeasonRepairImport');
@@ -370,22 +374,23 @@ test('Settings Seasonal Full Replace uses the permissioned V2 source-row pipelin
 
   assert.match(settingsSource, /handleSeasonRepairImport/);
   assert.match(settingsSource, /access\.permissions\.has\('season\.repair'\)/);
-  assert.match(handlerSource, /prepareSeasonalImportV2Attempt\(\{/);
-  assert.match(handlerSource, /mode:\s*'repair'/);
-  assert.match(handlerSource, /applySeasonalImportRemote\(attemptedImport, \{ operatorSessionEpoch \}\)/);
+  assert.match(handlerSource, /prepareSeasonalImportV3Attempt\(\{/);
+  assert.match(handlerSource, /strategy:\s*'replace'/);
+  assert.match(handlerSource, /stageSeasonalImportV3\(attemptedImport, \{ operatorSessionEpoch \}\)/);
+  assert.match(handlerSource, /commitSeasonalImportV3\(\{[\s\S]*previewHash:\s*preview\.previewHash/);
   assert.match(settingsSource, /revalidateSeasonWorkspaceAfterMutation\(\{/);
   assert.doesNotMatch(settingsSource, /loadTargetedCommittedImportRefresh\(\{/);
-  assert.match(handlerSource, /buildSeasonalImportRecoveryReceipt\(attemptedImport, currentOperatorUserId\)/);
-  assert.match(handlerSource, /persistSeasonalImportRecoveryReceipt\(sessionStorage, recoveryReceipt\)/);
+  assert.match(handlerSource, /buildSeasonalImportV3RecoveryReceipt\(preview\)/);
+  assert.match(handlerSource, /persistSeasonalImportV3RecoveryReceipt\(sessionStorage, receipt\)/);
   assert.ok(
-    handlerSource.indexOf('persistSeasonalImportRecoveryReceipt(sessionStorage, recoveryReceipt)')
-      < handlerSource.indexOf('applySeasonalImportRemote(attemptedImport, { operatorSessionEpoch })'),
+    handlerSource.indexOf('persistSeasonalImportV3RecoveryReceipt(sessionStorage, receipt)')
+      < handlerSource.indexOf('commitSeasonalImportV3({'),
     'the minimal recovery receipt must be durable before Settings issues commit',
   );
-  assert.match(handlerSource, /resumeSeasonalImportRemote\(\{[\s\S]*requestId:\s*receipt\.requestId[\s\S]*expectedDataVersion:\s*receipt\.expectedDataVersion/);
-  assert.match(handlerSource, /SeasonalImportV2StatusUnknownError/);
+  assert.match(handlerSource, /checkSeasonalImportV3RecoveryStatusOnce\([\s\S]*getSeasonalImportV3Status/);
   assert.match(handlerSource, /buildSeasonalImportCommittedRefreshFailure/);
-  assert.match(handlerSource, /committedSeasonalImportFromRecoveryReceipt\(receipt\)/);
+  assert.match(handlerSource, /committedSeasonalImportV3FromRecoveryReceipt\(receipt\)/);
+  assert.match(settingsSource, /strategyLocked/);
   assert.doesNotMatch(handlerSource, /flattenRowsToFlightRecords|mergeDuplicateImportRecords|assertNoDuplicateFlightNumbers/);
   assert.doesNotMatch(handlerSource, /clearSeasonBaseline|batchWriteFlightRecords|verifySeasonImportCounts/);
   assert.doesNotMatch(handlerSource, /callSeasonalImportRpcRawPayload|apply_seasonal_import_remote/);

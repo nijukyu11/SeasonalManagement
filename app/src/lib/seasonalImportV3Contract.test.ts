@@ -7,6 +7,7 @@ import {
   parseSeasonalImportV3CommittedResult,
   parseSeasonalImportV3StageResult,
   parseSeasonalImportV3StatusResult,
+  prepareSeasonalImportV3Attempt,
   type SeasonalImportV3PreviewCounts,
 } from './seasonalImportV3Contract.ts';
 
@@ -281,4 +282,56 @@ test('V3 request identity normalizes new-season identity and rejects invalid inp
     () => deriveSeasonalImportV3RequestId({ ...input, checksum: '  ' }),
     /checksum/,
   );
+});
+
+test('V3 attempt preparation canonicalizes source rows and binds the selected strategy', async () => {
+  const sourceRows = [{
+    rowIndex: 1,
+    effective: '2026-03-29',
+    discontinue: '2026-10-24',
+    airline: 'KE',
+    aircraft: '738',
+    daysOfWeek: [true, false, false, false, false, false, false],
+    sta: '23:15',
+    arrFlight: 'KE2093',
+    arrFlightType: 'PAX',
+    arrRoute: 'icn',
+    arrFlightCategory: 'J',
+    arrCodeShares: null,
+    arrIntDomInd: 'I',
+    std: null,
+    depFlight: null,
+    depFlightType: null,
+    depRoute: null,
+    depFlightCategory: null,
+    depCodeShares: null,
+    depIntDomInd: null,
+    overnightLinkRowIndex: null,
+    linkType: null,
+  }];
+  const merge = await prepareSeasonalImportV3Attempt({
+    seasonId: SEASON_ID,
+    seasonCode: ' s26 ',
+    expectedDataVersion: 16573,
+    strategy: 'merge',
+    fileName: 'Book3.xlsx',
+    uploadedAt: 123,
+    sourceRows,
+  });
+  const replace = await prepareSeasonalImportV3Attempt({
+    seasonId: SEASON_ID,
+    seasonCode: 'S26',
+    expectedDataVersion: 16573,
+    strategy: 'replace',
+    fileName: 'Book3.xlsx',
+    uploadedAt: 123,
+    sourceRows,
+  });
+
+  assert.equal(merge.contractVersion, 3);
+  assert.equal(merge.seasonCode, 'S26');
+  assert.equal(merge.sourceRows[0].airline, 'KE');
+  assert.equal(merge.sourceRows[0].arrFlight, 'KE2093');
+  assert.notEqual(merge.requestId, replace.requestId);
+  assert.equal(merge.checksum, replace.checksum);
 });

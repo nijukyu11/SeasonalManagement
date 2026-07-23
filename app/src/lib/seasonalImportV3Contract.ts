@@ -1,4 +1,9 @@
-import type { CanonicalSeasonalSourceRow } from './seasonalImportRpcContract.ts';
+import {
+  buildSeasonalImportV2Checksum,
+  canonicalizeSeasonalImportSourceRows,
+  normalizeSeasonalImportExpectedDataVersion,
+  type CanonicalSeasonalSourceRow,
+} from './seasonalImportRpcContract.ts';
 
 export type SeasonalImportV3Strategy = 'merge' | 'replace';
 
@@ -466,4 +471,41 @@ export async function deriveSeasonalImportV3RequestId(input: {
   uuidBytes[8] = (uuidBytes[8] & 0x3f) | 0x80;
   const hex = bytesToHex(uuidBytes);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export async function prepareSeasonalImportV3Attempt(input: {
+  seasonId: string | null;
+  seasonCode: string;
+  expectedDataVersion: number | null;
+  strategy: SeasonalImportV3Strategy;
+  fileName: string;
+  uploadedAt: number;
+  sourceRows: readonly unknown[];
+}): Promise<SeasonalImportV3Attempt> {
+  const sourceRows = canonicalizeSeasonalImportSourceRows(input.sourceRows);
+  const expectedDataVersion = normalizeSeasonalImportExpectedDataVersion(
+    input.seasonId,
+    input.expectedDataVersion,
+  );
+  const seasonCode = normalizeSeasonCode(input.seasonCode);
+  const checksum = await buildSeasonalImportV2Checksum(seasonCode, sourceRows);
+  const requestId = await deriveSeasonalImportV3RequestId({
+    seasonId: input.seasonId,
+    seasonCode,
+    expectedDataVersion,
+    strategy: input.strategy,
+    checksum,
+  });
+  return {
+    contractVersion: 3,
+    requestId,
+    checksum,
+    strategy: input.strategy,
+    seasonId: input.seasonId,
+    seasonCode,
+    expectedDataVersion,
+    fileName: input.fileName,
+    uploadedAt: input.uploadedAt,
+    sourceRows,
+  };
 }

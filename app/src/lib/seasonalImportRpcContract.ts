@@ -499,7 +499,7 @@ export async function runSeasonalImportV2RpcFlow(
 }
 
 export function buildSeasonalImportCommittedRefreshFailure(
-  result: SeasonalImportV2CommittedResult,
+  result: Pick<SeasonalImportV2CommittedResult, 'seasonId' | 'batchId'>,
   cause: unknown,
 ): SeasonalImportCommittedRefreshFailure {
   const causeMessage = cause instanceof Error && cause.message

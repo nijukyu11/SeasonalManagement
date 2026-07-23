@@ -177,17 +177,20 @@ test('Seasonal Schedule passes draft changes through the save guard flow', () =>
 
 test('Seasonal file actions wire the controller at commit, apply, and download boundaries', () => {
   const source = readSource('app/SeasonalSchedulePage.tsx');
-  const importStart = source.indexOf('const handleFile = useCallback');
+  const stageStart = source.indexOf('const stagePreparedSeasonalImport = useCallback');
+  const commitStart = source.indexOf('const handleCommitImportPreview = useCallback');
   const refreshApplyStart = source.indexOf('const applyTargetedCommittedImportRefresh = useCallback');
   const exportStart = source.indexOf('const handleExportUpdated = useCallback');
-  const commit = source.indexOf('applySeasonalImportRemote', importStart);
+  const stage = source.indexOf('stageSeasonalImportV3', stageStart);
+  const commit = source.indexOf('commitSeasonalImportV3', commitStart);
   const importApply = source.indexOf('applySeasonData(patternRows, refreshedRecords, refreshedModifications)', refreshApplyStart);
   const download = source.indexOf('downloadCanonicalSeasonalExcel', exportStart);
 
   assert.match(source, /createSeasonalFileActionController/);
   assert.match(source, /beginSeasonalFileAction\('import'\)/);
   assert.match(source, /beginSeasonalFileAction\('export'\)/);
-  assert.ok(source.lastIndexOf('validateSeasonalFileAction(', commit) > importStart);
+  assert.ok(source.lastIndexOf('validateSeasonalFileAction(', stage) > stageStart);
+  assert.ok(source.lastIndexOf("getSeasonalFileActionBlock({", commit) > commitStart);
   assert.ok(source.lastIndexOf('validateSeasonalFileAction(', importApply) > refreshApplyStart);
   assert.ok(source.lastIndexOf('validateSeasonalFileAction(', download) > exportStart);
 });
@@ -204,7 +207,8 @@ test('every Seasonal file action guard result returns before its side-effect bou
   const cases: readonly GuardBoundary[] = [
     ['handleImportClick', 'getSeasonalFileActionBlock', 'import', 'block', 'property', 'click', 'opening the import picker'],
     ['handleFile', 'getSeasonalFileActionBlock', 'import', 'block', 'identifier', 'findSeasonByCode', 'the first import server lookup'],
-    ['handleFile', 'validateSeasonalFileAction', 'import', 'commitInvalidation', 'identifier', 'applySeasonalImportRemote', 'the import server commit'],
+    ['stagePreparedSeasonalImport', 'validateSeasonalFileAction', 'import', 'stageInvalidation', 'identifier', 'stageSeasonalImportV3', 'the import server stage'],
+    ['handleCommitImportPreview', 'getSeasonalFileActionBlock', 'import', 'block', 'identifier', 'commitSeasonalImportV3', 'the import server commit'],
     ['applyTargetedCommittedImportRefresh', 'validateSeasonalFileAction', 'import', 'applyInvalidation', 'identifier', 'setCachedSeasons', 'applying the committed cache snapshot'],
     ['applyTargetedCommittedImportRefresh', 'validateSeasonalFileAction', 'import', 'finalApplyInvalidation', 'identifier', 'setSeasons', 'applying the committed UI snapshot'],
     ['handleExportUpdated', 'getSeasonalFileActionBlock', 'export', 'initialBlock', 'identifier', 'getSeasonalExportSnapshot', 'the export server request'],
@@ -259,14 +263,14 @@ test('Seasonal import rejects parser issues before preparing or committing sourc
   const source = readSource('app/SeasonalSchedulePage.tsx');
   const importStart = source.indexOf('const handleFile = useCallback');
   const issueCheck = source.indexOf('issues.length > 0', importStart);
-  const prepare = source.indexOf('prepareSeasonalImportV2Attempt', importStart);
-  const commit = source.indexOf('applySeasonalImportRemote', importStart);
+  const prepare = source.indexOf('prepareSeasonalImportV3Attempt', importStart);
+  const stage = source.indexOf('stagePreparedSeasonalImport(attemptedImport', importStart);
 
   assert.notEqual(issueCheck, -1, 'parser issues should be checked');
-  assert.notEqual(prepare, -1, 'validated source rows should be prepared through the shared V2 helper');
+  assert.notEqual(prepare, -1, 'validated source rows should be prepared through the shared V3 helper');
   assert.ok(issueCheck < prepare);
-  assert.ok(issueCheck < commit);
-  assert.doesNotMatch(source.slice(importStart, commit), /flattenRowsToFlightRecords|mergeDuplicateImportRecords/);
+  assert.ok(issueCheck < stage);
+  assert.doesNotMatch(source.slice(importStart, stage), /flattenRowsToFlightRecords|mergeDuplicateImportRecords/);
   assert.doesNotMatch(source, /Discard local changes and re-import/);
   assert.doesNotMatch(source, /Sync first/);
 });
