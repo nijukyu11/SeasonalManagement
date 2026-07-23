@@ -104,9 +104,14 @@ test('Seasonal import V3 RPCs stay identical in migration and canonical schema',
   );
   assert.match(commitSource, /from public\.season_import_batch_records_v3/);
   assert.match(commitSource, /insert into public\.season_import_batch_preimages_v3/);
-  assert.match(commitSource, /source_provenance_mode = 'fragmented'/);
   assert.doesNotMatch(commitSource, /generate_seasonal_import_records_v2/);
-  assert.doesNotMatch(commitSource, /(?:insert into|update|delete from) public\.season_source_rows/i);
+  assert.match(
+    commitSource,
+    /if v_batch\.apply_strategy = 'replace' then[\s\S]*delete from public\.season_source_rows[\s\S]*insert into public\.season_source_rows[\s\S]*insert into public\.season_source_row_days/i,
+  );
+  assert.match(commitSource, /Missing required permission: season\.repair/);
+  assert.match(commitSource, /Seasonal import preview counts changed before commit/);
+  assert.match(commitSource, /source_provenance_mode = case[\s\S]*then 'full'[\s\S]*else 'fragmented'/);
   assert.match(
     migrationSource,
     /grant execute on function public\.stage_seasonal_import_v3\(jsonb\)[\s\S]*to authenticated/,

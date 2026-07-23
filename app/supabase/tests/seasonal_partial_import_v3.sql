@@ -343,6 +343,7 @@ begin
 end;
 $$;
 
+
 set local role authenticated;
 select pg_catalog.set_config(
   'request.jwt.claim.sub',
@@ -1035,6 +1036,420 @@ $$;
 set local role authenticated;
 select pg_catalog.set_config(
   'request.jwt.claim.sub',
+  'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  true
+);
+
+do $$
+declare
+  v_preview jsonb;
+begin
+  v_preview := public.stage_seasonal_import_v3(
+    pg_catalog.jsonb_build_object(
+      'contractVersion', 3,
+      'requestId', '50000000-0000-5000-8000-000000000001',
+      'checksum', 'replace-permission-fixture',
+      'strategy', 'replace',
+      'seasonId', 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+      'seasonCode', 'M26',
+      'expectedDataVersion', 4,
+      'fileName', 'M26-replace-permission.xlsx',
+      'uploadedAt', 1,
+      'sourceRows', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 1,
+          'effective', '2026-08-01',
+          'discontinue', '2026-08-01',
+          'airline', 'MZ',
+          'aircraft', '321',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '08:00',
+          'arrFlight', '101',
+          'arrRoute', 'ICN',
+          'arrFlightCategory', 'J',
+          'arrIntDomInd', 'I'
+        )
+      )
+    )
+  );
+
+  if v_preview->>'status' <> 'validated' then
+    raise exception 'replace permission fixture did not stage: %', v_preview;
+  end if;
+end;
+$$;
+
+reset role;
+
+delete from public.app_operator_permission_overrides
+where user_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  and permission_key = 'season.repair';
+
+set local role authenticated;
+select pg_catalog.set_config(
+  'request.jwt.claim.sub',
+  'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  true
+);
+
+do $$
+declare
+  v_status jsonb;
+begin
+  v_status := public.get_seasonal_import_v3_status(
+    '50000000-0000-5000-8000-000000000001'
+  );
+
+  begin
+    perform public.commit_seasonal_import_v3(
+      (v_status->>'batchId')::uuid,
+      4,
+      v_status->>'previewHash'
+    );
+    raise exception 'replace commit without season.repair was accepted';
+  exception
+    when insufficient_privilege then
+      if sqlerrm not like '%season.repair%' then
+        raise;
+      end if;
+  end;
+end;
+$$;
+
+reset role;
+
+insert into public.app_operator_permission_overrides (
+  user_id,
+  permission_key,
+  effect
+) values (
+  'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  'season.repair',
+  'allow'
+);
+
+set local role authenticated;
+select pg_catalog.set_config(
+  'request.jwt.claim.sub',
+  'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  true
+);
+
+do $$
+declare
+  v_status jsonb;
+begin
+  v_status := public.get_seasonal_import_v3_status(
+    '50000000-0000-5000-8000-000000000001'
+  );
+  perform public.cancel_seasonal_import_v3((v_status->>'batchId')::uuid);
+end;
+$$;
+
+select pg_catalog.set_config(
+  'request.jwt.claim.sub',
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  true
+);
+
+do $$
+declare
+  v_preview jsonb;
+begin
+  v_preview := public.stage_seasonal_import_v3(
+    pg_catalog.jsonb_build_object(
+      'contractVersion', 3,
+      'requestId', '50000000-0000-5000-8000-000000000002',
+      'checksum', 'replace-drift-fixture',
+      'strategy', 'replace',
+      'seasonId', 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+      'seasonCode', 'M26',
+      'expectedDataVersion', 4,
+      'fileName', 'M26-replace-drift.xlsx',
+      'uploadedAt', 1,
+      'sourceRows', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 1,
+          'effective', '2026-08-01',
+          'discontinue', '2026-08-01',
+          'airline', 'MZ',
+          'aircraft', '321',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '08:00',
+          'arrFlight', '101',
+          'arrRoute', 'ICN',
+          'arrFlightCategory', 'J',
+          'arrIntDomInd', 'I'
+        )
+      )
+    )
+  );
+
+  begin
+    insert into public.season_modifications (
+      season_id,
+      leg_id,
+      action,
+      changed_fields,
+      route
+    ) values (
+      'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+      'LEG_M26_UNCHANGED',
+      'modified',
+      array['route'],
+      'DRIFT'
+    );
+
+    perform public.commit_seasonal_import_v3(
+      (v_preview->>'batchId')::uuid,
+      4,
+      v_preview->>'previewHash'
+    );
+    raise exception 'replace preview count drift was accepted';
+  exception
+    when raise_exception then
+      if sqlerrm not like '%preview counts changed%' then
+        raise;
+      end if;
+  end;
+
+  perform public.cancel_seasonal_import_v3((v_preview->>'batchId')::uuid);
+end;
+$$;
+
+do $$
+declare
+  v_preview jsonb;
+  v_committed jsonb;
+  v_retry jsonb;
+  v_batch_id uuid;
+begin
+  v_preview := public.stage_seasonal_import_v3(
+    pg_catalog.jsonb_build_object(
+      'contractVersion', 3,
+      'requestId', '50000000-0000-5000-8000-000000000003',
+      'checksum', 'replace-commit-fixture',
+      'strategy', 'replace',
+      'seasonId', 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+      'seasonCode', 'M26',
+      'expectedDataVersion', 4,
+      'fileName', 'M26-replace.xlsx',
+      'uploadedAt', 1,
+      'sourceRows', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 1,
+          'effective', '2026-08-01',
+          'discontinue', '2026-08-01',
+          'airline', 'MZ',
+          'aircraft', '321',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '08:00',
+          'arrFlight', '101',
+          'arrRoute', 'ICN',
+          'arrFlightCategory', 'J',
+          'arrIntDomInd', 'I'
+        ),
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 2,
+          'effective', '2026-08-01',
+          'discontinue', '2026-08-01',
+          'airline', 'MZ',
+          'aircraft', '738',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '09:00',
+          'arrFlight', '102',
+          'arrRoute', 'HND',
+          'arrFlightCategory', 'J',
+          'arrIntDomInd', 'I'
+        ),
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 3,
+          'effective', '2026-08-01',
+          'discontinue', '2026-08-01',
+          'airline', 'MZ',
+          'aircraft', '321',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '10:00',
+          'arrFlight', '103',
+          'arrRoute', 'ICN',
+          'arrFlightCategory', 'J',
+          'arrIntDomInd', 'I'
+        ),
+        pg_catalog.jsonb_build_object(
+          'rowIndex', 5,
+          'effective', '2026-08-01',
+          'discontinue', '2026-08-01',
+          'airline', 'MZ',
+          'aircraft', '321',
+          'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
+          'sta', '13:00',
+          'arrFlight', '105',
+          'arrRoute', 'ICN',
+          'arrFlightCategory', 'J',
+          'arrIntDomInd', 'I'
+        )
+      )
+    )
+  );
+
+  if v_preview->>'status' <> 'validated'
+    or (v_preview #>> '{counts,insertCount}')::integer <> 0
+    or (v_preview #>> '{counts,baselineUpdateCount}')::integer <> 0
+    or (v_preview #>> '{counts,unchangedCount}')::integer <> 4
+    or (v_preview #>> '{counts,removeImportedCount}')::integer <> 1
+    or (v_preview #>> '{counts,clearStructuralOverlayCount}')::integer <> 1
+    or (v_preview #>> '{counts,clearDeletedOverlayCount}')::integer <> 1
+    or (v_preview #>> '{counts,preservedOverlayCount}')::integer <> 1
+  then
+    raise exception 'replace commit fixture preview is incorrect: %', v_preview;
+  end if;
+
+  v_batch_id := (v_preview->>'batchId')::uuid;
+  v_committed := public.commit_seasonal_import_v3(
+    v_batch_id,
+    4,
+    v_preview->>'previewHash'
+  );
+  v_retry := public.commit_seasonal_import_v3(
+    v_batch_id,
+    4,
+    v_preview->>'previewHash'
+  );
+
+  if v_retry is distinct from v_committed
+    or v_committed->>'status' <> 'committed'
+    or v_committed->>'strategy' <> 'replace'
+    or (v_committed->>'dataVersion')::integer <> 5
+    or (v_committed->>'importedRecordCount')::integer <> 4
+    or (v_committed->>'totalEffectiveRecordCount')::integer <> 5
+  then
+    raise exception 'replace commit result or idempotency is incorrect: %',
+      v_committed;
+  end if;
+end;
+$$;
+
+reset role;
+
+do $$
+declare
+  v_batch_id uuid;
+begin
+  select batches.batch_id
+  into v_batch_id
+  from public.season_import_batches batches
+  where batches.request_id = '50000000-0000-5000-8000-000000000003';
+
+  if exists (
+    select 1
+    from public.season_flight_records records
+    where records.record_id = 'LEG_M26_OMITTED'
+  ) then
+    raise exception 'replace retained an omitted imported record';
+  end if;
+
+  if not exists (
+    select 1
+    from public.season_flight_records records
+    where records.record_id = 'LEG_M26_CHANGED'
+      and records.route = 'HND'
+      and records.aircraft = '738'
+      and records.gate = 24
+  ) or not exists (
+    select 1
+    from public.season_flight_records records
+    where records.record_id = 'LEG_M26_UNCHANGED'
+  ) or not exists (
+    select 1
+    from public.season_flight_records records
+    where records.record_id = 'LEG_M26_MANUAL'
+      and records.source_kind = 'added'
+  ) then
+    raise exception 'replace did not preserve matched IDs or manual records';
+  end if;
+
+  if not exists (
+    select 1
+    from public.season_modifications modifications
+    where modifications.leg_id = 'LEG_M26_CHANGED'
+      and modifications.action = 'modified'
+      and modifications.schedule is null
+      and modifications.gate = 25
+      and not ('schedule' = any(modifications.changed_fields))
+      and 'gate' = any(modifications.changed_fields)
+      and 'counter' = any(modifications.changed_fields)
+  ) or exists (
+    select 1
+    from public.season_modifications modifications
+    where modifications.leg_id = 'LEG_M26_DELETED_OVERLAY'
+  ) then
+    raise exception 'replace overlay cleanup is incorrect';
+  end if;
+
+  if not exists (
+    select 1
+    from public.season_modification_counters counters
+    where counters.leg_id = 'LEG_M26_CHANGED'
+      and counters.counter_value = '24'
+  ) or not exists (
+    select 1
+    from public.season_modification_checkin_windows windows
+    where windows.leg_id = 'LEG_M26_CHANGED'
+      and windows.counter_key = '24'
+  ) then
+    raise exception 'replace removed operational overlay child rows';
+  end if;
+
+  if (
+    select pg_catalog.count(*)
+    from public.season_source_rows source_rows
+    where source_rows.season_id
+      = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+  ) <> 4 or (
+    select pg_catalog.count(*)
+    from public.season_source_row_days source_days
+    where source_days.season_id
+      = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+  ) <> 4 then
+    raise exception 'replace did not rewrite the complete source snapshot';
+  end if;
+
+  if not exists (
+    select 1
+    from public.seasons seasons
+    where seasons.id = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+      and seasons.data_version = 5
+      and seasons.source_provenance_mode = 'full'
+      and seasons.last_import_batch_id = v_batch_id
+      and seasons.total_source_rows = 4
+      and seasons.total_legs = 5
+  ) then
+    raise exception 'replace season metadata is incorrect';
+  end if;
+
+  if (
+    select pg_catalog.count(*)
+    from public.season_import_batch_preimages_v3 preimages
+    where preimages.batch_id = v_batch_id
+  ) <> 5 then
+    raise exception 'replace did not snapshot every overwritten or removed baseline';
+  end if;
+
+  if (
+    select pg_catalog.count(*)
+    from public.season_change_events events
+    where events.season_id
+      = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+      and events.op_id = v_batch_id::text
+  ) <> 1 then
+    raise exception 'replace did not persist exactly one change event';
+  end if;
+end;
+$$;
+
+set local role authenticated;
+select pg_catalog.set_config(
+  'request.jwt.claim.sub',
   'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
   true
 );
@@ -1061,6 +1476,56 @@ begin
     raise exception 'another operator cancelled a V3 import';
   exception
     when insufficient_privilege then null;
+  end;
+end;
+$$;
+
+reset role;
+
+update public.season_import_batches batches
+set status = 'cancelled'
+where batches.request_id = '10000000-0000-4000-8000-000000000001';
+
+select pg_catalog.set_config(
+  'test.cancelled_seasonal_import_batch_id',
+  (
+    select batches.batch_id::text
+    from public.season_import_batches batches
+    where batches.request_id = '10000000-0000-4000-8000-000000000001'
+  ),
+  true
+);
+
+set local role authenticated;
+select pg_catalog.set_config(
+  'request.jwt.claim.sub',
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  true
+);
+
+do $$
+declare
+  v_batch_id uuid;
+begin
+  v_batch_id := pg_catalog.current_setting(
+    'test.cancelled_seasonal_import_batch_id'
+  )::uuid;
+
+  begin
+    perform public.commit_seasonal_import_v2(v_batch_id, 7);
+    raise exception 'cancelled V2 batch was committed';
+  exception
+    when invalid_parameter_value then null;
+  end;
+
+  begin
+    perform public.resume_seasonal_import_v2(
+      '10000000-0000-4000-8000-000000000001',
+      7
+    );
+    raise exception 'cancelled V2 batch was resumed';
+  exception
+    when invalid_parameter_value then null;
   end;
 end;
 $$;
