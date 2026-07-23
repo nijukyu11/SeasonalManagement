@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -96,4 +98,74 @@ test('invalid, terminal, and non-preview states never enable commit', () => {
       busy: false,
     }), false);
   }
+});
+
+test('grouped KE duplicate diagnostics remain compact and block commit', () => {
+  const result = {
+    ...mergePreview,
+    status: 'failed',
+    valid: false,
+    diagnosticCount: 2,
+    diagnostics: [
+      {
+        code: 'duplicate-occurrence-key',
+        message: 'Rows 1, 2 generate duplicate 6 occurrence(s) for KE2093.',
+        sourceRowIndexes: [1, 2],
+        occurrenceKey: null,
+        affectedDateCount: 6,
+        sampleDates: [
+          '2026-09-24',
+          '2026-10-01',
+          '2026-10-08',
+          '2026-10-15',
+          '2026-10-22',
+        ],
+      },
+      {
+        code: 'duplicate-occurrence-key',
+        message: 'Rows 1, 2 generate duplicate 6 occurrence(s) for KE2094.',
+        sourceRowIndexes: [1, 2],
+        occurrenceKey: null,
+        affectedDateCount: 6,
+        sampleDates: [
+          '2026-09-24',
+          '2026-10-01',
+          '2026-10-08',
+          '2026-10-15',
+          '2026-10-22',
+        ],
+      },
+    ],
+  } satisfies SeasonalImportV3StageResult;
+
+  assert.equal(result.diagnostics.length, 2);
+  assert.deepEqual(
+    result.diagnostics.map((diagnostic) => diagnostic.sourceRowIndexes),
+    [[1, 2], [1, 2]],
+  );
+  assert.deepEqual(
+    result.diagnostics.map((diagnostic) => diagnostic.affectedDateCount),
+    [6, 6],
+  );
+  assert.equal(
+    result.diagnostics.every((diagnostic) => diagnostic.sampleDates.length <= 5),
+    true,
+  );
+  assert.equal(canCommitSeasonalImportPreview({
+    state: state(result),
+    hasDraftChanges: false,
+    busy: false,
+  }), false);
+});
+
+test('Book3 shadow harness stages and cancels without a commit RPC', () => {
+  const source = readFileSync(
+    join(process.cwd(), 'scripts/seasonal-import-v3-book3-shadow.mjs'),
+    'utf8',
+  );
+
+  assert.match(source, /rpc\/stage_seasonal_import_v3/);
+  assert.match(source, /rpc\/cancel_seasonal_import_v3/);
+  assert.match(source, /commitCalled:\s*false/);
+  assert.doesNotMatch(source, /rpc\/commit_seasonal_import_v3/);
 });

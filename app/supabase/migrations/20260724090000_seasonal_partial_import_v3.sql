@@ -961,12 +961,12 @@ begin
               'Rows %s generate duplicate %s occurrence(s) for %s.',
               pg_catalog.array_to_string(ranked.source_row_indexes, ', '),
               ranked.affected_date_count,
-              coalesce(ranked.airline, '') || coalesce(ranked.flight_number, '')
+              coalesce(ranked.flight_number, ranked.airline, '')
             )
             when ranked.code = 'manual-occurrence-collision' then pg_catalog.format(
               'Incoming %s occurrence(s) for %s collide with manual added flights.',
               ranked.affected_date_count,
-              coalesce(ranked.airline, '') || coalesce(ranked.flight_number, '')
+              coalesce(ranked.flight_number, ranked.airline, '')
             )
             else ranked.message
           end,

@@ -194,3 +194,50 @@ test('invalid runtime leg type fails export validation and grouping', () => {
   assert.equal(validation.valid, false);
   assert.throws(() => groupFlightLegs([invalid]), /invalid flight type/i);
 });
+
+test('grouping after a merge keeps preserved and incoming pairs once while excluding deleted legs', () => {
+  const records: FlightLeg[] = [];
+  const addPair = (prefix: string, date: string, sourceRowIndex: number) => {
+    const arrivalId = `${prefix}-arr`;
+    const departureId = `${prefix}-dep`;
+    records.push(leg({
+      id: arrivalId,
+      linkId: `${prefix}-turn`,
+      type: 'A',
+      date,
+      sourceRowIndex,
+      turnaroundId: `${prefix}-turn`,
+      linkType: 'sameday',
+      pairAnchorDate: date,
+      linkedRecordId: departureId,
+    }));
+    records.push(leg({
+      id: departureId,
+      linkId: `${prefix}-turn`,
+      type: 'D',
+      date,
+      sourceRowIndex,
+      turnaroundId: `${prefix}-turn`,
+      linkType: 'sameday',
+      pairAnchorDate: date,
+      linkedRecordId: arrivalId,
+    }));
+  };
+  addPair('preserved', '2026-06-06', 41);
+  addPair('incoming', '2026-06-07', 42);
+  records.push(leg({
+    id: 'deleted-overlay',
+    type: 'A',
+    date: '2026-06-08',
+    sourceRowIndex: 43,
+    action: 'deleted',
+  }));
+
+  const validation = validateFlightLegsForSeasonalExport(records);
+  const groups = groupFlightLegs(records);
+
+  assert.equal(validation.valid, true, JSON.stringify(validation.issues));
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].effective, '2026-06-06');
+  assert.equal(groups[0].discontinue, '2026-06-07');
+});

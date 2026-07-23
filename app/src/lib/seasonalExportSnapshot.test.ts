@@ -452,3 +452,96 @@ test("mode='all' materializes a valid added modification from its marked child",
   assert.equal(selection.valid, true);
   assert.deepEqual(selection.recordIds, ['added-record']);
 });
+
+test('post-merge export preserves omitted baseline, excludes deleted overlay, and closes subsets over pairs', () => {
+  const pairedRecord = (
+    recordId: string,
+    counterpartId: string,
+    type: 'A' | 'D',
+    date: string,
+    sourceRowIndex: number,
+  ) => record(recordId, {
+    link_id: `turn-${sourceRowIndex}`,
+    type,
+    flight_number: type === 'A' ? `KE${sourceRowIndex}1` : `KE${sourceRowIndex}2`,
+    raw_flight_number: type === 'A' ? `${sourceRowIndex}1` : `${sourceRowIndex}2`,
+    schedule: type === 'A' ? '08:30' : '10:00',
+    date,
+    scheduled_date: date,
+    scheduled_time: type === 'A' ? '08:30' : '10:00',
+    operational_date: date,
+    day_of_week: new Date(`${date}T00:00:00Z`).getUTCDay(),
+    source_row_index: sourceRowIndex,
+    source_side: type === 'A' ? 'ARR' : 'DEP',
+    turnaround_id: `turn-${sourceRowIndex}`,
+    link_type: 'sameday',
+    pair_anchor_date: date,
+    linked_record_id: counterpartId,
+  });
+  const rows = [
+    pairedRecord('preserved-arr', 'preserved-dep', 'A', '2026-06-06', 41),
+    pairedRecord('preserved-dep', 'preserved-arr', 'D', '2026-06-06', 41),
+    pairedRecord('incoming-arr', 'incoming-dep', 'A', '2026-06-07', 42),
+    pairedRecord('incoming-dep', 'incoming-arr', 'D', '2026-06-07', 42),
+    record('deleted-overlay', {
+      flight_number: 'KE999',
+      raw_flight_number: '999',
+      date: '2026-06-08',
+      scheduled_date: '2026-06-08',
+      operational_date: '2026-06-08',
+      day_of_week: 1,
+      source_row_index: 43,
+    }),
+  ];
+  const snapshot = materializeSeasonalExportSnapshot(payload({
+    totalCount: rows.length,
+    sourceRowCount: 0,
+    flightRecords: rows,
+    modifications: [
+      modification({
+        leg_id: 'deleted-overlay',
+        action: 'deleted',
+        changed_fields: [],
+        gate: null,
+      }),
+    ],
+  }), { seasonId: 'season-s26', expectedDataVersion: 7 });
+  const effectiveLegs = materializeEffectiveSeasonalLegs(snapshot.records, snapshot.modifications);
+
+  const all = validateSeasonalExportSelection({
+    selection: {
+      seasonId: snapshot.seasonId,
+      dataVersion: snapshot.dataVersion,
+      mode: 'all',
+      recordIds: [],
+    },
+    snapshotSeasonId: snapshot.seasonId,
+    snapshotDataVersion: snapshot.dataVersion,
+    effectiveLegs,
+  });
+  const subset = validateSeasonalExportSelection({
+    selection: {
+      seasonId: snapshot.seasonId,
+      dataVersion: snapshot.dataVersion,
+      mode: 'ids',
+      recordIds: ['incoming-arr'],
+    },
+    snapshotSeasonId: snapshot.seasonId,
+    snapshotDataVersion: snapshot.dataVersion,
+    effectiveLegs,
+  });
+
+  assert.equal(snapshot.sourceRowCount, 0);
+  assert.equal(all.valid, true, JSON.stringify(all.issues));
+  assert.equal(new Set(all.recordIds).size, 4);
+  assert.deepEqual(new Set(all.recordIds), new Set([
+    'preserved-arr',
+    'preserved-dep',
+    'incoming-arr',
+    'incoming-dep',
+  ]));
+  assert.equal(all.recordIds.includes('deleted-overlay'), false);
+  assert.equal(subset.valid, true, JSON.stringify(subset.issues));
+  assert.deepEqual(new Set(subset.recordIds), new Set(['incoming-arr', 'incoming-dep']));
+
+});

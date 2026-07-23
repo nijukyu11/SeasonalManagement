@@ -44,6 +44,7 @@ const {
   buildCanonicalSeasonalRows,
   buildSourceRowRebuildPlan,
 } = require(path.join(tempDir, 'canonicalSeasonalRows.js'));
+const { expandToFlightLegs } = require(path.join(tempDir, 'parser.js'));
 
 test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -151,7 +152,7 @@ function flightRecord(overrides = {}) {
     iataSeasonCode: 'S26',
     flightSeriesId: `SER_${type}_YP_${flightNumber}_ICN`,
     dayOfWeek: new Date(`${date}T00:00:00Z`).getUTCDay(),
-    action: null,
+    action: overrides.action ?? null,
     sourceRowIndex: overrides.sourceRowIndex ?? 1,
     turnaroundId: overrides.turnaroundId,
     linkType: overrides.linkType,
@@ -159,7 +160,7 @@ function flightRecord(overrides = {}) {
     linkedRecordId: overrides.linkedRecordId,
     sourceKind: 'imported',
     sourceSide: type === 'A' ? 'ARR' : 'DEP',
-    status: 'active',
+    status: overrides.status ?? 'active',
   };
 }
 
@@ -211,4 +212,69 @@ test('source-row rebuild cannot apply when canonical pair resolution has issues'
   assert.equal(plan.validation.valid, false);
   assert.equal(plan.canApply, false);
   assert.match(plan.blockReason ?? '', /counterpart/i);
+});
+
+test('synthetic merge export round-trips preserved and incoming occurrence signatures', () => {
+  const pair = (prefix, date, sourceRowIndex) => {
+    const arrivalId = `${prefix}-arr`;
+    const departureId = `${prefix}-dep`;
+    return [
+      flightRecord({
+        id: arrivalId,
+        linkId: `${prefix}-turn`,
+        type: 'A',
+        date,
+        sourceRowIndex,
+        turnaroundId: `${prefix}-turn`,
+        linkType: 'sameday',
+        pairAnchorDate: date,
+        linkedRecordId: departureId,
+      }),
+      flightRecord({
+        id: departureId,
+        linkId: `${prefix}-turn`,
+        type: 'D',
+        date,
+        sourceRowIndex,
+        turnaroundId: `${prefix}-turn`,
+        linkType: 'sameday',
+        pairAnchorDate: date,
+        linkedRecordId: arrivalId,
+      }),
+    ];
+  };
+  const records = [
+    ...pair('preserved', '2026-06-06', 41),
+    ...pair('incoming', '2026-06-07', 42),
+    flightRecord({
+      id: 'deleted-overlay',
+      date: '2026-06-08',
+      sourceRowIndex: 43,
+      action: 'deleted',
+      status: 'deleted',
+    }),
+  ];
+
+  const canonical = buildCanonicalSeasonalRows({
+    records,
+    modifications: new Map(),
+  });
+  const reparsedLegs = expandToFlightLegs(canonical.rows);
+  const signature = (entry) => [
+    entry.type,
+    entry.date,
+    entry.airline,
+    entry.flightNumber,
+    entry.route,
+    entry.schedule,
+  ].join('|');
+
+  assert.equal(canonical.validation.valid, true, JSON.stringify(canonical.validation));
+  assert.equal(canonical.validation.expectedCount, 4);
+  assert.equal(canonical.validation.actualCount, 4);
+  assert.equal(canonical.effectiveLegs.some((entry) => entry.id === 'deleted-overlay'), false);
+  assert.deepEqual(
+    reparsedLegs.map(signature).sort(),
+    canonical.effectiveLegs.map(signature).sort(),
+  );
 });

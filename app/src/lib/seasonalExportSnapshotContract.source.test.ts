@@ -26,6 +26,8 @@ test('Export V2 hotfix restores the strict identity and count contract', () => {
     assert.match(source, /'seasonCode',\s*seasons\.season_code/);
     assert.match(source, /'sourceRowCount',[\s\S]*?from public\.season_source_rows source_rows/);
     assert.match(source, /'totalCount',[\s\S]*?from public\.season_flight_records records/);
+    assert.match(source, /'flightRecords',[\s\S]*?from public\.season_flight_records records/);
+    assert.doesNotMatch(source, /source_row_count\s*(?:>|>=|=)\s*[1-9]/i);
     assert.match(source, /return v_snapshot_state->'payload'/);
   }
 

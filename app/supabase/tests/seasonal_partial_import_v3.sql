@@ -1182,6 +1182,91 @@ $$;
 set local role authenticated;
 select pg_catalog.set_config(
   'request.jwt.claim.sub',
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  true
+);
+
+do $$
+declare
+  v_row jsonb := pg_catalog.jsonb_build_object(
+    'rowIndex', 1,
+    'effective', '2026-09-24',
+    'discontinue', '2026-10-29',
+    'airline', 'KE',
+    'aircraft', '333',
+    'daysOfWeek', '[false,false,false,true,false,false,false]'::jsonb,
+    'sta', '08:30',
+    'arrFlight', '2093',
+    'arrFlightType', 'PAX',
+    'arrRoute', 'ICN',
+    'arrFlightCategory', 'J',
+    'arrCodeShares', null,
+    'arrIntDomInd', 'I',
+    'std', '10:00',
+    'depFlight', '2094',
+    'depFlightType', 'PAX',
+    'depRoute', 'ICN',
+    'depFlightCategory', 'J',
+    'depCodeShares', null,
+    'depIntDomInd', 'I',
+    'overnightLinkRowIndex', null,
+    'linkType', null
+  );
+  v_result jsonb;
+begin
+  v_result := public.stage_seasonal_import_v3(
+    pg_catalog.jsonb_build_object(
+      'contractVersion', 3,
+      'requestId', '60000000-0000-5000-8000-000000000001',
+      'checksum', 'grouped-ke-duplicates',
+      'strategy', 'merge',
+      'seasonId', 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+      'seasonCode', 'S26',
+      'expectedDataVersion', 7,
+      'fileName', 'grouped-ke-duplicates.xlsx',
+      'uploadedAt', 1,
+      'sourceRows', pg_catalog.jsonb_build_array(
+        v_row,
+        pg_catalog.jsonb_set(v_row, '{rowIndex}', '2'::jsonb)
+      )
+    )
+  );
+
+  if v_result->>'status' <> 'failed'
+    or (v_result->>'valid')::boolean
+    or (v_result->>'diagnosticCount')::integer <> 2
+    or pg_catalog.jsonb_array_length(v_result->'diagnostics') <> 2
+    or exists (
+      select 1
+      from pg_catalog.jsonb_array_elements(v_result->'diagnostics')
+        diagnostics(item)
+      where diagnostics.item->>'code' <> 'duplicate-occurrence-key'
+        or diagnostics.item->'sourceRowIndexes' <> '[1,2]'::jsonb
+        or (diagnostics.item->>'affectedDateCount')::integer <> 6
+        or pg_catalog.jsonb_array_length(diagnostics.item->'sampleDates') <> 5
+    )
+    or (
+      select pg_catalog.array_agg(
+        diagnostics.item->>'message'
+        order by diagnostics.item->>'message'
+      )
+      from pg_catalog.jsonb_array_elements(v_result->'diagnostics')
+        diagnostics(item)
+    ) <> array[
+      'Rows 1, 2 generate duplicate 6 occurrence(s) for KE2093.',
+      'Rows 1, 2 generate duplicate 6 occurrence(s) for KE2094.'
+    ]::text[]
+  then
+    raise exception 'grouped duplicate diagnostics are incorrect: %', v_result;
+  end if;
+
+  perform public.cancel_seasonal_import_v3((v_result->>'batchId')::uuid);
+end;
+$$;
+
+set local role authenticated;
+select pg_catalog.set_config(
+  'request.jwt.claim.sub',
   'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
   true
 );
