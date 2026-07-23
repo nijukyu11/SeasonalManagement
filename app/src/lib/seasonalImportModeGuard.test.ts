@@ -164,6 +164,50 @@ test('main Seasonal import sends canonical source rows and never builds client a
   assert.doesNotMatch(importSource, /await batchWriteFlightRecords\(/);
 });
 
+test('Seasonal import V3 exposes four isolated server-only transport operations', () => {
+  const remoteStoreSource = readFileSync(join(root, 'lib', 'remoteStore.ts'), 'utf8');
+  const supabaseStoreSource = readFileSync(join(root, 'lib', 'supabaseStore.ts'), 'utf8');
+  const operations = [
+    ['stageSeasonalImportV3', 'stage_seasonal_import_v3'],
+    ['commitSeasonalImportV3', 'commit_seasonal_import_v3'],
+    ['getSeasonalImportV3Status', 'get_seasonal_import_v3_status'],
+    ['cancelSeasonalImportV3', 'cancel_seasonal_import_v3'],
+  ] as const;
+
+  for (const [methodName, rpcName] of operations) {
+    assert.match(
+      remoteStoreSource,
+      new RegExp(`${methodName}\\?\\([\\s\\S]*?OperatorSessionCheckpointOptions`),
+    );
+    assert.match(
+      remoteStoreSource,
+      new RegExp(`export function ${methodName}\\(`),
+    );
+
+    const methodStart = supabaseStoreSource.indexOf(`async ${methodName}(`);
+    assert.ok(methodStart >= 0, `${methodName} must exist in supabaseStore`);
+    const methodEnd = supabaseStoreSource.indexOf('\n  async ', methodStart + 1);
+    const methodSource = supabaseStoreSource.slice(
+      methodStart,
+      methodEnd >= 0 ? methodEnd : undefined,
+    );
+    assert.match(methodSource, new RegExp(`rpc\\('${rpcName}'`));
+    assert.ok(
+      (methodSource.match(/options\.assertOperatorSessionCurrent\(\)/g) ?? []).length >= 2,
+      `${methodName} must checkpoint the operator session before and after network activity`,
+    );
+    assert.doesNotMatch(
+      methodSource,
+      /seasonal_import_v2|applySeasonalImportRemote|resumeSeasonalImportRemote|invokeSupabaseFunction|\.from\(|native|sqlite/i,
+    );
+  }
+
+  const statusStart = supabaseStoreSource.indexOf('async getSeasonalImportV3Status(');
+  const statusEnd = supabaseStoreSource.indexOf('\n  async ', statusStart + 1);
+  const statusSource = supabaseStoreSource.slice(statusStart, statusEnd);
+  assert.doesNotMatch(statusSource, /stage_seasonal_import_v3|commit_seasonal_import_v3/);
+});
+
 test('remote store performs the exact stage-then-commit V2 RPC sequence without compatibility fallback', () => {
   const remoteStoreSource = readFileSync(join(root, 'lib', 'remoteStore.ts'), 'utf8');
   const supabaseStoreSource = readFileSync(join(root, 'lib', 'supabaseStore.ts'), 'utf8');

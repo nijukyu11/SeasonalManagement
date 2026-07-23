@@ -3,15 +3,21 @@ import test from 'node:test';
 
 import {
   buildSeasonalImportStatusUnknownNotice,
+  checkSeasonalImportV3RecoveryStatusOnce,
   loadTargetedCommittedImportRefresh,
   resumeSeasonalImportAttemptOnce,
 } from './seasonalImportRecovery.ts';
+import { buildSeasonalImportV3RecoveryReceipt } from './seasonalImportReceipt.ts';
 import type {
   RemoteSeasonalExportSnapshot,
   RemoteSeasonalImportInput,
   RemoteSeasonalImportResult,
 } from './remoteStore.ts';
 import type { Season } from './types.ts';
+import type {
+  SeasonalImportV3CommittedResult,
+  SeasonalImportV3StageResult,
+} from './seasonalImportV3Contract.ts';
 
 function deferred<T>(): {
   promise: Promise<T>;
@@ -108,6 +114,54 @@ const snapshotResult = {
   ] as unknown as RemoteSeasonalExportSnapshot['records'],
   modifications: new Map(),
 } satisfies RemoteSeasonalExportSnapshot;
+
+const v3Counts = {
+  sourceRowCount: 1,
+  generatedOccurrenceCount: 1,
+  insertCount: 1,
+  baselineUpdateCount: 0,
+  unchangedCount: 0,
+  preservedOutsideScopeCount: 0,
+  preservedOverlayCount: 0,
+  preservedDeletedOverlayCount: 0,
+  removeImportedCount: 0,
+  clearStructuralOverlayCount: 0,
+  clearDeletedOverlayCount: 0,
+  manualCollisionCount: 0,
+};
+
+const v3Stage = {
+  batchId: '10000000-0000-4000-8000-000000000001',
+  requestId: '20000000-0000-5000-8000-000000000001',
+  seasonId: 'season-w27',
+  seasonCode: 'W27',
+  strategy: 'merge',
+  status: 'validated',
+  valid: true,
+  expectedDataVersion: 0,
+  previewHash: 'preview-hash',
+  counts: v3Counts,
+  diagnosticCount: 0,
+  diagnosticsTruncated: false,
+  diagnostics: [],
+  expiresAt: '2026-07-24T12:00:00.000Z',
+} satisfies SeasonalImportV3StageResult;
+
+const v3Committed = {
+  batchId: v3Stage.batchId,
+  requestId: v3Stage.requestId,
+  seasonId: v3Stage.seasonId,
+  seasonCode: v3Stage.seasonCode,
+  strategy: v3Stage.strategy,
+  status: 'committed',
+  previewHash: v3Stage.previewHash,
+  counts: v3Counts,
+  importedRecordCount: 1,
+  totalEffectiveRecordCount: 1,
+  dataVersion: 1,
+  serverHighWater: 10,
+  checksum: 'checksum-v3',
+} satisfies SeasonalImportV3CommittedResult;
 
 test('manual Resume/Check calls once with the exact stored attempt and requestId', async () => {
   const gate = deferred<RemoteSeasonalImportResult>();
@@ -272,4 +326,63 @@ test('ambiguous RPC failure notice is status unknown and exposes Resume/Check', 
   assert.match(notice.message, /Resume\/Check/);
   assert.match(notice.message, /Failed to fetch/);
   assert.doesNotMatch(notice.title, /Import Failed/);
+});
+
+test('V3 Resume/Check performs one status-only request and returns preview or commit', async () => {
+  const receipt = buildSeasonalImportV3RecoveryReceipt(v3Stage);
+  for (const statusResult of [v3Stage, v3Committed]) {
+    const requestIds: string[] = [];
+    const result = await checkSeasonalImportV3RecoveryStatusOnce(
+      receipt,
+      async (requestId) => {
+        requestIds.push(requestId);
+        return statusResult;
+      },
+    );
+    assert.deepEqual(requestIds, [v3Stage.requestId]);
+    assert.equal(result.clearReceipt, false);
+    assert.equal(result.kind, statusResult.status === 'committed' ? 'committed' : 'preview');
+    assert.equal(result.result, statusResult);
+  }
+});
+
+test('V3 terminal status requests receipt clearing only after status is displayed', async () => {
+  const receipt = buildSeasonalImportV3RecoveryReceipt(v3Stage);
+  for (const status of ['failed', 'cancelled', 'expired'] as const) {
+    const terminal = {
+      ...v3Stage,
+      status,
+      valid: false,
+      diagnosticCount: 1,
+      diagnostics: [{
+        code: status,
+        message: `Batch is ${status}.`,
+        sourceRowIndexes: [],
+        occurrenceKey: null,
+        affectedDateCount: 0,
+        sampleDates: [],
+      }],
+    } satisfies SeasonalImportV3StageResult;
+    const result = await checkSeasonalImportV3RecoveryStatusOnce(
+      receipt,
+      async () => terminal,
+    );
+    assert.equal(result.kind, 'terminal');
+    assert.equal(result.clearReceipt, true);
+    assert.equal(result.result.status, status);
+  }
+});
+
+test('V3 unknown network status keeps the receipt and never invokes an apply callback', async () => {
+  const receipt = buildSeasonalImportV3RecoveryReceipt(v3Stage);
+  let statusCalls = 0;
+  await assert.rejects(
+    checkSeasonalImportV3RecoveryStatusOnce(receipt, async () => {
+      statusCalls += 1;
+      throw new Error('Failed to fetch');
+    }),
+    /Failed to fetch/,
+  );
+  assert.equal(statusCalls, 1);
+  assert.equal(receipt.status, 'validated');
 });

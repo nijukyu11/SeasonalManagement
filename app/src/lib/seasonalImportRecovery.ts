@@ -4,6 +4,11 @@ import type {
   RemoteSeasonalImportResult,
   RemoteSeasonWorkspaceWindowResult,
 } from './remoteStore.ts';
+import type { SeasonalImportV3RecoveryReceipt } from './seasonalImportReceipt.ts';
+import type {
+  SeasonalImportV3CommittedResult,
+  SeasonalImportV3StageResult,
+} from './seasonalImportV3Contract.ts';
 import type { Season } from './types.ts';
 
 export interface SeasonalImportStatusUnknownNotice {
@@ -18,11 +23,56 @@ export interface TargetedCommittedImportRefreshResult {
   window: RemoteSeasonWorkspaceWindowResult;
 }
 
+export type SeasonalImportV3RecoveryStatusResult =
+  | {
+      kind: 'preview';
+      result: SeasonalImportV3StageResult & { status: 'validated' };
+      clearReceipt: false;
+    }
+  | {
+      kind: 'committed';
+      result: SeasonalImportV3CommittedResult;
+      clearReceipt: false;
+    }
+  | {
+      kind: 'terminal';
+      result: SeasonalImportV3StageResult & {
+        status: 'failed' | 'cancelled' | 'expired';
+      };
+      clearReceipt: true;
+    };
+
 export async function resumeSeasonalImportAttemptOnce(
   attempt: RemoteSeasonalImportInput,
   applyImport: (storedAttempt: RemoteSeasonalImportInput) => Promise<RemoteSeasonalImportResult>,
 ): Promise<RemoteSeasonalImportResult> {
   return applyImport(attempt);
+}
+
+export async function checkSeasonalImportV3RecoveryStatusOnce(
+  receipt: Pick<SeasonalImportV3RecoveryReceipt, 'requestId'>,
+  getStatus: (
+    requestId: string,
+  ) => Promise<SeasonalImportV3StageResult | SeasonalImportV3CommittedResult>,
+): Promise<SeasonalImportV3RecoveryStatusResult> {
+  const result = await getStatus(receipt.requestId);
+  if (result.status === 'committed') {
+    return { kind: 'committed', result, clearReceipt: false };
+  }
+  if (result.status === 'validated') {
+    return {
+      kind: 'preview',
+      result: result as SeasonalImportV3StageResult & { status: 'validated' },
+      clearReceipt: false,
+    };
+  }
+  return {
+    kind: 'terminal',
+    result: result as SeasonalImportV3StageResult & {
+      status: 'failed' | 'cancelled' | 'expired';
+    },
+    clearReceipt: true,
+  };
 }
 
 export async function loadTargetedCommittedImportRefresh(input: {

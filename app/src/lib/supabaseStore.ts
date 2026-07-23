@@ -37,6 +37,15 @@ import {
   SeasonalImportV2RpcRejectedError,
 } from './seasonalImportRpcContract';
 import {
+  parseSeasonalImportV3CancelResult,
+  parseSeasonalImportV3CommittedResult,
+  parseSeasonalImportV3StageResult,
+  parseSeasonalImportV3StatusResult,
+  type SeasonalImportV3Attempt,
+  type SeasonalImportV3CommittedResult,
+  type SeasonalImportV3StageResult,
+} from './seasonalImportV3Contract';
+import {
   fromFlightRecordRows,
   fromModHistoryRows,
   fromModificationRows,
@@ -212,6 +221,14 @@ function assertSeasonalImportRpcOk<T>(result: SupabaseResult<T>, action: string)
     throw new SeasonalImportV2RpcRejectedError(message, result.error);
   }
   throw new Error(message);
+}
+
+function assertSeasonalImportV3RpcOk<T>(result: SupabaseResult<T>, action: string): T {
+  if (!result.error) return result.data as T;
+  const code = typeof result.error.code === 'string' && result.error.code.trim()
+    ? ` [${result.error.code.trim()}]`
+    : '';
+  throw new Error(`${action}${code}: ${result.error.message}`);
 }
 
 function isMissingDashboardAlertColumnError(error: unknown): boolean {
@@ -1023,6 +1040,66 @@ export const supabaseStore: RemoteStore = {
       ], 'load seasonal source provenance days'),
     ]);
     return hydrateSourceRowsFromRelationalPages([rows], [dayRows]);
+  },
+
+  async stageSeasonalImportV3(
+    input: SeasonalImportV3Attempt,
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<SeasonalImportV3StageResult> {
+    const attempt = {
+      ...input,
+      sourceRows: canonicalizeSeasonalImportSourceRows(input.sourceRows),
+    };
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('stage_seasonal_import_v3', { p_import: attempt });
+    options.assertOperatorSessionCurrent();
+    return parseSeasonalImportV3StageResult(
+      assertSeasonalImportV3RpcOk(response, 'stage seasonal import V3'),
+    );
+  },
+
+  async commitSeasonalImportV3(
+    input: { batchId: string; expectedDataVersion: number; previewHash: string },
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<SeasonalImportV3CommittedResult> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('commit_seasonal_import_v3', {
+      p_batch_id: input.batchId,
+      p_expected_data_version: input.expectedDataVersion,
+      p_preview_hash: input.previewHash,
+    });
+    options.assertOperatorSessionCurrent();
+    return parseSeasonalImportV3CommittedResult(
+      assertSeasonalImportV3RpcOk(response, 'commit seasonal import V3'),
+    );
+  },
+
+  async getSeasonalImportV3Status(
+    requestId: string,
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<SeasonalImportV3StageResult | SeasonalImportV3CommittedResult> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('get_seasonal_import_v3_status', {
+      p_request_id: requestId,
+    });
+    options.assertOperatorSessionCurrent();
+    return parseSeasonalImportV3StatusResult(
+      assertSeasonalImportV3RpcOk(response, 'get seasonal import V3 status'),
+    );
+  },
+
+  async cancelSeasonalImportV3(
+    batchId: string,
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<{ batchId: string; status: 'cancelled' }> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('cancel_seasonal_import_v3', {
+      p_batch_id: batchId,
+    });
+    options.assertOperatorSessionCurrent();
+    return parseSeasonalImportV3CancelResult(
+      assertSeasonalImportV3RpcOk(response, 'cancel seasonal import V3'),
+    );
   },
 
   async applySeasonalImportRemote(

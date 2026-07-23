@@ -16,6 +16,11 @@ import type {
   SeasonalImportV2CommittedResult,
   SeasonalImportV2RpcAttempt,
 } from './seasonalImportRpcContract';
+import type {
+  SeasonalImportV3Attempt,
+  SeasonalImportV3CommittedResult,
+  SeasonalImportV3StageResult,
+} from './seasonalImportV3Contract';
 import {
   createOperatorSessionAbortError,
   getOperatorSessionEpoch,
@@ -185,6 +190,22 @@ export interface RemoteStore {
   getSourceRows(seasonId: string): Promise<ParsedRow[]>;
   applySeasonalImportRemote?(input: RemoteSeasonalImportInput, options?: OperatorSessionCheckpointOptions): Promise<RemoteSeasonalImportResult>;
   resumeSeasonalImportRemote?(input: RemoteSeasonalImportResumeInput): Promise<RemoteSeasonalImportResult>;
+  stageSeasonalImportV3?(
+    input: SeasonalImportV3Attempt,
+    options?: OperatorSessionCheckpointOptions,
+  ): Promise<SeasonalImportV3StageResult>;
+  commitSeasonalImportV3?(
+    input: { batchId: string; expectedDataVersion: number; previewHash: string },
+    options?: OperatorSessionCheckpointOptions,
+  ): Promise<SeasonalImportV3CommittedResult>;
+  getSeasonalImportV3Status?(
+    requestId: string,
+    options?: OperatorSessionCheckpointOptions,
+  ): Promise<SeasonalImportV3StageResult | SeasonalImportV3CommittedResult>;
+  cancelSeasonalImportV3?(
+    batchId: string,
+    options?: OperatorSessionCheckpointOptions,
+  ): Promise<{ batchId: string; status: 'cancelled' }>;
   getFlightRecords(seasonId: string): Promise<FlightRecord[]>;
   getSeasonalExportSnapshot?(
     input: RemoteSeasonalExportSnapshotInput
@@ -416,6 +437,66 @@ export function applySeasonalImportRemote(
         throw new Error('Server-side seasonal import RPC is unavailable for the configured backend.');
       }
       return store.applySeasonalImportRemote(input, { assertOperatorSessionCurrent });
+    },
+  });
+}
+export function stageSeasonalImportV3(
+  input: SeasonalImportV3Attempt,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<SeasonalImportV3StageResult> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store, assertOperatorSessionCurrent) => {
+      if (!store.stageSeasonalImportV3) {
+        throw new Error('Seasonal import V3 stage RPC is unavailable for the configured backend.');
+      }
+      return store.stageSeasonalImportV3(input, { assertOperatorSessionCurrent });
+    },
+  });
+}
+export function commitSeasonalImportV3(
+  input: { batchId: string; expectedDataVersion: number; previewHash: string },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<SeasonalImportV3CommittedResult> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store, assertOperatorSessionCurrent) => {
+      if (!store.commitSeasonalImportV3) {
+        throw new Error('Seasonal import V3 commit RPC is unavailable for the configured backend.');
+      }
+      return store.commitSeasonalImportV3(input, { assertOperatorSessionCurrent });
+    },
+  });
+}
+export function getSeasonalImportV3Status(
+  requestId: string,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<SeasonalImportV3StageResult | SeasonalImportV3CommittedResult> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store, assertOperatorSessionCurrent) => {
+      if (!store.getSeasonalImportV3Status) {
+        throw new Error('Seasonal import V3 status RPC is unavailable for the configured backend.');
+      }
+      return store.getSeasonalImportV3Status(requestId, { assertOperatorSessionCurrent });
+    },
+  });
+}
+export function cancelSeasonalImportV3(
+  batchId: string,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<{ batchId: string; status: 'cancelled' }> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store, assertOperatorSessionCurrent) => {
+      if (!store.cancelSeasonalImportV3) {
+        throw new Error('Seasonal import V3 cancel RPC is unavailable for the configured backend.');
+      }
+      return store.cancelSeasonalImportV3(batchId, { assertOperatorSessionCurrent });
     },
   });
 }
