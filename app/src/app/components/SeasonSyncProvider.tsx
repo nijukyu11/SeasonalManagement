@@ -6,6 +6,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -592,9 +593,19 @@ export function useSeasonSyncGuard(
 ): void {
   const context = useContext(SeasonSyncContext);
   const { blocked, reason, beforeSync, quiet, blockingUi } = options;
+  const beforeSyncRef = useRef(beforeSync);
+  useLayoutEffect(() => {
+    beforeSyncRef.current = beforeSync;
+  }, [beforeSync]);
 
   useEffect(() => {
     if (!context || !seasonId) return undefined;
-    return context.registerGuard(seasonId, source, { blocked, reason, beforeSync, quiet, blockingUi });
-  }, [beforeSync, blocked, blockingUi, context, quiet, reason, seasonId, source]);
+    return context.registerGuard(seasonId, source, {
+      blocked,
+      reason,
+      beforeSync: () => beforeSyncRef.current?.(),
+      quiet,
+      blockingUi,
+    });
+  }, [blocked, blockingUi, context, quiet, reason, seasonId, source]);
 }

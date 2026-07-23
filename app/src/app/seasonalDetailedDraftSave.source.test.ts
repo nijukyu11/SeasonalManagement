@@ -151,6 +151,14 @@ function assertGuardResultReturnsBeforeSideEffect(
 test('Seasonal Schedule passes draft changes through the save guard flow', () => {
   const source = readSource('app/SeasonalSchedulePage.tsx');
   const syncButton = extractFirstTag(source, 'SyncActionButton');
+  const sourceFile = ts.createSourceFile(
+    'SeasonalSchedulePage.tsx',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const commitBody = extractUseCallbackBody(sourceFile, 'commitDraftBeforeSave').getText(sourceFile);
 
   assert.match(syncButton, /draftCount=\{draftChangeCount\}/);
   assert.match(syncButton, /onSync=\{handleSync\}/);
@@ -159,6 +167,11 @@ test('Seasonal Schedule passes draft changes through the save guard flow', () =>
   assert.match(
     source,
     /useSeasonSyncGuard\(activeSeason\?\.id,\s*'seasonal',\s*\{[\s\S]*?beforeSync:\s*commitDraftBeforeSave,[\s\S]*?\}\);/
+  );
+  assert.doesNotMatch(
+    commitBody,
+    /syncInProgress/,
+    'the scheduler already serializes Save; a stale syncing render must not silently drop the draft commit',
   );
 });
 

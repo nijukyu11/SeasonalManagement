@@ -127,3 +127,21 @@ test('provider keeps sync results narrow without native conflict handling', () =
   assert.doesNotMatch(source, /nativeResult\.status === 'conflict'\s*\?\s*'conflict'/);
   assert.doesNotMatch(source, /\bnativeResult\b/);
 });
+
+test('save guards invoke the latest draft commit callback without passive-effect re-registration', () => {
+  const guardStart = source.indexOf('export function useSeasonSyncGuard');
+  assert.notEqual(guardStart, -1, 'useSeasonSyncGuard should exist');
+  const guardSource = source.slice(guardStart);
+
+  assert.match(guardSource, /const beforeSyncRef = useRef\(beforeSync\);/);
+  assert.match(
+    guardSource,
+    /useLayoutEffect\(\(\) => \{\s*beforeSyncRef\.current = beforeSync;\s*\}, \[beforeSync\]\);/,
+  );
+  assert.match(guardSource, /beforeSync:\s*\(\)\s*=>\s*beforeSyncRef\.current\?\.\(\)/);
+  assert.doesNotMatch(
+    guardSource,
+    /\},\s*\[beforeSync,/,
+    'changing a draft callback must not temporarily unregister the active save guard',
+  );
+});

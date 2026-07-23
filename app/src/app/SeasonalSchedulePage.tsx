@@ -22,6 +22,7 @@ import {
 } from '@/lib/seasonalExportSelection';
 import {
   buildFlightRecordHistoryEntry,
+  compactDraftModifications,
   countHistoryEntryLegs,
   revertFlightRecordHistoryList,
   revertModificationHistoryMap,
@@ -1236,14 +1237,10 @@ export default function HomePage() {
   }, [activeSeason, applySeasonData, beginSeasonalMutation, draftState, finishSeasonalMutation, setDraftState]);
 
   const commitDraftBeforeSave = useCallback(async () => {
-    if (!activeSeason || !draftState || syncInProgress) return;
+    if (!activeSeason || !draftState) return;
     const baseRecordIds = new Set(draftState.baseRecords.map((record) => record.id));
-    const touchedIds = Array.from(new Set(draftState.modifications.map((mod) => mod.legId)));
     const addedRecords = flightRecords.filter((record) => !baseRecordIds.has(record.id));
-    const regularMods = touchedIds
-      .filter((id) => baseRecordIds.has(id))
-      .map((id) => modifications.get(id))
-      .filter((mod): mod is FlightModification => Boolean(mod));
+    const regularMods = compactDraftModifications(draftState.modifications, baseRecordIds);
     const targetRecordIds = [...addedRecords.map((record) => record.id), ...regularMods.map((mod) => mod.legId)];
 
     if (targetRecordIds.length === 0) {
@@ -1337,7 +1334,6 @@ export default function HomePage() {
     modifications,
     publishSeasonalWorkspaceChange,
     setDraftState,
-    syncInProgress,
   ]);
 
   useSeasonSyncGuard(activeSeason?.id, 'seasonal', {

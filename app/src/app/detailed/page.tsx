@@ -18,6 +18,7 @@ import {
   applyModificationBatch,
   applyModificationsToFlightLegs,
   buildCanonicalAddedFlightRecords,
+  compactDraftModifications,
   buildFlightRecordHistoryEntry,
   buildDetailedScheduleQueryWindow,
   buildDetailedTransferPairContext,
@@ -822,15 +823,10 @@ function DetailedScheduleContent() {
   const commitDraftBeforeSave = useCallback(async () => {
     if (!season || !draftState || isSaving) return;
     const baseRecordIds = new Set(draftState.baseRecords.map((record) => record.id));
-    const draftTargetIds = Array.from(new Set(draftState.modifications.map((mod) => mod.legId)));
     const addedRecords = flightRecords
       .filter((record) => !baseRecordIds.has(record.id) && currentMods.get(record.id)?.action !== 'deleted')
       .map((record) => applyModificationToAddedRecord(record, currentMods.get(record.id)));
-    const addedIds = new Set(addedRecords.map((record) => record.id));
-    const regularMods = draftTargetIds
-      .filter((id) => baseRecordIds.has(id) && !addedIds.has(id))
-      .map((id) => currentMods.get(id))
-      .filter((mod): mod is FlightModification => Boolean(mod));
+    const regularMods = compactDraftModifications(draftState.modifications, baseRecordIds);
     const targetRecordIds = [...addedRecords.map((record) => record.id), ...regularMods.map((mod) => mod.legId)];
 
     if (targetRecordIds.length === 0) {

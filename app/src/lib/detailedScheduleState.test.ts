@@ -7,8 +7,9 @@ import {
   buildDetailedTransferPairContext,
   buildDetailedTransferModifications,
   buildOvernightCompanionMap,
+  compactDraftModifications,
 } from './detailedScheduleState.ts';
-import type { FlightLeg } from './types.ts';
+import type { FlightLeg, FlightModification } from './types.ts';
 
 function leg(overrides: Partial<FlightLeg>): FlightLeg {
   const type = overrides.type ?? 'A';
@@ -55,6 +56,26 @@ function leg(overrides: Partial<FlightLeg>): FlightLeg {
     linkedRecordId: overrides.linkedRecordId,
   };
 }
+
+test('compactDraftModifications keeps delete terminal over stale operational edits', () => {
+  const mods: FlightModification[] = [
+    { legId: 'Z2827-2027-01-04', action: 'modified', counter: [43, 44, 45] },
+    { legId: 'Z2827-2027-01-04', action: 'deleted' },
+    { legId: 'Z2827-2027-01-04', action: 'modified', counter: null },
+    { legId: 'Z26827-2027-01-04', action: 'deleted' },
+    { legId: 'outside-draft', action: 'deleted' },
+  ];
+
+  const compacted = compactDraftModifications(
+    mods,
+    new Set(['Z2827-2027-01-04', 'Z26827-2027-01-04']),
+  );
+
+  assert.deepEqual(compacted, [
+    { legId: 'Z2827-2027-01-04', action: 'deleted' },
+    { legId: 'Z26827-2027-01-04', action: 'deleted' },
+  ]);
+});
 
 test('buildDetailedTransferModifications moves both linked legs from all legs even when one is visible', () => {
   const arr = leg({

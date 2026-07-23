@@ -318,6 +318,20 @@ export function applyModificationBatch(
   return next;
 }
 
+export function compactDraftModifications(
+  mods: FlightModification[],
+  eligibleLegIds: ReadonlySet<string>,
+): FlightModification[] {
+  const compacted = new Map<string, FlightModification>();
+  for (const mod of mods) {
+    if (!eligibleLegIds.has(mod.legId)) continue;
+    const existing = compacted.get(mod.legId);
+    if (existing?.action === 'deleted' && mod.action !== 'deleted') continue;
+    compacted.set(mod.legId, mod);
+  }
+  return Array.from(compacted.values());
+}
+
 export function revertModificationHistoryMap(
   currentMods: Map<string, FlightModification>,
   entriesToUndo: ModHistoryEntry[]
