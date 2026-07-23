@@ -4,6 +4,11 @@ import { isTauriRuntime } from './nativeRuntime';
 import { applySeasonServerMutationV1 } from './remoteStore';
 import { getOrCreateSeasonClientId } from './seasonChangeEvents';
 import { SERVER_AUTHORITATIVE_MODE } from './serverAuthoritativeMode';
+import {
+  serializeFlightModificationForPersistence,
+  serializeFlightRecordForPersistence,
+  serializeSourceRowForPersistence,
+} from './persistenceSchema';
 
 export interface NativeLocalModificationBatchDeltaResult {
   syncMeta: LocalSyncMeta;
@@ -95,7 +100,10 @@ export async function runNativeLocalModificationBatchDeltaResult(
 ): Promise<NativeLocalModificationBatchDeltaResult | null> {
   if (SERVER_AUTHORITATIVE_MODE) {
     const operations = [
-      ...mods.map((mod) => ({ type: 'modification', mod })),
+      ...mods.map((mod) => ({
+        type: 'modification',
+        mod: serializeFlightModificationForPersistence(mod),
+      })),
       ...historyOperation(history),
     ];
     const syncMeta = await applyServerAuthoritativeOperations(seasonId, source, operations);
@@ -138,10 +146,19 @@ export async function runNativeScheduleMutation(
 ): Promise<LocalSyncMeta | null> {
   if (SERVER_AUTHORITATIVE_MODE) {
     const operations = [
-      ...records.map((record) => ({ type: 'flightRecord', record })),
+      ...records.map((record) => ({
+        type: 'flightRecord',
+        record: serializeFlightRecordForPersistence(record),
+      })),
       ...deletedIds.map((id) => ({ type: 'flightRecord', record: { id, status: 'deleted' } })),
-      ...sourceRows.map((row) => ({ type: 'sourceRow', row })),
-      ...mods.map((mod) => ({ type: 'modification', mod })),
+      ...sourceRows.map((row) => ({
+        type: 'sourceRow',
+        row: serializeSourceRowForPersistence(row),
+      })),
+      ...mods.map((mod) => ({
+        type: 'modification',
+        mod: serializeFlightModificationForPersistence(mod),
+      })),
       ...historyOperation(history),
     ];
     return applyServerAuthoritativeOperations(seasonId, source, operations);

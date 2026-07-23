@@ -58,3 +58,9 @@ test('server-authoritative mutation boundary has no native read or catch-up depe
   assert.doesNotMatch(source, /\brunNativeSeasonCatchup\b/);
   assert.doesNotMatch(source, /\bbaseServerSeq\b/);
 });
+
+test('server-authoritative writes serialize schedule-bearing payloads before RPC', () => {
+  assert.match(source, /serializeFlightRecordForPersistence\(record\)/);
+  assert.match(source, /serializeSourceRowForPersistence\(row\)/);
+  assert.match(source, /serializeFlightModificationForPersistence\(mod\)/);
+});

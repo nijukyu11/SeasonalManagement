@@ -1,4 +1,5 @@
 import type { CheckInCounterWindowMap, FlightCounter, FlightLeg, FlightModification, FlightRecord, ModHistoryEntry, ParsedRow } from './types';
+import { requireScheduleTime } from './scheduleTime.ts';
 
 type PersistedSourceRow = Omit<ParsedRow, 'arrFlightType' | 'depFlightType'> & {
   arrFlightType?: never;
@@ -163,7 +164,11 @@ function hydrateOperationalFields<T extends Partial<FlightLeg>>(leg: T): T & Ope
 }
 
 export function serializeSourceRowForPersistence(row: ParsedRow): PersistedSourceRow {
-  const persisted = { ...row } as Partial<ParsedRow>;
+  const persisted = {
+    ...row,
+    sta: row.sta == null ? null : requireScheduleTime(row.sta, 'sta'),
+    std: row.std == null ? null : requireScheduleTime(row.std, 'std'),
+  } as Partial<ParsedRow>;
   delete persisted.arrFlightType;
   delete persisted.depFlightType;
   return stripUndefinedFields(persisted as PersistedSourceRow);
@@ -172,6 +177,8 @@ export function serializeSourceRowForPersistence(row: ParsedRow): PersistedSourc
 export function hydrateSourceRowFromPersistence(row: Partial<ParsedRow>): ParsedRow {
   return {
     ...row,
+    sta: row.sta == null ? null : requireScheduleTime(row.sta, 'sta'),
+    std: row.std == null ? null : requireScheduleTime(row.std, 'std'),
     arrFlightType: row.arrFlightType ?? null,
     depFlightType: row.depFlightType ?? null,
   } as ParsedRow;
@@ -179,7 +186,10 @@ export function hydrateSourceRowFromPersistence(row: Partial<ParsedRow>): Parsed
 
 export function serializeFlightLegForPersistence<T extends FlightLeg>(leg: T): Omit<T, 'flightType'> {
   assertOperationalFields(leg);
-  const persisted = { ...leg } as Partial<T>;
+  const persisted = {
+    ...leg,
+    schedule: requireScheduleTime(leg.schedule),
+  } as Partial<T>;
   delete persisted.flightType;
   return stripUndefinedFields(persisted as Omit<T, 'flightType'>);
 }
@@ -187,6 +197,7 @@ export function serializeFlightLegForPersistence<T extends FlightLeg>(leg: T): O
 export function hydrateFlightLegFromPersistence<T extends Partial<FlightLeg>>(leg: T): T & Pick<FlightLeg, 'flightType'> & OperationalFieldDefaults {
   return {
     ...hydrateOperationalFields(leg),
+    ...(leg.schedule == null ? {} : { schedule: requireScheduleTime(leg.schedule) }),
     flightType: 'PAX',
   } as T & Pick<FlightLeg, 'flightType'> & OperationalFieldDefaults;
 }
@@ -201,23 +212,29 @@ export function hydrateFlightRecordFromPersistence(record: Partial<FlightRecord>
 
 export function serializeFlightModificationForPersistence(mod: FlightModification): PersistedFlightModification {
   assertOperationalFields(mod);
+  const normalizedMod = mod.schedule == null
+    ? mod
+    : { ...mod, schedule: requireScheduleTime(mod.schedule) };
   if (mod.action === 'added' && mod.addedLeg) {
     return stripUndefinedFields({
-      ...mod,
+      ...normalizedMod,
       addedLeg: serializeFlightLegForPersistence(mod.addedLeg),
     });
   }
-  return stripUndefinedFields(mod as PersistedFlightModification);
+  return stripUndefinedFields(normalizedMod as PersistedFlightModification);
 }
 
 export function hydrateFlightModificationFromPersistence(mod: PersistedFlightModification | FlightModification): FlightModification {
+  const normalizedMod = mod.schedule == null
+    ? mod
+    : { ...mod, schedule: requireScheduleTime(mod.schedule) };
   if (mod.action === 'added' && mod.addedLeg) {
     return {
-      ...mod,
+      ...normalizedMod,
       addedLeg: hydrateFlightLegFromPersistence(mod.addedLeg) as FlightLeg,
     };
   }
-  return mod as FlightModification;
+  return normalizedMod as FlightModification;
 }
 
 export function serializeModHistoryEntryForPersistence(entry: ModHistoryEntry): ModHistoryEntry {

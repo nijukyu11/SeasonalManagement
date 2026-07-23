@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import type { FlightLeg, FlightModification } from '@/lib/types';
+import { normalizeScheduleTime } from '@/lib/scheduleTime';
 
 interface EditModalProps {
   isOpen: boolean;
@@ -56,7 +57,11 @@ export default function EditModal({ isOpen, onClose, title, targetLegs, onNext }
 
   if (!isOpen) return null;
 
+  const normalizedSchedule = newSchedule.trim() ? normalizeScheduleTime(newSchedule) : null;
+  const hasScheduleError = newSchedule.trim().length > 0 && normalizedSchedule === null;
+
   const handleApply = () => {
+    if (hasScheduleError) return;
     const mods: FlightModification[] = [];
     
     const fromTime = new Date(fromDate).getTime();
@@ -74,7 +79,7 @@ export default function EditModal({ isOpen, onClose, title, targetLegs, onNext }
           mods.push({ legId: leg.id, action: 'deleted' });
         } else {
           // Check for modifications
-          const isSchChanged = newSchedule && newSchedule !== leg.schedule;
+          const isSchChanged = normalizedSchedule != null && normalizedSchedule !== leg.schedule;
           const isAcChanged = newAircraft && newAircraft !== leg.aircraft;
           const isCsChanged = newCodeShares !== (leg.codeShares ?? '');
           
@@ -82,7 +87,7 @@ export default function EditModal({ isOpen, onClose, title, targetLegs, onNext }
              mods.push({
                legId: leg.id,
                action: 'modified',
-               ...(isSchChanged ? { schedule: newSchedule } : {}),
+               ...(isSchChanged ? { schedule: normalizedSchedule } : {}),
                ...(isAcChanged ? { aircraft: newAircraft } : {}),
                ...(isCsChanged ? { codeShares: newCodeShares || null } : {})
              });
@@ -131,7 +136,25 @@ export default function EditModal({ isOpen, onClose, title, targetLegs, onNext }
             <div className="flex gap-4">
               <div className="flex-1">
                 <label className="text-xs text-on-surface-variant mb-1 block">Schedule (STA/STD)</label>
-                <input type="text" placeholder="HH:MM" value={newSchedule} onChange={e => setNewSchedule(e.target.value)} className="w-full bg-surface-container-low border border-outline-variant rounded p-2 text-sm font-data-tabular placeholder:opacity-40" />
+                <input
+                  type="text"
+                  placeholder="HH:MM"
+                  value={newSchedule}
+                  onChange={e => setNewSchedule(e.target.value)}
+                  onBlur={() => {
+                    if (normalizedSchedule) setNewSchedule(normalizedSchedule);
+                  }}
+                  aria-invalid={hasScheduleError}
+                  aria-describedby={hasScheduleError ? 'schedule-format-error' : undefined}
+                  className={`w-full bg-surface-container-low border rounded p-2 text-sm font-data-tabular placeholder:opacity-40 ${
+                    hasScheduleError ? 'border-error' : 'border-outline-variant'
+                  }`}
+                />
+                {hasScheduleError && (
+                  <p id="schedule-format-error" className="mt-1 text-xs text-error">
+                    Enter a valid time as HH:mm or HHmm.
+                  </p>
+                )}
               </div>
               <div className="flex-1">
                 <label className="text-xs text-on-surface-variant mb-1 block">Aircraft Type</label>
@@ -178,7 +201,11 @@ export default function EditModal({ isOpen, onClose, title, targetLegs, onNext }
             <button onClick={handleDeleteAll} className="px-4 py-2 text-sm font-medium text-error border border-error/50 hover:bg-error-container hover:text-on-error-container rounded transition-colors">
               Delete Period
             </button>
-            <button onClick={handleApply} className="px-4 py-2 text-sm font-medium bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container rounded transition-colors shadow-sm">
+            <button
+              onClick={handleApply}
+              disabled={hasScheduleError}
+              className="px-4 py-2 text-sm font-medium bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container rounded transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-40"
+            >
               Review Changes
             </button>
           </div>

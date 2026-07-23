@@ -23,6 +23,7 @@ This section is the current runtime contract and supersedes the legacy native-fi
 - Save remains the user-facing action. Seasonal/Detailed draft guards flush directly to the server mutation RPC; successful server writes cannot be changed into failures by SQLite projection errors.
 - Release `app-v0.1.12` was published on 2026-07-20 after the combined server-first/Import-Export V2 canary, seven-client capacity gate, rollback drill, signed-installer install, and public updater metadata verification all passed.
 - Production Export V2 contract drift was repaired on 2026-07-21 by `20260721090000_fix_seasonal_export_snapshot_identity_counts.sql`. The live strict snapshot now includes `seasonCode` and `sourceRowCount`; signed client `0.1.12` export smoke passed without a desktop rebuild.
+- Production W26 schedule-time drift was repaired on 2026-07-23 after 154 modifications stored `1025` instead of canonical `10:25`, which produced errors such as `Invalid local datetime 2027-01-07T1025`. The original values are retained in `ops_hotfix.season_modification_schedule_20260723`; migration `20260723090000_normalize_season_modification_schedule.sql` adds server-side normalization and a validated format constraint.
 
 ## Legacy Native Context - 2026-05-30
 

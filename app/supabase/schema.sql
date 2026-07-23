@@ -13,6 +13,7 @@ drop function if exists public.upsert_season_modification_from_json(text, jsonb)
 drop function if exists public.upsert_season_mod_history_from_json(text, jsonb) cascade;
 drop function if exists public.enqueue_schedule_notification_delivery() cascade;
 drop function if exists public.jsonb_text_array(jsonb) cascade;
+drop function if exists public.normalize_season_modification_schedule_v1() cascade;
 drop table if exists public.audit_delta_chunks cascade;
 drop table if exists public.audit_entries cascade;
 drop table if exists public.audit_sessions cascade;
@@ -506,7 +507,12 @@ create table if not exists public.season_modifications (
   ghs text,
   check_in_start text,
   check_in_end text,
-  check_in_allocation_mode text check (check_in_allocation_mode is null or check_in_allocation_mode in ('grouped', 'broken'))
+  check_in_allocation_mode text check (check_in_allocation_mode is null or check_in_allocation_mode in ('grouped', 'broken')),
+  constraint season_modifications_schedule_format_check
+    check (
+      schedule is null
+      or schedule ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+    )
 );
 
 create table if not exists public.season_modification_counters (
@@ -571,6 +577,55 @@ create table if not exists public.season_modification_added_legs (
   turnaround_id text,
   foreign key (leg_id) references public.season_modifications(leg_id) on delete cascade
 );
+
+create or replace function public.normalize_season_modification_schedule_v1()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.schedule is null then
+    return new;
+  end if;
+
+  new.schedule := btrim(new.schedule);
+
+  if new.schedule ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' then
+    return new;
+  end if;
+
+  if new.schedule ~ '^([01][0-9]|2[0-3])[0-5][0-9]$' then
+    new.schedule :=
+      substring(new.schedule from 1 for 2)
+      || ':'
+      || substring(new.schedule from 3 for 2);
+    return new;
+  end if;
+
+  if new.schedule ~ '^[0-9][0-5][0-9]$' then
+    new.schedule :=
+      '0'
+      || substring(new.schedule from 1 for 1)
+      || ':'
+      || substring(new.schedule from 2 for 2);
+    return new;
+  end if;
+
+  raise exception 'season_modifications.schedule must use HH:mm format'
+    using errcode = '22007';
+end;
+$$;
+
+revoke all on function public.normalize_season_modification_schedule_v1() from public;
+
+drop trigger if exists normalize_season_modification_schedule_v1
+  on public.season_modifications;
+
+create trigger normalize_season_modification_schedule_v1
+before insert or update of schedule
+on public.season_modifications
+for each row
+execute function public.normalize_season_modification_schedule_v1();
 
 create table if not exists public.season_mod_history_entries (
   season_id text not null references public.seasons(id) on delete restrict,
