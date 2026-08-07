@@ -173,6 +173,23 @@ test('main Seasonal import sends canonical source rows and never builds client a
   assert.doesNotMatch(importSource, /await batchWriteFlightRecords\(/);
 });
 
+test('Seasonal strategy restage preserves the current valid batch when the next strategy fails', () => {
+  const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
+  const handlerStart = source.indexOf('const handleImportStrategyChange = useCallback');
+  const handlerEnd = source.indexOf('const handleCancelImportPreview = useCallback', handlerStart);
+  const handlerSource = source.slice(handlerStart, handlerEnd);
+
+  assert.ok(handlerStart >= 0 && handlerEnd > handlerStart, 'strategy restage handler must exist');
+  assert.match(handlerSource, /prepareSeasonalImportV3Attempt\(\{/);
+  assert.match(handlerSource, /uploadedAt:\s*prepared\.uploadedAt/);
+  assert.match(handlerSource, /stagePreparedSeasonalImport\(nextAttempt, operation, operatorSessionEpoch\)/);
+  assert.doesNotMatch(
+    handlerSource,
+    /cancelSeasonalImportV3\(/,
+    'changing preview strategy must not cancel the currently usable batch',
+  );
+});
+
 test('Seasonal import V3 exposes four isolated server-only transport operations', () => {
   const remoteStoreSource = readFileSync(join(root, 'lib', 'remoteStore.ts'), 'utf8');
   const supabaseStoreSource = readFileSync(join(root, 'lib', 'supabaseStore.ts'), 'utf8');

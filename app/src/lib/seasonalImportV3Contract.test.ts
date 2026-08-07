@@ -90,6 +90,7 @@ async function expectedRequestId(input: {
   expectedDataVersion: number;
   strategy: 'merge' | 'replace';
   checksum: string;
+  uploadedAt: number;
 }): Promise<string> {
   const digest = await crypto.subtle.digest(
     'SHA-256',
@@ -225,13 +226,14 @@ test('V3 committed, status, and cancel parsers accept only their exact shapes', 
   );
 });
 
-test('V3 request identity is deterministic and binds contract, strategy, and version', async () => {
+test('V3 request identity is deterministic per upload attempt and binds contract, strategy, and version', async () => {
   const input = {
     seasonId: SEASON_ID,
     seasonCode: 'S26',
     expectedDataVersion: 16573,
     strategy: 'merge' as const,
     checksum: HASH,
+    uploadedAt: 123,
   };
   const first = await deriveSeasonalImportV3RequestId(input);
   const retry = await deriveSeasonalImportV3RequestId({ ...input });
@@ -243,6 +245,7 @@ test('V3 request identity is deterministic and binds contract, strategy, and ver
     expectedDataVersion: input.expectedDataVersion,
     strategy: input.strategy,
     checksum: input.checksum,
+    uploadedAt: input.uploadedAt,
   }));
   assert.notEqual(
     await deriveSeasonalImportV3RequestId({ ...input, strategy: 'replace' }),
@@ -250,6 +253,10 @@ test('V3 request identity is deterministic and binds contract, strategy, and ver
   );
   assert.notEqual(
     await deriveSeasonalImportV3RequestId({ ...input, expectedDataVersion: 16574 }),
+    first,
+  );
+  assert.notEqual(
+    await deriveSeasonalImportV3RequestId({ ...input, uploadedAt: 124 }),
     first,
   );
 });
@@ -261,6 +268,7 @@ test('V3 request identity normalizes new-season identity and rejects invalid inp
     expectedDataVersion: 0,
     strategy: 'merge' as const,
     checksum: HASH.toUpperCase(),
+    uploadedAt: 123,
   };
   const first = await deriveSeasonalImportV3RequestId(input);
   const normalized = await deriveSeasonalImportV3RequestId({
@@ -281,6 +289,10 @@ test('V3 request identity normalizes new-season identity and rejects invalid inp
   await assert.rejects(
     () => deriveSeasonalImportV3RequestId({ ...input, checksum: '  ' }),
     /checksum/,
+  );
+  await assert.rejects(
+    () => deriveSeasonalImportV3RequestId({ ...input, uploadedAt: 123.5 }),
+    /uploadedAt/,
   );
 });
 
@@ -327,11 +339,21 @@ test('V3 attempt preparation canonicalizes source rows and binds the selected st
     uploadedAt: 123,
     sourceRows,
   });
+  const newUploadAttempt = await prepareSeasonalImportV3Attempt({
+    seasonId: SEASON_ID,
+    seasonCode: 'S26',
+    expectedDataVersion: 16573,
+    strategy: 'merge',
+    fileName: 'Book3.xlsx',
+    uploadedAt: 124,
+    sourceRows,
+  });
 
   assert.equal(merge.contractVersion, 3);
   assert.equal(merge.seasonCode, 'S26');
   assert.equal(merge.sourceRows[0].airline, 'KE');
   assert.equal(merge.sourceRows[0].arrFlight, 'KE2093');
   assert.notEqual(merge.requestId, replace.requestId);
+  assert.notEqual(merge.requestId, newUploadAttempt.requestId);
   assert.equal(merge.checksum, replace.checksum);
 });

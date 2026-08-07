@@ -1959,7 +1959,6 @@ export default function HomePage() {
     const operatorSessionEpoch = getOperatorSessionEpoch();
     setUploading(true);
     try {
-      await cancelSeasonalImportV3(importPreviewState.result.batchId, { operatorSessionEpoch });
       const nextAttempt = await prepareSeasonalImportV3Attempt({
         seasonId: prepared.seasonId,
         seasonCode: prepared.seasonCode,

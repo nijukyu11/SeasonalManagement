@@ -441,6 +441,7 @@ export async function deriveSeasonalImportV3RequestId(input: {
   expectedDataVersion: number;
   strategy: SeasonalImportV3Strategy;
   checksum: string;
+  uploadedAt: number;
 }): Promise<string> {
   const seasonId = input.seasonId?.trim() ?? '';
   if (input.seasonId !== null && !seasonId) {
@@ -458,6 +459,9 @@ export async function deriveSeasonalImportV3RequestId(input: {
   const strategy = parseStrategy(input.strategy, 'Seasonal import V3 request');
   const checksum = input.checksum.trim().toLowerCase();
   if (!checksum) throw new Error('checksum must be a non-empty string.');
+  if (!Number.isSafeInteger(input.uploadedAt) || input.uploadedAt < 0) {
+    throw new Error('uploadedAt must be a non-negative safe integer.');
+  }
   const seasonIdentity = seasonId || normalizeSeasonCode(input.seasonCode);
   const bytes = await sha256Bytes(stableJson({
     contractVersion: 3,
@@ -465,6 +469,7 @@ export async function deriveSeasonalImportV3RequestId(input: {
     expectedDataVersion: input.expectedDataVersion,
     strategy,
     checksum,
+    uploadedAt: input.uploadedAt,
   }));
   const uuidBytes = bytes.slice(0, 16);
   uuidBytes[6] = (uuidBytes[6] & 0x0f) | 0x50;
@@ -495,6 +500,7 @@ export async function prepareSeasonalImportV3Attempt(input: {
     expectedDataVersion,
     strategy: input.strategy,
     checksum,
+    uploadedAt: input.uploadedAt,
   });
   return {
     contractVersion: 3,
