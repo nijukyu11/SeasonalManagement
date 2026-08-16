@@ -1026,9 +1026,18 @@ function CheckInAllocationContent() {
     });
   }, []);
 
-  const refreshCheckInWindow = useCallback(async () => {
+  const refreshCheckInWindow = useCallback(async (options: { revalidate?: boolean } = {}) => {
     if (!season) return;
     const windowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
+    if (options.revalidate) {
+      await loadSeasonWorkspaceWindow({
+        seasonId: season.id,
+        dateFrom: fromDateTime.slice(0, 10),
+        dateTo: toDateTime.slice(0, 10),
+        resourceType: 'checkin',
+        limit: 100000,
+      });
+    }
     const snapshot = readWorkspaceWindowSnapshot(useSeasonWorkspaceStore.getState().workspaces[season.id], windowKey);
     if (!snapshot?.syncMeta) return null;
     clearOptimisticAllocationView();
@@ -1950,9 +1959,9 @@ function CheckInAllocationContent() {
     source: 'checkin',
     shouldDeferRefresh: shouldDeferCheckInRefresh,
     shouldHandleWorkspaceChange: shouldHandleCheckInWorkspaceChange,
-    onRefresh: async () => {
+    onRefresh: async (event) => {
       await flushPendingCheckInLocalCommit();
-      await refreshCheckInWindow();
+      await refreshCheckInWindow({ revalidate: event.refreshMode === 'revalidate' });
     },
   });
 

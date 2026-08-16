@@ -602,9 +602,18 @@ function GateAllocationContent() {
     });
   }, []);
 
-  const refreshGateWindow = useCallback(async () => {
+  const refreshGateWindow = useCallback(async (options: { revalidate?: boolean } = {}) => {
     if (!season) return;
     const windowKey = buildGateWindowKey(fromDateTime, toDateTime);
+    if (options.revalidate) {
+      await loadSeasonWorkspaceWindow({
+        seasonId: season.id,
+        dateFrom: fromDateTime.slice(0, 10),
+        dateTo: toDateTime.slice(0, 10),
+        resourceType: 'gate',
+        limit: 100000,
+      });
+    }
     const snapshot = readWorkspaceWindowSnapshot(useSeasonWorkspaceStore.getState().workspaces[season.id], windowKey);
     if (!snapshot) return null;
     clearOptimisticGateAllocationView();
@@ -648,8 +657,8 @@ function GateAllocationContent() {
     seasonId: season?.id ?? targetSeasonId,
     policy: 'on-activation',
     source: 'gate',
-    onRefresh: async () => {
-      await refreshGateWindow();
+    onRefresh: async (event) => {
+      await refreshGateWindow({ revalidate: event.refreshMode === 'revalidate' });
     },
   });
 
