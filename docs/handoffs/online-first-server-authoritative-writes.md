@@ -150,6 +150,12 @@ If `baseServerSeq` is older than current server high-water:
 
 Only reject for hard validation/security/business-rule errors.
 
+### Verification note, 2026-08-16
+
+The client mutation adapter now preserves canonical `appliedEvents`, `serverHighWater`, and `nextServerSeq` instead of leaving applied events as untyped payloads. The direct-realtime path must use the event `serverSeq`; browser time and promise completion order are not authoritative.
+
+Live function-definition verification was not completed in this workspace: the documented self-hosted Supabase SSH endpoint rejected the available key, and the external `opsdata-supabase` migration repository was not present locally or in the authenticated GitHub repository list. No production mutation was run. The transaction and latest-write-wins description below therefore remains documentation-derived until an operator with backend access rechecks `pg_get_functiondef(public.apply_season_server_mutation_v1(jsonb))` against `20260622_online_first_server_mutation_v1.sql`.
+
 ## Audit Requirements
 
 Every non-empty mutation should be traceable through existing or new audit fields:

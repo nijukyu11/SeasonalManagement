@@ -17,3 +17,17 @@ test('season realtime subscriptions use a unique channel topic before registerin
   assert.match(body, /filter: `season_id=eq\.\$\{seasonId\}`/);
   assert.doesNotMatch(body, /\.channel\(`season-change-events:\$\{seasonId\}`\)/);
 });
+
+test('server mutation responses preserve canonical events and authoritative sequence fields', () => {
+  const functionStart = source.indexOf('function normalizeServerSeasonMutationResult');
+  assert.notEqual(functionStart, -1, 'normalizeServerSeasonMutationResult should exist');
+  const functionEnd = source.indexOf('function snapshotArray', functionStart);
+  assert.notEqual(functionEnd, -1, 'mutation result normalizer should end before snapshotArray');
+  const body = source.slice(functionStart, functionEnd);
+
+  assert.match(body, /serverHighWater:\s*numberFromRpc|const serverHighWater = numberFromRpc/);
+  assert.match(body, /nextServerSeq:\s*numberFromRpc/);
+  assert.match(body, /appliedEvents:[\s\S]*?\.map\(\(event\) => \([\s\S]*?normalizeRpcSeasonEvent/);
+  assert.match(body, /changedTargets:/);
+  assert.match(body, /affectedIds:/);
+});

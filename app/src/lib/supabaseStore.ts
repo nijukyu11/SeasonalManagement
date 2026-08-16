@@ -405,7 +405,9 @@ function normalizeServerSeasonMutationResult(result: ServerSeasonMutationRpc | n
     nextServerSeq: numberFromRpc(result?.nextServerSeq ?? result?.next_server_seq, serverHighWater),
     changedTargets: result?.changedTargets ?? result?.changed_targets ?? [],
     affectedIds: result?.affectedIds ?? result?.affected_ids ?? [],
-    appliedEvents: result?.appliedEvents ?? result?.applied_events ?? [],
+    appliedEvents: (result?.appliedEvents ?? result?.applied_events ?? []).map((event) => (
+      normalizeRpcSeasonEvent(event as SeasonChangeEvent | SeasonChangeEventRow)
+    )),
     rejectedEvents: result?.rejectedEvents ?? result?.rejected_events ?? [],
   };
 }
