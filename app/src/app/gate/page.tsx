@@ -72,6 +72,7 @@ import {
 import { useSessionScrollRestoration } from '../hooks/useSessionScrollRestoration';
 import { useSessionState } from '../hooks/useSessionState';
 import { useSeasonWorkspaceRefresh } from '../hooks/useSeasonWorkspaceRefresh';
+import { useGanttDragScroll } from '../hooks/useGanttDragScroll';
 
 const DEFAULT_TIMELINE_PIXELS_PER_MINUTE = 1.5;
 const MIN_TIMELINE_PIXELS_PER_MINUTE = 0.5;
@@ -476,6 +477,7 @@ function GateAllocationContent() {
   const [activeDropRowIndex, setActiveDropRowIndex] = useState<number | null>(null);
   const [poolDropActive, setPoolDropActive] = useState(false);
   const [pointerDragState, setPointerDragState] = useState<GatePointerDragState | null>(null);
+  const pointerDragStateRef = useRef<GatePointerDragState | null>(null);
   const [isGanttFullscreen, setIsGanttFullscreen] = useState(false);
   const [timelinePixelsPerMinute, setTimelinePixelsPerMinute] = useSessionState(
     'gate:timelinePixelsPerMinute',
@@ -1289,6 +1291,38 @@ function GateAllocationContent() {
     setPoolDropActive(target.kind === 'pool' && drag.kind === 'allocated');
   }, [resolveGatePointerDrop]);
 
+  const {
+    start: startGateDragScroll,
+    updatePointer: updateGateDragScrollPointer,
+    stop: stopGateDragScroll,
+  } = useGanttDragScroll({
+    scrollRef: ganttScrollRef,
+    onAfterScroll: ({ clientX, clientY }) => {
+      const drag = pointerDragStateRef.current;
+      if (drag) updateGatePointerPreview(clientX, clientY, drag);
+    },
+  });
+
+  const releaseGateInteraction = useCallback((recordId: string) => {
+    if (!season) return;
+    const winner = ganttInteractionArbiter.cancel({
+      seasonId: season.id,
+      targetType: 'modification',
+      targetId: recordId,
+    });
+    if (!winner) return;
+    const applied = useSeasonWorkspaceStore.getState().applyServerModificationPatch({
+      seasonId: season.id,
+      legId: recordId,
+      modification: winner.modification,
+      serverSeq: winner.serverSeq,
+      operatorSessionEpoch: getOperatorSessionEpoch(),
+    });
+    if (applied !== 'applied') return;
+    applyOptimisticGateModification(winner.modification);
+    publishWorkspaceChange(season.id, winner.serverSeq, 'gate', [recordId], null, 'direct');
+  }, [applyOptimisticGateModification, publishWorkspaceChange, season]);
+
   const handleGatePointerDown = useCallback((
     event: ReactPointerEvent<HTMLElement>,
     source: { kind: 'unallocated'; record: FlightRecord } | { kind: 'allocated'; bar: GateResourceBar }
@@ -1334,10 +1368,18 @@ function GateAllocationContent() {
           backgroundColor: color.backgroundColor,
           textColor: color.textColor,
         };
+    if (season) {
+      ganttInteractionArbiter.begin({ seasonId: season.id, targetType: 'modification', targetId: drag.recordId });
+    }
+    pointerDragStateRef.current = drag;
     setPointerDragState(drag);
     setDraggedRecordId(drag.recordId);
     updateGatePointerPreview(event.clientX, event.clientY, drag);
-  }, [isRouteActive, recordById, settings, syncWriteInProgress, updateGatePointerPreview]);
+    startGateDragScroll(
+      { clientX: event.clientX, clientY: event.clientY },
+      drag.kind === 'allocated' ? 'vertical' : 'both',
+    );
+  }, [isRouteActive, recordById, season, settings, startGateDragScroll, syncWriteInProgress, updateGatePointerPreview]);
 
   const handleGatePointerMove = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     if (!isRouteActive) return;
@@ -1348,23 +1390,36 @@ function GateAllocationContent() {
         currentClientX: current.kind === 'allocated' ? current.currentClientX : event.clientX,
         currentClientY: event.clientY,
       } as GatePointerDragState;
+      pointerDragStateRef.current = next;
       updateGatePointerPreview(event.clientX, event.clientY, next);
       return next;
     });
-  }, [isRouteActive, updateGatePointerPreview]);
+    updateGateDragScrollPointer({ clientX: event.clientX, clientY: event.clientY });
+  }, [isRouteActive, updateGateDragScrollPointer, updateGatePointerPreview]);
 
   const handleGatePointerUp = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     if (!isRouteActive) return;
     const drag = pointerDragState;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const target = resolveGatePointerDrop(event.clientX, event.clientY);
+    stopGateDragScroll();
+    pointerDragStateRef.current = null;
     clearGateDragState();
     const record = recordById.get(drag.recordId);
-    if (!record || syncWriteInProgress) return;
+    if (!record || syncWriteInProgress) {
+      releaseGateInteraction(drag.recordId);
+      return;
+    }
     if (target.kind === 'row') {
       const resource = view?.resourceRows[target.rowIndex];
-      if (!resource) return;
-      if (drag.kind === 'allocated' && drag.gate === resource.gate) return;
+      if (!resource) {
+        releaseGateInteraction(drag.recordId);
+        return;
+      }
+      if (drag.kind === 'allocated' && drag.gate === resource.gate) {
+        releaseGateInteraction(drag.recordId);
+        return;
+      }
       void commitGateModification(
         allocateGate(record, resource.gate),
         `${drag.kind === 'allocated' ? 'Moved' : 'Allocated'} ${drag.flightNumber} to gate ${resource.label}`
@@ -1380,8 +1435,27 @@ function GateAllocationContent() {
       ).catch((err) => {
         void showAlert({ title: 'Unallocate Failed', message: (err as Error).message, tone: 'error' });
       });
+      return;
     }
-  }, [clearGateDragState, commitGateModification, isRouteActive, pointerDragState, recordById, resolveGatePointerDrop, showAlert, syncWriteInProgress, view]);
+    releaseGateInteraction(drag.recordId);
+  }, [clearGateDragState, commitGateModification, isRouteActive, pointerDragState, recordById, releaseGateInteraction, resolveGatePointerDrop, showAlert, stopGateDragScroll, syncWriteInProgress, view]);
+
+  const handleGatePointerCancel = useCallback(() => {
+    const drag = pointerDragStateRef.current;
+    stopGateDragScroll();
+    pointerDragStateRef.current = null;
+    clearGateDragState();
+    if (drag) releaseGateInteraction(drag.recordId);
+  }, [clearGateDragState, releaseGateInteraction, stopGateDragScroll]);
+
+  useEffect(() => {
+    if (!pointerDragState) return undefined;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') handleGatePointerCancel();
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [handleGatePointerCancel, pointerDragState]);
 
   const dragOverlay = pointerDragState ? (
     <div
@@ -1618,8 +1692,8 @@ function GateAllocationContent() {
         onPointerDown={(event) => handleGatePointerDown(event, { kind: 'unallocated', record: item.record })}
         onPointerMove={handleGatePointerMove}
         onPointerUp={handleGatePointerUp}
-        onPointerCancel={clearGateDragState}
-        className={`absolute flex h-6 cursor-grab items-center overflow-hidden rounded-[4px] border border-white px-2 text-[11px] font-bold transition-[transform,width,box-shadow,background-color,border-color] duration-200 ease-out active:cursor-grabbing ${draggedRecordId === item.record.id ? 'ring-2 ring-primary/60 ring-offset-1 ring-offset-surface-container-lowest' : ''}`}
+        onPointerCancel={handleGatePointerCancel}
+        className={`absolute flex h-6 touch-none cursor-grab items-center overflow-hidden rounded-[4px] border border-white px-2 text-[11px] font-bold transition-[transform,width,box-shadow,background-color,border-color] duration-200 ease-out active:cursor-grabbing ${draggedRecordId === item.record.id ? 'ring-2 ring-primary/60 ring-offset-1 ring-offset-surface-container-lowest' : ''}`}
         style={{
           left: 0,
           top: 0,
@@ -1659,8 +1733,8 @@ function GateAllocationContent() {
         onPointerDown={(event) => handleGatePointerDown(event, { kind: 'allocated', bar })}
         onPointerMove={handleGatePointerMove}
         onPointerUp={handleGatePointerUp}
-        onPointerCancel={clearGateDragState}
-        className={`absolute z-10 flex items-center overflow-hidden rounded-[4px] border border-white px-2 text-[11px] font-bold ${syncWriteInProgress ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'} ${draggedRecordId === bar.recordId ? 'ring-2 ring-primary/60 ring-offset-1 ring-offset-surface-container-lowest' : ''}`}
+        onPointerCancel={handleGatePointerCancel}
+        className={`absolute z-10 flex touch-none items-center overflow-hidden rounded-[4px] border border-white px-2 text-[11px] font-bold ${syncWriteInProgress ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'} ${draggedRecordId === bar.recordId ? 'ring-2 ring-primary/60 ring-offset-1 ring-offset-surface-container-lowest' : ''}`}
         style={{
           left,
           top: 6 + bar.stackIndex * (BAR_HEIGHT + 4),
