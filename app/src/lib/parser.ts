@@ -1,6 +1,13 @@
 import * as XLSX from 'xlsx';
-import type { ParsedRow, CleanedFlight, FlightLeg, ParseResult, DisplayRow } from './types';
+import type { ParsedRow, CleanedFlight, FlightLeg, ParseResult, DisplayRow, SeasonalSourceRowIssue } from './types';
 import { normalizeSeasonSheetName } from './importSeasonRules.ts';
+import {
+  normalizeSeasonalDate,
+  normalizeSeasonalDay,
+  normalizeSeasonalTime,
+  REQUIRED_SEASONAL_HEADERS,
+  validateSeasonalSourceRow,
+} from './seasonalSourceRowValidation.ts';
 
 // ─── Excel Column Mapping ──────────────────────────────────────
 // Columns from DAD_SeasonalS26.xlsx:
@@ -24,9 +31,17 @@ const MONTHS: Record<string, number> = {
 function parseDate(raw: string | number | undefined, seasonYear: number): Date | null {
   if (raw == null || raw === '') return null;
 
+  const canonical = normalizeSeasonalDate(raw);
+  if (canonical) {
+    const [year, month, day] = canonical.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  }
+
   // Handle Excel serial number
   if (typeof raw === 'number') {
-    const d = XLSX.SSF.parse_date_code(raw);
+    const ssf = XLSX.SSF ?? (XLSX as typeof XLSX & { default?: typeof XLSX }).default?.SSF;
+    const d = ssf?.parse_date_code(raw);
+    if (!d) return null;
     return new Date(d.y, d.m - 1, d.d);
   }
 
@@ -49,29 +64,6 @@ function parseDate(raw: string | number | undefined, seasonYear: number): Date |
   }
 
   return new Date(year, month, day);
-}
-
-/**
- * Parse time string like "14:30" or Excel fraction (0.604...) to "HH:MM".
- */
-function parseTime(raw: string | number | undefined): string | null {
-  if (raw == null || raw === '') return null;
-
-  if (typeof raw === 'number') {
-    // Excel time fraction: 0.5 = 12:00
-    const totalMinutes = Math.round(raw * 24 * 60);
-    const h = Math.floor(totalMinutes / 60) % 24;
-    const m = totalMinutes % 60;
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-  }
-
-  const str = String(raw).trim();
-  // Already "H:MM" or "HH:MM"
-  const match = str.match(/^(\d{1,2}):(\d{2})$/);
-  if (match) {
-    return `${match[1].padStart(2, '0')}:${match[2]}`;
-  }
-  return str;
 }
 
 // ─── Flight Number Cleaning ────────────────────────────────────
@@ -129,37 +121,61 @@ export function parseSeasonalSchedule(workbook: XLSX.WorkBook): ParseResult {
   });
 
   const rows: ParsedRow[] = [];
+  const issues: SeasonalSourceRowIssue[] = [];
+  const headerRows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, blankrows: false });
+  const headers = new Set((headerRows[0] ?? []).map((value) => String(value ?? '').trim()));
+  for (const header of REQUIRED_SEASONAL_HEADERS) {
+    if (!headers.has(header)) {
+      issues.push({ code: 'missing-header', rowIndex: null, column: header, message: `Required header ${header} is missing.` });
+    }
+  }
+  if (issues.length > 0) return { seasonCode, rows, issues };
 
   for (let i = 0; i < rawRows.length; i++) {
     const r = rawRows[i];
-
-    // Skip empty rows
+    if (Object.values(r).every((value) => value == null || String(value).trim() === '')) continue;
+    const rowIndex = i + 1;
     const airline = normalizeRequiredUpperText(r['Airline']);
-    if (!airline) continue;
+    const effective = normalizeSeasonalDate(r['Effective']);
+    const discontinue = normalizeSeasonalDate(r['Discontinue']);
+    const dayResults = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((column) => ({
+      column,
+      ...normalizeSeasonalDay(r[column]),
+    }));
+    for (const day of dayResults) {
+      if (!day.valid) issues.push({
+        code: 'invalid-day-value',
+        rowIndex,
+        column: day.column,
+        message: `${day.column} must be TRUE/FALSE or 1/0.`,
+      });
+    }
+    const rawSta = r['STA'];
+    const rawStd = r['STD'];
+    const sta = normalizeSeasonalTime(rawSta);
+    const std = normalizeSeasonalTime(rawStd);
+    if (rawSta != null && String(rawSta).trim() !== '' && sta === null) {
+      issues.push({ code: 'invalid-time', rowIndex, column: 'STA', message: 'STA must be a valid HH:mm time.' });
+    }
+    if (rawStd != null && String(rawStd).trim() !== '' && std === null) {
+      issues.push({ code: 'invalid-time', rowIndex, column: 'STD', message: 'STD must be a valid HH:mm time.' });
+    }
 
     const row: ParsedRow = {
-      rowIndex: i + 1, // 1-indexed (header is row 0)
-      effective: r['Effective'] as string,
-      discontinue: r['Discontinue'] as string,
+      rowIndex,
+      effective: effective ?? '',
+      discontinue: discontinue ?? '',
       airline,
       aircraft: normalizeRequiredUpperText(r['Aircraft']),
-      daysOfWeek: [
-        numToBool(r['Mon']),
-        numToBool(r['Tue']),
-        numToBool(r['Wed']),
-        numToBool(r['Thu']),
-        numToBool(r['Fri']),
-        numToBool(r['Sat']),
-        numToBool(r['Sun']),
-      ],
-      sta: parseTime(r['STA'] as string | number | undefined),
+      daysOfWeek: dayResults.map((day) => day.value),
+      sta,
       arrFlight: upperOrNull(r['ARRFlight']),
       arrFlightType: upperOrNull(r['ARRFlightType']),
       arrRoute: upperOrNull(r['ARRRoute']),
       arrFlightCategory: upperOrNull(r['ARRFlightCategory']),
       arrCodeShares: upperOrNull(r['ARRCodeShares']),
       arrIntDomInd: upperOrNull(r['ARRIntDomInd']),
-      std: parseTime(r['STD'] as string | number | undefined),
+      std,
       depFlight: upperOrNull(r['DEPFlight']),
       depFlightType: upperOrNull(r['DEPFlightType']),
       depRoute: upperOrNull(r['DEPRoute']),
@@ -168,10 +184,21 @@ export function parseSeasonalSchedule(workbook: XLSX.WorkBook): ParseResult {
       depIntDomInd: upperOrNull(r['DEPIntDomInd']),
     };
 
-    rows.push(row);
+    const rowIssues = validateSeasonalSourceRow(row);
+    issues.push(...rowIssues);
+    const hasRawEffective = r['Effective'] != null && String(r['Effective']).trim() !== '';
+    const hasRawDiscontinue = r['Discontinue'] != null && String(r['Discontinue']).trim() !== '';
+    if (hasRawEffective && !effective && !rowIssues.some((issue) => issue.code === 'invalid-effective-date')) {
+      issues.push({ code: 'invalid-effective-date', rowIndex, column: 'Effective', message: 'Effective date is invalid.' });
+    }
+    if (hasRawDiscontinue && !discontinue && !rowIssues.some((issue) => issue.code === 'invalid-discontinue-date')) {
+      issues.push({ code: 'invalid-discontinue-date', rowIndex, column: 'Discontinue', message: 'Discontinue date is invalid.' });
+    }
+    const hasRowIssue = issues.some((issue) => issue.rowIndex === rowIndex);
+    if (!hasRowIssue) rows.push(row);
   }
 
-  return { seasonCode, rows };
+  return { seasonCode, rows, issues };
 }
 
 /**
@@ -459,12 +486,6 @@ export function detectOvernightPairs(rows: ParsedRow[]): OvernightPair[] {
 
 // ─── Helpers ───────────────────────────────────────────────────
 
-function numToBool(val: unknown): boolean {
-  if (typeof val === 'number') return val !== 0;
-  if (typeof val === 'string') return val.trim() === '1';
-  return false;
-}
-
 function emptyToNull(val: unknown): string | null {
   if (val == null) return null;
   const s = String(val).trim();
@@ -490,8 +511,9 @@ function guessSeasonYear(effective: string | number | undefined): number {
   if (effective == null || effective === '') return new Date().getFullYear();
 
   if (typeof effective === 'number') {
-    const d = XLSX.SSF.parse_date_code(effective);
-    return d.y;
+    const ssf = XLSX.SSF ?? (XLSX as typeof XLSX & { default?: typeof XLSX }).default?.SSF;
+    const d = ssf?.parse_date_code(effective);
+    return d?.y ?? new Date().getFullYear();
   }
 
   const parts = String(effective).split('-');

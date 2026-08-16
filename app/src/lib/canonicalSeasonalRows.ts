@@ -1,7 +1,8 @@
 import * as XLSX from 'xlsx';
 import { flattenRowsToFlightRecords, flightRecordsToLegs, includeLinkedLegsForExport } from './atomicSchedule';
-import { applyModificationsToFlightLegs } from './detailedScheduleState';
+import { materializeEffectiveSeasonalLegs } from './effectiveSeasonalLegs.ts';
 import { saveExportBlob, type ExportSaveResult } from './exportSave.ts';
+import { cleanFlightNumber } from './parser.ts';
 import type { FlightLeg, FlightModification, FlightRecord, ParsedRow } from './types';
 
 const XLSX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -195,8 +196,7 @@ function legSort(left: FlightLeg, right: FlightLeg): number {
 
 function buildEffectiveLegs(input: CanonicalSeasonalRowsInput): FlightLeg[] {
   const modifications = input.modifications ?? new Map<string, FlightModification>();
-  const baseLegs = flightRecordsToLegs(input.records);
-  const effectiveLegs = applyModificationsToFlightLegs(baseLegs, modifications);
+  const effectiveLegs = materializeEffectiveSeasonalLegs(input.records, modifications);
   return includeLinkedLegsForExport(effectiveLegs, input.selectedRecordIds).sort(legSort);
 }
 
@@ -349,12 +349,19 @@ function rowFromCandidate(candidate: RowCandidate, dates: string[], rowIndex: nu
   };
 }
 
-function occurrenceSignature(leg: Pick<FlightLeg, 'type' | 'date' | 'airline' | 'flightNumber' | 'route' | 'schedule' | 'aircraft' | 'category' | 'codeShares' | 'intDomInd'>): string {
+export function normalizeSeasonalOccurrenceFlightNumber(
+  leg: Pick<FlightLeg, 'airline' | 'flightNumber' | 'rawFlightNumber'>,
+): string {
+  return cleanFlightNumber(leg.airline, leg.flightNumber || leg.rawFlightNumber)?.flightNumber
+    ?? `${leg.airline}${leg.flightNumber || leg.rawFlightNumber}`.toUpperCase();
+}
+
+function occurrenceSignature(leg: Pick<FlightLeg, 'type' | 'date' | 'airline' | 'flightNumber' | 'rawFlightNumber' | 'route' | 'schedule' | 'aircraft' | 'category' | 'codeShares' | 'intDomInd'>): string {
   return [
     leg.type,
     leg.date,
     leg.airline,
-    leg.flightNumber,
+    normalizeSeasonalOccurrenceFlightNumber(leg),
     leg.route,
     leg.schedule,
     leg.aircraft,

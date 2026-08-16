@@ -4,7 +4,7 @@
 
 **Goal:** Replace the unstable Seasonal atomic-record upload with a source-row server-first import, make export consume one validated server snapshot, and repair the production data states that currently block import or export.
 
-**Architecture:** The native client parses Excel into a strict canonical source-row contract and sends only those rows to Supabase. A versioned Postgres import V2 stages the request, expands occurrences set-wise, reconciles the imported baseline while preserving manual operational data, and commits under a season lock with idempotency and real read-back counts. Export reads one versioned full-season snapshot, materializes effective legs through one shared modification and pairing resolver, validates the selected set, and only then formats the workbook in the client.
+**Architecture:** The native client parses Excel into a strict canonical source-row contract and sends only those rows to Supabase. A versioned Postgres import V2 stages the request, expands occurrences set-wise, reconciles the imported baseline while preserving manual operational data, and commits under a season lock with idempotency and real read-back counts. After commit, the route-reload plan's shared coordinator performs the only initiating-client reconciliation by assembling sequential keyset pages from `get_season_schedule_allocation_window_v2`, fenced by the import result's `dataVersion`/`serverHighWater`. Export reads one distinct versioned full-season artifact snapshot, materializes effective legs through one shared modification and pairing resolver, validates the selected set, and only then formats the workbook in the client.
 
 **Tech Stack:** Next.js 16, React 19, TypeScript, Node `node:test`, SheetJS `xlsx`, Zustand 5, Supabase JS 2, self-hosted Supabase Postgres, SQL/PLpgSQL, Tauri 2, PowerShell.
 
@@ -20,6 +20,7 @@
 - S26 contains two duplicate baseline groups on 2026-06-10: PR585 and PR586. They are currently hidden by deletion state, so changing modification behavior before repairing the baseline can expose export failures.
 - W25 contains 8,165 records marked `source_kind='added'` and one active JX703 record linked to a missing JX704 record.
 - The current worktree already contains user changes in `AGENTS.md`, `app/src/lib/detailedScheduleState.ts`, `app/src/lib/detailedScheduleState.test.ts`, and an untracked route reload plan. Do not overwrite or revert them.
+- Runtime evidence supplied on 2026-07-20 shows bursts of seven simultaneous workspace-read V1 calls that saturate CPU and cross the same 8-second timeout. Import V2 removes the oversized write; `2026-07-13-server-first-route-reload-hardening.md` owns the read-side V2 paging/single-flight fix. They ship as one client campaign.
 
 ---
 
@@ -35,6 +36,7 @@
 8. New record IDs are deterministic and season-namespaced. Existing matched IDs remain stable during migration so counters, history, and operational modifications are not orphaned.
 9. Export must reject zero matched records, unknown selected IDs, malformed/truncated snapshots, duplicate occurrences, and unresolved or ambiguous pairs.
 10. No import or export error may silently fall back to SQLite, a native local table, or the old non-atomic Settings full-replace sequence.
+11. `commit_seasonal_import_v2` is the only import write and `revalidateSeasonWorkspaceAfterMutation()` is the only initiating-client post-commit schedule read. The import handler never launches a direct workspace load or publishes a second refresh trigger.
 
 ---
 
@@ -49,7 +51,9 @@ XLSX file
   -> client commits the staged batch
   -> commit_seasonal_import_v2 locks season and reconciles in one transaction
   -> server returns actual row counts, record counts, dataVersion, and high-water
-  -> client reloads one server snapshot and replaces all Seasonal page state
+  -> client advances the workspace generation once
+  -> coordinator assembles one complete token-fenced workspace-read V2 page chain
+  -> coordinator commits the complete snapshot before the import handler continues
 ```
 
 ```text
@@ -62,6 +66,32 @@ Export command
   -> duplicate + pair + round-trip validation
   -> client formats and saves XLSX
 ```
+
+---
+
+## Cross-Plan Integration Boundary
+
+This plan and `2026-07-13-server-first-route-reload-hardening.md` retain separate task IDs and RPC responsibilities, but they have one client cutover and one release gate:
+
+```text
+Route Tasks 1-5 + Import Tasks 1-5
+  -> Route Task 5A tracked workspace-read V2 SQL/assembler
+  -> Route Task 6 shared coordinator
+  -> Import Task 6 + Route Task 7 one client cutover
+  -> remaining tasks from both plans
+  -> combined load/fault verification
+  -> deploy Import V2 SQL, then workspace-read V2 SQL
+  -> schema-cache reload -> authenticated smoke -> native canary
+```
+
+The two legacy RPC names are not interchangeable:
+
+- `apply_seasonal_import_remote` is **Import V1** and may be revoked only after the Import V2 canary gate.
+- `get_season_schedule_allocation_window_v1` is **workspace-read V1** and remains callable for old signed clients through the separate route-plan compatibility window.
+
+"Fix once" means one coordinated signed app release. The database migrations still deploy additively before that client so a new app never calls a missing function.
+
+The route plan's finalized herd policy is part of this release gate: automatic realtime/TTL refresh uses full-jitter `100-300ms`, `snapshot_changed` waits full-jitter `250-1000ms` and restarts at most once, while manual/post-import reconciliation starts immediately. Do not add shared server page caching unless the seven-client gate fails; if it fails, the immutable pinned cache becomes mandatory before release and all capacity/completeness tests rerun.
 
 ---
 
@@ -400,6 +430,7 @@ Add a test that reads the migration and requires these objects:
 
 ```ts
 assert.match(migrationSource, /create table if not exists public\.season_import_batches/);
+assert.match(migrationSource, /client_id text not null/);
 assert.match(migrationSource, /create table if not exists public\.season_import_batch_rows/);
 assert.match(migrationSource, /create or replace function public\.stage_seasonal_import_v2\(p_import jsonb\)/);
 assert.match(migrationSource, /public\.app_operator_has_permission\('seasonal\.write'\)/);
@@ -422,6 +453,7 @@ The migration must create these tables without altering V1:
 create table if not exists public.season_import_batches (
   batch_id uuid primary key default gen_random_uuid(),
   request_id uuid not null unique,
+  client_id text not null,
   season_id text references public.seasons(id) on delete restrict,
   season_code text not null,
   expected_data_version integer,
@@ -451,7 +483,7 @@ Enable RLS, deny direct authenticated table writes, and grant authenticated user
 
 `stage_seasonal_import_v2(p_import jsonb)` must:
 
-1. Require `requestId`, `checksum`, `seasonCode`, and a non-empty `sourceRows` JSON array.
+1. Require `requestId`, `clientId`, `checksum`, `seasonCode`, and a non-empty `sourceRows` JSON array. Persist `clientId` on the batch; it must come from the same `getOrCreateSeasonClientId()` identity used by `SeasonSyncProvider`.
 2. Return the existing batch when `request_id` already exists with the same checksum.
 3. Raise a conflict when a reused request ID has a different checksum.
 4. Insert source rows with one `INSERT INTO season_import_batch_rows SELECT` statement sourced from `jsonb_array_elements`.
@@ -587,7 +619,7 @@ git commit -m "feat: generate seasonal atomic records on server"
 Cover these database behaviors:
 
 1. A stale `expectedDataVersion` rejects without changing any Seasonal table.
-2. Recommitting one batch returns the original result and does not increment version twice.
+2. Recommitting one batch returns the original result, does not increment version twice, and does not insert a second change event.
 3. Matching imported occurrences retain existing record IDs and operational fields.
 4. Source-owned modifications are cleared on re-import.
 5. Operational-only modifications survive with corrected `changed_fields`.
@@ -612,7 +644,7 @@ The implementation must:
 - Delete source-owned or deleted modifications for affected imported IDs while retaining operational-only fields and child counter/window rows.
 - Replace `season_source_rows` and `season_source_row_days` from the staged batch.
 - Update `seasons.total_legs`, `total_source_rows`, effective bounds, file name, upload timestamp, `data_version`, and `last_synced_at` from actual committed rows.
-- Insert one `season_change_events` import event and use its sequence as `serverHighWater`.
+- Insert exactly one `season_change_events` import event with `client_id=batch.client_id` and `op_id=request_id`, and use its sequence as `serverHighWater`. Idempotent recommit returns the stored result without another event.
 - Mark the batch `committed` and return camelCase keys only.
 
 The success response contract is:
@@ -692,6 +724,7 @@ Replace the atomic-record import input in `remoteStore.ts` with:
 ```ts
 export interface RemoteSeasonalImportInput {
   requestId: string;
+  clientId: string;
   checksum: string;
   seasonId?: string | null;
   seasonCode: string;
@@ -727,18 +760,31 @@ The same module must build a stable SHA-256 checksum from `seasonCode + canonica
 
 `supabaseStore.applySeasonalImportRemote` must:
 
-1. Call `stage_seasonal_import_v2` with `{ p_import: payload }`.
+1. Run the originating operator-epoch checkpoint, then call `stage_seasonal_import_v2` with `{ p_import: payload }`, including `clientId`.
 2. Reject staging diagnostics or a non-validated status.
-3. Call `commit_seasonal_import_v2` with `p_batch_id` and `p_expected_data_version`.
-4. Parse the response through `parseSeasonalImportV2Result`.
+3. Run the same checkpoint again after stage and immediately before calling `commit_seasonal_import_v2` with `p_batch_id` and `p_expected_data_version`.
+4. Parse the response through `parseSeasonalImportV2Result`, then run the checkpoint again before returning/progress or any client cache write.
 
 Remove `flightRecords`, `flight_records`, duplicated camel/snake payload keys, `callSeasonalImportRpcRawPayload`, and every V1 signature fallback from this path.
 
 - [ ] **Step 5: Simplify the Seasonal page import handler**
 
-Remove client write dependencies on `flattenRowsToFlightRecords`, `mergeDuplicateImportRecords`, `buildSeasonalImportPatch`, and `modificationDeleteRecordIds`. Send the validated source rows, request ID, checksum, expected version, file name, and upload timestamp. After commit, load one server window and pass `refreshedRecords` plus `refreshedModifications` to `applySeasonData`; never pass pre-RPC arrays.
+Remove client write dependencies on `flattenRowsToFlightRecords`, `mergeDuplicateImportRecords`, `buildSeasonalImportPatch`, and `modificationDeleteRecordIds`. Send the validated source rows, request ID, shared season client ID, checksum, expected version, file name, and upload timestamp. After commit and an operator-epoch check, update season metadata from the returned values and call exactly once:
 
-If commit succeeds but refresh fails, show `Import committed, refresh failed` with season ID and batch ID, keep the committed result, and offer Refresh. Do not display `Import Failed` or automatically retry the commit.
+```ts
+await revalidateSeasonWorkspaceAfterMutation(windowInput, {
+  operatorSessionEpoch,
+  generationAlreadyAdvanced: false,
+  expectedSnapshot: {
+    dataVersion: importResult.dataVersion,
+    serverHighWater: importResult.serverHighWater,
+  },
+});
+```
+
+The coordinator owns the complete sequential workspace-read V2 page chain and commits it before resolving. Never pass pre-RPC arrays, directly call `loadSeasonWorkspaceWindow()`/`replaceSeasonWindow()`/page-owned `applySeasonData()`, or publish another refresh-triggering workspace event. The initiating client ignores its own realtime import event by `clientId` and relies on this explicit reconciliation; other clients each persist one invalidation and start at most one logical load for the resulting generation.
+
+If commit succeeds but reconciliation fails, show `Import committed, refresh failed` with season ID and batch ID, keep the committed result and stale visible snapshot, and offer Refresh. Do not display `Import Failed` or automatically retry the commit. An epoch change after stage prevents commit; an epoch change after a successful commit suppresses old-operator UI/cache/reconciliation work but does not relabel the server commit as failed.
 
 - [ ] **Step 6: Run focused tests and verify GREEN**
 
@@ -746,7 +792,7 @@ If commit succeeds but refresh fails, show `Import committed, refresh failed` wi
 node --experimental-strip-types --test src/lib/seasonalImportRpcContract.test.ts src/lib/seasonalImportModeGuard.test.ts src/lib/parser.test.ts src/lib/seasonalFileActionGuard.test.ts
 ```
 
-Expected: PASS; source assertions prove no atomic array or raw V1 fallback remains in the main import path.
+Expected: PASS; source assertions prove no atomic array or raw Import V1 fallback remains, `getOrCreateSeasonClientId()` supplies `clientId`, and exactly one `revalidateSeasonWorkspaceAfterMutation()` replaces every direct post-import workspace load.
 
 - [ ] **Step 7: Commit the client cutover**
 
@@ -973,7 +1019,7 @@ git commit -m "fix: repair seasonal import and export data integrity"
 
 ---
 
-### Task 10: Retire Legacy Full-Replace and V1 Compatibility Paths
+### Task 10: Retire Legacy Full-Replace and Import V1 Compatibility Paths
 
 **Files:**
 - Modify: `app/src/app/settings/page.tsx`
@@ -994,11 +1040,11 @@ Keep the visible `Seasonal Full Replace` label, but make the action run strict p
 
 - [ ] **Step 3: Remove client compatibility paths**
 
-Delete V1 import payload types, fallback signatures, raw PostgREST fetch, false payload-count verification, and direct source-row mutation APIs that conflict with the staged import contract. Keep source rows readable as import provenance; do not expose arbitrary row-by-row editing.
+Delete Import V1 payload types, fallback signatures, raw PostgREST fetch, false payload-count verification, and direct source-row mutation APIs that conflict with the staged import contract. Keep source rows readable as import provenance; do not expose arbitrary row-by-row editing. Do not remove or revoke `get_season_schedule_allocation_window_v1`; that separate workspace-read compatibility lifecycle belongs to the route plan.
 
-- [ ] **Step 4: Retire V1 only after the canary client is live**
+- [ ] **Step 4: Retire Import V1 only after the canary client is live**
 
-At the end of the migration, revoke execute on `apply_seasonal_import_remote` from authenticated users. Keep its SQL definition for one release rollback window, then drop it in a later migration after production verification. Do not make the V2 client fall back to V1.
+At the end of the import migration, revoke execute on Import V1 `apply_seasonal_import_remote` from authenticated users. Keep its SQL definition for one release rollback window, then drop it in a later migration after production verification. Do not make the Import V2 client fall back to Import V1. This decision does not authorize revoking workspace-read V1.
 
 - [ ] **Step 5: Update architecture documentation**
 
@@ -1048,6 +1094,15 @@ For S26 and W26 fixtures: import source rows, fetch export snapshot, build canon
 
 Verify network failure before stage, after stage, during commit response delivery, and during post-commit refresh. Assert that retrying a request ID cannot duplicate or recommit data and that a committed-refresh failure is reported as committed.
 
+Also run the route plan's combined reconciliation/capacity cases:
+
+- one successful import commit creates one event and one initiating-client logical workspace-read V2 chain, not direct + coordinator + realtime chains;
+- an initiating realtime echo is ignored by `clientId`; a second client persists one invalidation and starts at most one chain;
+- seven same-process consumers share one strict coordinator promise, while seven independent authenticated clients run at most seven page statements total at once;
+- pages inside each chain are sequential, every chain reaches `hasMore=false`, and all clients assemble identical token/ID/count sets with no duplicate/missing roots;
+- the unchanged 8-second timeout produces zero `57014`, page p95 below 2 seconds, and maximum page latency below 4 seconds;
+- workspace-read V2 timeout/network failure produces no workspace-read V1 or direct-table request; only a confirmed missing V2 signature may make one workspace-read V1 compatibility call.
+
 - [ ] **Step 5: Run the complete verification matrix**
 
 ```powershell
@@ -1085,15 +1140,16 @@ Record the current server migration checksum, RPC signatures, role timeouts, S26
 
 - [ ] **Step 2: Deploy additive SQL first**
 
-Apply the tracked V2 migration to the self-hosted Supabase server. Verify V1 remains callable during the compatibility window, V2 permissions are correct, and staging a one-row fixture succeeds without changing a season.
+Apply the tracked Import V2 migration, then the route plan's tracked workspace-read V2 migration, to the self-hosted Supabase server. Verify Import V1 and workspace-read V1 remain callable during their distinct compatibility windows, both V2 permission contracts are correct, and staging a one-row fixture succeeds without changing a season.
 
 Run from the repository root:
 
 ```powershell
 Get-Content -Raw -Encoding UTF8 app/supabase/migrations/20260718090000_seasonal_source_import_v2.sql | ssh ops@100.91.158.79 "docker exec -i opsdata-supabase-db psql -U supabase_admin -d postgres -v ON_ERROR_STOP=1"
+Get-Content -Raw -Encoding UTF8 app/supabase/migrations/20260720090000_workspace_window_keyset_v2.sql | ssh ops@100.91.158.79 "docker exec -i opsdata-supabase-db psql -U supabase_admin -d postgres -v ON_ERROR_STOP=1"
 ```
 
-Expected: `psql` exits 0. Immediately query `pg_proc` and table metadata to confirm the V2 signatures and batch tables exist.
+Expected: both `psql` calls exit 0. Reload the PostgREST schema cache, then query `pg_proc`, grants, indexes, and table metadata to confirm both exact V2 signatures and batch tables exist. Run authenticated preview-only Import V2 and first-page workspace-read V2 smoke calls before installing any new client.
 
 - [ ] **Step 3: Run production preview-only shadow checks**
 
@@ -1109,13 +1165,17 @@ Run the approved repair transaction, rerun the read-only audit, and record maint
 npm run native:build
 ```
 
-Install the canary on one clean machine. Test new-season import, same-season re-import, draft blocking, refresh-after-commit, select-all export, subset export, S26/W26 round-trip, and application restart. Confirm no SQLite/catch-up log line appears in either file action.
+Install the canary on one clean machine. Test new-season import, same-season re-import, draft blocking, exactly one token-fenced refresh-after-commit, full-season Detailed with blank From/To, repeated route navigation, select-all export, subset export, S26/W26 round-trip, and application restart. Confirm no SQLite/catch-up log line appears and that the import's realtime echo does not start a second logical window chain.
 
-- [ ] **Step 6: Monitor before retiring V1**
+- [ ] **Step 6: Monitor before retiring Import V1**
 
-Monitor PostgREST/Kong/Postgres logs for `57014`, 409 version conflicts, malformed snapshot errors, duplicate diagnostics, and request sizes. Require successful S26 and W26 import/export smoke results before revoking V1 execute permission.
+Monitor PostgREST/Kong/Postgres logs for `57014`, 409 version conflicts, malformed snapshot/page errors, duplicate diagnostics, request sizes, page latency/concurrency, and sustained CPU. Require successful S26 and W26 import/export/reconciliation smoke results before revoking execute on Import V1 `apply_seasonal_import_remote`. Do not revoke workspace-read V1 here.
 
-- [ ] **Step 7: Bump version and publish the updater release**
+- [ ] **Step 7: Pass the seven-client workspace-read capacity gate**
+
+Run the route plan's seven-client barrier test against the canary backend. Require zero `57014`, at most seven simultaneous page statements, identical complete results, page p95 below 2 seconds, maximum below 4 seconds, and no sustained CPU above the documented threshold. Do not publish the updater if the metrics cannot be captured or the gate fails.
+
+- [ ] **Step 8: Bump version and publish the updater release**
 
 Use the repository release script to move the current `0.1.10` baseline to `0.1.11`, keep Next, Cargo, and Tauri versions aligned, rerun the native build, publish signed updater assets and `latest.json`, and verify the previous installed version discovers and installs the update.
 
@@ -1124,7 +1184,7 @@ npm run release:version -- 0.1.11
 npm run native:build
 ```
 
-- [ ] **Step 8: Commit release metadata**
+- [ ] **Step 9: Commit release metadata**
 
 ```powershell
 git add app/package.json app/src-tauri/tauri.conf.json docs/superpowers/artifacts/2026-07-18-seasonal-import-export-verification.md
@@ -1138,7 +1198,7 @@ git commit -m "release: publish seasonal import export v2"
 - The client sends canonical source rows only; no atomic record array is present in the request.
 - W26 import completes without `57014` and without increasing the global authenticated role timeout as the primary fix.
 - Repeating one request ID or importing the same file does not create, move, or duplicate records.
-- A committed import reloads to the same records and modifications shown immediately after commit.
+- A committed import runs exactly one initiating-client token-fenced coordinated workspace-read V2 chain; the complete committed snapshot is applied before reconciliation resolves and the import realtime echo starts no duplicate chain.
 - Draft import/export is blocked until Save or Discard.
 - Export rejects stale selection, empty output, malformed/truncated snapshots, duplicates, and pair ambiguity.
 - Full and selected S26/W26 exports succeed after approved data repair.
@@ -1147,16 +1207,18 @@ git commit -m "release: publish seasonal import export v2"
 - `season_source_rows` is populated for seasons imported through V2.
 - Settings repair uses the same atomic V2 path.
 - No Seasonal import/export path reads or writes SQLite.
-- Focused tests, `test:rules`, TypeScript, targeted ESLint, web build, SQL integration, W26 load, round-trip, native build, updater installation, and production smoke checks all pass.
+- Seven independent workspace clients complete under the unchanged 8-second timeout with zero `57014`, bounded sequential page concurrency, identical complete snapshots, and the route plan's latency/CPU gates.
+- Focused tests, `test:rules`, TypeScript, targeted ESLint, web build, both SQL integrations, W26 load, workspace-read V2 load, round-trip, native build, updater installation, and production smoke checks all pass.
 
 ---
 
 ## Rollback Boundaries
 
-- Database deployment is additive until canary verification completes; V1 is not dropped in the same migration.
+- Database deployment is additive until canary verification completes; neither Import V1 nor workspace-read V1 is dropped in the same migrations.
 - A failed commit transaction rolls back automatically and leaves the staged batch available for diagnosis.
 - Data repair is reversible from named maintenance backup tables created in the same transaction.
-- The client does not fall back to V1 or SQLite. If V2 is unavailable, it reports that the server must be upgraded.
+- The import client does not fall back to Import V1 or SQLite. The workspace-read client may call workspace-read V1 exactly once only when the workspace-read V2 signature is confirmed missing; timeout/network failure never selects it.
+- Roll back the app by reinstalling the previous signed release while retaining both workspace-read versions. Do not drop workspace-read V2 while a new client exists or workspace-read V1 while an old client exists.
 - The previous signed native updater release remains available until the new release passes clean-machine smoke testing.
 
 ---
@@ -1167,4 +1229,5 @@ git commit -m "release: publish seasonal import export v2"
 - Use RED -> GREEN -> focused verification -> commit for every task.
 - Do not combine production data repair with code deployment before preview-only parity succeeds.
 - Do not raise the global `authenticated` statement timeout to hide row-by-row processing.
+- Execute Import Task 6 and Route Task 7 as one client cutover after Route Task 5A and Task 6 are green; do not release a direct post-import workspace load in between.
 - Do not store SSH credentials, Supabase service keys, or updater signing keys in plan artifacts or shell scripts.
