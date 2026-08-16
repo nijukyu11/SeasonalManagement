@@ -156,6 +156,28 @@ The client mutation adapter now preserves canonical `appliedEvents`, `serverHigh
 
 Live function-definition verification was not completed in this workspace: the documented self-hosted Supabase SSH endpoint rejected the available key, and the external `opsdata-supabase` migration repository was not present locally or in the authenticated GitHub repository list. No production mutation was run. The transaction and latest-write-wins description below therefore remains documentation-derived until an operator with backend access rechecks `pg_get_functiondef(public.apply_season_server_mutation_v1(jsonb))` against `20260622_online_first_server_mutation_v1.sql`.
 
+### Client implementation verification, 2026-08-16
+
+The application now has two explicit realtime paths:
+
+- complete ordered modification events patch the matching workspace entity and mounted Gantt snapshot directly;
+- reconnects, sequence gaps, incomplete/unsafe payloads, and membership changes publish one coalesced background revalidation request while the current snapshot stays visible.
+
+Check-in and Gate register interaction locks per modification target. Events for another flight remain live; events for the active flight are queued and settled with the mutation acknowledgement by greatest `serverSeq`. The store high-water also rejects late direct patches and stale server-window responses.
+
+Check-in no longer uses native HTML5 drag-and-drop for allocation bars. Check-in and Gate now share a pointer-capture controller that allows wheel/touchpad scrolling during drag and continuous edge auto-scroll, with drop-target recomputation after scrolling.
+
+Automated evidence from `app` on 2026-08-16:
+
+- core realtime/store/arbiter/drag-scroll tests: 16 passed;
+- provider/refresh/route-boundary source tests: 26 passed;
+- Check-in/Gate realtime and drag-scroll source tests: 12 passed;
+- TypeScript: passed;
+- rule regression suite: passed;
+- Next.js 16.2.4 production build: passed, including all 10 application routes.
+
+Not verified in this workspace: authenticated two-session convergence against the live self-hosted backend, websocket reconnect behavior in the deployed environment, physical mouse/touchpad behavior in a packaged Tauri build, and the live database function definition. These require an isolated test season/records, cleanup plan, backend access, and the appropriate desktop devices. They must not be treated as passed based only on the automated client evidence above.
+
 ## Audit Requirements
 
 Every non-empty mutation should be traceable through existing or new audit fields:

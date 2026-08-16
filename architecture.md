@@ -42,6 +42,16 @@ Online-first server-authoritative writes are staged through `opsdata-supabase/su
 
 Online-first reads use `loadSeasonWorkspaceWindow()` in `remoteStore`, which delegates to the shared coordinator. Existing snapshots remain visible while stale data revalidates. The V2 transport composes the logical window from bounded sequential keyset pages pinned to one `dataVersion` and `serverHighWater`; partial or mixed-version assemblies are never committed. Workspace-read V1 is called only when the V2 RPC signature is confirmed missing during additive rollout. Timeout and network failures do not fan out to V1, direct-table reads, or SQLite.
 
+### Realtime Gantt Convergence
+
+Check-in and Gate consume full `season_change_events` through `SeasonSyncProvider`. A realtime event can use the fast path only when it has a finite `serverSeq`, identifies one existing modification target, and carries the complete canonical `FlightModification`. The workspace store then patches the modification and only the snapshots already containing that leg. This direct patch does not mark the window stale, advance its generation, replace route state, or trigger a screen reload.
+
+The cursor is maintained per season. Duplicate or older sequences are ignored. A gap, reconnect, missing sequence, incomplete payload, unknown target, or membership-changing event marks the relevant workspace stale and publishes a revalidation event. Mounted routes keep their current snapshot rendered while the shared server-window coordinator coalesces the background fetch. Normal history events advance the cursor without forcing a Gantt revalidation.
+
+Concurrent manipulation is serialized per `seasonId + targetType + targetId`. Realtime for the active target is queued; realtime for other targets applies immediately. Local mutation acknowledgements and queued remote candidates settle through the same arbiter, and the candidate with the greatest server-issued sequence wins. The store maintains a per-target high-water so a late mutation promise or stale server-window response cannot overwrite a newer direct event. This is server latest-write-wins; client clocks and websocket arrival order are not authoritative.
+
+Check-in and Gate share a Pointer Events drag-scroll controller. A non-passive wheel listener acts only while a pointer drag is active inside the Gantt. Edge velocity is recalculated through `requestAnimationFrame`, scroll positions are clamped, and drop hit-testing is recomputed after scroll. Allocated bars lock horizontal movement while resource reassignment remains vertical. Pointer up, pointer cancel, Escape, and hook unmount stop the controller and cancel its pending animation frame.
+
 ### Sync vs Fetch data
 
 - `Save` flushes route-owned drafts or debounced mutations directly to the server mutation RPC. There is no SQLite pending upload in normal operation.
