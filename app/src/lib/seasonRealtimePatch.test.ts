@@ -86,3 +86,17 @@ test('does not use an event cursor from another season', () => {
     { kind: 'revalidate-window', reason: 'unknown-target', serverSeq: 101 },
   );
 });
+
+test('advances through non-visual history events without forcing a Gantt reload', () => {
+  assert.deepEqual(
+    classifySeasonRealtimeEvent(
+      makeEvent({
+        targetType: 'modHistory',
+        targetId: 'history-1',
+        opPayload: { type: 'modHistory', entry: { id: 'history-1', timestamp: 1, description: 'Gate', changes: [] } },
+      }),
+      createSeasonRealtimeCursor('season-1', 100),
+    ),
+    { kind: 'ignore-nonvisual', serverSeq: 101 },
+  );
+});

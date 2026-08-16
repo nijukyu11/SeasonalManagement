@@ -1,4 +1,5 @@
 import type { FlightModification } from './types.ts';
+import type { SeasonChangeEvent } from './seasonChangeEvents.ts';
 
 export interface GanttTargetKey {
   seasonId: string;
@@ -28,6 +29,31 @@ function latestPatch(
   if (!right) return left;
   if (right.serverSeq > left.serverSeq) return right;
   return left;
+}
+
+export function findLatestSequencedModificationPatch(
+  events: SeasonChangeEvent[] | null | undefined,
+  legId: string,
+  source: SequencedModificationPatch['source'],
+): SequencedModificationPatch | null {
+  let latest: SequencedModificationPatch | null = null;
+  for (const event of events ?? []) {
+    if (
+      event.targetType !== 'modification'
+      || event.targetId !== legId
+      || !Number.isFinite(event.serverSeq)
+      || event.opPayload.type !== 'modification'
+      || event.opPayload.mod?.legId !== legId
+    ) {
+      continue;
+    }
+    latest = latestPatch(latest, {
+      serverSeq: event.serverSeq as number,
+      modification: event.opPayload.mod,
+      source,
+    });
+  }
+  return latest;
 }
 
 export function createGanttInteractionArbiter() {

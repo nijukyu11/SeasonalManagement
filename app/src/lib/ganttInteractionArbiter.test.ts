@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   createGanttInteractionArbiter,
+  findLatestSequencedModificationPatch,
   type GanttTargetKey,
   type SequencedModificationPatch,
 } from './ganttInteractionArbiter.ts';
@@ -60,4 +61,39 @@ test('disposeSeason clears only matching season locks and queued patches', () =>
   assert.equal(arbiter.cancel(targetA), null);
   assert.equal(arbiter.isActive(otherSeason), true);
   assert.deepEqual(arbiter.cancel(otherSeason), patch('LEG-A', 103));
+});
+
+test('finds the newest canonical modification acknowledgement for one target', () => {
+  const base = {
+    seasonId: 'season-1',
+    clientId: 'client-a',
+    actorUserId: null,
+    changedFields: ['gate'],
+    createdAt: '2026-08-16T08:00:00.000Z',
+  };
+  const result = findLatestSequencedModificationPatch([
+    {
+      ...base,
+      eventId: 'event-101',
+      opId: 'op-101',
+      serverSeq: 101,
+      targetType: 'modification',
+      targetId: 'LEG-A',
+      opPayload: { type: 'modification', mod: { legId: 'LEG-A', action: 'modified', gate: 4 } },
+    },
+    {
+      ...base,
+      eventId: 'event-103',
+      opId: 'op-103',
+      serverSeq: 103,
+      targetType: 'modification',
+      targetId: 'LEG-A',
+      opPayload: { type: 'modification', mod: { legId: 'LEG-A', action: 'modified', gate: 8 } },
+    },
+  ], 'LEG-A', 'local-ack');
+  assert.deepEqual(result, {
+    serverSeq: 103,
+    source: 'local-ack',
+    modification: { legId: 'LEG-A', action: 'modified', gate: 8 },
+  });
 });
