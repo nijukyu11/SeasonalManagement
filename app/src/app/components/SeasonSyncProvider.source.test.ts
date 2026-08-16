@@ -52,11 +52,12 @@ test('workspace changes do not schedule native summary polling', () => {
   assert.doesNotMatch(callbackSource, /\bworkspaceChangeDebounceTimerRef\b/);
 });
 
-test('remote live server events publish workspace refresh events without native catch-up source', () => {
-  assert.match(
-    source,
-    /subscribeToSeasonEvents\(seasonId, \(event\) => \{[\s\S]*?publishSeasonWorkspaceChanged\(\{[\s\S]*?source:\s*'server-live'[\s\S]*?localRevision:\s*event\.serverSeq[\s\S]*?affectedIds:\s*\[event\.targetId\][\s\S]*?changedTargets:\s*\[`\$\{event\.targetType\}:\$\{event\.targetId\}`\][\s\S]*?\}\);[\s\S]*?\}\)/
-  );
+test('remote live server events keep the full payload and choose direct patch or reconciliation', () => {
+  assert.match(source, /classifySeasonRealtimeEvent\(event,/);
+  assert.match(source, /applyServerModificationPatch\(/);
+  assert.match(source, /refreshMode:\s*'direct'/);
+  assert.match(source, /refreshMode:\s*'revalidate'/);
+  assert.doesNotMatch(source, /if \(event\.clientId === clientIdRef\.current\) return;/);
   assert.doesNotMatch(source, /source:\s*'native-catchup'/);
 });
 
