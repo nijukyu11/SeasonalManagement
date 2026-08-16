@@ -20,7 +20,7 @@ function compileFixtureModules() {
   fs.mkdirSync(tempDir, { recursive: true });
   fs.writeFileSync(path.join(tempDir, 'package.json'), '{"type":"commonjs"}\n');
 
-  for (const name of ['types', 'importSeasonRules', 'iataSeason', 'flightPairIntegrity', 'seasonalSourceRowValidation', 'parser', 'seasonalFileActionGuard', 'seasonalPairing', 'effectiveSeasonalLegs', 'seasonalExportSelection', 'exporter', 'canonicalSeasonalRows', 'sourceRowPatterns', 'atomicSchedule', 'firestoreWritePlanner', 'importProgress', 'settingsRules', 'settingsPageActions', 'modHistorySizing', 'auditLog', 'auditReadModel', 'operationalSettingsReadModel', 'detailedScheduleState', 'dailySchedule', 'dailyScheduleImport', 'dailyScheduleExport', 'checkinAllocation', 'checkInCounterSettings', 'gateAllocation', 'checkinPdfExport', 'gatePdfExport', 'seasonDataCache', 'seasonWorkspaceStore', 'seasonalLinkActions', 'nativeRuntime', 'serverAuthoritativeMode', 'nativeSeasonCatchup', 'scheduleTime', 'nativeLocalSeasonStore', 'localSeasonStore', 'localSeasonSqlStore', 'seasonWorkspaceBootstrap', 'seasonChangeEvents', 'operatorSessionCacheRegistry', 'appSessionCleanup', 'exportSave', 'remoteStore', 'supabase', 'supabaseErrorPolicy', 'seasonWorkspaceWindowRpcV2Contract', 'seasonWorkspaceWindowV2Assembler', 'seasonalImportRpcContract', 'supabaseRelationalMappers', 'supabaseStore', 'seasonSync', 'seasonAutoSync', 'seasonalDisplayAggregator', 'routeCountry', 'dashboardAnalysis', 'dashboardAiShared', 'dashboardAiAnalysis', 'dashboardReportExport', 'persistenceSchema']) {
+  for (const name of ['types', 'importSeasonRules', 'iataSeason', 'flightPairIntegrity', 'seasonalSourceRowValidation', 'parser', 'seasonalFileActionGuard', 'seasonalPairing', 'effectiveSeasonalLegs', 'seasonalExportSelection', 'exporter', 'canonicalSeasonalRows', 'sourceRowPatterns', 'atomicSchedule', 'firestoreWritePlanner', 'importProgress', 'settingsRules', 'settingsPageActions', 'modHistorySizing', 'auditLog', 'auditReadModel', 'operationalSettingsReadModel', 'detailedScheduleState', 'dailySchedule', 'dailyScheduleImport', 'dailyScheduleExport', 'ganttDragScroll', 'checkinAllocation', 'checkInCounterSettings', 'gateAllocation', 'checkinPdfExport', 'gatePdfExport', 'seasonDataCache', 'seasonWorkspaceStore', 'seasonalLinkActions', 'nativeRuntime', 'serverAuthoritativeMode', 'nativeSeasonCatchup', 'scheduleTime', 'nativeLocalSeasonStore', 'localSeasonStore', 'localSeasonSqlStore', 'seasonWorkspaceBootstrap', 'seasonChangeEvents', 'operatorSessionCacheRegistry', 'appSessionCleanup', 'exportSave', 'remoteStore', 'supabase', 'supabaseErrorPolicy', 'seasonWorkspaceWindowRpcV2Contract', 'seasonWorkspaceWindowV2Assembler', 'seasonalImportRpcContract', 'supabaseRelationalMappers', 'supabaseStore', 'seasonSync', 'seasonAutoSync', 'seasonalDisplayAggregator', 'routeCountry', 'dashboardAnalysis', 'dashboardAiShared', 'dashboardAiAnalysis', 'dashboardReportExport', 'persistenceSchema']) {
     const sourcePath = name === 'dashboardAiShared'
       ? path.join(root, 'supabase', 'functions', '_shared', 'dashboardAiShared.ts')
       : path.join(root, 'src', 'lib', `${name}.ts`);
@@ -8203,12 +8203,12 @@ async function run() {
   const uiUndoMemorySource = fs.existsSync(path.join(root, 'src', 'lib', 'uiUndoMemory.ts'))
     ? fs.readFileSync(path.join(root, 'src', 'lib', 'uiUndoMemory.ts'), 'utf8')
     : '';
-  const flightBarDragImageSource = fs.readFileSync(path.join(root, 'src', 'lib', 'flightBarDragImage.ts'), 'utf8');
   assert(
     checkInPageSource.includes('const refreshCheckInWindow = useCallback(async') &&
-      checkInPageSource.includes('onRefresh: async () => {') &&
-      checkInPageSource.includes('await refreshCheckInWindow();'),
-    'Check-in must refresh its server/cache allocation window when workspace changes are delivered on route activation'
+      checkInPageSource.includes('onRefresh: async (event) => {') &&
+      checkInPageSource.includes("await refreshCheckInWindow({ revalidate: event.refreshMode === 'revalidate' });") &&
+      checkInPageSource.includes("event.refreshMode !== 'direct'"),
+    'Check-in must consume direct workspace patches without fetching and revalidate only fallback workspace events'
   );
   const extractCheckInObjectCalls = (callName) => {
     const blocks = [];
@@ -8252,15 +8252,16 @@ async function run() {
     }
   };
   assert(
-    checkInPageSource.includes('handlePoolDrop') &&
+    checkInPageSource.includes('commitCheckInPoolDrop') &&
       checkInPageSource.includes('unallocateCheckInRecord(record)') &&
       extractCheckInObjectCalls('removeCheckInCounter').some((block) =>
         block.includes('clickedCounter: drag.counter') &&
           (block.includes('resources: allocationResult.view.resourceRows') ||
             block.includes('resources: view.resourceRows'))
       ) &&
-      checkInPageSource.includes('onDrop={handlePoolDrop}') &&
-      checkInPageSource.includes('setPoolDropActiveIfChanged(true)'),
+      checkInPageSource.includes('data-checkin-pool-drop="true"') &&
+      checkInPageSource.includes("target.closest('[data-checkin-pool-drop=\"true\"]')") &&
+      checkInPageSource.includes("setPoolDropActiveIfChanged(target.kind === 'pool' && drag.kind === 'allocated')"),
     'Check-in Allocation must allow dragging allocated bars back to the Unallocated Pool to clear counters locally'
   );
   assert(
@@ -8287,15 +8288,16 @@ async function run() {
   assert(
     checkInPageSource.includes('const previewStartRow = Math.max(') &&
       checkInPageSource.includes('hoveredRowIndex - dragRowOffset') &&
-      checkInPageSource.includes('scheduleDropPreviewUpdate(dropTarget.previewStartRow)'),
-    'Check-in Allocation resource drag-over preview must subtract the stored grouped slice offset before setting activeDropRowIndex'
+      checkInPageSource.includes("scheduleDropPreviewUpdate(target.kind === 'row' ? target.previewStartRow : null)"),
+    'Check-in Allocation pointer preview must subtract the stored grouped slice offset before setting activeDropRowIndex'
   );
   assert(
     checkInPageSource.includes('function resolveDropTargetRow') &&
-      checkInPageSource.includes('const dropTarget = resolveDropTargetRow(drag, rowIndex, view)') &&
-      checkInPageSource.includes('const dropTarget = resolveDropTargetRow(dragStateRef.current, rowIndex, view)') &&
-      checkInPageSource.includes('scheduleDropPreviewUpdate(dropTarget.previewStartRow)') &&
-      checkInPageSource.includes('handleResourceDrop(event, dropTarget.rowIndex, dropTarget.counter)'),
+      checkInPageSource.includes('const dropTarget = resolveDropTargetRow(drag, hoveredRowIndex, displayAllocationView)') &&
+      checkInPageSource.includes("return { kind: 'row' as const, ...dropTarget }") &&
+      checkInPageSource.includes("scheduleDropPreviewUpdate(target.kind === 'row' ? target.previewStartRow : null)") &&
+      checkInPageSource.includes('if (drag.kind === \'unallocated\') void handleAllocate(recordId, target.counter)') &&
+      checkInPageSource.includes('else void handleMove(drag, target.rowIndex)'),
     'Check-in Allocation preview and drop commit must share the same resolved drop target row/counter'
   );
   assert(
@@ -8404,9 +8406,11 @@ async function run() {
       checkInPageSource.includes('anchorTime') &&
       checkInPageSource.includes('updateSnapLine(nextResizeState, clientX)') &&
       checkInPageSource.includes('if (resizeDragGuardRef.current || resizeState)') &&
-      checkInPageSource.includes('draggable={false}') &&
+      checkInPageSource.includes("onResizeStart('start', bar, event.clientX)") &&
+      checkInPageSource.includes('event.stopPropagation()') &&
+      checkInPageSource.includes('event.preventDefault()') &&
       checkInPageSource.includes('resizeDragGuardRef.current = false'),
-    'Check-in Allocation resize handles must suppress parent drag and show the 1-minute snap crosshair immediately while resizing'
+    'Check-in Allocation resize handles must suppress parent pointer drag and show the 1-minute snap crosshair immediately while resizing'
   );
   assert(
     checkInPageSource.includes('snapLineLabel?: string | null') &&
@@ -8431,18 +8435,12 @@ async function run() {
       checkInPageSource.includes('setActiveDropRowIndexIfChanged'),
     'Check-in Allocation high-frequency drag and resize feedback must be requestAnimationFrame-throttled with no-op state guards'
   );
-  const verticalEdgeScrollStart = checkInPageSource.indexOf('const applyVerticalEdgeScroll = useCallback');
-  const verticalEdgeScrollEnd = checkInPageSource.indexOf('const updateSnapLine = useCallback', verticalEdgeScrollStart + 1);
-  const verticalEdgeScrollBody = verticalEdgeScrollStart >= 0 && verticalEdgeScrollEnd > verticalEdgeScrollStart
-    ? checkInPageSource.slice(verticalEdgeScrollStart, verticalEdgeScrollEnd)
-    : '';
   assert(
-    verticalEdgeScrollBody.includes('container.scrollTop += velocity.y') &&
-      !verticalEdgeScrollBody.includes('container.scrollLeft') &&
-      checkInPageSource.includes("if (drag?.kind === 'allocated')") &&
-      checkInPageSource.includes("if (dragStateRef.current.kind === 'allocated')") &&
-      checkInPageSource.includes('applyVerticalEdgeScroll(event.clientX, event.clientY);'),
-    'Check-in allocated bar drag-over must use vertical-only edge scrolling so horizontal timeline movement stays locked during reassignment'
+    checkInPageSource.includes('useGanttDragScroll({') &&
+      checkInPageSource.includes("next.kind === 'allocated' ? 'vertical' : 'both'") &&
+      checkInPageSource.includes("currentClientX: current.kind === 'allocated' ? current.currentClientX : event.clientX") &&
+      checkInPageSource.includes('updateCheckInDragScrollPointer({ clientX: event.clientX, clientY: event.clientY })'),
+    'Check-in allocated pointer drag must use vertical-only shared edge scrolling so horizontal timeline movement stays locked during reassignment'
   );
   assert(
     checkInPageSource.includes("logCheckInPerformance('buildCheckInAllocationView'") &&
@@ -8700,16 +8698,15 @@ async function run() {
     'Check-in Allocation flight bars must render as fully opaque solid fills with no feathered fade, no dark border override, and a 1px solid #FFFFFF frame'
   );
   assert(
-    flightBarDragImageSource.includes('export function setSolidFlightBarDragImage') &&
-      flightBarDragImageSource.includes('event.dataTransfer.setDragImage') &&
-      flightBarDragImageSource.includes("ctx.fillStyle = backgroundColor") &&
-      flightBarDragImageSource.includes("ctx.strokeStyle = '#FFFFFF'") &&
-      flightBarDragImageSource.includes('ctx.lineWidth = 1') &&
-      flightBarDragImageSource.includes('const radius = 4') &&
-      flightBarDragImageSource.includes('canvas.style.opacity = \'1\'') &&
-      checkInPageSource.includes("import { setSolidFlightBarDragImage } from '@/lib/flightBarDragImage'") &&
-      checkInPageSource.match(/setSolidFlightBarDragImage\(/g)?.length >= 2,
-    'Check-in Allocation drag must use a custom fully opaque solid flight-bar drag image instead of the browser default feathered ghost'
+    checkInPageSource.includes('setPointerCapture(event.pointerId)') &&
+      checkInPageSource.includes('pointer-events-none fixed z-[200]') &&
+      checkInPageSource.includes('background: pointerDragState.backgroundColor') &&
+      checkInPageSource.includes('color: pointerDragState.textColor') &&
+      checkInPageSource.includes('onPointerMove={handleCheckInPointerMove}') &&
+      !checkInPageSource.includes("import { setSolidFlightBarDragImage } from '@/lib/flightBarDragImage'") &&
+      !checkInPageSource.includes('dataTransfer') &&
+      !checkInPageSource.includes('draggable='),
+    'Check-in Allocation drag must use an opaque pointer overlay instead of the browser drag ghost so wheel scrolling remains available'
   );
   assert(
     checkInPageSource.includes('getResourceRowStripeClass') &&
@@ -10243,8 +10240,8 @@ async function run() {
       !seasonSyncProviderSource.includes("if (mode !== 'manual') return") &&
       seasonSyncProviderSource.includes("const syncGuardSource = mode === 'auto' ? 'auto-sync' : 'manual-sync'") &&
       gatePageSource.includes('refreshGateWindow') &&
-      gatePageSource.includes('onRefresh: async () =>') &&
-      gatePageSource.includes('await refreshGateWindow()'),
+      gatePageSource.includes('onRefresh: async (event) =>') &&
+      gatePageSource.includes("await refreshGateWindow({ revalidate: event.refreshMode === 'revalidate' })"),
     'SeasonAutoSyncScheduler must guarded-auto-save Daily/Check-in/Gate changes while provider/page guards keep auto sync safe'
   );
   assert(
@@ -10979,9 +10976,9 @@ async function run() {
       checkInPageSource.includes('const startResizeInteraction = useCallback((edge: ResizeState') &&
       checkInPageSource.includes('if (syncWriteInProgress) return;\n    resizeDragGuardRef.current = true;') &&
       checkInPageSource.includes('if (syncWriteInProgress || !view || !settings) return;') &&
-      checkInPageSource.includes('if (!drag || syncWriteInProgress) return;') &&
-      checkInPageSource.includes("if (!drag || drag.kind !== 'allocated' || syncWriteInProgress) return;") &&
-      checkInPageSource.includes('draggable={!syncWriteInProgress}') &&
+      checkInPageSource.includes('if (!isRouteActive || syncWriteInProgress || event.button !== 0) return;') &&
+      checkInPageSource.includes('if (syncWriteInProgress) return;\n    const record = getEffectiveRecord(drag.recordId);') &&
+      !checkInPageSource.includes('draggable=') &&
       checkInPageSource.includes('syncing={syncWriteInProgress}') &&
       checkInPageSource.includes('disabled={syncWriteInProgress || summary.counterBlocks === 0}') &&
       checkInPageSource.includes("disabled={syncWriteInProgress || (action === 'reshape' && contextMenu.bar.mode !== 'broken')}"),
@@ -11011,17 +11008,18 @@ async function run() {
       checkInPageSource.includes('window.clearTimeout(checkInCommitFlushTimerRef.current);') &&
       checkInPageSource.includes('await flushAccumulatedCheckInCommit(entry);') &&
       checkInPageSource.includes('await commitQueueRef.current;') &&
-      seasonWorkspaceRefreshHookSource.includes('shouldDeferRefresh?: () => boolean;') &&
+      seasonWorkspaceRefreshHookSource.includes('shouldDeferRefresh?: (event: SeasonWorkspaceChangeEvent) => boolean;') &&
       seasonWorkspaceRefreshHookSource.includes('const shouldDeferRefreshRef = useRef(shouldDeferRefresh);') &&
-      seasonWorkspaceRefreshHookSource.includes('if (shouldDeferRefreshRef.current?.()) {') &&
-      seasonWorkspaceRefreshHookSource.includes('if (pendingEvent && !shouldDeferRefreshRef.current?.()) scheduleRefreshRef.current(pendingEvent);') &&
-      checkInPageSource.includes('const shouldDeferCheckInRefresh = useCallback(() => (') &&
-      checkInPageSource.includes('checkInLocalCommitPending || Boolean(draggedGroupId) || resizeState !== null') &&
+      seasonWorkspaceRefreshHookSource.includes('if (shouldDeferRefreshRef.current?.(event)) {') &&
+      seasonWorkspaceRefreshHookSource.includes('if (pendingEvent && !shouldDeferRefreshRef.current?.(pendingEvent)) scheduleRefreshRef.current(pendingEvent);') &&
+      checkInPageSource.includes('const shouldDeferCheckInRefresh = useCallback((event: SeasonWorkspaceChangeEvent) => (') &&
+      checkInPageSource.includes("event.refreshMode !== 'direct'") &&
+      checkInPageSource.includes('&& (checkInLocalCommitPending || Boolean(draggedGroupId) || resizeState !== null)') &&
       checkInPageSource.includes('shouldDeferRefresh: shouldDeferCheckInRefresh') &&
-      checkInPageSource.includes('await flushPendingCheckInLocalCommit();\n      await refreshCheckInWindow();') &&
+      checkInPageSource.includes("await flushPendingCheckInLocalCommit();\n      await refreshCheckInWindow({ revalidate: event.refreshMode === 'revalidate' });") &&
       checkInPageSource.includes('blocked: checkInLocalCommitPending || Boolean(draggedGroupId) || resizeState !== null') &&
       checkInPageSource.includes('beforeSync: flushPendingCheckInLocalCommit'),
-    'Check-in sync/refresh guards must defer native refresh during drag/resize/pending local commits and flush debounced local allocation commits before rebuilding the allocation view'
+    'Check-in sync/refresh guards must defer fallback refresh during drag/resize/pending local commits, allow direct patches, and flush debounced allocation commits before rebuilding the view'
   );
   assert(
     seasonSyncProviderSource.includes("source: 'server-live'") &&
@@ -11042,7 +11040,7 @@ async function run() {
   assert(
     gatePageSource.includes('const syncWriteInProgress = syncInProgress || fetchingServerData;') &&
       gatePageSource.includes('if (!isRouteActive || syncWriteInProgress || event.button !== 0) return;') &&
-      gatePageSource.includes('if (!record || syncWriteInProgress) return;') &&
+      gatePageSource.includes('if (!record || syncWriteInProgress) {\n      releaseGateInteraction(drag.recordId);\n      return;\n    }') &&
       gatePageSource.includes("${syncWriteInProgress ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}") &&
       gatePageSource.includes('disabled={syncWriteInProgress}') &&
       gatePageSource.includes('disabled={syncWriteInProgress || summary.gateBlocks === 0}'),
