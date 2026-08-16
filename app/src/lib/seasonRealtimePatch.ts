@@ -10,6 +10,7 @@ export type SeasonRealtimeRevalidationReason =
 
 export type SeasonRealtimeDecision =
   | { kind: 'ignore-duplicate-or-stale'; serverSeq: number }
+  | { kind: 'ignore-nonvisual'; serverSeq: number }
   | { kind: 'direct-modification'; serverSeq: number; legId: string; modification: FlightModification }
   | { kind: 'revalidate-window'; reason: SeasonRealtimeRevalidationReason; serverSeq: number | null };
 
@@ -86,6 +87,9 @@ export function classifySeasonRealtimeEvent(
     return { kind: 'revalidate-window', reason: 'gap', serverSeq: sequence };
   }
   if (event.targetType !== 'modification') {
+    if (event.targetType === 'modHistory') {
+      return { kind: 'ignore-nonvisual', serverSeq: sequence };
+    }
     return { kind: 'revalidate-window', reason: 'unknown-target', serverSeq: sequence };
   }
   if (event.opPayload.type === 'modificationDelete') {

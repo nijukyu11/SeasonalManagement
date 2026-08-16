@@ -332,6 +332,7 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
         const decision = classifySeasonRealtimeEvent(event, cursor);
         if (decision.kind === 'ignore-duplicate-or-stale') return;
         rememberSeasonRealtimeEvent(cursor, event);
+        if (decision.kind === 'ignore-nonvisual') return;
         if (decision.kind === 'revalidate-window') {
           publishRevalidation(decision.reason, event);
           return;

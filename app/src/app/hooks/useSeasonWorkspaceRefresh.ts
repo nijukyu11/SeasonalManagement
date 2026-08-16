@@ -12,7 +12,7 @@ interface UseSeasonWorkspaceRefreshOptions {
   policy: 'background' | 'on-activation';
   source: string;
   onRefresh?: (event: SeasonWorkspaceChangeEvent) => Promise<void> | void;
-  shouldDeferRefresh?: () => boolean;
+  shouldDeferRefresh?: (event: SeasonWorkspaceChangeEvent) => boolean;
   shouldHandleWorkspaceChange?: (event: SeasonWorkspaceChangeEvent) => boolean;
 }
 
@@ -119,7 +119,7 @@ export function useSeasonWorkspaceRefresh({
       if (event.eventSeq !== failedRefreshEventSeqRef.current) failedRefreshEventSeqRef.current = null;
       staleEventRef.current = event;
       if (refreshTimerRef.current != null) window.clearTimeout(refreshTimerRef.current);
-      if (shouldDeferRefreshRef.current?.()) {
+      if (shouldDeferRefreshRef.current?.(event)) {
         return;
       }
       refreshTimerRef.current = window.setTimeout(() => {
@@ -183,6 +183,6 @@ export function useSeasonWorkspaceRefresh({
   useEffect(() => {
     if (!isRouteActive || policy !== 'on-activation') return;
     const pendingEvent = staleEventRef.current;
-    if (pendingEvent && !shouldDeferRefreshRef.current?.()) scheduleRefreshRef.current(pendingEvent);
+    if (pendingEvent && !shouldDeferRefreshRef.current?.(pendingEvent)) scheduleRefreshRef.current(pendingEvent);
   }, [isRouteActive, policy, shouldDeferRefresh]);
 }

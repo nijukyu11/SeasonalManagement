@@ -1,4 +1,5 @@
 import type { LocalSyncMeta } from './localSeasonStore';
+import type { SeasonChangeEvent } from './seasonChangeEvents';
 import type { FlightModification, FlightRecord, ModHistoryEntry, ParsedRow } from './types';
 import { isTauriRuntime } from './nativeRuntime';
 import { applySeasonServerMutationV1 } from './remoteStore';
@@ -13,6 +14,9 @@ import {
 export interface NativeLocalModificationBatchDeltaResult {
   syncMeta: LocalSyncMeta;
   affectedIds: string[];
+  appliedEvents?: SeasonChangeEvent[];
+  serverHighWater?: number;
+  nextServerSeq?: number;
 }
 
 export interface NativeScheduleMutationResult {
@@ -80,7 +84,12 @@ async function applyServerAuthoritativeOperations(
   seasonId: string,
   source: string,
   operations: unknown[]
-): Promise<LocalSyncMeta> {
+): Promise<{
+  syncMeta: LocalSyncMeta;
+  appliedEvents: SeasonChangeEvent[];
+  serverHighWater: number;
+  nextServerSeq: number;
+}> {
   const clientId = getOrCreateSeasonClientId();
   const result = await applySeasonServerMutationV1({
     seasonId,
@@ -89,7 +98,12 @@ async function applyServerAuthoritativeOperations(
     source,
     operations,
   });
-  return toServerAuthoritativeSyncMeta(seasonId, clientId, result.nextServerSeq, result.appliedEvents);
+  return {
+    syncMeta: toServerAuthoritativeSyncMeta(seasonId, clientId, result.nextServerSeq, result.appliedEvents),
+    appliedEvents: result.appliedEvents,
+    serverHighWater: result.serverHighWater,
+    nextServerSeq: result.nextServerSeq,
+  };
 }
 
 export async function runNativeLocalModificationBatchDeltaResult(
@@ -106,9 +120,9 @@ export async function runNativeLocalModificationBatchDeltaResult(
       })),
       ...historyOperation(history),
     ];
-    const syncMeta = await applyServerAuthoritativeOperations(seasonId, source, operations);
+    const result = await applyServerAuthoritativeOperations(seasonId, source, operations);
     return {
-      syncMeta,
+      ...result,
       affectedIds: mods.map((mod) => mod.legId),
     };
   }
@@ -161,7 +175,7 @@ export async function runNativeScheduleMutation(
       })),
       ...historyOperation(history),
     ];
-    return applyServerAuthoritativeOperations(seasonId, source, operations);
+    return (await applyServerAuthoritativeOperations(seasonId, source, operations)).syncMeta;
   }
 
   if (!isNativeLocalStoreRuntime()) return null;

@@ -64,6 +64,12 @@ import {
   type LocalSyncMeta,
 } from '@/lib/localSeasonStore';
 import { runNativeLocalModificationBatchDeltaResult } from '@/lib/nativeSeasonRepository';
+import { getOperatorSessionEpoch } from '@/lib/operatorSessionCacheRegistry';
+import {
+  findLatestSequencedModificationPatch,
+  ganttInteractionArbiter,
+} from '@/lib/ganttInteractionArbiter';
+import type { SeasonChangeEvent } from '@/lib/seasonChangeEvents';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import { trimUiUndoStack } from '@/lib/uiUndoMemory';
@@ -601,6 +607,7 @@ type CheckInCommitPersistenceResult = {
   syncMeta?: LocalSyncMeta;
   affectedIds?: string[];
   source?: CheckInCommitSource;
+  appliedEvents?: SeasonChangeEvent[];
 };
 
 interface CheckInUndoEntry {
@@ -1006,7 +1013,8 @@ function CheckInAllocationContent() {
     localRevision: number | null,
     source: 'checkin' | 'checkin-worker' | 'checkin-native' | 'checkin-sync',
     affectedIds: string[] = [],
-    syncMeta: LocalSyncMeta | null = null
+    syncMeta: LocalSyncMeta | null = null,
+    refreshMode: SeasonWorkspaceChangeEvent['refreshMode'] = 'snapshot'
   ) => {
     publishSeasonWorkspaceChanged({
       seasonId,
@@ -1014,6 +1022,7 @@ function CheckInAllocationContent() {
       source,
       affectedIds,
       syncMeta,
+      refreshMode,
     });
   }, []);
 
@@ -1139,6 +1148,7 @@ function CheckInAllocationContent() {
         syncMeta: nativeResult.syncMeta,
         affectedIds: nativeResult.affectedIds,
         source: 'checkin-native',
+        appliedEvents: nativeResult.appliedEvents,
       };
     });
   }, [enqueueLocalMutation]);
@@ -1749,6 +1759,25 @@ function CheckInAllocationContent() {
         });
       }
     }
+    const queuedWinners: FlightModification[] = [];
+    if (season) {
+      for (const legId of entry.legIds) {
+        const winner = ganttInteractionArbiter.cancel({ seasonId: season.id, targetType: 'modification', targetId: legId });
+        if (!winner) continue;
+        const applied = useSeasonWorkspaceStore.getState().applyServerModificationPatch({
+          seasonId: season.id,
+          legId,
+          modification: winner.modification,
+          serverSeq: winner.serverSeq,
+          operatorSessionEpoch: getOperatorSessionEpoch(),
+        });
+        if (applied === 'applied') queuedWinners.push(winner.modification);
+      }
+    }
+    if (queuedWinners.length > 0 && season) {
+      applyOptimisticCheckInModifications(queuedWinners);
+      publishWorkspaceChange(season.id, null, 'checkin', queuedWinners.map((mod) => mod.legId), null, 'direct');
+    }
     void showAlert({
       title: 'Check-in Update Failed',
       message: formatCheckInCommitFailure({
@@ -1759,7 +1788,7 @@ function CheckInAllocationContent() {
       }),
       tone: 'error',
     });
-  }, [applyOptimisticCheckInModifications, clearOptimisticAllocationView, fromDateTime, replaceCheckInModifications, season, showAlert, toDateTime]);
+  }, [applyOptimisticCheckInModifications, clearOptimisticAllocationView, fromDateTime, publishWorkspaceChange, replaceCheckInModifications, season, showAlert, toDateTime]);
 
   const flushAccumulatedCheckInCommit = useCallback(async (entry: PendingAccumulatedCheckInCommit) => {
     if (!season) return;
@@ -1773,19 +1802,58 @@ function CheckInAllocationContent() {
         );
       }
       scheduleSyncSummaryUpdate(result.syncMeta);
-      useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
-        seasonId: season.id,
-        affectedIds: result.affectedIds ?? entry.legIds,
-        modifications: entry.mods,
-        syncMeta: result.syncMeta,
-      });
-      publishWorkspaceChange(
-        season.id,
-        result.syncMeta.localRevision,
-        result.source ?? 'checkin-worker',
-        result.affectedIds ?? entry.legIds,
-        result.syncMeta
-      );
+      const appliedMods: FlightModification[] = [];
+      let needsRevalidation = false;
+      for (const legId of entry.legIds) {
+        const localAck = findLatestSequencedModificationPatch(result.appliedEvents, legId, 'local-ack');
+        const winner = ganttInteractionArbiter.settle(
+          { seasonId: season.id, targetType: 'modification', targetId: legId },
+          localAck,
+        );
+        if (!winner) {
+          needsRevalidation = true;
+          continue;
+        }
+        const patchResult = useSeasonWorkspaceStore.getState().applyServerModificationPatch({
+          seasonId: season.id,
+          legId,
+          modification: winner.modification,
+          serverSeq: winner.serverSeq,
+          operatorSessionEpoch: getOperatorSessionEpoch(),
+        });
+        if (patchResult === 'missing-target' || patchResult === 'invalid-epoch') {
+          needsRevalidation = true;
+          continue;
+        }
+        const canonicalMod = useSeasonWorkspaceStore.getState().workspaces[season.id]?.modificationsByLegId.get(legId);
+        if (canonicalMod) appliedMods.push(canonicalMod);
+      }
+      if (appliedMods.length > 0) {
+        applyOptimisticCheckInModifications(appliedMods);
+        publishWorkspaceChange(
+          season.id,
+          result.syncMeta.localRevision,
+          result.source ?? 'checkin-worker',
+          appliedMods.map((mod) => mod.legId),
+          result.syncMeta,
+          'direct'
+        );
+      }
+      if (needsRevalidation) {
+        useSeasonWorkspaceStore.getState().markSeasonWorkspaceStale(
+          season.id,
+          'mutation',
+          getOperatorSessionEpoch(),
+        );
+        publishWorkspaceChange(
+          season.id,
+          result.syncMeta.localRevision,
+          result.source ?? 'checkin-worker',
+          result.affectedIds ?? entry.legIds,
+          result.syncMeta,
+          'revalidate'
+        );
+      }
       if (entry.trackUndo) pushCheckInUndoEntry(entry.undoEntry);
       scheduleCheckInAuditEntry(entry, result);
     } catch (error) {
@@ -1793,7 +1861,7 @@ function CheckInAllocationContent() {
     } finally {
       updateCheckInLocalCommitPending();
     }
-  }, [persistCheckInModifications, publishWorkspaceChange, pushCheckInUndoEntry, rollbackAccumulatedCheckInCommit, scheduleCheckInAuditEntry, scheduleSyncSummaryUpdate, season, updateCheckInLocalCommitPending]);
+  }, [applyOptimisticCheckInModifications, persistCheckInModifications, publishWorkspaceChange, pushCheckInUndoEntry, rollbackAccumulatedCheckInCommit, scheduleCheckInAuditEntry, scheduleSyncSummaryUpdate, season, updateCheckInLocalCommitPending]);
 
   const scheduleAccumulatedCheckInCommit = useCallback(({
     legIds,
@@ -1809,6 +1877,9 @@ function CheckInAllocationContent() {
     trackUndo: boolean;
   }): void => {
     if (!season) return;
+    for (const legId of legIds) {
+      ganttInteractionArbiter.begin({ seasonId: season.id, targetType: 'modification', targetId: legId });
+    }
     const entry = mergePendingCheckInCommit(checkInCommitAccumulatorRef.current, {
       legIds: Array.from(new Set(legIds)),
       mods,
@@ -1864,8 +1935,9 @@ function CheckInAllocationContent() {
     blockingUi: false,
   });
 
-  const shouldDeferCheckInRefresh = useCallback(() => (
-    checkInLocalCommitPending || Boolean(draggedGroupId) || resizeState !== null
+  const shouldDeferCheckInRefresh = useCallback((event: SeasonWorkspaceChangeEvent) => (
+    event.refreshMode !== 'direct'
+    && (checkInLocalCommitPending || Boolean(draggedGroupId) || resizeState !== null)
   ), [checkInLocalCommitPending, draggedGroupId, resizeState]);
 
   const shouldHandleCheckInWorkspaceChange = useCallback((event: SeasonWorkspaceChangeEvent) => (

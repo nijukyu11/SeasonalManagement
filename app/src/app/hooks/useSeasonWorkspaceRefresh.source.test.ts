@@ -36,12 +36,12 @@ test('season workspace refresh drops pending events from a previous season befor
 });
 
 test('season workspace refresh defers refresh while a route interaction is active', () => {
-  assert.match(source, /shouldDeferRefresh\?:\s*\(\)\s*=>\s*boolean/);
+  assert.match(source, /shouldDeferRefresh\?:\s*\(event:\s*SeasonWorkspaceChangeEvent\)\s*=>\s*boolean/);
   assert.match(source, /const shouldDeferRefreshRef = useRef\(shouldDeferRefresh\)/);
-  assert.match(source, /if \(shouldDeferRefreshRef\.current\?\.\(\)\) \{/);
+  assert.match(source, /if \(shouldDeferRefreshRef\.current\?\.\(event\)\) \{/);
   assert.match(source, /if \(refreshTimerRef\.current != null\) window\.clearTimeout\(refreshTimerRef\.current\);/);
   assert.match(source, /return;/);
-  assert.match(source, /const pendingEvent = staleEventRef\.current;\s*if \(pendingEvent && !shouldDeferRefreshRef\.current\?\.\(\)\) scheduleRefreshRef\.current\(pendingEvent\);/);
+  assert.match(source, /const pendingEvent = staleEventRef\.current;\s*if \(pendingEvent && !shouldDeferRefreshRef\.current\?\.\(pendingEvent\)\) scheduleRefreshRef\.current\(pendingEvent\);/);
 });
 
 test('season workspace refresh lets active routes filter non-own-source events before scheduling refresh', () => {
