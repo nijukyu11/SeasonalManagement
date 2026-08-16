@@ -22,7 +22,14 @@ import {
   subscribeSeasonWorkspaceChanges,
 } from '@/lib/seasonDataCache';
 import { getRemoteStore } from '@/lib/remoteStore';
-import { getOrCreateSeasonClientId } from '@/lib/seasonChangeEvents';
+import { getOrCreateSeasonClientId, type SeasonChangeEvent } from '@/lib/seasonChangeEvents';
+import {
+  classifySeasonRealtimeEvent,
+  createSeasonRealtimeCursor,
+  rememberSeasonRealtimeEvent,
+  type SeasonRealtimeCursor,
+} from '@/lib/seasonRealtimePatch';
+import { ganttInteractionArbiter } from '@/lib/ganttInteractionArbiter';
 import { getOperatorSessionEpoch, isOperatorSessionEpochCurrent } from '@/lib/operatorSessionCacheRegistry';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import { useCachedRouteActivity } from './RouteCacheContext';
@@ -204,12 +211,26 @@ function browserCancelIdleCallback(handle: number): void {
   browserClearTimeout(handle as unknown as ReturnType<typeof setTimeout>);
 }
 
+function readSeasonServerHighWater(seasonId: string): number | null {
+  const workspace = useSeasonWorkspaceStore.getState().workspaces[seasonId];
+  if (!workspace) return null;
+  const candidates = [
+    workspace.syncMeta?.lastServerSeq,
+    workspace.syncMeta?.baseServerVersion,
+    ...Array.from(workspace.windowMetadata.values()).map((metadata) => metadata.serverHighWater),
+    ...workspace.recordServerHighWater.values(),
+    ...workspace.modificationServerHighWater.values(),
+  ].filter((value): value is number => Number.isFinite(value));
+  return candidates.length > 0 ? Math.max(...candidates) : null;
+}
+
 export default function SeasonSyncProvider({ children }: { children: ReactNode }) {
   const guardsRef = useRef(new Map<string, RegisteredSeasonSyncGuard>());
   const statesRef = useRef<Record<string, SeasonAutoSyncState>>({});
   const liveUnsubscribersRef = useRef(new Map<string, () => void>());
   const liveSubscribingRef = useRef(new Set<string>());
   const liveSubscriptionAttemptsRef = useRef(new Map<string, { cancelled: boolean; operatorSessionEpoch: number }>());
+  const liveCursorsRef = useRef(new Map<string, SeasonRealtimeCursor>());
   const providerMountedRef = useRef(true);
   const sessionPendingSeasonIdsRef = useRef(new Set<string>());
   const clientIdRef = useRef<string | null>(null);
@@ -275,24 +296,82 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
         liveUnsubscribersRef.current.set(seasonId, () => undefined);
         return;
       }
-      const unsubscribe = await remoteStore.subscribeToSeasonEvents(seasonId, (event) => {
-        if (subscriptionAttempt.cancelled || !providerMountedRef.current) return;
-        if (!isOperatorSessionEpochCurrent(subscriptionAttempt.operatorSessionEpoch)) return;
-        if (event.clientId === clientIdRef.current) return;
+      const cursor = liveCursorsRef.current.get(seasonId)
+        ?? createSeasonRealtimeCursor(seasonId, readSeasonServerHighWater(seasonId));
+      liveCursorsRef.current.set(seasonId, cursor);
+      let hasSubscribed = false;
+
+      const publishRevalidation = (reason: string, event?: SeasonChangeEvent) => {
         const invalidated = useSeasonWorkspaceStore.getState().markSeasonWorkspaceStale(
-          event.seasonId || seasonId,
+          seasonId,
           'realtime',
           subscriptionAttempt.operatorSessionEpoch,
         );
         if (!invalidated) return;
         publishSeasonWorkspaceChanged({
-          seasonId: event.seasonId || seasonId,
+          seasonId,
+          source: 'server-live',
+          localRevision: event?.serverSeq ?? cursor.lastServerSeq,
+          affectedIds: event ? [event.targetId] : [],
+          changedTargets: event ? [`${event.targetType}:${event.targetId}`] : [],
+          syncMeta: null,
+          refreshMode: 'revalidate',
+          serverEvent: event ?? null,
+          revalidationReason: reason,
+        });
+      };
+
+      const unsubscribe = await remoteStore.subscribeToSeasonEvents(seasonId, (event) => {
+        if (subscriptionAttempt.cancelled || !providerMountedRef.current) return;
+        if (!isOperatorSessionEpochCurrent(subscriptionAttempt.operatorSessionEpoch)) return;
+        const decision = classifySeasonRealtimeEvent(event, cursor);
+        if (decision.kind === 'ignore-duplicate-or-stale') return;
+        rememberSeasonRealtimeEvent(cursor, event);
+        if (decision.kind === 'revalidate-window') {
+          publishRevalidation(decision.reason, event);
+          return;
+        }
+        const targetKey = { seasonId, targetType: 'modification' as const, targetId: decision.legId };
+        const arbitration = ganttInteractionArbiter.enqueueOrApply(targetKey, {
+          serverSeq: decision.serverSeq,
+          modification: decision.modification,
+          source: 'remote',
+        });
+        if (arbitration.kind === 'queued') return;
+        const patchResult = useSeasonWorkspaceStore.getState().applyServerModificationPatch({
+          seasonId,
+          legId: decision.legId,
+          modification: arbitration.candidate.modification,
+          serverSeq: arbitration.candidate.serverSeq,
+          operatorSessionEpoch: subscriptionAttempt.operatorSessionEpoch,
+        });
+        if (patchResult === 'missing-target') {
+          publishRevalidation('missing-target', event);
+          return;
+        }
+        if (patchResult !== 'applied') return;
+        publishSeasonWorkspaceChanged({
+          seasonId,
           source: 'server-live',
           localRevision: event.serverSeq,
           affectedIds: [event.targetId],
           changedTargets: [`${event.targetType}:${event.targetId}`],
           syncMeta: null,
+          refreshMode: 'direct',
+          serverEvent: event,
         });
+      }, {
+        onStatus: (status) => {
+          if (subscriptionAttempt.cancelled || !providerMountedRef.current) return;
+          if (status === 'SUBSCRIBED') {
+            if (hasSubscribed) publishRevalidation('reconnect');
+            hasSubscribed = true;
+            return;
+          }
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            publishRevalidation(status.toLowerCase());
+          }
+        },
       });
       if (subscriptionAttempt.cancelled || !providerMountedRef.current) {
         unsubscribe();
@@ -474,6 +553,8 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
       subscribingSeasons.clear();
       for (const unsubscribe of liveUnsubscribers.values()) unsubscribe();
       liveUnsubscribers.clear();
+      liveCursorsRef.current.clear();
+      ganttInteractionArbiter.clear();
     };
   }, []);
 

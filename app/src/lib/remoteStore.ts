@@ -246,7 +246,11 @@ export interface RemoteStore {
   getSeasonSyncCursorState?(seasonId: string): Promise<RemoteSeasonSyncCursorState>;
   loadSeasonEventPage?(seasonId: string, serverSeq: number, options: { throughSeq: number; limit?: number }): Promise<RemoteSeasonEventPage>;
   loadSeasonEventsSince?(seasonId: string, serverSeq: number, options?: { throughSeq?: number }): Promise<SeasonChangeEvent[]>;
-  subscribeToSeasonEvents?(seasonId: string, onEvent: (event: SeasonChangeEvent) => void): Promise<() => void> | (() => void);
+  subscribeToSeasonEvents?(
+    seasonId: string,
+    onEvent: (event: SeasonChangeEvent) => void,
+    options?: { onStatus?: (status: string) => void },
+  ): Promise<() => void> | (() => void);
   getCurrentRemoteActor(): Promise<RemoteActor | null>;
 }
 
