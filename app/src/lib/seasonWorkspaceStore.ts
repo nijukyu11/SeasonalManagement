@@ -57,6 +57,20 @@ export interface PatchSeasonWorkspaceInput {
   operatorSessionEpoch?: number;
 }
 
+export interface ApplyServerModificationPatchInput {
+  seasonId: string;
+  legId: string;
+  modification: FlightModification;
+  serverSeq: number;
+  operatorSessionEpoch: number;
+}
+
+export type ApplyServerModificationPatchResult =
+  | 'applied'
+  | 'ignored-stale'
+  | 'missing-target'
+  | 'invalid-epoch';
+
 export interface SeasonWorkspaceCounters {
   totalRecords: number;
   activeRecords: number;
@@ -96,6 +110,7 @@ export interface SeasonWorkspaceStoreState {
   markSeasonWorkspaceStale(seasonId: string, reason: SeasonWindowStaleReason, operatorSessionEpoch: number): boolean;
   replaceSeasonWindow(input: ReplaceSeasonWindowInput): boolean;
   patchSeasonWorkspace(input: PatchSeasonWorkspaceInput): boolean;
+  applyServerModificationPatch(input: ApplyServerModificationPatchInput): ApplyServerModificationPatchResult;
 }
 
 function createWindowMetadata(): SeasonWorkspaceWindowMetadata {
@@ -120,6 +135,16 @@ function validOptionalEpoch(epoch: number | undefined): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function syncMetaAtHighWater(syncMeta: LocalSyncMeta | null, serverHighWater: number): LocalSyncMeta | null {
+  if (!syncMeta) return null;
+  return {
+    ...syncMeta,
+    baseServerVersion: Math.max(syncMeta.baseServerVersion, serverHighWater),
+    lastServerSeq: Math.max(syncMeta.lastServerSeq ?? -1, serverHighWater),
+    localRevision: Math.max(syncMeta.localRevision, serverHighWater),
+  };
 }
 
 function referencedByAnySnapshot(snapshots: Map<string, SeasonWorkspaceWindowSnapshot>, id: string): boolean {
@@ -167,9 +192,6 @@ export const useSeasonWorkspaceStore = create<SeasonWorkspaceStoreState>()((set,
     const windowSnapshots = new Map(previous.windowSnapshots);
     const previousSnapshot = windowSnapshots.get(input.windowKey);
     const modifications = new Map(input.modifications);
-    windowSnapshots.set(input.windowKey, {
-      rows: [...input.rows], records: [...input.records], modifications, syncMeta: input.syncMeta,
-    });
 
     const recordsById = new Map(previous.recordsById);
     const recordServerHighWater = new Map(previous.recordServerHighWater);
@@ -185,6 +207,18 @@ export const useSeasonWorkspaceStore = create<SeasonWorkspaceStoreState>()((set,
       if (input.serverHighWater >= (modificationServerHighWater.get(legId) ?? -1)) {
         modificationsByLegId.set(legId, modification);
         modificationServerHighWater.set(legId, input.serverHighWater);
+      }
+    }
+
+    const snapshotRecordIds = new Set(input.records.map((record) => record.id));
+    const protectedModifications = new Map<string, FlightModification>();
+    for (const [legId, modification] of previousSnapshot?.modifications ?? []) {
+      if (
+        !modifications.has(legId)
+        && snapshotRecordIds.has(legId)
+        && (modificationServerHighWater.get(legId) ?? -1) > input.serverHighWater
+      ) {
+        protectedModifications.set(legId, modification);
       }
     }
 
@@ -209,11 +243,22 @@ export const useSeasonWorkspaceStore = create<SeasonWorkspaceStoreState>()((set,
       ...input.records.map((record) => record.id).filter((id) => !existingOrder.has(id)),
     ];
     const windowMetadata = new Map(previous.windowMetadata);
+    const committedHighWater = Math.max(metadata.serverHighWater ?? -1, input.serverHighWater);
+    const committedSyncMeta = syncMetaAtHighWater(input.syncMeta, committedHighWater);
+    windowSnapshots.set(input.windowKey, {
+      rows: [...input.rows],
+      records: input.records.map((record) => recordsById.get(record.id) ?? record),
+      modifications: new Map([
+        ...Array.from(modifications.keys()).map((legId) => [legId, modificationsByLegId.get(legId) ?? modifications.get(legId)!] as const),
+        ...protectedModifications,
+      ]),
+      syncMeta: committedSyncMeta,
+    });
     windowMetadata.set(input.windowKey, {
       generation: metadata.generation,
       fetchedAt: input.fetchedAt,
       dataVersion: input.dataVersion,
-      serverHighWater: input.serverHighWater,
+      serverHighWater: committedHighWater,
       requestStatus: 'ready',
       staleReason: null,
       lastError: null,
@@ -223,7 +268,7 @@ export const useSeasonWorkspaceStore = create<SeasonWorkspaceStoreState>()((set,
         ...state.workspaces,
         [input.seasonId]: {
           ...previous,
-          rows: [...input.rows], recordsById, recordOrder, modificationsByLegId, syncMeta: input.syncMeta,
+          rows: [...input.rows], recordsById, recordOrder, modificationsByLegId, syncMeta: committedSyncMeta,
           windowSnapshots, windowMetadata, recordServerHighWater, modificationServerHighWater, updatedAt: input.fetchedAt,
         },
       },
@@ -361,6 +406,64 @@ export const useSeasonWorkspaceStore = create<SeasonWorkspaceStoreState>()((set,
       windowSnapshots, windowMetadata, updatedAt: Date.now(),
     } } });
     return true;
+  },
+  applyServerModificationPatch: (input) => {
+    if (!isOperatorSessionEpochCurrent(input.operatorSessionEpoch)) return 'invalid-epoch';
+    if (!Number.isFinite(input.serverSeq) || input.modification.legId !== input.legId) return 'missing-target';
+    const state = get();
+    const previous = state.workspaces[input.seasonId];
+    if (!previous) return 'missing-target';
+    const currentHighWater = previous.modificationServerHighWater.get(input.legId);
+    if (currentHighWater != null && input.serverSeq <= currentHighWater) return 'ignored-stale';
+
+    const targetExists = previous.recordsById.has(input.legId)
+      || previous.modificationsByLegId.has(input.legId)
+      || referencedByAnySnapshot(previous.windowSnapshots, input.legId);
+    if (!targetExists) return 'missing-target';
+
+    const modificationsByLegId = new Map(previous.modificationsByLegId);
+    modificationsByLegId.set(input.legId, input.modification);
+    const modificationServerHighWater = new Map(previous.modificationServerHighWater);
+    modificationServerHighWater.set(input.legId, input.serverSeq);
+
+    const windowSnapshots = new Map(previous.windowSnapshots);
+    for (const [key, snapshot] of previous.windowSnapshots) {
+      const containsTarget = snapshot.modifications.has(input.legId)
+        || snapshot.records.some((record) => record.id === input.legId);
+      if (!containsTarget) continue;
+      const modifications = new Map(snapshot.modifications);
+      modifications.set(input.legId, input.modification);
+      windowSnapshots.set(key, {
+        ...snapshot,
+        modifications,
+        syncMeta: syncMetaAtHighWater(snapshot.syncMeta, input.serverSeq),
+      });
+    }
+
+    const windowMetadata = new Map(previous.windowMetadata);
+    for (const key of new Set([...previous.windowMetadata.keys(), ...previous.windowSnapshots.keys()])) {
+      const metadata = previous.windowMetadata.get(key) ?? createWindowMetadata();
+      windowMetadata.set(key, {
+        ...metadata,
+        serverHighWater: Math.max(metadata.serverHighWater ?? -1, input.serverSeq),
+      });
+    }
+
+    set({
+      workspaces: {
+        ...state.workspaces,
+        [input.seasonId]: {
+          ...previous,
+          modificationsByLegId,
+          modificationServerHighWater,
+          windowSnapshots,
+          windowMetadata,
+          syncMeta: syncMetaAtHighWater(previous.syncMeta, input.serverSeq),
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    return 'applied';
   },
 }));
 

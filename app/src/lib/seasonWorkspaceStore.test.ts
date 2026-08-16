@@ -6,7 +6,8 @@ import {
   useSeasonWorkspaceStore,
 } from './seasonWorkspaceStore.ts';
 import type { LocalSyncMeta } from './localSeasonStore.ts';
-import type { FlightRecord } from './types';
+import { getOperatorSessionEpoch } from './operatorSessionCacheRegistry.ts';
+import type { FlightModification, FlightRecord } from './types';
 
 function makeRecord(overrides: Partial<FlightRecord> & { id: string }): FlightRecord {
   return {
@@ -56,6 +57,10 @@ function makeSyncMeta(overrides: Partial<LocalSyncMeta> = {}): LocalSyncMeta {
   };
 }
 
+function makeModification(legId: string, gate: number): FlightModification {
+  return { legId, action: 'modified', gate };
+}
+
 test('patchSeasonWorkspace replaces only affected records and updates counters from client state', () => {
   const store = useSeasonWorkspaceStore;
   store.getState().resetSeasonWorkspaceStore();
@@ -96,4 +101,116 @@ test('patchSeasonWorkspace replaces only affected records and updates counters f
     pendingCount: 1,
     lastLocalChangeAt: 1778292000000,
   });
+});
+
+test('applyServerModificationPatch updates only matching snapshots and rejects stale sequence values', () => {
+  const store = useSeasonWorkspaceStore;
+  store.getState().resetSeasonWorkspaceStore();
+  const target = makeRecord({ id: 'LEG-TARGET', gate: 1 });
+  const other = makeRecord({ id: 'LEG-OTHER', gate: 2 });
+  store.getState().replaceSeasonWindow({
+    seasonId: 'season-1',
+    records: [target],
+    modifications: [makeModification(target.id, 1)],
+    syncMeta: makeSyncMeta({ lastServerSeq: 100, baseServerVersion: 100, localRevision: 100 }),
+    windowKey: 'gate:target',
+  });
+  store.getState().replaceSeasonWindow({
+    seasonId: 'season-1',
+    records: [other],
+    modifications: [makeModification(other.id, 2)],
+    syncMeta: makeSyncMeta({ lastServerSeq: 100, baseServerVersion: 100, localRevision: 100 }),
+    windowKey: 'gate:other',
+  });
+
+  const before = store.getState().workspaces['season-1'];
+  const targetSnapshotBefore = before.windowSnapshots.get('gate:target');
+  const otherSnapshotBefore = before.windowSnapshots.get('gate:other');
+  const targetMetadataBefore = before.windowMetadata.get('gate:target');
+
+  assert.equal(store.getState().applyServerModificationPatch({
+    seasonId: 'season-1',
+    legId: target.id,
+    modification: makeModification(target.id, 7),
+    serverSeq: 102,
+    operatorSessionEpoch: getOperatorSessionEpoch(),
+  }), 'applied');
+
+  const after = store.getState().workspaces['season-1'];
+  assert.equal(after.modificationsByLegId.get(target.id)?.gate, 7);
+  assert.equal(after.modificationServerHighWater.get(target.id), 102);
+  assert.notEqual(after.windowSnapshots.get('gate:target'), targetSnapshotBefore);
+  assert.equal(after.windowSnapshots.get('gate:target')?.modifications.get(target.id)?.gate, 7);
+  assert.equal(after.windowSnapshots.get('gate:other'), otherSnapshotBefore);
+  assert.equal(after.windowMetadata.get('gate:target')?.generation, targetMetadataBefore?.generation);
+  assert.equal(after.windowMetadata.get('gate:target')?.staleReason, targetMetadataBefore?.staleReason);
+  assert.equal(after.windowMetadata.get('gate:target')?.serverHighWater, 102);
+
+  assert.equal(store.getState().applyServerModificationPatch({
+    seasonId: 'season-1',
+    legId: target.id,
+    modification: makeModification(target.id, 3),
+    serverSeq: 101,
+    operatorSessionEpoch: getOperatorSessionEpoch(),
+  }), 'ignored-stale');
+  assert.equal(store.getState().applyServerModificationPatch({
+    seasonId: 'season-1',
+    legId: target.id,
+    modification: makeModification(target.id, 8),
+    serverSeq: 102,
+    operatorSessionEpoch: getOperatorSessionEpoch(),
+  }), 'ignored-stale');
+  assert.equal(store.getState().applyServerModificationPatch({
+    seasonId: 'season-1',
+    legId: 'LEG-MISSING',
+    modification: makeModification('LEG-MISSING', 8),
+    serverSeq: 103,
+    operatorSessionEpoch: getOperatorSessionEpoch(),
+  }), 'missing-target');
+  assert.equal(store.getState().applyServerModificationPatch({
+    seasonId: 'season-1',
+    legId: target.id,
+    modification: makeModification(target.id, 8),
+    serverSeq: 103,
+    operatorSessionEpoch: getOperatorSessionEpoch() + 1,
+  }), 'invalid-epoch');
+  assert.equal(store.getState().workspaces['season-1'].modificationsByLegId.get(target.id)?.gate, 7);
+});
+
+test('a late server-window response cannot overwrite a newer direct modification patch', () => {
+  const store = useSeasonWorkspaceStore;
+  store.getState().resetSeasonWorkspaceStore();
+  const record = makeRecord({ id: 'LEG-RACE', gate: 1 });
+  store.getState().replaceSeasonWindow({
+    seasonId: 'season-1',
+    records: [record],
+    modifications: [makeModification(record.id, 1)],
+    syncMeta: makeSyncMeta({ lastServerSeq: 100 }),
+    windowKey: 'gate:race',
+  });
+  const generation = store.getState().beginSeasonWindowRequest('season-1', 'gate:race');
+  assert.equal(store.getState().applyServerModificationPatch({
+    seasonId: 'season-1',
+    legId: record.id,
+    modification: makeModification(record.id, 9),
+    serverSeq: 102,
+    operatorSessionEpoch: getOperatorSessionEpoch(),
+  }), 'applied');
+  assert.equal(store.getState().commitSeasonWindowResult({
+    seasonId: 'season-1',
+    windowKey: 'gate:race',
+    requestGeneration: generation,
+    operatorSessionEpoch: getOperatorSessionEpoch(),
+    rows: [],
+    records: [record],
+    modifications: new Map([[record.id, makeModification(record.id, 4)]]),
+    syncMeta: makeSyncMeta({ lastServerSeq: 101 }),
+    fetchedAt: Date.now(),
+    dataVersion: 1,
+    serverHighWater: 101,
+  }), true);
+  const workspace = store.getState().workspaces['season-1'];
+  assert.equal(workspace.modificationsByLegId.get(record.id)?.gate, 9);
+  assert.equal(workspace.windowSnapshots.get('gate:race')?.modifications.get(record.id)?.gate, 9);
+  assert.equal(workspace.windowMetadata.get('gate:race')?.serverHighWater, 102);
 });
