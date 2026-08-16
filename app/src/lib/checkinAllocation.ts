@@ -5,6 +5,7 @@ import {
   findCheckInLockConflict,
 } from './checkInCounterSettings';
 import { evaluateCounterRules, validateOperationalSettings } from './settingsRules';
+import { calculateGanttEdgeScrollVelocity } from './ganttDragScroll';
 import type { AirlineColorSetting, CheckInAllocationMode, CheckInCounterWindowMap, FlightCounter, FlightModification, FlightRecord, OperationalSettings } from './types';
 import type { CheckInCounterResourceRow, CheckInCounterResourceSection, CheckInLockConflict } from './checkInCounterSettings';
 
@@ -777,15 +778,12 @@ export function calculateCheckInEdgeScroll({
   threshold = 56,
   maxSpeed = 28,
 }: CheckInEdgeScrollInput): { x: number; y: number } {
-  const axisSpeed = (distanceToStart: number, distanceToEnd: number): number => {
-    if (distanceToStart < threshold) return -Math.ceil(((threshold - distanceToStart) / threshold) * maxSpeed);
-    if (distanceToEnd < threshold) return Math.ceil(((threshold - distanceToEnd) / threshold) * maxSpeed);
-    return 0;
-  };
-  return {
-    x: axisSpeed(pointerX - rect.left, rect.right - pointerX),
-    y: axisSpeed(pointerY - rect.top, rect.bottom - pointerY),
-  };
+  return calculateGanttEdgeScrollVelocity({
+    pointer: { clientX: pointerX, clientY: pointerY },
+    rect,
+    threshold,
+    maxSpeed,
+  });
 }
 
 export function buildCheckInTimelineTicks(from: string, to: string): CheckInTimelineTicks {
