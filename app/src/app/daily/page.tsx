@@ -576,9 +576,18 @@ function DailyScheduleContent() {
     return freshWindow ? 'fresh' as const : 'stale' as const;
   }, [applyDailyNativeState, fromDateTime, targetSeasonId, toDateTime]);
 
-  const refreshDailyWindow = useCallback(async () => {
+  const refreshDailyWindow = useCallback(async (options: { revalidate?: boolean } = {}) => {
     if (!season?.id) return null;
     const windowKey = buildDailyWindowKey(fromDateTime, toDateTime);
+    if (options.revalidate) {
+      await loadSeasonWorkspaceWindow({
+        seasonId: season.id,
+        dateFrom: fromDateTime.slice(0, 10),
+        dateTo: toDateTime.slice(0, 10),
+        resourceType: 'schedule',
+        limit: 100000,
+      });
+    }
     const snapshot = readWorkspaceWindowSnapshot(useSeasonWorkspaceStore.getState().workspaces[season.id], windowKey);
     if (!snapshot?.syncMeta) return null;
     setFlightRecords(snapshot.records);
@@ -599,8 +608,8 @@ function DailyScheduleContent() {
     seasonId: season?.id ?? targetSeasonId,
     policy: 'on-activation',
     source: 'daily',
-    onRefresh: async () => {
-      await refreshDailyWindow();
+    onRefresh: async (event) => {
+      await refreshDailyWindow({ revalidate: event.refreshMode === 'revalidate' });
     },
   });
 

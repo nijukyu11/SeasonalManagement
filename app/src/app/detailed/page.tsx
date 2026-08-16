@@ -305,7 +305,7 @@ function DetailedScheduleContent() {
     });
   }, []);
 
-  const refreshDetailedWindow = useCallback(async (options: { preserveSelection?: boolean } = {}) => {
+  const refreshDetailedWindow = useCallback(async (options: { preserveSelection?: boolean; revalidate?: boolean } = {}) => {
     if (!season?.id) return null;
     if (hasDraftChanges) return null;
     const queryWindow = buildDetailedScheduleQueryWindow({
@@ -315,6 +315,15 @@ function DetailedScheduleContent() {
       targetDepFlight,
     });
     const windowKey = buildDetailedWindowKey(queryWindow);
+    if (options.revalidate) {
+      await loadSeasonWorkspaceWindow({
+        seasonId: season.id,
+        dateFrom: queryWindow.dateFrom,
+        dateTo: queryWindow.dateTo,
+        resourceType: 'schedule',
+        limit: 100000,
+      });
+    }
     const snapshot = readWorkspaceWindowSnapshot(
       useSeasonWorkspaceStore.getState().workspaces[season.id],
       windowKey
@@ -390,8 +399,11 @@ function DetailedScheduleContent() {
     seasonId: season?.id ?? targetSeasonId,
     policy: 'on-activation',
     source: 'detailed',
-    onRefresh: async () => {
-      await refreshDetailedWindow({ preserveSelection: true });
+    onRefresh: async (event) => {
+      await refreshDetailedWindow({
+        preserveSelection: true,
+        revalidate: event.refreshMode === 'revalidate',
+      });
     },
   });
 

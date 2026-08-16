@@ -457,7 +457,11 @@ export default function HomePage() {
     seasonId: activeSeason?.id,
     policy: 'on-activation',
     source: 'seasonal',
-    onRefresh: () => {
+    onRefresh: async (event) => {
+      if (event.refreshMode === 'revalidate' && activeSeason && !hasDraftChanges) {
+        await loadSeasonRows(activeSeason, true);
+        return;
+      }
       refreshSeasonalWindow();
     },
   });

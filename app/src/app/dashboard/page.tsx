@@ -941,9 +941,16 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     return cachedState.freshness;
   }, [targetSeasonId]);
 
-  const refreshDashboardWindow = useCallback(async () => {
+  const refreshDashboardWindow = useCallback(async (options: { revalidate?: boolean } = {}) => {
     if (!season?.id) return null;
     const windowKey = buildDashboardWindowKey('operations');
+    if (options.revalidate) {
+      await loadSeasonWorkspaceWindow({
+        seasonId: season.id,
+        resourceType: 'schedule',
+        limit: 100000,
+      });
+    }
     const snapshot = readWorkspaceWindowSnapshot(useSeasonWorkspaceStore.getState().workspaces[season.id], windowKey);
     if (!snapshot) return null;
     setRecords(snapshot.records);
@@ -964,8 +971,8 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     seasonId: season?.id ?? targetSeasonId,
     policy: 'on-activation',
     source: 'dashboard',
-    onRefresh: async () => {
-      await refreshDashboardWindow();
+    onRefresh: async (event) => {
+      await refreshDashboardWindow({ revalidate: event.refreshMode === 'revalidate' });
     },
   });
 
