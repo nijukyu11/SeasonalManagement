@@ -75,3 +75,10 @@ test('primary route pages expose server fetch separately from Sync submit', () =
     assert.doesNotMatch(fetchBody, /syncNativePendingChanges/, file);
   }
 });
+
+test('realtime direct updates never use route reload APIs', () => {
+  for (const file of routeFiles) {
+    const source = readFileSync(join(process.cwd(), file), 'utf8');
+    assert.doesNotMatch(source, /router\.refresh\(\)|location\.reload\(\)|window\.location\.reload\(\)/, file);
+  }
+});

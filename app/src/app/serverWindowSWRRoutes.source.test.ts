@@ -26,3 +26,11 @@ test('route code never imports a native or SQLite read fallback for server windo
     assert.doesNotMatch(source, /queryNative|importNative|loadNativeSeason|SQLite fallback/i, route);
   }
 });
+
+test('workspace refresh callbacks distinguish direct patches from server revalidation', () => {
+  for (const route of ROUTES) {
+    const source = readFileSync(new URL(route, import.meta.url), 'utf8');
+    assert.match(source, /onRefresh:\s*async?\s*\(?event\)?\s*=>|onRefresh:\s*\(?event\)?\s*=>/, `${route} must inspect the workspace event`);
+    assert.match(source, /event\.refreshMode === 'revalidate'/, `${route} must fetch only for reconciliation events`);
+  }
+});
