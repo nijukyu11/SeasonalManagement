@@ -1527,7 +1527,11 @@ export const supabaseStore: RemoteStore = {
     return events;
   },
 
-  async subscribeToSeasonEvents(seasonId: string, onEvent: (event: SeasonChangeEvent) => void): Promise<() => void> {
+  async subscribeToSeasonEvents(
+    seasonId: string,
+    onEvent: (event: SeasonChangeEvent) => void,
+    options: { onStatus?: (status: string) => void } = {},
+  ): Promise<() => void> {
     const channelTopic = `season-change-events:${seasonId}:${randomId('subscription')}`;
     const channel = client()
       .channel(channelTopic)
@@ -1541,7 +1545,7 @@ export const supabaseStore: RemoteStore = {
         },
         (payload) => onEvent(toSeasonChangeEvent(payload.new as SeasonChangeEventRow))
       )
-      .subscribe();
+      .subscribe((status) => options.onStatus?.(status));
     return () => {
       void client().removeChannel(channel);
     };

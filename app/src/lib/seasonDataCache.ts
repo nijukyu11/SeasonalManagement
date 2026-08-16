@@ -1,4 +1,5 @@
 import type { LocalSyncMeta } from './localSeasonStore';
+import type { SeasonChangeEvent } from './seasonChangeEvents';
 import type { FlightModification, FlightRecord, OperationalSettings, ParsedRow, Season } from './types';
 
 export interface CachedSeasonData {
@@ -19,6 +20,9 @@ export interface SeasonWorkspaceChangeEvent {
   affectedIds: string[];
   changedTargets: string[];
   syncMeta: LocalSyncMeta | null;
+  refreshMode: 'snapshot' | 'direct' | 'revalidate';
+  serverEvent: SeasonChangeEvent | null;
+  revalidationReason: string | null;
 }
 
 type WritableSeasonWorkspaceChangeEvent = {
@@ -29,6 +33,9 @@ type WritableSeasonWorkspaceChangeEvent = {
   affectedIds?: string[];
   changedTargets?: string[];
   syncMeta?: LocalSyncMeta | null;
+  refreshMode?: SeasonWorkspaceChangeEvent['refreshMode'];
+  serverEvent?: SeasonChangeEvent | null;
+  revalidationReason?: string | null;
 };
 type SeasonWorkspaceChangeListener = (event: SeasonWorkspaceChangeEvent) => void;
 
@@ -102,6 +109,9 @@ export function publishSeasonWorkspaceChanged(event: WritableSeasonWorkspaceChan
     affectedIds: event.affectedIds ? Array.from(new Set(event.affectedIds)) : [],
     changedTargets: event.changedTargets ? Array.from(new Set(event.changedTargets)) : [],
     syncMeta: event.syncMeta ?? null,
+    refreshMode: event.refreshMode ?? 'snapshot',
+    serverEvent: event.serverEvent ?? null,
+    revalidationReason: event.revalidationReason ?? null,
   };
   for (const listener of Array.from(seasonWorkspaceChangeListeners)) listener(nextEvent);
   return nextEvent;

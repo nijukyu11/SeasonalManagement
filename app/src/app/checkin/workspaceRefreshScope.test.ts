@@ -13,6 +13,9 @@ function event(partial: Partial<SeasonWorkspaceChangeEvent>): SeasonWorkspaceCha
     affectedIds: [],
     changedTargets: [],
     syncMeta: null,
+    refreshMode: 'snapshot',
+    serverEvent: null,
+    revalidationReason: null,
     ...partial,
   };
 }
