@@ -8,12 +8,13 @@ import type { SeasonChangeEvent } from './seasonChangeEvents.ts';
 
 function makeEvent(overrides: Partial<SeasonChangeEvent> = {}): SeasonChangeEvent {
   const targetId = overrides.targetId ?? 'LEG-1';
+  const serverSeq = 'serverSeq' in overrides ? overrides.serverSeq ?? null : 101;
   return {
-    eventId: overrides.eventId ?? `event-${overrides.serverSeq ?? 101}`,
+    eventId: overrides.eventId ?? `event-${serverSeq ?? 'missing'}`,
     seasonId: overrides.seasonId ?? 'season-1',
     clientId: overrides.clientId ?? 'client-a',
-    opId: overrides.opId ?? `op-${overrides.serverSeq ?? 101}`,
-    serverSeq: overrides.serverSeq ?? 101,
+    opId: overrides.opId ?? `op-${serverSeq ?? 'missing'}`,
+    serverSeq,
     targetType: overrides.targetType ?? 'modification',
     targetId,
     changedFields: overrides.changedFields ?? ['gate'],
