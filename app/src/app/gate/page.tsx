@@ -30,12 +30,19 @@ import {
   patchCachedSeasonData,
   publishSeasonWorkspaceChanged,
   setCachedSeasons,
+  type SeasonWorkspaceChangeEvent,
 } from '@/lib/seasonDataCache';
 import {
   applyLocalModificationBatchDelta,
   type LocalSyncMeta,
 } from '@/lib/localSeasonStore';
 import { runNativeLocalModificationBatchDeltaResult } from '@/lib/nativeSeasonRepository';
+import { getOperatorSessionEpoch } from '@/lib/operatorSessionCacheRegistry';
+import {
+  findLatestSequencedModificationPatch,
+  ganttInteractionArbiter,
+} from '@/lib/ganttInteractionArbiter';
+import type { SeasonChangeEvent } from '@/lib/seasonChangeEvents';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import {
@@ -424,6 +431,7 @@ type GateCommitPersistenceResult = {
   syncMeta?: LocalSyncMeta;
   affectedIds?: string[];
   source?: 'gate' | 'gate-worker' | 'gate-native';
+  appliedEvents?: SeasonChangeEvent[];
 };
 
 interface PendingAccumulatedGateCommit {
@@ -581,7 +589,8 @@ function GateAllocationContent() {
     localRevision: number | null,
     source: 'gate' | 'gate-worker' | 'gate-native' | 'gate-sync',
     affectedIds: string[] = [],
-    syncMeta: LocalSyncMeta | null = null
+    syncMeta: LocalSyncMeta | null = null,
+    refreshMode: SeasonWorkspaceChangeEvent['refreshMode'] = 'snapshot'
   ) => {
     publishSeasonWorkspaceChanged({
       seasonId,
@@ -589,6 +598,7 @@ function GateAllocationContent() {
       source,
       affectedIds,
       syncMeta,
+      refreshMode,
     });
   }, []);
 
@@ -932,6 +942,7 @@ function GateAllocationContent() {
         syncMeta: nativeResult.syncMeta,
         affectedIds: nativeResult.affectedIds,
         source: 'gate-native',
+        appliedEvents: nativeResult.appliedEvents,
       };
     });
   }, [enqueueLocalMutation]);
@@ -1058,7 +1069,7 @@ function GateAllocationContent() {
     };
   }, []);
 
-  const rollbackAccumulatedGateCommit = useCallback(async (error: unknown) => {
+  const rollbackAccumulatedGateCommit = useCallback(async (entry: PendingAccumulatedGateCommit, error: unknown) => {
     if (season) {
       clearOptimisticGateAllocationView();
       const result = await loadSeasonWorkspaceWindow({
@@ -1086,37 +1097,95 @@ function GateAllocationContent() {
         });
       }
     }
+    const queuedWinners: FlightModification[] = [];
+    if (season) {
+      for (const legId of entry.legIds) {
+        const winner = ganttInteractionArbiter.cancel({ seasonId: season.id, targetType: 'modification', targetId: legId });
+        if (!winner) continue;
+        const applied = useSeasonWorkspaceStore.getState().applyServerModificationPatch({
+          seasonId: season.id,
+          legId,
+          modification: winner.modification,
+          serverSeq: winner.serverSeq,
+          operatorSessionEpoch: getOperatorSessionEpoch(),
+        });
+        if (applied === 'applied') queuedWinners.push(winner.modification);
+      }
+    }
+    if (queuedWinners.length > 0 && season) {
+      for (const modification of queuedWinners) applyOptimisticGateModification(modification);
+      publishWorkspaceChange(season.id, null, 'gate', queuedWinners.map((mod) => mod.legId), null, 'direct');
+    }
     void showAlert({
       title: 'Gate Update Failed',
       message: error instanceof Error ? error.message : String(error),
       tone: 'error',
     });
-  }, [clearOptimisticGateAllocationView, fromDateTime, replaceGateModifications, season, showAlert, toDateTime]);
+  }, [applyOptimisticGateModification, clearOptimisticGateAllocationView, fromDateTime, publishWorkspaceChange, replaceGateModifications, season, showAlert, toDateTime]);
 
   const flushAccumulatedGateCommit = useCallback(async (entry: PendingAccumulatedGateCommit) => {
     if (!season) return;
     try {
       const result = await persistGateModifications(season.id, entry.mods, entry.description);
-      if (!result.syncMeta) return;
-      promoteLatestGateModificationsForView();
-      useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
-        seasonId: season.id,
-        affectedIds: result.affectedIds ?? entry.legIds,
-        modifications: entry.mods,
-        syncMeta: result.syncMeta,
-      });
-      publishWorkspaceChange(
-        season.id,
-        result.syncMeta.localRevision,
-        result.source ?? 'gate-worker',
-        result.affectedIds ?? entry.legIds,
-        result.syncMeta
-      );
+      if (!result.syncMeta) throw new Error('Gate server mutation completed without sync metadata.');
+      const appliedMods: FlightModification[] = [];
+      let needsRevalidation = false;
+      for (const legId of entry.legIds) {
+        const localAck = findLatestSequencedModificationPatch(result.appliedEvents, legId, 'local-ack');
+        const winner = ganttInteractionArbiter.settle(
+          { seasonId: season.id, targetType: 'modification', targetId: legId },
+          localAck,
+        );
+        if (!winner) {
+          needsRevalidation = true;
+          continue;
+        }
+        const patchResult = useSeasonWorkspaceStore.getState().applyServerModificationPatch({
+          seasonId: season.id,
+          legId,
+          modification: winner.modification,
+          serverSeq: winner.serverSeq,
+          operatorSessionEpoch: getOperatorSessionEpoch(),
+        });
+        if (patchResult === 'missing-target' || patchResult === 'invalid-epoch') {
+          needsRevalidation = true;
+          continue;
+        }
+        const canonicalMod = useSeasonWorkspaceStore.getState().workspaces[season.id]?.modificationsByLegId.get(legId);
+        if (canonicalMod) appliedMods.push(canonicalMod);
+      }
+      if (appliedMods.length > 0) {
+        for (const modification of appliedMods) applyOptimisticGateModification(modification);
+        promoteLatestGateModificationsForView();
+        publishWorkspaceChange(
+          season.id,
+          result.syncMeta.localRevision,
+          result.source ?? 'gate-worker',
+          appliedMods.map((mod) => mod.legId),
+          result.syncMeta,
+          'direct'
+        );
+      }
+      if (needsRevalidation) {
+        useSeasonWorkspaceStore.getState().markSeasonWorkspaceStale(
+          season.id,
+          'mutation',
+          getOperatorSessionEpoch(),
+        );
+        publishWorkspaceChange(
+          season.id,
+          result.syncMeta.localRevision,
+          result.source ?? 'gate-worker',
+          result.affectedIds ?? entry.legIds,
+          result.syncMeta,
+          'revalidate'
+        );
+      }
       scheduleGateAuditEntry(entry, result);
     } catch (error) {
-      await rollbackAccumulatedGateCommit(error);
+      await rollbackAccumulatedGateCommit(entry, error);
     }
-  }, [persistGateModifications, promoteLatestGateModificationsForView, publishWorkspaceChange, rollbackAccumulatedGateCommit, scheduleGateAuditEntry, season]);
+  }, [applyOptimisticGateModification, persistGateModifications, promoteLatestGateModificationsForView, publishWorkspaceChange, rollbackAccumulatedGateCommit, scheduleGateAuditEntry, season]);
 
   const scheduleAccumulatedGateCommit = useCallback(({
     legIds,
@@ -1128,6 +1197,9 @@ function GateAllocationContent() {
     description: string;
   }): void => {
     if (!season) return;
+    for (const legId of legIds) {
+      ganttInteractionArbiter.begin({ seasonId: season.id, targetType: 'modification', targetId: legId });
+    }
     const entry = mergePendingGateCommit(gateCommitAccumulatorRef.current, {
       legIds: Array.from(new Set(legIds)),
       mods,

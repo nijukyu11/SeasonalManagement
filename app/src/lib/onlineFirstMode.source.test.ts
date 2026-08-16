@@ -68,9 +68,11 @@ test('normal native startup and close do not preload or mutate SQLite', () => {
   assert.doesNotMatch(closeGuard, /discardPendingLocalChanges|SQLite database|local database/);
 });
 
-test('gate commit promotes committed modifications before optimistic view can clear', () => {
+test('gate commit resolves canonical server events before optimistic view can clear', () => {
   const gatePage = readFileSync(join(process.cwd(), 'src/app/gate/page.tsx'), 'utf8');
-  assert.match(gatePage, /promoteLatestGateModificationsForView\(\);\s*useSeasonWorkspaceStore\.getState\(\)\.patchSeasonWorkspace/);
+  assert.match(gatePage, /findLatestSequencedModificationPatch\(result\.appliedEvents/);
+  assert.match(gatePage, /applyServerModificationPatch\(/);
+  assert.match(gatePage, /promoteLatestGateModificationsForView\(\)/);
 });
 
 test('allocation mutations keep their module source in server-authoritative RPC', () => {
