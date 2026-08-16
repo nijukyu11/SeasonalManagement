@@ -38,18 +38,20 @@ export function findLatestSequencedModificationPatch(
 ): SequencedModificationPatch | null {
   let latest: SequencedModificationPatch | null = null;
   for (const event of events ?? []) {
+    if (!event) continue;
+    const payload = event.opPayload;
     if (
       event.targetType !== 'modification'
       || event.targetId !== legId
       || !Number.isFinite(event.serverSeq)
-      || event.opPayload.type !== 'modification'
-      || event.opPayload.mod?.legId !== legId
+      || payload?.type !== 'modification'
+      || payload.mod?.legId !== legId
     ) {
       continue;
     }
     latest = latestPatch(latest, {
       serverSeq: event.serverSeq as number,
-      modification: event.opPayload.mod,
+      modification: payload.mod,
       source,
     });
   }

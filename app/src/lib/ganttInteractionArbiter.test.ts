@@ -97,3 +97,26 @@ test('finds the newest canonical modification acknowledgement for one target', (
     modification: { legId: 'LEG-A', action: 'modified', gate: 8 },
   });
 });
+
+test('ignores an incomplete mutation acknowledgement so the caller can revalidate', () => {
+  const incompleteEvent = {
+    eventId: 'event-incomplete',
+    seasonId: 'season-1',
+    clientId: 'client-a',
+    opId: 'op-incomplete',
+    actorUserId: null,
+    serverSeq: 107,
+    targetType: 'modification',
+    targetId: 'LEG-A',
+    changedFields: ['counter'],
+    createdAt: '2026-08-16T08:00:00.000Z',
+  };
+
+  assert.doesNotThrow(() => {
+    assert.equal(findLatestSequencedModificationPatch(
+      [incompleteEvent as never],
+      'LEG-A',
+      'local-ack',
+    ), null);
+  });
+});
