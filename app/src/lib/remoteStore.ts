@@ -73,7 +73,7 @@ export interface ServerSeasonMutationResult {
   nextServerSeq: number;
   changedTargets: string[];
   affectedIds: string[];
-  appliedEvents: unknown[];
+  appliedEvents: SeasonChangeEvent[];
   rejectedEvents: unknown[];
 }
 
