@@ -9,7 +9,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
@@ -30,7 +29,6 @@ import {
   buildCheckInRecordProjection,
   buildCheckInResizePreview,
   buildCheckInTimelineTicks,
-  calculateCheckInEdgeScroll,
   displayCheckInCounter,
   formatCheckInDisplayTime,
   formatCheckInFlightLabel,
@@ -81,7 +79,6 @@ import {
   type CheckInPdfExportRange,
   type CheckInPdfPreviewPlan,
 } from '@/lib/checkinPdfExport';
-import { setSolidFlightBarDragImage } from '@/lib/flightBarDragImage';
 import { appendAuditLogEntry, createFlightActionAuditFromHistory } from '@/lib/auditLog';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
 import type { FlightModification, FlightRecord, OperationalSettings, Season } from '@/lib/types';
@@ -101,6 +98,7 @@ import {
 import { useSessionScrollRestoration } from '../hooks/useSessionScrollRestoration';
 import { useSessionState } from '../hooks/useSessionState';
 import { useSeasonWorkspaceRefresh } from '../hooks/useSeasonWorkspaceRefresh';
+import { useGanttDragScroll } from '../hooks/useGanttDragScroll';
 import {
   formatCheckInCommitFailure,
   getCheckInCommitFailureSource,
@@ -333,12 +331,27 @@ function TimelineHeader({
   );
 }
 
-type DragState =
+interface DragPointerVisualState {
+  pointerId: number;
+  activated: boolean;
+  startClientX: number;
+  startClientY: number;
+  currentClientX: number;
+  currentClientY: number;
+  offsetX: number;
+  offsetY: number;
+  width: number;
+  height: number;
+  flightNumber: string;
+  backgroundColor: string;
+  textColor: string;
+}
+
+type DragState = DragPointerVisualState & (
   | {
       kind: 'unallocated';
       recordId: string;
       dropSpan: number;
-      startClientX: number;
     }
   | {
       kind: 'allocated';
@@ -349,8 +362,8 @@ type DragState =
       dragRowOffset: number;
       dropSpan: number;
       mode: CheckInResourceBar['mode'];
-      startClientX: number;
-    };
+    }
+);
 
 function resolveDropTargetRow(drag: DragState | null, hoveredRowIndex: number, view: CheckInAllocationView) {
   const dropSpan = Math.max(1, drag?.dropSpan ?? 1);
@@ -406,13 +419,15 @@ interface CheckInResourceBarButtonProps {
   groupStartIndex: number;
   syncing: boolean;
   resizing: boolean;
-  onDragStart: (
-    event: DragEvent<HTMLDivElement>,
+  onPointerDown: (
+    event: ReactPointerEvent<HTMLDivElement>,
     bar: CheckInResourceBar,
     groupStartIndex: number,
     groupedSpan: number
   ) => void;
-  onDragEnd: () => void;
+  onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerCancel: () => void;
   onHoverStart: (groupId: string) => void;
   onHoverEnd: (groupId: string) => void;
   onSelect: (groupId: string) => void;
@@ -441,8 +456,10 @@ function areCheckInResourceBarButtonPropsEqual(
     previous.syncing === next.syncing &&
     previous.resizing === next.resizing &&
     isSameCheckInColorToken(previous.color, next.color) &&
-    previous.onDragStart === next.onDragStart &&
-    previous.onDragEnd === next.onDragEnd &&
+    previous.onPointerDown === next.onPointerDown &&
+    previous.onPointerMove === next.onPointerMove &&
+    previous.onPointerUp === next.onPointerUp &&
+    previous.onPointerCancel === next.onPointerCancel &&
     previous.onHoverStart === next.onHoverStart &&
     previous.onHoverEnd === next.onHoverEnd &&
     previous.onSelect === next.onSelect &&
@@ -461,8 +478,10 @@ const CheckInResourceBarButton = memo(function CheckInResourceBarButton({
   groupStartIndex,
   syncing,
   resizing,
-  onDragStart,
-  onDragEnd,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
   onHoverStart,
   onHoverEnd,
   onSelect,
@@ -484,9 +503,10 @@ const CheckInResourceBarButton = memo(function CheckInResourceBarButton({
       role="button"
       tabIndex={0}
       aria-label={`${bar.flightNumber} on counter ${displayCheckInCounter(bar.counter)}, ${formatLocalDateTimeLabel(bar.start)} to ${formatLocalDateTimeLabel(bar.end)}${lockConflict ? `, LockConflict ${lockConflict.lock.name}` : ''}`}
-      draggable={!syncing && !resizing}
-      onDragStart={(event) => onDragStart(event, bar, groupStartIndex, groupedSpan)}
-      onDragEnd={onDragEnd}
+      onPointerDown={(event) => onPointerDown(event, bar, groupStartIndex, groupedSpan)}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
       onMouseEnter={() => onHoverStart(bar.groupId)}
       onMouseLeave={() => onHoverEnd(bar.groupId)}
       onClick={(event) => {
@@ -498,7 +518,7 @@ const CheckInResourceBarButton = memo(function CheckInResourceBarButton({
         onOpenContextMenu(bar, event.clientX, event.clientY);
       }}
       onKeyDown={(event) => onKeyDown(event, bar)}
-      className={`absolute flex h-6 cursor-grab items-center overflow-hidden rounded-[4px] border border-white px-2 text-[11px] font-bold transition-[transform,width,box-shadow,background-color,border-color] duration-200 ease-out active:cursor-grabbing ${highlighted ? 'z-20' : 'z-10'} ${lockConflict ? 'ring-2 ring-error/80 ring-offset-1 ring-offset-surface-container-lowest' : ''}`}
+      className={`absolute flex h-6 touch-none cursor-grab items-center overflow-hidden rounded-[4px] border border-white px-2 text-[11px] font-bold transition-[transform,width,box-shadow,background-color,border-color] duration-200 ease-out active:cursor-grabbing ${highlighted ? 'z-20' : 'z-10'} ${lockConflict ? 'ring-2 ring-error/80 ring-offset-1 ring-offset-surface-container-lowest' : ''}`}
       style={{
         left: 0,
         top: 0,
@@ -520,9 +540,7 @@ const CheckInResourceBarButton = memo(function CheckInResourceBarButton({
         type="button"
         aria-label="Resize start"
         disabled={syncing}
-        draggable={false}
         className="absolute left-0 top-0 h-full w-2 cursor-ew-resize disabled:cursor-not-allowed"
-        onDragStart={(event) => event.preventDefault()}
         onPointerDown={(event: ReactPointerEvent<HTMLButtonElement>) => {
           event.stopPropagation();
           event.preventDefault();
@@ -560,9 +578,7 @@ const CheckInResourceBarButton = memo(function CheckInResourceBarButton({
         type="button"
         aria-label="Resize end"
         disabled={syncing}
-        draggable={false}
         className="absolute right-0 top-0 h-full w-2 cursor-ew-resize disabled:cursor-not-allowed"
-        onDragStart={(event) => event.preventDefault()}
         onPointerDown={(event: ReactPointerEvent<HTMLButtonElement>) => {
           event.stopPropagation();
           event.preventDefault();
@@ -868,6 +884,7 @@ function CheckInAllocationContent() {
   const [hoveredGroupId, setHoveredGroupId] = useState<string | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [draggedGroupId, setDraggedGroupId] = useState<string | null>(null);
+  const [pointerDragState, setPointerDragState] = useState<DragState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [resizeState, setResizeState] = useState<ResizeState | null>(null);
   const [overrideDraft, setOverrideDraft] = useState<OverrideDraft | null>(null);
@@ -887,6 +904,7 @@ function CheckInAllocationContent() {
   );
   const [groupByCounterGroup, setGroupByCounterGroup] = useSessionState('checkin:groupByCounterGroup', true);
   const dragStateRef = useRef<DragState | null>(null);
+  const suppressNextPointerClickRef = useRef(false);
   const resizeDragGuardRef = useRef(false);
   const ganttScrollRef = useRef<HTMLDivElement | null>(null);
   const ganttFullscreenRef = useRef<HTMLElement | null>(null);
@@ -2033,35 +2051,6 @@ function CheckInAllocationContent() {
     setSnapLineLabel((current) => current === label ? current : label);
   }, []);
 
-  const applyEdgeScroll = useCallback((clientX: number, clientY: number) => {
-    const container = ganttScrollRef.current;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const velocity = calculateCheckInEdgeScroll({
-      pointerX: clientX,
-      pointerY: clientY,
-      rect,
-      threshold: EDGE_SCROLL_THRESHOLD,
-      maxSpeed: EDGE_SCROLL_MAX_SPEED,
-    });
-    if (velocity.x !== 0) container.scrollLeft += velocity.x;
-    if (velocity.y !== 0) container.scrollTop += velocity.y;
-  }, []);
-
-  const applyVerticalEdgeScroll = useCallback((clientX: number, clientY: number) => {
-    const container = ganttScrollRef.current;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const velocity = calculateCheckInEdgeScroll({
-      pointerX: clientX,
-      pointerY: clientY,
-      rect,
-      threshold: EDGE_SCROLL_THRESHOLD,
-      maxSpeed: EDGE_SCROLL_MAX_SPEED,
-    });
-    if (velocity.y !== 0) container.scrollTop += velocity.y;
-  }, []);
-
   const updateSnapLine = useCallback((state: ResizeState, clientX: number) => {
     const preview = buildCheckInResizePreview({
       edge: state.edge,
@@ -2392,7 +2381,6 @@ function CheckInAllocationContent() {
     document.body.style.cursor = 'ew-resize';
     const handlePointerMove = (event: PointerEvent) => {
       scheduleSnapLineUpdate(resizeState, event.clientX);
-      applyEdgeScroll(event.clientX, event.clientY);
     };
     const handlePointerUp = (event: PointerEvent) => {
       const nextState = resizeState;
@@ -2416,7 +2404,7 @@ function CheckInAllocationContent() {
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handleCancel);
     };
-  }, [applyEdgeScroll, clearSnapLine, handleResizeCommit, isRouteActive, resizeState, scheduleSnapLineUpdate, updateSnapLine]);
+  }, [clearSnapLine, handleResizeCommit, isRouteActive, resizeState, scheduleSnapLineUpdate]);
 
   useEffect(() => {
     if (!isRouteActive) return undefined;
@@ -2473,54 +2461,8 @@ function CheckInAllocationContent() {
   const canZoomOut = timelinePixelsPerMinute > MIN_TIMELINE_PIXELS_PER_MINUTE;
   const canZoomIn = timelinePixelsPerMinute < MAX_TIMELINE_PIXELS_PER_MINUTE;
 
-  const handleResourceDrop = useCallback((event: DragEvent<HTMLDivElement>, rowIndex: number, counter: CheckInCounter) => {
-    event.preventDefault();
-    const drag = dragStateRef.current;
-    dragStateRef.current = null;
-    setDraggedGroupId(null);
-    clearDropPreview();
-    if (!drag || syncWriteInProgress) return;
-    if (drag.kind === 'unallocated') {
-      void handleAllocate(drag.recordId, counter);
-      return;
-    }
-    void handleMove(drag, rowIndex);
-  }, [clearDropPreview, handleAllocate, handleMove, syncWriteInProgress]);
-
-  const handleResourceDragOver = useCallback((
-    event: DragEvent<HTMLDivElement>,
-    rowIndex: number,
-    view: CheckInAllocationView
-  ) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-    const drag = dragStateRef.current;
-    const dropTarget = resolveDropTargetRow(drag, rowIndex, view);
-    scheduleDropPreviewUpdate(dropTarget.previewStartRow);
-    if (drag?.kind === 'allocated') {
-      applyVerticalEdgeScroll(event.clientX, event.clientY);
-    } else {
-      applyEdgeScroll(event.clientX, event.clientY);
-    }
-  }, [applyEdgeScroll, applyVerticalEdgeScroll, scheduleDropPreviewUpdate]);
-
-  const handleResourceRowDrop = useCallback((
-    event: DragEvent<HTMLDivElement>,
-    rowIndex: number,
-    view: CheckInAllocationView
-  ) => {
-    const dropTarget = resolveDropTargetRow(dragStateRef.current, rowIndex, view);
-    handleResourceDrop(event, dropTarget.rowIndex, dropTarget.counter);
-  }, [handleResourceDrop]);
-
-  const handlePoolDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const drag = dragStateRef.current;
-    dragStateRef.current = null;
-    setDraggedGroupId(null);
-    clearDropPreview();
-    setPoolDropActiveIfChanged(false);
-    if (!drag || drag.kind !== 'allocated' || syncWriteInProgress) return;
+  const commitCheckInPoolDrop = useCallback((drag: Extract<DragState, { kind: 'allocated' }>) => {
+    if (syncWriteInProgress) return;
     const record = getEffectiveRecord(drag.recordId);
     if (!record) return;
     const currentCounters = normalizeCheckInCounterList(record.counter);
@@ -2547,70 +2489,103 @@ function CheckInAllocationContent() {
     ).catch((err) => {
       void showAlert({ title: 'Unallocate Failed', message: (err as Error).message, tone: 'error' });
     });
-  }, [clearDropPreview, commitOneModification, displayAllocationView, getEffectiveRecord, setPoolDropActiveIfChanged, settings, showAlert, syncWriteInProgress]);
+  }, [commitOneModification, displayAllocationView, getEffectiveRecord, settings, showAlert, syncWriteInProgress]);
 
-  const handleDragEnd = useCallback(() => {
+  const resolveCheckInPointerDrop = useCallback((clientX: number, clientY: number) => {
+    const target = document.elementFromPoint(clientX, clientY);
+    const drag = dragStateRef.current;
+    if (!target || !drag || !displayAllocationView) return { kind: 'none' as const };
+    if (target.closest('[data-checkin-pool-drop="true"]')) return { kind: 'pool' as const };
+    const rowTarget = target.closest('[data-checkin-drop-index]');
+    const hoveredRowIndex = Number(rowTarget?.getAttribute('data-checkin-drop-index') ?? '');
+    if (!Number.isInteger(hoveredRowIndex)) return { kind: 'none' as const };
+    const dropTarget = resolveDropTargetRow(drag, hoveredRowIndex, displayAllocationView);
+    return { kind: 'row' as const, ...dropTarget };
+  }, [displayAllocationView]);
+
+  const updateCheckInPointerPreview = useCallback((clientX: number, clientY: number) => {
+    const drag = dragStateRef.current;
+    if (!drag?.activated) return;
+    const target = resolveCheckInPointerDrop(clientX, clientY);
+    scheduleDropPreviewUpdate(target.kind === 'row' ? target.previewStartRow : null);
+    setPoolDropActiveIfChanged(target.kind === 'pool' && drag.kind === 'allocated');
+  }, [resolveCheckInPointerDrop, scheduleDropPreviewUpdate, setPoolDropActiveIfChanged]);
+
+  const {
+    start: startCheckInDragScroll,
+    updatePointer: updateCheckInDragScrollPointer,
+    stop: stopCheckInDragScroll,
+  } = useGanttDragScroll({
+    scrollRef: ganttScrollRef,
+    edgeThreshold: EDGE_SCROLL_THRESHOLD,
+    maxEdgeSpeed: EDGE_SCROLL_MAX_SPEED,
+    onAfterScroll: ({ clientX, clientY }) => updateCheckInPointerPreview(clientX, clientY),
+  });
+
+  const releaseCheckInInteraction = useCallback((recordId: string) => {
+    if (!season) return;
+    const winner = ganttInteractionArbiter.cancel({ seasonId: season.id, targetType: 'modification', targetId: recordId });
+    if (!winner) return;
+    const applied = useSeasonWorkspaceStore.getState().applyServerModificationPatch({
+      seasonId: season.id,
+      legId: recordId,
+      modification: winner.modification,
+      serverSeq: winner.serverSeq,
+      operatorSessionEpoch: getOperatorSessionEpoch(),
+    });
+    if (applied !== 'applied') return;
+    applyOptimisticCheckInModifications([winner.modification]);
+    publishWorkspaceChange(season.id, winner.serverSeq, 'checkin', [recordId], null, 'direct');
+  }, [applyOptimisticCheckInModifications, publishWorkspaceChange, season]);
+
+  const clearCheckInPointerDrag = useCallback(() => {
+    stopCheckInDragScroll();
     dragStateRef.current = null;
+    setPointerDragState(null);
     setDraggedGroupId(null);
     clearDropPreview();
     setPoolDropActiveIfChanged(false);
-  }, [clearDropPreview, setPoolDropActiveIfChanged]);
+  }, [clearDropPreview, setPoolDropActiveIfChanged, stopCheckInDragScroll]);
 
-  const handleGanttDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
-    if (!dragStateRef.current) return;
-    if (dragStateRef.current.kind === 'allocated') {
-      applyVerticalEdgeScroll(event.clientX, event.clientY);
-    } else {
-      applyEdgeScroll(event.clientX, event.clientY);
-    }
-  }, [applyEdgeScroll, applyVerticalEdgeScroll]);
-
-  const handlePoolDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
-    const drag = dragStateRef.current;
-    if (!drag || drag.kind !== 'allocated' || syncWriteInProgress) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-    setPoolDropActiveIfChanged(true);
-    applyVerticalEdgeScroll(event.clientX, event.clientY);
-  }, [applyVerticalEdgeScroll, setPoolDropActiveIfChanged, syncWriteInProgress]);
-
-  const handlePoolDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
-    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-      setPoolDropActiveIfChanged(false);
-    }
-  }, [setPoolDropActiveIfChanged]);
-
-  const handleUnallocatedDragStart = useCallback((event: DragEvent<HTMLButtonElement>, item: CheckInPackedItem) => {
+  const handleUnallocatedPointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>, item: CheckInPackedItem) => {
+    if (!isRouteActive || syncWriteInProgress || event.button !== 0) return;
     const color = getCheckInColorToken(item.record, settings);
-    setSolidFlightBarDragImage(event, {
-      label: `${formatCheckInFlightLabel(item.record)} (${item.requiredCounters})`,
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const rect = event.currentTarget.getBoundingClientRect();
+    dragStateRef.current = {
+      kind: 'unallocated',
+      recordId: item.record.id,
+      dropSpan: item.requiredCounters,
+      pointerId: event.pointerId,
+      activated: false,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      currentClientX: event.clientX,
+      currentClientY: event.clientY,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+      flightNumber: `${formatCheckInFlightLabel(item.record)} (${item.requiredCounters})`,
       backgroundColor: color.backgroundColor,
       textColor: color.textColor,
-    });
-    dragStateRef.current = { kind: 'unallocated', recordId: item.record.id, dropSpan: item.requiredCounters, startClientX: event.clientX };
-    setDraggedGroupId(item.record.id);
-    setActiveDropSpanIfChanged(item.requiredCounters);
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', item.record.id);
-  }, [setActiveDropSpanIfChanged, settings]);
+    };
+  }, [isRouteActive, settings, syncWriteInProgress]);
 
-  const handleResourceBarDragStart = useCallback((
-    event: DragEvent<HTMLDivElement>,
+  const handleResourceBarPointerDown = useCallback((
+    event: ReactPointerEvent<HTMLDivElement>,
     bar: CheckInResourceBar,
     groupStartIndex: number,
     groupedSpan: number
   ) => {
     if (resizeDragGuardRef.current || resizeState) {
-      event.preventDefault();
       return;
     }
+    if (!isRouteActive || syncWriteInProgress || event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const rect = event.currentTarget.getBoundingClientRect();
     const record = recordById.get(bar.recordId);
     const color = getCheckInColorToken(record ?? { airline: bar.flightNumber.slice(0, 2), flightNumber: bar.flightNumber, rawFlightNumber: bar.flightNumber }, settings);
-    setSolidFlightBarDragImage(event, {
-      label: bar.flightNumber,
-      backgroundColor: color.backgroundColor,
-      textColor: color.textColor,
-    });
     dragStateRef.current = {
       kind: 'allocated',
       recordId: bar.recordId,
@@ -2620,13 +2595,87 @@ function CheckInAllocationContent() {
       dragRowOffset: bar.counterIndex - groupStartIndex,
       dropSpan: bar.mode === 'grouped' ? groupedSpan : 1,
       mode: bar.mode,
+      pointerId: event.pointerId,
+      activated: false,
       startClientX: event.clientX,
+      startClientY: event.clientY,
+      currentClientX: event.clientX,
+      currentClientY: event.clientY,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+      flightNumber: bar.flightNumber,
+      backgroundColor: color.backgroundColor,
+      textColor: color.textColor,
     };
-    setDraggedGroupId(bar.groupId);
-    setActiveDropSpanIfChanged(bar.mode === 'grouped' ? groupedSpan : 1);
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', bar.recordId);
-  }, [recordById, resizeState, setActiveDropSpanIfChanged, settings]);
+  }, [isRouteActive, recordById, resizeState, settings, syncWriteInProgress]);
+
+  const handleCheckInPointerMove = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const current = dragStateRef.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    const distance = Math.hypot(event.clientX - current.startClientX, event.clientY - current.startClientY);
+    if (!current.activated && distance < 4) return;
+    event.preventDefault();
+    if (!current.activated && season) {
+      ganttInteractionArbiter.begin({ seasonId: season.id, targetType: 'modification', targetId: current.recordId });
+    }
+    const next: DragState = {
+      ...current,
+      activated: true,
+      currentClientX: current.kind === 'allocated' ? current.currentClientX : event.clientX,
+      currentClientY: event.clientY,
+    };
+    dragStateRef.current = next;
+    setPointerDragState(next);
+    setDraggedGroupId(next.recordId);
+    setActiveDropSpanIfChanged(next.dropSpan);
+    updateCheckInPointerPreview(event.clientX, event.clientY);
+    if (!current.activated) {
+      startCheckInDragScroll({ clientX: event.clientX, clientY: event.clientY }, next.kind === 'allocated' ? 'vertical' : 'both');
+    } else {
+      updateCheckInDragScrollPointer({ clientX: event.clientX, clientY: event.clientY });
+    }
+  }, [season, setActiveDropSpanIfChanged, startCheckInDragScroll, updateCheckInDragScrollPointer, updateCheckInPointerPreview]);
+
+  const handleCheckInPointerUp = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!drag.activated) {
+      clearCheckInPointerDrag();
+      return;
+    }
+    suppressNextPointerClickRef.current = true;
+    const target = resolveCheckInPointerDrop(event.clientX, event.clientY);
+    const recordId = drag.recordId;
+    releaseCheckInInteraction(recordId);
+    clearCheckInPointerDrag();
+    if (syncWriteInProgress) return;
+    if (target.kind === 'row') {
+      if (drag.kind === 'unallocated') void handleAllocate(recordId, target.counter);
+      else void handleMove(drag, target.rowIndex);
+      return;
+    }
+    if (target.kind === 'pool' && drag.kind === 'allocated') commitCheckInPoolDrop(drag);
+  }, [clearCheckInPointerDrag, commitCheckInPoolDrop, handleAllocate, handleMove, releaseCheckInInteraction, resolveCheckInPointerDrop, syncWriteInProgress]);
+
+  const handleCheckInPointerCancel = useCallback(() => {
+    const drag = dragStateRef.current;
+    if (drag?.activated) {
+      suppressNextPointerClickRef.current = true;
+      releaseCheckInInteraction(drag.recordId);
+    }
+    clearCheckInPointerDrag();
+  }, [clearCheckInPointerDrag, releaseCheckInInteraction]);
+
+  useEffect(() => {
+    if (!pointerDragState) return undefined;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') handleCheckInPointerCancel();
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [handleCheckInPointerCancel, pointerDragState]);
 
   const handleBreakShape = useCallback(async (bar: CheckInResourceBar) => {
     const record = getEffectiveRecord(bar.recordId);
@@ -2805,6 +2854,10 @@ function CheckInAllocationContent() {
   }, []);
 
   const handleResourceBarSelect = useCallback((groupId: string) => {
+    if (suppressNextPointerClickRef.current) {
+      suppressNextPointerClickRef.current = false;
+      return;
+    }
     setSelectedGroupId(groupId);
   }, []);
 
@@ -2819,14 +2872,15 @@ function CheckInAllocationContent() {
       <button
         key={item.record.id}
         type="button"
-        draggable={!syncWriteInProgress}
         aria-label={`${label}, ${formatLocalDateTimeLabel(item.window.start)} to ${formatLocalDateTimeLabel(item.window.end)}`}
         onClick={(event) => {
           event.stopPropagation();
         }}
-        onDragStart={(event) => handleUnallocatedDragStart(event, item)}
-        onDragEnd={handleDragEnd}
-        className="absolute flex h-6 cursor-grab items-center overflow-hidden rounded-[4px] border border-white px-2 text-[11px] font-bold transition-[transform,width,box-shadow,background-color,border-color] duration-200 ease-out active:cursor-grabbing"
+        onPointerDown={(event) => handleUnallocatedPointerDown(event, item)}
+        onPointerMove={handleCheckInPointerMove}
+        onPointerUp={handleCheckInPointerUp}
+        onPointerCancel={handleCheckInPointerCancel}
+        className="absolute flex h-6 touch-none cursor-grab items-center overflow-hidden rounded-[4px] border border-white px-2 text-[11px] font-bold transition-[transform,width,box-shadow,background-color,border-color] duration-200 ease-out active:cursor-grabbing"
         style={{
           left: 0,
           top: 0,
@@ -2874,8 +2928,10 @@ function CheckInAllocationContent() {
         groupStartIndex={groupStartIndex}
         syncing={syncWriteInProgress}
         resizing={resizeState !== null}
-        onDragStart={handleResourceBarDragStart}
-        onDragEnd={handleDragEnd}
+        onPointerDown={handleResourceBarPointerDown}
+        onPointerMove={handleCheckInPointerMove}
+        onPointerUp={handleCheckInPointerUp}
+        onPointerCancel={handleCheckInPointerCancel}
         onHoverStart={handleResourceBarHoverStart}
         onHoverEnd={handleResourceBarHoverEnd}
         onSelect={handleResourceBarSelect}
@@ -2887,8 +2943,10 @@ function CheckInAllocationContent() {
   }, [
     groupedBarMetadataByRecordId,
     handleBarKeyDown,
-    handleDragEnd,
-    handleResourceBarDragStart,
+    handleCheckInPointerCancel,
+    handleCheckInPointerMove,
+    handleCheckInPointerUp,
+    handleResourceBarPointerDown,
     handleResourceBarHoverEnd,
     handleResourceBarHoverStart,
     handleResourceBarSelect,
@@ -3141,7 +3199,6 @@ function CheckInAllocationContent() {
               <div
                 ref={ganttScrollRef}
                 className="h-full overflow-auto"
-                onDragOver={handleGanttDragOver}
                 onClick={() => {
                   setSelectedGroupId(null);
                   setContextMenu(null);
@@ -3162,11 +3219,9 @@ function CheckInAllocationContent() {
                   )}
 
                   <div
+                    data-checkin-pool-drop="true"
                     className={`sticky top-14 z-30 border-b border-surface-variant bg-surface-container-lowest shadow-sm transition-colors duration-150 ${poolDropActive ? 'ring-2 ring-primary/50 bg-primary-container/20' : ''}`}
                     style={{ height: poolCollapsed ? POOL_HEADER_HEIGHT : poolHeight }}
-                    onDragOver={handlePoolDragOver}
-                    onDragLeave={handlePoolDragLeave}
-                    onDrop={handlePoolDrop}
                   >
                     <div className="flex h-9 items-center border-b border-surface-variant bg-surface-container-low">
                       <div
@@ -3307,13 +3362,9 @@ function CheckInAllocationContent() {
                                   )}
                                 </div>
                                 <div
+                                  data-checkin-drop-index={rowIndex}
                                   className="relative shrink-0"
                                   style={{ width: timeline.width }}
-                                  onDragOver={(event) => handleResourceDragOver(event, rowIndex, displayAllocationView)}
-                                  onDragLeave={() => {
-                                    scheduleDropPreviewUpdate(null);
-                                  }}
-                                  onDrop={(event) => handleResourceRowDrop(event, rowIndex, displayAllocationView)}
                                 >
                                   <TimelineGridBackground ticks={timeline.ticks} />
                                   {bars.map(renderResourceBar)}
@@ -3364,6 +3415,23 @@ function CheckInAllocationContent() {
                     {label}
                   </button>
                 ))}
+              </div>
+            )}
+
+            {pointerDragState && (
+              <div
+                className="pointer-events-none fixed z-[200] flex items-center overflow-hidden rounded-[4px] border border-white px-2 text-[11px] font-bold opacity-90 shadow-xl"
+                style={{
+                  left: pointerDragState.currentClientX - pointerDragState.offsetX,
+                  top: pointerDragState.currentClientY - pointerDragState.offsetY,
+                  width: pointerDragState.width,
+                  height: pointerDragState.height,
+                  background: pointerDragState.backgroundColor,
+                  backgroundColor: pointerDragState.backgroundColor,
+                  color: pointerDragState.textColor,
+                }}
+              >
+                <span className="truncate">{pointerDragState.flightNumber}</span>
               </div>
             )}
 
