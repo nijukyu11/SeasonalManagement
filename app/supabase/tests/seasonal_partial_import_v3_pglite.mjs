@@ -18,6 +18,10 @@ const fullReplaceMigrationUrl = new URL(
   '../migrations/20260817173000_make_seasonal_replace_full_reset.sql',
   import.meta.url,
 );
+const safeupdateHotfixMigrationUrl = new URL(
+  '../migrations/20260818100000_bound_seasonal_commit_temp_updates.sql',
+  import.meta.url,
+);
 const testUrl = new URL('./seasonal_partial_import_v3.sql', import.meta.url);
 
 const preV3FixtureSql = `
@@ -114,6 +118,9 @@ try {
   const fullReplaceMigrationSql = await readFile(fullReplaceMigrationUrl, 'utf8');
   await db.exec(fullReplaceMigrationSql);
   await db.exec(fullReplaceMigrationSql);
+  const safeupdateHotfixMigrationSql = await readFile(safeupdateHotfixMigrationUrl, 'utf8');
+  await db.exec(safeupdateHotfixMigrationSql);
+  await db.exec(safeupdateHotfixMigrationSql);
   await db.exec(await readFile(testUrl, 'utf8'));
   console.log(JSON.stringify({
     suite: 'seasonal_partial_import_v3.sql',
@@ -122,6 +129,7 @@ try {
     v3MigrationRuns: 2,
     flightNormalizationOptimizationRuns: 2,
     fullReplaceMigrationRuns: 2,
+    safeupdateHotfixMigrationRuns: 2,
     elapsedMs: Date.now() - startedAt,
     status: 'passed',
   }));

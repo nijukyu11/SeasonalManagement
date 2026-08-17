@@ -7801,13 +7801,15 @@ begin
         1,
         32
       )
-    end;
+    end
+  where incoming.final_record_id is not null;
 
   update pg_temp.seasonal_import_commit_records_v3 incoming
   set resolved_link_id = coalesce(
     incoming.resolved_turnaround_id,
     incoming.final_record_id
-  );
+  )
+  where incoming.final_record_id is not null;
 
   create temporary table seasonal_import_commit_omitted_v3
   on commit drop

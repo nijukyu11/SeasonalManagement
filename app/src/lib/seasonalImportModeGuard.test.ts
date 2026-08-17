@@ -118,6 +118,16 @@ test('Seasonal import V3 RPCs stay identical in migration and canonical schema',
   assert.match(commitSource, /Seasonal import preview counts changed before commit/);
   assert.match(
     commitSource,
+    /resolved_turnaround_id = case[\s\S]*?end\s+where incoming\.final_record_id is not null;/,
+    'safeupdate requires the temp-table turnaround update to have a WHERE clause',
+  );
+  assert.match(
+    commitSource,
+    /set resolved_link_id = coalesce\([\s\S]*?\)\s+where incoming\.final_record_id is not null;/,
+    'safeupdate requires the temp-table link update to have a WHERE clause',
+  );
+  assert.match(
+    commitSource,
     /if v_batch\.apply_strategy = 'replace' then[\s\S]*delete from public\.season_mod_history_entries[\s\S]*delete from public\.season_modifications[\s\S]*delete from public\.season_flight_records[\s\S]*delete from public\.season_entity_versions/i,
   );
   assert.match(commitSource, /source_provenance_mode = case[\s\S]*then 'full'[\s\S]*else 'fragmented'/);
@@ -137,6 +147,24 @@ test('Seasonal import V3 RPCs stay identical in migration and canonical schema',
     migrationSource,
     /grant execute on function public\.commit_seasonal_import_v3\(uuid, integer, text\)[\s\S]*to authenticated/,
   );
+});
+
+test('Seasonal import V3 safeupdate hotfix upgrades an already deployed commit RPC', () => {
+  const source = readFileSync(
+    join(
+      root,
+      '..',
+      'supabase',
+      'migrations',
+      '20260818100000_bound_seasonal_commit_temp_updates.sql',
+    ),
+    'utf8',
+  );
+
+  assert.match(source, /pg_get_functiondef\(v_signature::oid\)/);
+  assert.match(source, /where incoming\.final_record_id is not null;/);
+  assert.match(source, /Unexpected commit_seasonal_import_v3 turnaround update definition/);
+  assert.match(source, /Unexpected commit_seasonal_import_v3 link update definition/);
 });
 
 test('Replace preview states the full-season destructive boundary', () => {
