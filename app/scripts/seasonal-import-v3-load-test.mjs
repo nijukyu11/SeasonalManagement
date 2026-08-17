@@ -249,6 +249,17 @@ async function runPerformance(client, userId) {
   const replaceCommit = await commit(client, userId, replaceStage.result);
   dataVersion = replaceCommit.result.dataVersion;
 
+  const fullBaselineAttempt = await prepareExisting(
+    seasonId,
+    seasonCode,
+    dataVersion,
+    fixture.sourceRows,
+    'merge',
+  );
+  const fullBaselineStage = await stage(client, userId, fullBaselineAttempt);
+  assert.equal(fullBaselineStage.result.valid, true, JSON.stringify(fullBaselineStage.result.diagnostics));
+  await cancel(client, userId, fullBaselineStage.result.batchId);
+
   const stageMetric = metric(stageDurations);
   const commitMetric = metric(commitDurations);
   assert.ok(stageMetric.p95Ms < MERGE_STAGE_P95_MS, `merge stage p95 ${stageMetric.p95Ms} ms`);
@@ -257,6 +268,7 @@ async function runPerformance(client, userId) {
   assert.ok(commitMetric.maxMs < MERGE_COMMIT_MAX_MS, `merge commit max ${commitMetric.maxMs} ms`);
   assert.ok(replaceStage.durationMs < AUTHENTICATED_TIMEOUT_MS);
   assert.ok(replaceCommit.durationMs < AUTHENTICATED_TIMEOUT_MS);
+  assert.ok(fullBaselineStage.durationMs < AUTHENTICATED_TIMEOUT_MS);
 
   return {
     seasonId,
@@ -270,6 +282,7 @@ async function runPerformance(client, userId) {
       generatedOccurrenceCount: replaceStage.result.counts.generatedOccurrenceCount,
       stageMs: Number(replaceStage.durationMs.toFixed(2)),
       commitMs: Number(replaceCommit.durationMs.toFixed(2)),
+      restageAgainstFullBaselineMs: Number(fullBaselineStage.durationMs.toFixed(2)),
     },
     sqlState57014Count: 0,
   };

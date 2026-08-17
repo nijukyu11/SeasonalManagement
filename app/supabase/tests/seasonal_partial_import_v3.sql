@@ -3,7 +3,26 @@ begin;
 do $$
 declare
   v_error_code text;
+  v_flight_number text;
+  v_raw_flight_number text;
 begin
+  select normalized.flight_number, normalized.raw_flight_number
+  into v_flight_number, v_raw_flight_number
+  from public.normalize_seasonal_flight_number_v2(' tg ', ' TG59 ') normalized;
+
+  if v_flight_number is distinct from 'TG059'
+    or v_raw_flight_number is distinct from '059'
+  then
+    raise exception 'optimized flight normalization changed canonical output';
+  end if;
+
+  if exists (
+    select 1
+    from public.normalize_seasonal_flight_number_v2('TG', '   ')
+  ) then
+    raise exception 'optimized flight normalization must not emit blank flights';
+  end if;
+
   if (
     select source_provenance_mode
     from public.seasons

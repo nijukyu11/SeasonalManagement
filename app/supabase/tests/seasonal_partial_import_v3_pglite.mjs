@@ -10,6 +10,10 @@ const v3MigrationUrl = new URL(
   '../migrations/20260724090000_seasonal_partial_import_v3.sql',
   import.meta.url,
 );
+const flightNormalizationOptimizationUrl = new URL(
+  '../migrations/20260817160000_optimize_seasonal_import_flight_normalization.sql',
+  import.meta.url,
+);
 const testUrl = new URL('./seasonal_partial_import_v3.sql', import.meta.url);
 
 const preV3FixtureSql = `
@@ -97,12 +101,19 @@ try {
   const migrationSql = await readFile(v3MigrationUrl, 'utf8');
   await db.exec(migrationSql);
   await db.exec(migrationSql);
+  const flightNormalizationOptimizationSql = await readFile(
+    flightNormalizationOptimizationUrl,
+    'utf8',
+  );
+  await db.exec(flightNormalizationOptimizationSql);
+  await db.exec(flightNormalizationOptimizationSql);
   await db.exec(await readFile(testUrl, 'utf8'));
   console.log(JSON.stringify({
     suite: 'seasonal_partial_import_v3.sql',
     engine: 'PGlite',
     v2MigrationRuns: 1,
     v3MigrationRuns: 2,
+    flightNormalizationOptimizationRuns: 2,
     elapsedMs: Date.now() - startedAt,
     status: 'passed',
   }));

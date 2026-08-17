@@ -1395,51 +1395,48 @@ returns table (
   flight_number text,
   raw_flight_number text
 )
-language sql
+language plpgsql
 immutable
+rows 1
 set search_path = pg_catalog, pg_temp
 as $$
-  with normalized_input as (
-    select
-      pg_catalog.upper(pg_catalog.btrim(p_airline)) as airline,
-      pg_catalog.upper(pg_catalog.btrim(p_raw)) as raw_value
-  ), without_airline_prefix as (
-    select
-      normalized_input.airline,
-      case
-        when normalized_input.airline <> ''
-          and pg_catalog.char_length(normalized_input.raw_value)
-            > pg_catalog.char_length(normalized_input.airline)
-          and pg_catalog.left(
-            normalized_input.raw_value,
-            pg_catalog.char_length(normalized_input.airline)
-          ) = normalized_input.airline
-          then pg_catalog.substr(
-            normalized_input.raw_value,
-            pg_catalog.char_length(normalized_input.airline) + 1
-          )
-        else normalized_input.raw_value
-      end as flight_part
-    from normalized_input
-  ), normalized_flight as (
-    select
-      without_airline_prefix.airline,
-      case
-        when without_airline_prefix.flight_part ~ '^[0-9]+$'
-          and pg_catalog.char_length(without_airline_prefix.flight_part) < 3
-          then pg_catalog.repeat(
-            '0',
-            3 - pg_catalog.char_length(without_airline_prefix.flight_part)
-          ) || without_airline_prefix.flight_part
-        else without_airline_prefix.flight_part
-      end as flight_part
-    from without_airline_prefix
-  )
-  select
-    normalized_flight.airline || normalized_flight.flight_part,
-    normalized_flight.flight_part
-  from normalized_flight
-  where normalized_flight.flight_part <> ''
+declare
+  v_airline text;
+  v_flight_part text;
+begin
+  if p_raw is null then
+    return;
+  end if;
+
+  v_airline := pg_catalog.upper(pg_catalog.btrim(p_airline));
+  v_flight_part := pg_catalog.upper(pg_catalog.btrim(p_raw));
+  if v_flight_part = '' then
+    return;
+  end if;
+
+  if v_airline <> ''
+    and pg_catalog.char_length(v_flight_part) > pg_catalog.char_length(v_airline)
+    and pg_catalog.left(v_flight_part, pg_catalog.char_length(v_airline)) = v_airline
+  then
+    v_flight_part := pg_catalog.substr(
+      v_flight_part,
+      pg_catalog.char_length(v_airline) + 1
+    );
+  end if;
+
+  if v_flight_part ~ '^[0-9]+$'
+    and pg_catalog.char_length(v_flight_part) < 3
+  then
+    v_flight_part := pg_catalog.repeat(
+      '0',
+      3 - pg_catalog.char_length(v_flight_part)
+    ) || v_flight_part;
+  end if;
+
+  flight_number := v_airline || v_flight_part;
+  raw_flight_number := v_flight_part;
+  return next;
+end;
 $$;
 
 create or replace function public.seasonal_operational_date_v2(
