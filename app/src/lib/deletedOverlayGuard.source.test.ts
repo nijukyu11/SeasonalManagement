@@ -50,3 +50,15 @@ test('Seasonal import V3 merge keeps all modification overlays immutable', () =>
     /if v_batch\.apply_strategy = 'replace' then[\s\S]*delete from public\.season_modifications/,
   );
 });
+
+test('Seasonal import V3 replace rebuilds the complete season workspace', () => {
+  const replaceBlock = seasonalImportV3Migration.match(
+    /if v_batch\.apply_strategy = 'replace' then[\s\S]*?end if;/i,
+  )?.[0] ?? '';
+
+  assert.match(replaceBlock, /delete from public\.season_mod_history_entries/);
+  assert.match(replaceBlock, /delete from public\.season_modifications/);
+  assert.match(replaceBlock, /delete from public\.season_flight_records/);
+  assert.match(replaceBlock, /delete from public\.season_entity_versions/);
+  assert.doesNotMatch(replaceBlock, /source_kind = 'imported'/);
+});

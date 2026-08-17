@@ -6885,6 +6885,7 @@ begin
       coalesce(nullif(linked.flight_number, ''), linked.raw_flight_number)
     ) linked_normalized on linked.record_id is not null
     where records.season_id = v_target_season_id
+      and v_strategy = 'merge'
       and records.source_kind = 'imported'
       and records.status = 'active'
       and records.action is distinct from 'deleted'
@@ -6945,46 +6946,34 @@ begin
   if v_strategy = 'merge' then
     v_preserved_outside_count := v_existing_imported_count - v_matched_count;
   else
-    v_remove_imported_count := v_existing_imported_count - v_matched_count;
+    select
+      pg_catalog.count(*)::integer
+    into v_remove_imported_count
+    from (
+      select records.record_id
+      from public.season_flight_records records
+      where records.season_id = v_target_season_id
+      union
+      select added_legs.record_id
+      from public.season_modification_added_legs added_legs
+      where added_legs.season_id = v_target_season_id
+    ) existing_records;
 
     select
       pg_catalog.count(*) filter (
-        where records.record_id is not null
-          and modifications.action = 'modified'
-          and modifications.changed_fields
-            && array['schedule', 'aircraft', 'route', 'codeShares']::text[]
-      )::integer,
-      pg_catalog.count(*) filter (
-        where records.record_id is not null
-          and modifications.action = 'deleted'
-      )::integer,
-      pg_catalog.count(*) filter (
-        where records.record_id is null
-          or (
-            modifications.action = 'modified'
-            and exists (
-              select 1
-              from pg_catalog.unnest(modifications.changed_fields) fields(field_name)
-              where fields.field_name
-                <> all(array['schedule', 'aircraft', 'route', 'codeShares']::text[])
-            )
-          )
+        where modifications.action <> 'deleted'
       )::integer,
       pg_catalog.count(*) filter (
         where modifications.action = 'deleted'
-          and records.record_id is null
       )::integer
     into
       v_clear_structural_overlay_count,
-      v_clear_deleted_overlay_count,
-      v_preserved_overlay_count,
-      v_preserved_deleted_overlay_count
+      v_clear_deleted_overlay_count
     from public.season_modifications modifications
-    left join public.season_flight_records records
-      on records.record_id = modifications.leg_id
-      and records.season_id = modifications.season_id
-      and records.source_kind = 'imported'
     where modifications.season_id = v_target_season_id;
+
+    v_preserved_overlay_count := 0;
+    v_preserved_deleted_overlay_count := 0;
   end if;
 
   drop table if exists pg_temp.seasonal_import_v3_diagnostic_items;
@@ -7055,6 +7044,7 @@ begin
       on modifications.season_id = records.season_id
       and modifications.leg_id = records.record_id
     where records.season_id = v_target_season_id
+      and v_strategy = 'merge'
       and (records.source_kind = 'added' or records.action = 'added')
       and records.status = 'active'
       and records.action is distinct from 'deleted'
@@ -7073,6 +7063,7 @@ begin
       on modifications.season_id = added_legs.season_id
       and modifications.leg_id = added_legs.leg_id
     where added_legs.season_id = v_target_season_id
+      and v_strategy = 'merge'
       and added_legs.source_kind = 'added'
       and added_legs.status = 'active'
       and added_legs.action is distinct from 'deleted'
@@ -7695,6 +7686,7 @@ begin
       coalesce(nullif(linked.flight_number, ''), linked.raw_flight_number)
     ) linked_normalized on linked.record_id is not null
     where records.season_id = v_target_season_id
+      and v_batch.apply_strategy = 'merge'
       and records.source_kind = 'imported'
       and records.status = 'active'
       and records.action is distinct from 'deleted'
@@ -7737,14 +7729,29 @@ begin
     on existing.occurrence_key = incoming.occurrence_key
   where incoming.batch_id = p_batch_id;
 
-  select conflicts.record_id
-  into v_conflicting_record_id
-  from pg_temp.seasonal_import_commit_records_v3 incoming
-  join public.season_flight_records conflicts
-    on conflicts.record_id = incoming.generated_record_id
-  where incoming.is_insert
-  order by conflicts.record_id
-  limit 1;
+  create unique index seasonal_import_commit_generated_id_v3
+    on pg_temp.seasonal_import_commit_records_v3 (generated_record_id);
+
+  if v_batch.apply_strategy = 'merge' then
+    select conflicts.record_id
+    into v_conflicting_record_id
+    from pg_temp.seasonal_import_commit_records_v3 incoming
+    join public.season_flight_records conflicts
+      on conflicts.record_id = incoming.generated_record_id
+    where incoming.is_insert
+    order by conflicts.record_id
+    limit 1;
+  else
+    select conflicts.record_id
+    into v_conflicting_record_id
+    from pg_temp.seasonal_import_commit_records_v3 incoming
+    join public.season_flight_records conflicts
+      on conflicts.record_id = incoming.generated_record_id
+    where incoming.is_insert
+      and conflicts.season_id <> v_target_season_id
+    order by conflicts.record_id
+    limit 1;
+  end if;
 
   if v_conflicting_record_id is not null then
     raise exception 'Generated record ID % conflicts with an existing record',
@@ -7805,11 +7812,14 @@ begin
   create temporary table seasonal_import_commit_omitted_v3
   on commit drop
   as
-  select existing.record_id
-  from pg_temp.seasonal_import_commit_existing_v3 existing
-  left join pg_temp.seasonal_import_commit_records_v3 incoming
-    on incoming.matched_record_id = existing.record_id
-  where incoming.matched_record_id is null
+  select records.record_id
+  from public.season_flight_records records
+  where records.season_id = v_target_season_id
+    and v_batch.apply_strategy = 'replace'
+  union
+  select added_legs.record_id
+  from public.season_modification_added_legs added_legs
+  where added_legs.season_id = v_target_season_id
     and v_batch.apply_strategy = 'replace';
 
   create unique index seasonal_import_commit_omitted_id_v3
@@ -7822,7 +7832,12 @@ begin
   from pg_temp.seasonal_import_commit_records_v3 incoming
   union
   select omitted.record_id
-  from pg_temp.seasonal_import_commit_omitted_v3 omitted;
+  from pg_temp.seasonal_import_commit_omitted_v3 omitted
+  union
+  select modifications.leg_id
+  from public.season_modifications modifications
+  where modifications.season_id = v_target_season_id
+    and v_batch.apply_strategy = 'replace';
 
   create unique index seasonal_import_commit_affected_id_v3
     on pg_temp.seasonal_import_commit_affected_v3 (record_id);
@@ -7872,60 +7887,44 @@ begin
   -- seasonal_import_v3_merge_overlay_immutability_begin
   if v_batch.apply_strategy = 'merge' then
     v_preserved_outside_count := v_existing_imported_count - v_matched_count;
+    select
+      pg_catalog.count(*)::integer,
+      pg_catalog.count(*) filter (
+        where modifications.action = 'deleted'
+      )::integer
+    into v_preserved_overlay_count, v_preserved_deleted_overlay_count
+    from public.season_modifications modifications
+    where modifications.season_id = v_target_season_id;
   else
-    v_remove_imported_count := v_existing_imported_count - v_matched_count;
-  end if;
+    select pg_catalog.count(*)::integer
+    into v_remove_imported_count
+    from (
+      select records.record_id
+      from public.season_flight_records records
+      where records.season_id = v_target_season_id
+      union
+      select added_legs.record_id
+      from public.season_modification_added_legs added_legs
+      where added_legs.season_id = v_target_season_id
+    ) existing_records;
 
-  select
-    pg_catalog.count(*)::integer,
-    pg_catalog.count(*) filter (
-      where modifications.action = 'deleted'
-    )::integer
-  into v_preserved_overlay_count, v_preserved_deleted_overlay_count
-  from public.season_modifications modifications
-  where modifications.season_id = v_target_season_id;
-  -- seasonal_import_v3_merge_overlay_immutability_end
-
-  if v_batch.apply_strategy = 'replace' then
     select
       pg_catalog.count(*) filter (
-        where records.record_id is not null
-          and modifications.action = 'modified'
-          and modifications.changed_fields
-            && array['schedule', 'aircraft', 'route', 'codeShares']::text[]
-      )::integer,
-      pg_catalog.count(*) filter (
-        where records.record_id is not null
-          and modifications.action = 'deleted'
-      )::integer,
-      pg_catalog.count(*) filter (
-        where records.record_id is null
-          or (
-            modifications.action = 'modified'
-            and exists (
-              select 1
-              from pg_catalog.unnest(modifications.changed_fields) fields(field_name)
-              where fields.field_name
-                <> all(array['schedule', 'aircraft', 'route', 'codeShares']::text[])
-            )
-          )
+        where modifications.action <> 'deleted'
       )::integer,
       pg_catalog.count(*) filter (
         where modifications.action = 'deleted'
-          and records.record_id is null
       )::integer
     into
       v_clear_structural_overlay_count,
-      v_clear_deleted_overlay_count,
-      v_preserved_overlay_count,
-      v_preserved_deleted_overlay_count
+      v_clear_deleted_overlay_count
     from public.season_modifications modifications
-    left join public.season_flight_records records
-      on records.record_id = modifications.leg_id
-      and records.season_id = modifications.season_id
-      and records.source_kind = 'imported'
     where modifications.season_id = v_target_season_id;
+
+    v_preserved_overlay_count := 0;
+    v_preserved_deleted_overlay_count := 0;
   end if;
+  -- seasonal_import_v3_merge_overlay_immutability_end
 
   if v_insert_count
       is distinct from (v_batch.preview #>> '{counts,insertCount}')::integer
@@ -7951,6 +7950,31 @@ begin
       using errcode = 'P0001';
   end if;
 
+  with counter_snapshots as (
+    select
+      counters.leg_id,
+      pg_catalog.jsonb_agg(
+        pg_catalog.to_jsonb(counters)
+        order by counters.counter_group, counters.item_index
+      ) as rows
+    from public.season_modification_counters counters
+    join public.season_modifications modifications
+      on modifications.leg_id = counters.leg_id
+    where modifications.season_id = v_target_season_id
+    group by counters.leg_id
+  ), checkin_window_snapshots as (
+    select
+      windows.leg_id,
+      pg_catalog.jsonb_agg(
+        pg_catalog.to_jsonb(windows)
+        order by windows.counter_key
+      ) as rows
+    from public.season_modification_checkin_windows windows
+    join public.season_modifications modifications
+      on modifications.leg_id = windows.leg_id
+    where modifications.season_id = v_target_season_id
+    group by windows.leg_id
+  )
   insert into public.season_import_batch_preimages_v3 (
     batch_id,
     record_id,
@@ -7966,43 +7990,24 @@ begin
     affected.record_id,
     records.record_id is not null,
     pg_catalog.to_jsonb(records),
-    (
-      select pg_catalog.to_jsonb(modifications)
-      from public.season_modifications modifications
-      where modifications.season_id = v_target_season_id
-        and modifications.leg_id = affected.record_id
-    ),
-    coalesce(
-      (
-        select pg_catalog.jsonb_agg(
-          pg_catalog.to_jsonb(counters)
-          order by counters.counter_group, counters.item_index
-        )
-        from public.season_modification_counters counters
-        where counters.leg_id = affected.record_id
-      ),
-      '[]'::jsonb
-    ),
-    coalesce(
-      (
-        select pg_catalog.jsonb_agg(
-          pg_catalog.to_jsonb(windows)
-          order by windows.counter_key
-        )
-        from public.season_modification_checkin_windows windows
-        where windows.leg_id = affected.record_id
-      ),
-      '[]'::jsonb
-    ),
-    (
-      select pg_catalog.to_jsonb(added_legs)
-      from public.season_modification_added_legs added_legs
-      where added_legs.season_id = v_target_season_id
-        and added_legs.leg_id = affected.record_id
-    )
+    pg_catalog.to_jsonb(modifications),
+    coalesce(counter_snapshots.rows, '[]'::jsonb),
+    coalesce(checkin_window_snapshots.rows, '[]'::jsonb),
+    pg_catalog.to_jsonb(added_legs)
   from pg_temp.seasonal_import_commit_affected_v3 affected
   left join public.season_flight_records records
-    on records.record_id = affected.record_id;
+    on records.record_id = affected.record_id
+    and records.season_id = v_target_season_id
+  left join public.season_modifications modifications
+    on modifications.leg_id = affected.record_id
+    and modifications.season_id = v_target_season_id
+  left join counter_snapshots
+    on counter_snapshots.leg_id = affected.record_id
+  left join checkin_window_snapshots
+    on checkin_window_snapshots.leg_id = affected.record_id
+  left join public.season_modification_added_legs added_legs
+    on added_legs.leg_id = affected.record_id
+    and added_legs.season_id = v_target_season_id;
 
   with manual_candidates as (
     select
@@ -8023,6 +8028,7 @@ begin
       on modifications.season_id = records.season_id
       and modifications.leg_id = records.record_id
     where records.season_id = v_target_season_id
+      and v_batch.apply_strategy = 'merge'
       and (records.source_kind = 'added' or records.action = 'added')
       and records.status = 'active'
       and records.action is distinct from 'deleted'
@@ -8049,6 +8055,7 @@ begin
       on modifications.season_id = added_legs.season_id
       and modifications.leg_id = added_legs.leg_id
     where added_legs.season_id = v_target_season_id
+      and v_batch.apply_strategy = 'merge'
       and added_legs.source_kind = 'added'
       and added_legs.status = 'active'
       and added_legs.action is distinct from 'deleted'
@@ -8068,74 +8075,28 @@ begin
       using errcode = '23505';
   end if;
 
-  if v_batch.apply_strategy = 'replace' then
-    delete from public.season_modifications modifications
-    using pg_temp.seasonal_import_commit_omitted_v3 omitted
-    where modifications.season_id = v_target_season_id
-      and modifications.leg_id = omitted.record_id;
-
-    delete from public.season_modifications modifications
-    using pg_temp.seasonal_import_commit_records_v3 incoming
-    where modifications.season_id = v_target_season_id
-      and modifications.leg_id = incoming.final_record_id
-      and incoming.matched_record_id is not null
-      and modifications.action = 'deleted';
-
-    update public.season_modifications modifications
-    set
-      changed_fields = array(
-        select fields.field_name
-        from pg_catalog.unnest(modifications.changed_fields) fields(field_name)
-        where fields.field_name
-          <> all(array['schedule', 'aircraft', 'route', 'codeShares']::text[])
-        order by fields.field_name
-      ),
-      schedule = case
-        when 'schedule' = any(modifications.changed_fields) then null
-        else modifications.schedule
-      end,
-      aircraft = case
-        when 'aircraft' = any(modifications.changed_fields) then null
-        else modifications.aircraft
-      end,
-      route = case
-        when 'route' = any(modifications.changed_fields) then null
-        else modifications.route
-      end,
-      code_shares = case
-        when 'codeShares' = any(modifications.changed_fields) then null
-        else modifications.code_shares
-      end
-    from pg_temp.seasonal_import_commit_records_v3 incoming
-    where modifications.season_id = v_target_season_id
-      and modifications.leg_id = incoming.final_record_id
-      and incoming.matched_record_id is not null
-      and modifications.action = 'modified'
-      and modifications.changed_fields
-        && array['schedule', 'aircraft', 'route', 'codeShares']::text[];
-
-    delete from public.season_modifications modifications
-    using pg_temp.seasonal_import_commit_records_v3 incoming
-    where modifications.season_id = v_target_season_id
-      and modifications.leg_id = incoming.final_record_id
-      and incoming.matched_record_id is not null
-      and modifications.action = 'modified'
-      and pg_catalog.cardinality(modifications.changed_fields) = 0;
-
-    delete from public.season_flight_records records
-    using pg_temp.seasonal_import_commit_omitted_v3 omitted
-    where records.season_id = v_target_season_id
-      and records.record_id = omitted.record_id
-      and records.source_kind = 'imported';
-  end if;
-
   perform pg_catalog.set_config(
     'app.seasonal_import_v3_bulk_season_id',
     v_target_season_id,
     true
   );
 
-  update public.season_flight_records records
+  if v_batch.apply_strategy = 'replace' then
+    delete from public.season_mod_history_entries history
+    where history.season_id = v_target_season_id;
+
+    delete from public.season_modifications modifications
+    where modifications.season_id = v_target_season_id;
+
+    delete from public.season_flight_records records
+    where records.season_id = v_target_season_id;
+
+    delete from public.season_entity_versions versions
+    where versions.season_id = v_target_season_id;
+  end if;
+
+  if v_batch.apply_strategy = 'merge' then
+    update public.season_flight_records records
   set
     link_id = incoming.resolved_link_id,
     type = incoming.record_data->>'type',
@@ -8168,10 +8129,8 @@ begin
   from pg_temp.seasonal_import_commit_records_v3 incoming
   where records.record_id = incoming.final_record_id
     and records.season_id = v_target_season_id
-    and (
-      incoming.needs_update
-      or v_batch.apply_strategy = 'replace'
-    );
+    and incoming.needs_update;
+  end if;
 
   insert into public.season_flight_records (
     season_id,
@@ -8240,6 +8199,17 @@ begin
     incoming.source_staging_row_index
   from pg_temp.seasonal_import_commit_records_v3 incoming
   where incoming.is_insert;
+
+  if v_batch.apply_strategy = 'replace' then
+    get diagnostics v_imported_record_count = row_count;
+    if v_imported_record_count <> v_staged_record_count then
+      raise exception 'Replace inserted % of % staged records for batch %',
+        v_imported_record_count,
+        v_staged_record_count,
+        p_batch_id
+        using errcode = 'P0001';
+    end if;
+  end if;
 
   perform pg_catalog.set_config(
     'app.seasonal_import_v3_bulk_season_id',
@@ -8336,47 +8306,66 @@ begin
     where seasons.id = v_target_season_id;
   end if;
 
-  select pg_catalog.count(*)::integer
-  into v_imported_record_count
-  from public.season_flight_records records
-  where records.season_id = v_target_season_id
-    and records.source_kind = 'imported';
-
-  with effective_schedule as (
+  if v_batch.apply_strategy = 'replace' then
+    v_effective_record_count := v_imported_record_count;
     select
-      records.record_id,
-      coalesce(nullif(records.scheduled_date, ''), nullif(records.date, ''))
-        as scheduled_date
-    from public.season_flight_records records
-    left join public.season_modifications modifications
-      on modifications.season_id = records.season_id
-      and modifications.leg_id = records.record_id
-    where records.season_id = v_target_season_id
-      and records.status = 'active'
-      and records.action is distinct from 'deleted'
-      and modifications.action is distinct from 'deleted'
-    union
-    select
-      added_legs.record_id,
-      coalesce(
-        nullif(added_legs.scheduled_date, ''),
-        nullif(added_legs.date, '')
+      pg_catalog.min(
+        coalesce(
+          nullif(incoming.record_data->>'scheduledDate', ''),
+          nullif(incoming.record_data->>'date', '')
+        )
+      ),
+      pg_catalog.max(
+        coalesce(
+          nullif(incoming.record_data->>'scheduledDate', ''),
+          nullif(incoming.record_data->>'date', '')
+        )
       )
-    from public.season_modification_added_legs added_legs
-    join public.season_modifications modifications
-      on modifications.season_id = added_legs.season_id
-      and modifications.leg_id = added_legs.leg_id
-    where added_legs.season_id = v_target_season_id
-      and added_legs.status = 'active'
-      and added_legs.action is distinct from 'deleted'
-      and modifications.action = 'added'
-  )
-  select
-    pg_catalog.count(*)::integer,
-    pg_catalog.min(effective_schedule.scheduled_date),
-    pg_catalog.max(effective_schedule.scheduled_date)
-  into v_effective_record_count, v_effective_start, v_effective_end
-  from effective_schedule;
+    into v_effective_start, v_effective_end
+    from pg_temp.seasonal_import_commit_records_v3 incoming;
+  else
+    select pg_catalog.count(*)::integer
+    into v_imported_record_count
+    from public.season_flight_records records
+    where records.season_id = v_target_season_id
+      and records.source_kind = 'imported';
+
+    with effective_schedule as (
+      select
+        records.record_id,
+        coalesce(nullif(records.scheduled_date, ''), nullif(records.date, ''))
+          as scheduled_date
+      from public.season_flight_records records
+      left join public.season_modifications modifications
+        on modifications.season_id = records.season_id
+        and modifications.leg_id = records.record_id
+      where records.season_id = v_target_season_id
+        and records.status = 'active'
+        and records.action is distinct from 'deleted'
+        and modifications.action is distinct from 'deleted'
+      union
+      select
+        added_legs.record_id,
+        coalesce(
+          nullif(added_legs.scheduled_date, ''),
+          nullif(added_legs.date, '')
+        )
+      from public.season_modification_added_legs added_legs
+      join public.season_modifications modifications
+        on modifications.season_id = added_legs.season_id
+        and modifications.leg_id = added_legs.leg_id
+      where added_legs.season_id = v_target_season_id
+        and added_legs.status = 'active'
+        and added_legs.action is distinct from 'deleted'
+        and modifications.action = 'added'
+    )
+    select
+      pg_catalog.count(*)::integer,
+      pg_catalog.min(effective_schedule.scheduled_date),
+      pg_catalog.max(effective_schedule.scheduled_date)
+    into v_effective_record_count, v_effective_start, v_effective_end
+    from effective_schedule;
+  end if;
 
   v_now_ms := pg_catalog.floor(
     extract(epoch from pg_catalog.clock_timestamp()) * 1000

@@ -604,6 +604,9 @@ export default function HomePage() {
           totalEffectiveRecords: remoteImport.totalEffectiveRecordCount,
           preservedOperationalRecords: remoteImport.counts.preservedOverlayCount,
           removedImportedRecords: remoteImport.counts.removeImportedCount,
+          removedSeasonRecords: remoteImport.strategy === 'replace'
+            ? remoteImport.counts.removeImportedCount
+            : 0,
           dataVersion: remoteImport.dataVersion,
           fileName: refreshedSeason.fileName,
           batchId: remoteImport.batchId,
@@ -615,6 +618,9 @@ export default function HomePage() {
         totalEffectiveRecords: remoteImport.totalEffectiveRecordCount,
         preservedOperationalRecords: remoteImport.counts.preservedOverlayCount,
         removedImportedRecords: remoteImport.counts.removeImportedCount,
+        removedSeasonRecords: remoteImport.strategy === 'replace'
+          ? remoteImport.counts.removeImportedCount
+          : 0,
         dataVersion: remoteImport.dataVersion,
         serverHighWater: remoteImport.serverHighWater,
         checksum: remoteImport.checksum,
@@ -626,7 +632,7 @@ export default function HomePage() {
       message:
         `${remoteImport.counts.sourceRowCount} source rows generated ${remoteImport.importedRecordCount} imported records. ` +
         `${remoteImport.counts.preservedOverlayCount} operational overlays preserved; ` +
-        `${remoteImport.counts.removeImportedCount} prior imported records removed.`,
+        `${remoteImport.counts.removeImportedCount} ${remoteImport.strategy === 'replace' ? 'prior season records' : 'prior imported records'} removed.`,
       tone: 'success',
     });
     return true;

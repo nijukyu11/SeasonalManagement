@@ -462,11 +462,11 @@ begin
           'rowIndex', 3,
           'effective', '2026-06-06',
           'discontinue', '2026-06-06',
-          'airline', 'KE',
+          'airline', 'KC',
           'aircraft', '789',
           'daysOfWeek', '[false,false,false,false,false,true,false]'::jsonb,
           'sta', '11:00',
-          'arrFlight', '123',
+          'arrFlight', '999',
           'arrRoute', 'ICN'
         )
       )
@@ -475,9 +475,11 @@ begin
 
   if v_replace->>'status' <> 'validated'
     or v_replace->>'strategy' <> 'replace'
-    or (v_replace #>> '{counts,removeImportedCount}')::integer <> 1
+    or (v_replace #>> '{counts,insertCount}')::integer <> 1
+    or (v_replace #>> '{counts,removeImportedCount}')::integer <> 2
+    or (v_replace #>> '{counts,manualCollisionCount}')::integer <> 0
   then
-    raise exception 'replace preview was not staged correctly: %', v_replace;
+    raise exception 'replace preview did not bypass manual collisions: %', v_replace;
   end if;
 end;
 $$;
@@ -1195,6 +1197,20 @@ begin
   ) <> 4 then
     raise exception 'merge did not persist one preimage per incoming occurrence';
   end if;
+
+  if not exists (
+    select 1
+    from public.season_import_batch_preimages_v3 preimages
+    join public.season_import_batches batches
+      on batches.batch_id = preimages.batch_id
+    where batches.request_id = '40000000-0000-5000-8000-000000000001'
+      and preimages.record_id = 'LEG_M26_CHANGED'
+      and preimages.modification_data->>'action' = 'modified'
+      and pg_catalog.jsonb_array_length(preimages.counter_rows) = 1
+      and pg_catalog.jsonb_array_length(preimages.checkin_window_rows) = 1
+  ) then
+    raise exception 'merge preimage omitted operational overlay details';
+  end if;
 end;
 $$;
 
@@ -1467,6 +1483,57 @@ begin
 end;
 $$;
 
+reset role;
+
+insert into public.season_mod_history_entries (
+  season_id,
+  entry_id,
+  timestamp,
+  description
+) values (
+  'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+  'HISTORY_M26_BEFORE_REPLACE',
+  1,
+  'Old modification history'
+);
+
+insert into public.season_mod_history_changes (
+  entry_id,
+  change_index,
+  leg_id,
+  previous_mod_snapshot,
+  new_mod_snapshot
+) values (
+  'HISTORY_M26_BEFORE_REPLACE',
+  0,
+  'LEG_M26_CHANGED',
+  null,
+  '{"action":"modified"}'::jsonb
+);
+
+insert into public.season_entity_versions (
+  season_id,
+  target_type,
+  target_id,
+  entity_version,
+  field_versions,
+  updated_by
+) values (
+  'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6',
+  'flightRecord',
+  'LEG_M26_CHANGED_BEFORE_REPLACE',
+  9,
+  '{"schedule":9}'::jsonb,
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+);
+
+set local role authenticated;
+select pg_catalog.set_config(
+  'request.jwt.claim.sub',
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  true
+);
+
 do $$
 declare
   v_preview jsonb;
@@ -1543,13 +1610,14 @@ begin
   );
 
   if v_preview->>'status' <> 'validated'
-    or (v_preview #>> '{counts,insertCount}')::integer <> 0
+    or (v_preview #>> '{counts,insertCount}')::integer <> 4
     or (v_preview #>> '{counts,baselineUpdateCount}')::integer <> 0
-    or (v_preview #>> '{counts,unchangedCount}')::integer <> 4
-    or (v_preview #>> '{counts,removeImportedCount}')::integer <> 1
+    or (v_preview #>> '{counts,unchangedCount}')::integer <> 0
+    or (v_preview #>> '{counts,removeImportedCount}')::integer <> 6
     or (v_preview #>> '{counts,clearStructuralOverlayCount}')::integer <> 1
     or (v_preview #>> '{counts,clearDeletedOverlayCount}')::integer <> 1
-    or (v_preview #>> '{counts,preservedOverlayCount}')::integer <> 1
+    or (v_preview #>> '{counts,preservedOverlayCount}')::integer <> 0
+    or (v_preview #>> '{counts,manualCollisionCount}')::integer <> 0
   then
     raise exception 'replace commit fixture preview is incorrect: %', v_preview;
   end if;
@@ -1571,7 +1639,7 @@ begin
     or v_committed->>'strategy' <> 'replace'
     or (v_committed->>'dataVersion')::integer <> 5
     or (v_committed->>'importedRecordCount')::integer <> 4
-    or (v_committed->>'totalEffectiveRecordCount')::integer <> 5
+    or (v_committed->>'totalEffectiveRecordCount')::integer <> 4
     or (v_committed #>> '{counts,clearDeletedOverlayCount}')::integer <> 1
   then
     raise exception 'replace commit result or idempotency is incorrect: %',
@@ -1594,61 +1662,50 @@ begin
   if exists (
     select 1
     from public.season_flight_records records
-    where records.record_id = 'LEG_M26_OMITTED'
-  ) then
-    raise exception 'replace retained an omitted imported record';
+    where records.season_id
+      = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+      and records.record_id like 'LEG_M26_%'
+  ) or (
+    select pg_catalog.count(*)
+    from public.season_flight_records records
+    where records.season_id
+      = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+      and records.source_kind = 'imported'
+      and records.source_import_batch_id = v_batch_id
+  ) <> 4 then
+    raise exception 'replace did not rebuild the season exclusively from the new batch';
   end if;
 
-  if not exists (
-    select 1
-    from public.season_flight_records records
-    where records.record_id = 'LEG_M26_CHANGED'
-      and records.route = 'HND'
-      and records.aircraft = '738'
-      and records.gate = 24
-  ) or not exists (
-    select 1
-    from public.season_flight_records records
-    where records.record_id = 'LEG_M26_UNCHANGED'
-  ) or not exists (
-    select 1
-    from public.season_flight_records records
-    where records.record_id = 'LEG_M26_MANUAL'
-      and records.source_kind = 'added'
-  ) then
-    raise exception 'replace did not preserve matched IDs or manual records';
-  end if;
-
-  if not exists (
+  if exists (
     select 1
     from public.season_modifications modifications
-    where modifications.leg_id = 'LEG_M26_CHANGED'
-      and modifications.action = 'modified'
-      and modifications.schedule is null
-      and modifications.gate = 25
-      and not ('schedule' = any(modifications.changed_fields))
-      and 'gate' = any(modifications.changed_fields)
-      and 'counter' = any(modifications.changed_fields)
+    where modifications.season_id
+      = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
   ) or exists (
     select 1
-    from public.season_modifications modifications
-    where modifications.leg_id = 'LEG_M26_DELETED_OVERLAY'
-  ) then
-    raise exception 'replace overlay cleanup is incorrect';
-  end if;
-
-  if not exists (
-    select 1
     from public.season_modification_counters counters
-    where counters.leg_id = 'LEG_M26_CHANGED'
-      and counters.counter_value = '24'
-  ) or not exists (
+    where counters.leg_id like 'LEG_M26_%'
+  ) or exists (
     select 1
     from public.season_modification_checkin_windows windows
-    where windows.leg_id = 'LEG_M26_CHANGED'
-      and windows.counter_key = '24'
+    where windows.leg_id like 'LEG_M26_%'
   ) then
-    raise exception 'replace removed operational overlay child rows';
+    raise exception 'replace retained old modification state';
+  end if;
+
+  if exists (
+    select 1
+    from public.season_mod_history_entries history
+    where history.season_id
+      = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+  ) or exists (
+    select 1
+    from public.season_entity_versions versions
+    where versions.season_id
+      = 'season-39cbca13-e11d-4b75-bcaa-00a6c5ca68c6'
+      and versions.target_type <> 'seasonImport'
+  ) then
+    raise exception 'replace retained old history or entity versions';
   end if;
 
   if (
@@ -1673,7 +1730,7 @@ begin
       and seasons.source_provenance_mode = 'full'
       and seasons.last_import_batch_id = v_batch_id
       and seasons.total_source_rows = 4
-      and seasons.total_legs = 5
+      and seasons.total_legs = 4
   ) then
     raise exception 'replace season metadata is incorrect';
   end if;
@@ -1682,8 +1739,13 @@ begin
     select pg_catalog.count(*)
     from public.season_import_batch_preimages_v3 preimages
     where preimages.batch_id = v_batch_id
-  ) <> 5 then
-    raise exception 'replace did not snapshot every overwritten or removed baseline';
+  ) <> 9 or (
+    select pg_catalog.count(*)
+    from public.season_import_batch_preimages_v3 preimages
+    where preimages.batch_id = v_batch_id
+      and preimages.existed_before
+  ) <> 6 then
+    raise exception 'replace did not snapshot every affected record identity';
   end if;
 
   if (

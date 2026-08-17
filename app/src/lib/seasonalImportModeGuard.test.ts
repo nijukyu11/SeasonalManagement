@@ -116,6 +116,10 @@ test('Seasonal import V3 RPCs stay identical in migration and canonical schema',
   );
   assert.match(commitSource, /Missing required permission: season\.repair/);
   assert.match(commitSource, /Seasonal import preview counts changed before commit/);
+  assert.match(
+    commitSource,
+    /if v_batch\.apply_strategy = 'replace' then[\s\S]*delete from public\.season_mod_history_entries[\s\S]*delete from public\.season_modifications[\s\S]*delete from public\.season_flight_records[\s\S]*delete from public\.season_entity_versions/i,
+  );
   assert.match(commitSource, /source_provenance_mode = case[\s\S]*then 'full'[\s\S]*else 'fragmented'/);
   assert.match(
     migrationSource,
@@ -132,6 +136,19 @@ test('Seasonal import V3 RPCs stay identical in migration and canonical schema',
   assert.match(
     migrationSource,
     /grant execute on function public\.commit_seasonal_import_v3\(uuid, integer, text\)[\s\S]*to authenticated/,
+  );
+});
+
+test('Replace preview states the full-season destructive boundary', () => {
+  const source = readFileSync(
+    join(root, 'app', 'components', 'SeasonalImportPreviewDialog.tsx'),
+    'utf8',
+  );
+
+  assert.match(source, /Prior season flights removed/);
+  assert.match(
+    source,
+    /Replace removes every existing flight, manual addition, modification, and modification history/,
   );
 });
 

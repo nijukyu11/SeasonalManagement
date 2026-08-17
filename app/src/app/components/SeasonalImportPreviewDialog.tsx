@@ -20,14 +20,16 @@ interface SeasonalImportPreviewDialogProps {
   onCommit: () => void;
 }
 
-const countRows = [
-  ['Insert', 'insertCount'],
-  ['Baseline update', 'baselineUpdateCount'],
-  ['Unchanged', 'unchangedCount'],
-  ['Preserved outside file', 'preservedOutsideScopeCount'],
-  ['Removed', 'removeImportedCount'],
-  ['Preserved overlays', 'preservedOverlayCount'],
-] as const;
+function countRows(strategy: SeasonalImportV3Strategy) {
+  return [
+    ['Insert', 'insertCount'],
+    ['Baseline update', 'baselineUpdateCount'],
+    ['Unchanged', 'unchangedCount'],
+    ['Preserved outside file', 'preservedOutsideScopeCount'],
+    [strategy === 'replace' ? 'Prior season flights removed' : 'Removed', 'removeImportedCount'],
+    ['Preserved overlays', 'preservedOverlayCount'],
+  ] as const;
+}
 
 export default function SeasonalImportPreviewDialog({
   state,
@@ -122,7 +124,7 @@ export default function SeasonalImportPreviewDialog({
           </div>
 
           <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-outline-variant bg-outline-variant sm:grid-cols-2">
-            {countRows.map(([label, field]) => (
+            {countRows(result.strategy).map(([label, field]) => (
               <div key={field} className="flex items-center justify-between gap-4 bg-surface px-4 py-3">
                 <span className="text-sm text-on-surface-variant">{label}</span>
                 <span className="tabular-nums text-sm font-semibold text-on-surface">{result.counts[field]}</span>
@@ -162,20 +164,25 @@ export default function SeasonalImportPreviewDialog({
           )}
 
           {result.strategy === 'replace' && (
-            <label className="block">
-              <span className="text-sm font-semibold text-on-surface">
-                Confirm season code
-              </span>
-              <input
-                type="text"
-                value={confirmation}
-                onChange={(event) => onConfirmationChange(event.target.value)}
-                disabled={state.kind === 'committing'}
-                placeholder={result.seasonCode}
-                autoComplete="off"
-                className="mt-2 w-full rounded-md border border-outline bg-surface px-3 py-2 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:opacity-60"
-              />
-            </label>
+            <div className="space-y-3">
+              <p className="rounded-md border border-error/40 bg-error-container/30 px-3 py-2 text-sm text-on-error-container">
+                Replace removes every existing flight, manual addition, modification, and modification history in this season before importing the workbook.
+              </p>
+              <label className="block">
+                <span className="text-sm font-semibold text-on-surface">
+                  Confirm season code
+                </span>
+                <input
+                  type="text"
+                  value={confirmation}
+                  onChange={(event) => onConfirmationChange(event.target.value)}
+                  disabled={state.kind === 'committing'}
+                  placeholder={result.seasonCode}
+                  autoComplete="off"
+                  className="mt-2 w-full rounded-md border border-outline bg-surface px-3 py-2 text-sm text-on-surface outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:opacity-60"
+                />
+              </label>
+            </div>
           )}
 
           {hasDraftChanges && (

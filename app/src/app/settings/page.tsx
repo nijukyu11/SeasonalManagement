@@ -1229,6 +1229,9 @@ export default function SettingsPage() {
           totalEffectiveRecords: remoteImport.totalEffectiveRecordCount,
           preservedOperationalRecords: remoteImport.counts.preservedOverlayCount,
           removedImportedRecords: remoteImport.counts.removeImportedCount,
+          removedSeasonRecords: remoteImport.strategy === 'replace'
+            ? remoteImport.counts.removeImportedCount
+            : 0,
           dataVersion: remoteImport.dataVersion,
         },
       }],
