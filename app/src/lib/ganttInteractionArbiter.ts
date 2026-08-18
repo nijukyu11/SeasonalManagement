@@ -35,6 +35,7 @@ export function findLatestSequencedModificationPatch(
   events: SeasonChangeEvent[] | null | undefined,
   legId: string,
   source: SequencedModificationPatch['source'],
+  submittedModification?: FlightModification | null,
 ): SequencedModificationPatch | null {
   let latest: SequencedModificationPatch | null = null;
   for (const event of events ?? []) {
@@ -44,14 +45,16 @@ export function findLatestSequencedModificationPatch(
       event.targetType !== 'modification'
       || event.targetId !== legId
       || !Number.isFinite(event.serverSeq)
-      || payload?.type !== 'modification'
-      || payload.mod?.legId !== legId
     ) {
       continue;
     }
+    const modification = payload == null
+      ? submittedModification?.legId === legId ? submittedModification : null
+      : payload.type === 'modification' && payload.mod?.legId === legId ? payload.mod : null;
+    if (!modification) continue;
     latest = latestPatch(latest, {
       serverSeq: event.serverSeq as number,
-      modification: payload.mod,
+      modification,
       source,
     });
   }

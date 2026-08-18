@@ -70,7 +70,10 @@ test('normal native startup and close do not preload or mutate SQLite', () => {
 
 test('gate commit resolves canonical server events before optimistic view can clear', () => {
   const gatePage = readFileSync(join(process.cwd(), 'src/app/gate/page.tsx'), 'utf8');
-  assert.match(gatePage, /findLatestSequencedModificationPatch\(result\.appliedEvents/);
+  assert.match(
+    gatePage,
+    /findLatestSequencedModificationPatch\(\s*result\.appliedEvents,\s*legId,\s*'local-ack',\s*submittedModsByLegId\.get\(legId\),\s*\)/
+  );
   assert.match(gatePage, /applyServerModificationPatch\(/);
   assert.match(gatePage, /promoteLatestGateModificationsForView\(\)/);
 });

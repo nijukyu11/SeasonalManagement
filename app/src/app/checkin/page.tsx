@@ -1830,9 +1830,15 @@ function CheckInAllocationContent() {
       }
       scheduleSyncSummaryUpdate(result.syncMeta);
       const appliedMods: FlightModification[] = [];
+      const submittedModsByLegId = new Map(entry.mods.map((mod) => [mod.legId, mod]));
       let needsRevalidation = false;
       for (const legId of entry.legIds) {
-        const localAck = findLatestSequencedModificationPatch(result.appliedEvents, legId, 'local-ack');
+        const localAck = findLatestSequencedModificationPatch(
+          result.appliedEvents,
+          legId,
+          'local-ack',
+          submittedModsByLegId.get(legId),
+        );
         const winner = ganttInteractionArbiter.settle(
           { seasonId: season.id, targetType: 'modification', targetId: legId },
           localAck,

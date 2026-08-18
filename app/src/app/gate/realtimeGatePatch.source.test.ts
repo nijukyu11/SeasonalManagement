@@ -7,7 +7,8 @@ const source = readFileSync(join(process.cwd(), 'src/app/gate/page.tsx'), 'utf8'
 
 test('gate settles local acknowledgements and queued remote events by server sequence', () => {
   assert.match(source, /appliedEvents\?:\s*SeasonChangeEvent\[\]/);
-  assert.match(source, /findLatestSequencedModificationPatch\(result\.appliedEvents,\s*legId,\s*'local-ack'\)/);
+  assert.match(source, /const submittedModsByLegId = new Map\(entry\.mods\.map/);
+  assert.match(source, /findLatestSequencedModificationPatch\(\s*result\.appliedEvents,\s*legId,\s*'local-ack',\s*submittedModsByLegId\.get\(legId\),\s*\)/);
   assert.match(source, /ganttInteractionArbiter\.settle\(/);
   assert.match(source, /applyServerModificationPatch\(/);
 });

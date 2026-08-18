@@ -120,3 +120,73 @@ test('ignores an incomplete mutation acknowledgement so the caller can revalidat
     ), null);
   });
 });
+
+test('uses the submitted modification when an applied acknowledgement omits its payload', () => {
+  const incompleteEvent = {
+    eventId: 'event-incomplete',
+    seasonId: 'season-1',
+    clientId: 'client-a',
+    opId: 'op-incomplete',
+    actorUserId: null,
+    serverSeq: 107,
+    targetType: 'modification',
+    targetId: 'LEG-A',
+    changedFields: ['counter'],
+    createdAt: '2026-08-16T08:00:00.000Z',
+  };
+  const submittedModification = {
+    legId: 'LEG-A',
+    action: 'modified' as const,
+    counter: [21, 22],
+  };
+
+  const localAck = findLatestSequencedModificationPatch(
+    [incompleteEvent as never],
+    'LEG-A',
+    'local-ack',
+    submittedModification,
+  );
+  assert.deepEqual(localAck, {
+    serverSeq: 107,
+    source: 'local-ack',
+    modification: submittedModification,
+  });
+
+  const arbiter = createGanttInteractionArbiter();
+  const newerRemote = {
+    serverSeq: 108,
+    source: 'remote' as const,
+    modification: { legId: 'LEG-A', action: 'modified' as const, counter: [31, 32] },
+  };
+  arbiter.begin(targetA);
+  arbiter.enqueueOrApply(targetA, newerRemote);
+  assert.deepEqual(arbiter.settle(targetA, localAck), newerRemote);
+});
+
+test('prefers a canonical acknowledgement payload over the submitted fallback', () => {
+  const canonicalModification = { legId: 'LEG-A', action: 'modified' as const, counter: [41, 42] };
+  const event = {
+    eventId: 'event-canonical',
+    seasonId: 'season-1',
+    clientId: 'client-a',
+    opId: 'op-canonical',
+    actorUserId: null,
+    serverSeq: 109,
+    targetType: 'modification' as const,
+    targetId: 'LEG-A',
+    changedFields: ['counter'],
+    opPayload: { type: 'modification' as const, mod: canonicalModification },
+    createdAt: '2026-08-16T08:00:00.000Z',
+  };
+
+  assert.deepEqual(findLatestSequencedModificationPatch(
+    [event],
+    'LEG-A',
+    'local-ack',
+    { legId: 'LEG-A', action: 'modified', counter: [51, 52] },
+  ), {
+    serverSeq: 109,
+    source: 'local-ack',
+    modification: canonicalModification,
+  });
+});
