@@ -165,7 +165,9 @@ select
   case when ranked.effective_pax > 0 then 'reported' else 'unknown' end as pax_status,
   ranked.authoritative_server_seq,
   statement_timestamp() as snapshot_refreshed_at,
-  (select max(events.server_seq)::bigint from public.season_change_events events) as snapshot_source_watermark
+  (select max(events.server_seq)::bigint from public.season_change_events events) as snapshot_source_watermark,
+  (select coalesce(sum(quarantine.candidate_count), 0)::integer
+    from reporting.public_traffic_duplicate_quarantine quarantine) as snapshot_quarantined_candidate_count
 from reporting.public_traffic_ranked_candidates ranked
 left join public.operational_route_countries countries
   on upper(countries.route) = upper(ranked.effective_route)
@@ -270,8 +272,8 @@ with bounds as (
     )::integer as pax_due_missing
   from scoped where period = 'current'
 ), quarantine as (
-  select coalesce(sum(candidate_count), 0)::integer as candidates
-  from reporting.public_traffic_duplicate_quarantine
+  select coalesce(max(snapshot_quarantined_candidate_count), 0)::integer as candidates
+  from reporting.public_traffic_effective
 ), current_totals as (
   select coalesce((select flights from totals where period = 'current'), 0) as flights,
     coalesce((select arrivals from totals where period = 'current'), 0) as arrivals,
