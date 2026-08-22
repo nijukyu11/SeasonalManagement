@@ -75,8 +75,8 @@ Local PGlite validates query semantics and idempotent schema application. Real P
 
 - Server: Debian 13, operator `ops`; existing remotely managed named Cloudflare Tunnel remained unchanged.
 - Staging URL: `https://exp-tell-nearly-imposed.trycloudflare.com/reports/traffic` through a separate Quick Tunnel service.
-- Current immutable static release: `/srv/seasonal-traffic-report/releases/20260822T114200Z-3acd8ae`.
-- Static artifact SHA-256: `33dcb4852d6cd578973b63fa449be2a2c1f5d52cf70562150e1517d42abd977d` (179 files).
+- Current immutable static release: `/srv/seasonal-traffic-report/releases/20260822T142031Z-f7d7c64`.
+- Static artifact SHA-256: `53ec13ca7ddb8bf9f65e82c3e68230ed13bb55198199df41abbf75667ef42a1d` (179 files).
 - Migration SHA-256: `a471a0deaee1f39354590e24b9caca282103f3fdd867e658e8b204e9da4b5cce`.
 - Edge source SHA-256: `89899d63748a30081869604caea10c49a09035e79afefa6cc50596b77201d873`.
 - Nginx config SHA-256: `9c10f16269dc33e233ea65c0ea0a519d06c07172e4729f496d35a6dbcfd46810`; `nginx -t` passed.
@@ -99,4 +99,13 @@ Local PGlite validates query semantics and idempotent schema application. Real P
 
 To meet practical query latency without copying data into a second database, staging uses an indexed materialized aggregate refreshed every 20 seconds. Combined with the 60-second Nginx cache, the designed maximum observable age is under 90 seconds. This replaces the earlier plan wording “aggregate live per request, no periodic snapshot” and requires explicit acceptance before production publication.
 
-Remaining gates: user acceptance of the staging behavior/visuals, exact 360/390 real-device accessibility smoke, resolution of the `<150 ms` warm database p95 target or acceptance of the measured result, and production named-tunnel/DNS configuration.
+## Phase 1 interaction polish evidence
+
+- Commits: `f2b82af` (date presets, interactive timeline and share bars), `77b3307` (anchor presets to the latest completed Ops Date instead of future schedule dates) and `f7d7c64` (contain breakdown tables on narrow viewports).
+- The public default `2026-01-01..2026-08-21` is detected as YTD. The 7-day preset produced `2026-08-15..2026-08-21`, a 7-point continuous timeline and `910` flights; overview returned HTTP 200 from Nginx cache with contract `traffic-report-v1`.
+- Timeline interaction passed pointer rendering and keyboard `End`/`ArrowLeft`: the tooltip moved from 21/08/2026 to 20/08/2026 and exposed Ops Date, total, ARR, DEP, reported Pax and ratio to the selected-period daily average.
+- Airline and Route share bars expose named `progressbar` semantics and numeric percentage values; Country and Aircraft Group retain the compact aggregate table.
+- Browser QA passed at 1440x900 and 375x812. Preset targets measured 44 px high. At 375 px, document width was 360 px with no page-level horizontal overflow; the 420 px breakdown tables and 720 px timeline remained independently scrollable inside their cards.
+- `npm run test:traffic-report-contract`, targeted ESLint, `npx tsc --noEmit --pretty false`, production build, public HTML smoke and UTF-8/mojibake scan all passed.
+
+Remaining gates: user acceptance of the staging behavior/visuals, optional physical-device/screen-reader acceptance, resolution of the `<150 ms` warm database p95 target or acceptance of the measured result, and production named-tunnel/DNS configuration.
