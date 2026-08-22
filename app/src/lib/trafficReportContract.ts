@@ -106,6 +106,20 @@ function shiftIsoDate(value: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+export function getLatestCompletedOpsDate(dataAsOf: string, maxOpsDate: string): string {
+  if (!ISO_DATE.test(maxOpsDate)) throw new Error('Ngày Ops Date tối đa không hợp lệ.');
+  const instant = new Date(dataAsOf);
+  if (Number.isNaN(instant.getTime())) throw new Error('Mốc cập nhật dữ liệu không hợp lệ.');
+  const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(instant).map((part) => [part.type, part.value]));
+  const latestCompleted = shiftIsoDate(`${dateParts.year}-${dateParts.month}-${dateParts.day}`, -1);
+  return latestCompleted < maxOpsDate ? latestCompleted : maxOpsDate;
+}
+
 export function getTrafficReportPresetRange(
   preset: TrafficDatePreset,
   minOpsDate: string,

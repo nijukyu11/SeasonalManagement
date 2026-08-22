@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   buildOverviewUrl,
   detectTrafficReportDatePreset,
+  getLatestCompletedOpsDate,
   getTrafficReportPresetRange,
   parseTrafficReportSearchParams,
   toTrafficReportSearchParams,
@@ -30,6 +31,11 @@ test('date presets anchor to the latest Ops Date and stay inside the available d
   assert.deepEqual(getTrafficReportPresetRange('7d', '2025-01-01', '2026-08-21'), { from: '2026-08-15', to: '2026-08-21' });
   assert.deepEqual(getTrafficReportPresetRange('30d', '2026-08-10', '2026-08-21'), { from: '2026-08-10', to: '2026-08-21' });
   assert.deepEqual(getTrafficReportPresetRange('ytd', '2025-01-01', '2026-08-21'), { from: '2026-01-01', to: '2026-08-21' });
+});
+
+test('latest completed Ops Date does not drift into future schedule dates', () => {
+  assert.equal(getLatestCompletedOpsDate('2026-08-22T14:14:00.000Z', '2026-10-24'), '2026-08-21');
+  assert.equal(getLatestCompletedOpsDate('2026-08-22T14:14:00.000Z', '2026-08-18'), '2026-08-18');
 });
 
 test('date preset detection keeps manually selected ranges custom', () => {

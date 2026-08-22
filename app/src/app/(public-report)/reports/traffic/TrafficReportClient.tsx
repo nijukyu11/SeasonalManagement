@@ -5,6 +5,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import {
   buildOverviewUrl,
   detectTrafficReportDatePreset,
+  getLatestCompletedOpsDate,
   getTrafficReportPresetRange,
   isTrafficReportBundle,
   parseTrafficReportSearchParams,
@@ -318,7 +319,8 @@ export default function TrafficReportClient() {
 
   const applyDatePreset = (preset: TrafficDatePreset) => {
     if (!bundle) return;
-    const range = getTrafficReportPresetRange(preset, bundle.metadata.min_ops_date, bundle.metadata.max_ops_date);
+    const presetAnchor = getLatestCompletedOpsDate(bundle.data_as_of, bundle.metadata.max_ops_date);
+    const range = getTrafficReportPresetRange(preset, bundle.metadata.min_ops_date, presetAnchor);
     const next: NormalizedTrafficReportFilter = { ...bundle.metadata.normalized_filter, ...range };
     window.history.pushState(null, '', `${pathname}?${toTrafficReportSearchParams(next).toString()}`);
     window.dispatchEvent(new PopStateEvent('popstate'));
@@ -329,8 +331,9 @@ export default function TrafficReportClient() {
   const comparisonLabel = comparison?.mode === 'year_ago' ? 'cùng kỳ năm trước' : 'kỳ trước liền kề';
   const insights = bundle ? buildInsights(bundle) : [];
   const filter = bundle?.metadata.normalized_filter ?? parsed.filter;
-  const activeDatePreset = bundle && filter?.from && filter.to
-    ? detectTrafficReportDatePreset(filter.from, filter.to, bundle.metadata.min_ops_date, bundle.metadata.max_ops_date)
+  const presetAnchor = bundle ? getLatestCompletedOpsDate(bundle.data_as_of, bundle.metadata.max_ops_date) : null;
+  const activeDatePreset = bundle && presetAnchor && filter?.from && filter.to
+    ? detectTrafficReportDatePreset(filter.from, filter.to, bundle.metadata.min_ops_date, presetAnchor)
     : null;
 
   return (
