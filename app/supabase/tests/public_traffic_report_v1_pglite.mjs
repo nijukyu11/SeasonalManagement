@@ -113,8 +113,13 @@ try {
 
   try {
     await db.exec('set role service_role');
-    const serviceTimeline = await db.query(`select reporting.get_traffic_report_timeline(date '2026-03-02', date '2026-03-05') as result`);
-    assert.equal(serviceTimeline.rows[0].result.series.length, 4, 'the Edge service role must execute aggregate RPCs without raw-table grants');
+    await assert.rejects(
+      db.query(`select reporting.get_traffic_report_timeline(date '2026-03-02', date '2026-03-05') as result`),
+      /permission denied/,
+      'the Edge service role must not bypass the single public wrapper',
+    );
+    const serviceOverview = await db.query(`select public.get_public_traffic_report_overview_v1(date '2026-03-02', date '2026-03-03') as result`);
+    assert.equal(serviceOverview.rows[0].result.timeline.length, 2, 'the Edge service role must execute the aggregate-only public wrapper');
   } finally {
     await db.exec('reset role');
   }

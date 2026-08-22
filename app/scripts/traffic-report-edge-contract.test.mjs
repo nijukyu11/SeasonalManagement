@@ -16,9 +16,9 @@ assert.match(edge, /status: 308/);
 assert.match(edge, /'Cache-Control': 'no-store'/);
 assert.doesNotMatch(edge, /request\.headers\.get\(['"]Authorization/);
 assert.match(edge, /get_public_traffic_report_overview_v1/);
-assert.match(edge, /get_traffic_report_timeline/);
-assert.match(edge, /get_traffic_report_breakdowns/);
-assert.match(edge, /'Accept-Profile': schema/);
+assert.doesNotMatch(edge, /postgrestRpc\('get_traffic_report_timeline'/);
+assert.doesNotMatch(edge, /postgrestRpc\('get_traffic_report_breakdowns'/);
+assert.doesNotMatch(edge, /'Accept-Profile'/);
 assert.match(edge, /max-age=0, s-maxage=60, stale-while-revalidate=30/);
 
 for (const signature of [
@@ -30,7 +30,7 @@ for (const signature of [
   assert.ok(migration.includes(signature), `migration is missing ${signature}`);
 }
 assert.match(migration, /revoke execute[\s\S]+from public, anon, authenticated/);
-assert.match(migration, /grant execute[\s\S]+to service_role/);
+assert.match(migration, /grant execute on function public\.get_public_traffic_report_overview_v1[\s\S]+to service_role/);
 assert.match(migration, /effective_action is distinct from 'deleted'/);
 assert.match(migration, /public_traffic_duplicate_quarantine/);
 assert.match(migration, /generate_series/);

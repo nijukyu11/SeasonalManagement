@@ -98,7 +98,7 @@ function normalizeRequest(url: URL, endpoint: string): NormalizedRequest {
   };
 }
 
-async function postgrestRpc(functionName: string, args: Record<string, unknown>, schema = 'public'): Promise<unknown> {
+async function postgrestRpc(functionName: string, args: Record<string, unknown>): Promise<unknown> {
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!supabaseUrl || !serviceKey) throw new Error('report origin is not configured');
@@ -109,8 +109,6 @@ async function postgrestRpc(functionName: string, args: Record<string, unknown>,
       Accept: 'application/json',
       apikey: serviceKey,
       Authorization: `Bearer ${serviceKey}`,
-      'Accept-Profile': schema,
-      'Content-Profile': schema,
     },
     body: JSON.stringify(args),
     signal: AbortSignal.timeout(8_000),
@@ -121,16 +119,6 @@ async function postgrestRpc(functionName: string, args: Record<string, unknown>,
     throw new Error(message);
   }
   return payload;
-}
-
-function reportingFilters(request: NormalizedRequest): Record<string, string[]> {
-  return {
-    types: request.types,
-    ...(request.airlines.length ? { airlines: request.airlines } : {}),
-    ...(request.routes.length ? { routes: request.routes } : {}),
-    ...(request.countries.length ? { countries: request.countries } : {}),
-    ...(request.aircraftGroups.length ? { aircraft_groups: request.aircraftGroups } : {}),
-  };
 }
 
 async function requestHash(request: NormalizedRequest): Promise<string> {
@@ -190,38 +178,13 @@ Deno.serve(async (request: Request) => {
     const startedAt = performance.now();
     const dataAsOf = new Date().toISOString();
     const canonicalRequestHash = await requestHash(normalized);
-    let payload: unknown;
-    if (endpoint === 'timeline') {
-      payload = await postgrestRpc('get_traffic_report_timeline', {
-        p_from_date: normalized.from,
-        p_to_date: normalized.to,
-        p_window_from: null,
-        p_window_to: null,
-        p_granularity: 'day',
-        p_after_date: normalized.after,
-        p_page_size: normalized.pageSize,
-        p_filters: reportingFilters(normalized),
-        p_data_as_of: dataAsOf,
-      }, 'reporting');
-    } else if (endpoint === 'breakdowns' || endpoint === 'export') {
-      payload = await postgrestRpc('get_traffic_report_breakdowns', {
-        p_from_date: normalized.from,
-        p_to_date: normalized.to,
-        p_filters: reportingFilters(normalized),
-        p_top_n: 10,
-        p_time_basis: normalized.timeBasis,
-        p_bucket_minutes: 60,
-        p_data_as_of: dataAsOf,
-      }, 'reporting');
-    } else {
-      payload = await postgrestRpc('get_public_traffic_report_overview_v1', overviewArgs(normalized));
-    }
+    const payload = await postgrestRpc('get_public_traffic_report_overview_v1', overviewArgs(normalized));
     const duration = Math.round(performance.now() - startedAt);
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('invalid report payload');
     const bundle = payload as Record<string, unknown>;
 
     if (endpoint === 'export') {
-      const csv = buildAggregateCsv({ breakdowns: bundle });
+      const csv = buildAggregateCsv(bundle);
       return new Response(csv, {
         headers: {
           'Content-Type': 'text/csv; charset=utf-8',
@@ -233,21 +196,24 @@ Deno.serve(async (request: Request) => {
       });
     }
 
+    const metadata = bundle.metadata && typeof bundle.metadata === 'object'
+      ? bundle.metadata as Record<string, unknown>
+      : {};
     const responsePayload = endpoint === 'timeline'
       ? {
           contract_version: CONTRACT_VERSION,
           request_hash: canonicalRequestHash,
-          data_as_of: dataAsOf,
+          data_as_of: bundle.data_as_of ?? dataAsOf,
           metadata: {
-            timeline_has_more: Boolean(bundle.has_more),
-            timeline_next_cursor: bundle.next_cursor ?? null,
-            page_from: bundle.page_from,
-            page_to: bundle.page_to,
+            timeline_has_more: Boolean(metadata.timeline_has_more),
+            timeline_next_cursor: metadata.timeline_next_cursor ?? null,
+            page_from: normalized.after ?? normalized.from,
+            page_to: normalized.to,
           },
-          timeline: Array.isArray(bundle.series) ? bundle.series : [],
+          timeline: Array.isArray(bundle.timeline) ? bundle.timeline : [],
         }
       : endpoint === 'breakdowns'
-        ? { contract_version: CONTRACT_VERSION, request_hash: canonicalRequestHash, data_as_of: dataAsOf, breakdowns: bundle }
+        ? { contract_version: CONTRACT_VERSION, request_hash: canonicalRequestHash, data_as_of: bundle.data_as_of ?? dataAsOf, breakdowns: bundle.breakdowns ?? {} }
         : { ...bundle, request_hash: canonicalRequestHash };
     return json(responsePayload, 200, {
       'Cache-Control': 'public, max-age=0, s-maxage=60, stale-while-revalidate=30',

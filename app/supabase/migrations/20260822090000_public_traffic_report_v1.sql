@@ -633,9 +633,9 @@ revoke all on reporting.public_traffic_candidates from public, anon, authenticat
 revoke all on reporting.public_traffic_ranked_candidates from public, anon, authenticated;
 revoke all on reporting.public_traffic_duplicate_quarantine from public, anon, authenticated;
 revoke all on reporting.public_traffic_effective from public, anon, authenticated;
-revoke execute on function reporting.get_traffic_report_kpis(date, date, jsonb, text, timestamptz) from public, anon, authenticated;
-revoke execute on function reporting.get_traffic_report_timeline(date, date, date, date, text, date, integer, jsonb, timestamptz) from public, anon, authenticated;
-revoke execute on function reporting.get_traffic_report_breakdowns(date, date, jsonb, integer, text, integer, timestamptz) from public, anon, authenticated;
+revoke execute on function reporting.get_traffic_report_kpis(date, date, jsonb, text, timestamptz) from public, anon, authenticated, service_role;
+revoke execute on function reporting.get_traffic_report_timeline(date, date, date, date, text, date, integer, jsonb, timestamptz) from public, anon, authenticated, service_role;
+revoke execute on function reporting.get_traffic_report_breakdowns(date, date, jsonb, integer, text, integer, timestamptz) from public, anon, authenticated, service_role;
 revoke execute on function public.get_public_traffic_report_overview_v1(date, date, text[], text[], text[], text[], text[], text, text, date, integer, text) from public, anon, authenticated;
 
 alter function reporting.get_traffic_report_kpis(date, date, jsonb, text, timestamptz) owner to postgres;
@@ -644,7 +644,4 @@ alter function reporting.get_traffic_report_breakdowns(date, date, jsonb, intege
 alter function public.get_public_traffic_report_overview_v1(date, date, text[], text[], text[], text[], text[], text, text, date, integer, text) owner to postgres;
 
 grant usage on schema reporting to service_role;
-grant execute on function reporting.get_traffic_report_kpis(date, date, jsonb, text, timestamptz) to service_role;
-grant execute on function reporting.get_traffic_report_timeline(date, date, date, date, text, date, integer, jsonb, timestamptz) to service_role;
-grant execute on function reporting.get_traffic_report_breakdowns(date, date, jsonb, integer, text, integer, timestamptz) to service_role;
 grant execute on function public.get_public_traffic_report_overview_v1(date, date, text[], text[], text[], text[], text[], text, text, date, integer, text) to service_role;
