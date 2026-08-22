@@ -52,7 +52,7 @@ function DeltaPill({ value, label }: { value: number | null; label: string }) {
 
 function KpiCard({ label, value, delta, comparisonLabel, note, suffix = '' }: { label: string; value: number | null; delta: number | null; comparisonLabel: string; note?: string; suffix?: string }) {
   return (
-    <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <p className="text-sm font-semibold text-slate-600">{label}</p>
       <p className="mt-3 text-3xl font-bold tracking-tight text-[#102033] tabular-nums">{formatNumber(value)}{value == null ? '' : suffix}</p>
       <div className="mt-4"><DeltaPill value={delta} label={comparisonLabel} /></div>
@@ -176,7 +176,7 @@ function TimelineChart({ rows, totalFlights, dayCount }: { rows: TrafficTimeline
 
 function BreakdownTable({ title, rows, showShareBars = false }: { title: string; rows: TrafficBreakdownRow[]; showShareBars?: boolean }) {
   return (
-    <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <h3 className="text-lg font-bold text-[#102033]">{title}</h3>
       <div className="mt-4 overflow-x-auto">
         <table className="w-full min-w-[420px] border-collapse text-sm">
