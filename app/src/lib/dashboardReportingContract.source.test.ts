@@ -119,8 +119,8 @@ function readSourceBlock(source: string, startMarker: string, endMarker: string,
 }
 
 test('dashboard replacement UI labels are the active visible contract', () => {
-  const dashboardPage = readWorkspaceFile('src/app/dashboard/page.tsx');
-  const aiBlockRenderers = readWorkspaceFile('src/app/dashboard/components/AiNotebookBlockRenderers.tsx');
+  const dashboardPage = readWorkspaceFile('src/app/(desktop)/dashboard/page.tsx');
+  const aiBlockRenderers = readWorkspaceFile('src/app/(desktop)/dashboard/components/AiNotebookBlockRenderers.tsx');
   const tabControls = readSourceBlock(dashboardPage, '<div className="mt-1 grid grid-cols-1', '<div className="text-left text-xs', 'dashboard tab controls');
   assertContainsAll(dashboardPage, ['Vận hành ca trực', 'So sánh sản lượng', 'AI Workspace'], 'dashboard page labels');
   assert.match(tabControls, /sm:grid-cols-3/, 'dashboard tabs must stack on small screens and keep three columns on wider screens');
@@ -162,8 +162,8 @@ test('dashboard replacement UI labels are the active visible contract', () => {
 });
 
 test('AI Workspace is decoupled from dashboard rows and local SQLite analytical context', () => {
-  const dashboardPage = readWorkspaceFile('src/app/dashboard/page.tsx');
-  const aiWorkspacePanel = readWorkspaceFile('src/app/dashboard/components/AiWorkspacePanel.tsx');
+  const dashboardPage = readWorkspaceFile('src/app/(desktop)/dashboard/page.tsx');
+  const aiWorkspacePanel = readWorkspaceFile('src/app/(desktop)/dashboard/components/AiWorkspacePanel.tsx');
   const submitAiPrompt = readSourceBlock(dashboardPage, 'const submitAiPrompt', 'const aiWorkspaceSeasonSummaryRows', 'dashboard submitAiPrompt');
   const materializeTableRows = readSourceBlock(dashboardPage, 'const materializeAiWorkspaceTableRows', 'const materializeAiWorkspaceChartRows', 'AI Workspace table materializer');
   const materializeChartRows = readSourceBlock(dashboardPage, 'const materializeAiWorkspaceChartRows', 'const moveAiNotebookBlock', 'AI Workspace chart materializer');
@@ -189,7 +189,7 @@ test('AI Workspace is decoupled from dashboard rows and local SQLite analytical 
 });
 
 test('dashboard comparison scope, ranking, and legacy season state stay isolated', () => {
-  const dashboardPage = readWorkspaceFile('src/app/dashboard/page.tsx');
+  const dashboardPage = readWorkspaceFile('src/app/(desktop)/dashboard/page.tsx');
   const comparisonSection = readSourceBlock(dashboardPage, "{dashboardView === 'comparison' &&", "{dashboardView === 'ai-workspace' &&", 'dashboard comparison section');
   assert.doesNotMatch(dashboardPage, /useSessionState<string\[\]>\('dashboard:seasonIds'/, 'operations/comparison must ignore hidden legacy dashboard:seasonIds state');
   assert.doesNotMatch(dashboardPage, /activeDashboardSeasonIds|dashboardSeasonOptions|toggleDashboardSeason/, 'legacy dashboard multi-season selectors must be removed from the new dashboard');
@@ -377,7 +377,7 @@ test('AI reporting fields survive allowlist, sanitizer, and tool declaration pat
 test('AI Workspace query scope contract is date-range first and not MCP based', () => {
   const sharedContract = readWorkspaceFile('supabase/functions/_shared/dashboardAiShared.ts');
   const edgeFunction = readWorkspaceFile('supabase/functions/dashboard-ai-analysis/index.ts');
-  const dashboardPage = readWorkspaceFile('src/app/dashboard/page.tsx');
+  const dashboardPage = readWorkspaceFile('src/app/(desktop)/dashboard/page.tsx');
 
   assertContainsAll(
     sharedContract,

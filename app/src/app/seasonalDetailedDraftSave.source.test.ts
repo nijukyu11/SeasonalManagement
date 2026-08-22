@@ -149,7 +149,7 @@ function assertGuardResultReturnsBeforeSideEffect(
 }
 
 test('Seasonal Schedule passes draft changes through the save guard flow', () => {
-  const source = readSource('app/SeasonalSchedulePage.tsx');
+  const source = readSource('app/(desktop)/SeasonalSchedulePage.tsx');
   const syncButton = extractFirstTag(source, 'SyncActionButton');
   const sourceFile = ts.createSourceFile(
     'SeasonalSchedulePage.tsx',
@@ -176,7 +176,7 @@ test('Seasonal Schedule passes draft changes through the save guard flow', () =>
 });
 
 test('Seasonal file actions wire the controller at commit, apply, and download boundaries', () => {
-  const source = readSource('app/SeasonalSchedulePage.tsx');
+  const source = readSource('app/(desktop)/SeasonalSchedulePage.tsx');
   const stageStart = source.indexOf('const stagePreparedSeasonalImport = useCallback');
   const commitStart = source.indexOf('const handleCommitImportPreview = useCallback');
   const refreshApplyStart = source.indexOf('const applyTargetedCommittedImportRefresh = useCallback');
@@ -196,7 +196,7 @@ test('Seasonal file actions wire the controller at commit, apply, and download b
 });
 
 test('every Seasonal file action guard result returns before its side-effect boundary', () => {
-  const source = readSource('app/SeasonalSchedulePage.tsx');
+  const source = readSource('app/(desktop)/SeasonalSchedulePage.tsx');
   const sourceFile = ts.createSourceFile(
     'SeasonalSchedulePage.tsx',
     source,
@@ -223,7 +223,7 @@ test('every Seasonal file action guard result returns before its side-effect bou
 });
 
 test('Seasonal Import and Export controls are disabled for draft changes', () => {
-  const source = readSource('app/SeasonalSchedulePage.tsx');
+  const source = readSource('app/(desktop)/SeasonalSchedulePage.tsx');
   const importButton = extractOpeningTagContaining(source, 'button', 'onClick={handleImportClick}');
   const exportButton = extractOpeningTagContaining(source, 'button', 'onClick={handleExportUpdated}');
   const seasonSelect = extractOpeningTagContaining(source, 'select', 'disabled={seasonalFileActionActive}');
@@ -235,7 +235,7 @@ test('Seasonal Import and Export controls are disabled for draft changes', () =>
 });
 
 test('Seasonal selection is reset or reconciled at every snapshot boundary', () => {
-  const source = readSource('app/SeasonalSchedulePage.tsx');
+  const source = readSource('app/(desktop)/SeasonalSchedulePage.tsx');
 
   assert.match(source, /const handleSeasonChange[\s\S]{0,500}setSelectedRecordIds\(new Set\(\)\)/);
   assert.match(source, /reconcileSeasonalSelection\(\s*Array\.from\(previous\),\s*buildSeasonalAvailableRecordIds\(records,\s*mods\)/);
@@ -260,7 +260,7 @@ test('Seasonal selection is reset or reconciled at every snapshot boundary', () 
 });
 
 test('Seasonal import rejects parser issues before preparing or committing source rows', () => {
-  const source = readSource('app/SeasonalSchedulePage.tsx');
+  const source = readSource('app/(desktop)/SeasonalSchedulePage.tsx');
   const importStart = source.indexOf('const handleFile = useCallback');
   const issueCheck = source.indexOf('issues.length > 0', importStart);
   const prepare = source.indexOf('prepareSeasonalImportV3Attempt', importStart);
@@ -276,7 +276,7 @@ test('Seasonal import rejects parser issues before preparing or committing sourc
 });
 
 test('Detailed Schedule passes draft changes through the save guard flow', () => {
-  const source = readSource('app/detailed/page.tsx');
+  const source = readSource('app/(desktop)/detailed/page.tsx');
   const syncButton = extractFirstTag(source, 'SyncActionButton');
 
   assert.match(syncButton, /draftCount=\{draftChangeCount\}/);
@@ -293,7 +293,7 @@ test('Detailed Schedule passes draft changes through the save guard flow', () =>
 });
 
 test('Detailed initial route load does not rerun when refreshDetailedState changes', () => {
-  const source = readSource('app/detailed/page.tsx');
+  const source = readSource('app/(desktop)/detailed/page.tsx');
   const effectStart = source.indexOf('const cachedSeasons = getCachedSeasons();');
   assert.notEqual(effectStart, -1, 'initial detailed load effect body should exist');
   const effectEnd = source.indexOf('useEffect(() => {', effectStart + 1);

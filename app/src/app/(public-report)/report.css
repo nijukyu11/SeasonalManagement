@@ -1,0 +1,51 @@
+:root {
+  --report-navy: #081322;
+  --report-navy-soft: #10243b;
+  --report-cyan: #00b4d8;
+  --report-teal: #42c1c7;
+  --report-cobalt: #234093;
+  --report-ink: #102033;
+  --report-muted: #526274;
+  --report-surface: #f3f7fa;
+  --report-line: #d7e0e8;
+  --report-warning: #d97706;
+}
+
+.report-body {
+  margin: 0;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  background: var(--report-surface);
+  color: var(--report-ink);
+  font-family: Arial, "Helvetica Neue", sans-serif;
+}
+
+.report-display {
+  font-size: clamp(2.75rem, 7vw, 4.375rem);
+  line-height: 0.95;
+  letter-spacing: -0.055em;
+}
+
+.report-headline {
+  font-size: clamp(2.25rem, 6vw, 3.75rem);
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+
+.report-focus:focus-visible {
+  outline: 3px solid var(--report-cyan);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .report-body *,
+  .report-body *::before,
+  .report-body *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

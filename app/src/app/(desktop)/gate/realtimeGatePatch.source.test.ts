@@ -3,11 +3,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const source = readFileSync(join(process.cwd(), 'src/app/checkin/page.tsx'), 'utf8');
-const nativeStore = readFileSync(join(process.cwd(), 'src/lib/nativeLocalSeasonStore.ts'), 'utf8');
+const source = readFileSync(join(process.cwd(), 'src/app/(desktop)/gate/page.tsx'), 'utf8');
 
-test('check-in retains canonical mutation events and settles per target by server sequence', () => {
-  assert.match(nativeStore, /appliedEvents:\s*result\.appliedEvents/);
+test('gate settles local acknowledgements and queued remote events by server sequence', () => {
   assert.match(source, /appliedEvents\?:\s*SeasonChangeEvent\[\]/);
   assert.match(source, /const submittedModsByLegId = new Map\(entry\.mods\.map/);
   assert.match(source, /findLatestSequencedModificationPatch\(\s*result\.appliedEvents,\s*legId,\s*'local-ack',\s*submittedModsByLegId\.get\(legId\),\s*\)/);
@@ -15,14 +13,14 @@ test('check-in retains canonical mutation events and settles per target by serve
   assert.match(source, /applyServerModificationPatch\(/);
 });
 
-test('check-in registers target locks before debounced commit and lets direct changes through', () => {
+test('gate locks each target before the debounced server commit', () => {
   assert.match(source, /for \(const legId of legIds\) \{\s*ganttInteractionArbiter\.begin/);
-  assert.match(source, /event\.refreshMode !== 'direct'/);
-  assert.match(source, /refreshMode:\s*SeasonWorkspaceChangeEvent\['refreshMode'\]/);
+  assert.match(source, /ganttInteractionArbiter\.cancel/);
 });
 
-test('check-in falls back to server revalidation when no sequenced acknowledgement exists', () => {
-  assert.match(source, /let needsRevalidation = false/);
+test('gate emits direct refreshes for canonical patches and reconciles incomplete acknowledgements', () => {
+  assert.match(source, /refreshMode:\s*SeasonWorkspaceChangeEvent\['refreshMode'\]/);
+  assert.match(source, /'direct'/);
   assert.match(source, /markSeasonWorkspaceStale\([\s\S]*?'mutation'/);
   assert.match(source, /'revalidate'/);
 });

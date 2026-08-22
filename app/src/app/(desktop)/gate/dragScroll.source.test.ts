@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const source = readFileSync(join(process.cwd(), 'src/app/gate/page.tsx'), 'utf8');
+const source = readFileSync(join(process.cwd(), 'src/app/(desktop)/gate/page.tsx'), 'utf8');
 
 test('gate allocation uses pointer capture with the shared drag scroll controller', () => {
   assert.match(source, /useGanttDragScroll\(/);

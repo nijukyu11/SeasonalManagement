@@ -205,6 +205,21 @@ This section supersedes older AI Notebook wording that described AI as coupled t
 
 ---
 
+## Public Traffic Report Context - 2026-08-22
+
+The public traffic report is a separate web publication boundary at `/reports/traffic`. It is anonymous and aggregate-only; it does not load operator authentication, desktop navigation, native runtime gates, Zustand desktop state, Supabase browser clients or Tauri IPC.
+
+- The default filter is 1 January of the current year through the latest completed Ops Date, clamped to the available `[min_ops_date, max_ops_date]` domain returned by the initial overview call.
+- Ops Date is a typed PostgreSQL `date` using the local operating-day boundary 05:00-04:59 in `Asia/Ho_Chi_Minh`. The report has no season filter and date ranges may cross season boundaries without a hard maximum-day limit.
+- The publication grain is one effective ARR/DEP leg after added/modified/deleted overlays. Cross-season duplicates use the canonical occurrence identity `(type, scheduled_date, airline, flight_number)` and authoritative server recency from `season_change_events.server_seq`. Deleted winners are resolved before the final deleted filter; duplicate candidates with tied or missing recency are quarantined.
+- Pax totals include only positive values because the current schema has no independent “reported zero” state. Pax coverage uses all effective legs whose scheduled local time is at least T+1; cargo/ferry remain conservatively eligible until a canonical exemption field exists.
+- Country labels come from `operational_route_countries`; unmapped routes remain `Unknown`. Excel files are reconciliation evidence only and never override the database.
+- Public cells below 3 legs are suppressed or folded into `Khác`; complementary suppression protects a single small cell from subtraction. Raw leg identifiers, flight numbers, exact times, allocation fields and provenance never cross the public API.
+- The browser makes one initial same-origin GET to `/api/report/v1/overview`. The anonymous Edge Function makes one PostgREST wrapper call; the wrapper calls the three reporting RPCs under one PostgreSQL statement snapshot. Timeline continuation uses a date cursor.
+- Nginx owns the 60-second shared cache and never serves stale content. Browser stale-while-revalidate is capped at 30 seconds; Cloudflare must bypass `/api/report/*`.
+
+The implementation contract is mirrored by `app/supabase/migrations/20260822090000_public_traffic_report_v1.sql`, `app/supabase/schema.sql`, `app/supabase/functions/traffic-report/index.ts`, and `app/src/lib/trafficReportContract.ts`. Deployment and rollback are documented in `docs/runbooks/public-traffic-report-deploy.md`.
+
 ## Current Architecture
 
 ```text

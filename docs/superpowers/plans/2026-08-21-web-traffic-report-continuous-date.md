@@ -1,6 +1,6 @@
 # Kế hoạch triển khai Web Traffic Report theo dãy Ops Date liên tục
 
-> **Trạng thái:** D1 đến D15 đã chốt; sẵn sàng làm baseline cho phiên code sau; chưa thực hiện code trong phiên lập kế hoạch này.
+> **Trạng thái:** Đang thực hiện trên nhánh `codex/web-traffic-report`; local implementation/build/contract tests đã pass ngày 2026-08-22. Staging bị chặn bởi SSH/DNS/tunnel authority; production tiếp tục chờ nghiệm thu staging. Xem evidence tại `docs/superpowers/artifacts/2026-08-22-public-traffic-report-baseline-audit.md`.
 >
 > **Ngày lập:** 2026-08-21.
 >
@@ -501,11 +501,11 @@ Tên chính xác phải được revalidate trên `origin/main` trước khi cod
 - [x] Chốt D4 là live aggregate và ghi cơ chế bảo vệ public query vào plan.
 - [x] Chốt Nginx là shared-cache owner cho `/api/report`; Cloudflare cache bypass route API để không cộng dồn độ cũ.
 - [x] Xác nhận D12-D14: mặc định đầu năm đến nay; duplicate chọn bản mới nhất; Country dùng database + `Unknown`.
-- [ ] Fetch refs và tạo worktree từ `origin/main` mới nhất.
-- [ ] Ghi commit baseline và trạng thái production endpoint mà không in secrets.
-- [ ] Inventory server: OS, Nginx/Caddy, cloudflared service, named tunnel, DNS ownership, thư mục deploy và rollback artifact.
-- [ ] Xác nhận `reports.ahtops.xyz` có thể dùng và không đụng API ingress.
-- [ ] Revalidate file list và migration timestamp.
+- [x] Fetch refs và tạo worktree từ `origin/main` mới nhất.
+- [x] Ghi commit baseline và trạng thái production endpoint mà không in secrets.
+- [ ] Inventory server: OS, Nginx/Caddy, cloudflared service, named tunnel, DNS ownership, thư mục deploy và rollback artifact. (Đã thử read-only; SSH identity hiện có bị từ chối.)
+- [x] Xác nhận `reports.ahtops.xyz` có thể dùng và không đụng API ingress. (NXDOMAIN ngày 2026-08-22; chưa provision.)
+- [x] Revalidate file list và migration timestamp.
 
 **Done:** D1-D15 không còn mở; baseline, cache owner và rollback owner được ghi nhận.
 

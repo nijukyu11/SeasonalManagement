@@ -7,6 +7,7 @@
     "dev": "next dev",
     "build": "next build",
     "test:dashboard-contract": "node --test src/lib/dashboardReportingContract.source.test.ts",
+    "test:traffic-report-contract": "node --experimental-strip-types --test src/lib/trafficReportContract.test.ts && node supabase/tests/public_traffic_report_v1_pglite.mjs && node scripts/traffic-report-edge-contract.test.mjs && node scripts/traffic-report-isolation-test.mjs",
     "test:rules": "node scripts/rule-regression-tests.cjs",
     "test:seasonal-import-sql": "node supabase/tests/seasonal_source_import_v2_pglite.mjs",
     "test:seasonal-import-v3-sql": "node supabase/tests/seasonal_partial_import_v3_pglite.mjs",

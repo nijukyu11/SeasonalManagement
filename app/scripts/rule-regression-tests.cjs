@@ -4,6 +4,7 @@ const path = require('path');
 const ts = require('typescript');
 
 const root = path.resolve(__dirname, '..');
+const desktopAppRoot = path.join(root, 'src', 'app', '(desktop)');
 const tempDir = path.join(root, '.tmp-rule-tests');
 const readFileSync = fs.readFileSync.bind(fs);
 
@@ -8189,9 +8190,9 @@ async function run() {
       centeredScroll.y === 0,
     `edge scrolling should accelerate near boundaries and stop in the center, got ${JSON.stringify({ edgeScroll, centeredScroll })}`
   );
-  const checkInPageSource = fs.readFileSync(path.join(root, 'src', 'app', 'checkin', 'page.tsx'), 'utf8');
-  const checkInWorkspaceRefreshScopeSource = fs.readFileSync(path.join(root, 'src', 'app', 'checkin', 'workspaceRefreshScope.ts'), 'utf8');
-  const checkInWorkerSource = fs.readFileSync(path.join(root, 'src', 'app', 'checkin', 'checkInLocalCommitWorker.ts'), 'utf8');
+  const checkInPageSource = fs.readFileSync(path.join(desktopAppRoot, 'checkin', 'page.tsx'), 'utf8');
+  const checkInWorkspaceRefreshScopeSource = fs.readFileSync(path.join(desktopAppRoot, 'checkin', 'workspaceRefreshScope.ts'), 'utf8');
+  const checkInWorkerSource = fs.readFileSync(path.join(desktopAppRoot, 'checkin', 'checkInLocalCommitWorker.ts'), 'utf8');
   const localSeasonStoreSource = fs.readFileSync(path.join(root, 'src', 'lib', 'localSeasonStore.ts'), 'utf8');
   const localSeasonSqlStoreSource = fs.readFileSync(path.join(root, 'src', 'lib', 'localSeasonSqlStore.ts'), 'utf8');
   const nativeRuntimePath = path.join(root, 'src', 'lib', 'nativeRuntime.ts');
@@ -8841,8 +8842,8 @@ async function run() {
       checkInPageSource.includes('type="datetime-local"'),
     'Check-in page must expose an Export PDF configuration modal with datetime fields, counter-group selection, WYSIWYG preview, loading state, and error handling'
   );
-  const settingsPageSource = fs.readFileSync(path.join(root, 'src', 'app', 'settings', 'page.tsx'), 'utf8');
-  const settingsComponentsDir = path.join(root, 'src', 'app', 'settings', 'components');
+  const settingsPageSource = fs.readFileSync(path.join(desktopAppRoot, 'settings', 'page.tsx'), 'utf8');
+  const settingsComponentsDir = path.join(desktopAppRoot, 'settings', 'components');
   const settingsComponentSources = fs.existsSync(settingsComponentsDir)
     ? Object.fromEntries(
         walkFiles(settingsComponentsDir, (filePath) => filePath.endsWith('.tsx')).map((filePath) => [
@@ -8941,12 +8942,12 @@ async function run() {
       settingsPageSource.indexOf("'gateAllocation'") < settingsPageSource.indexOf("'locksAndOutages'"),
     'Settings Gate tab must be titled Gate and expose add-gate/add-group controls before the dedicated lock tab'
   );
-  const gatePageSource = fs.readFileSync(path.join(root, 'src', 'app', 'gate', 'page.tsx'), 'utf8');
+  const gatePageSource = fs.readFileSync(path.join(desktopAppRoot, 'gate', 'page.tsx'), 'utf8');
   const gatePdfExportSource = fs.readFileSync(path.join(root, 'src', 'lib', 'gatePdfExport.ts'), 'utf8');
-  const gateWorkerSource = fs.existsSync(path.join(root, 'src', 'app', 'gate', 'gateLocalCommitWorker.ts'))
-    ? fs.readFileSync(path.join(root, 'src', 'app', 'gate', 'gateLocalCommitWorker.ts'), 'utf8')
+  const gateWorkerSource = fs.existsSync(path.join(desktopAppRoot, 'gate', 'gateLocalCommitWorker.ts'))
+    ? fs.readFileSync(path.join(desktopAppRoot, 'gate', 'gateLocalCommitWorker.ts'), 'utf8')
     : '';
-  const dailyPageSourceForGate = fs.readFileSync(path.join(root, 'src', 'app', 'daily', 'page.tsx'), 'utf8');
+  const dailyPageSourceForGate = fs.readFileSync(path.join(desktopAppRoot, 'daily', 'page.tsx'), 'utf8');
   const gateCommitBody = gatePageSource.slice(
     gatePageSource.indexOf('const commitGateModification = useCallback'),
     gatePageSource.indexOf('const clearGateDragState')
@@ -9177,7 +9178,7 @@ async function run() {
     browserDialogViolations.length === 0,
     `native browser dialogs should not be used in app UI:\n${browserDialogViolations.join('\n')}`
   );
-  const appDialogSource = fs.readFileSync(path.join(root, 'src', 'app', 'components', 'AppDialog.tsx'), 'utf8');
+  const appDialogSource = fs.readFileSync(path.join(desktopAppRoot, 'components', 'AppDialog.tsx'), 'utf8');
   assert(
     appDialogSource.includes('createPortal') &&
       appDialogSource.includes('APP_DIALOG_ROOT_ID') &&
@@ -9192,13 +9193,13 @@ async function run() {
       appDialogSource.includes("flex: '0 0 min(480px, calc(100vw - 32px))'"),
     'AppDialog overlay/card geometry must use inline fixed dimensions so table/page CSS cannot collapse the modal'
   );
-  const detailedPageSource = fs.readFileSync(path.join(root, 'src', 'app', 'detailed', 'page.tsx'), 'utf8');
+  const detailedPageSource = fs.readFileSync(path.join(desktopAppRoot, 'detailed', 'page.tsx'), 'utf8');
   assert(
     detailedPageSource.includes('isSelectedCell = isInSelection || isSweepTarget') &&
       detailedPageSource.includes('isToday && !isSelectedCell'),
     'Detailed calendar today highlight must yield to active or committed selection coloring'
   );
-  const newFlightModalSource = fs.readFileSync(path.join(root, 'src', 'app', 'components', 'NewFlightModal.tsx'), 'utf8');
+  const newFlightModalSource = fs.readFileSync(path.join(desktopAppRoot, 'components', 'NewFlightModal.tsx'), 'utf8');
   assert(
     newFlightModalSource.includes('prefillDateSelection?: NewFlightDateSelection') &&
       !newFlightModalSource.includes('prefillDate?: string') &&
@@ -9222,11 +9223,11 @@ async function run() {
       !detailedPageSource.includes('const workspace = await applyLocalModificationBatch(season.id, regularMods, historyEntry);'),
     'Detailed Schedule mass edits/adds/deletes must optimistically update visible state, persist only selected IDs through native mutation, and rollback immediately on failed commits'
   );
-  const homePageSource = fs.readFileSync(path.join(root, 'src', 'app', 'page.tsx'), 'utf8');
-  const seasonalRoutePath = path.join(root, 'src', 'app', 'seasonal', 'page.tsx');
+  const homePageSource = fs.readFileSync(path.join(desktopAppRoot, 'page.tsx'), 'utf8');
+  const seasonalRoutePath = path.join(desktopAppRoot, 'seasonal', 'page.tsx');
   const seasonalRouteSource = fs.existsSync(seasonalRoutePath) ? fs.readFileSync(seasonalRoutePath, 'utf8') : '';
-  const seasonalPageSource = fs.readFileSync(path.join(root, 'src', 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
-  const dailyPageSource = fs.readFileSync(path.join(root, 'src', 'app', 'daily', 'page.tsx'), 'utf8');
+  const seasonalPageSource = fs.readFileSync(path.join(desktopAppRoot, 'SeasonalSchedulePage.tsx'), 'utf8');
+  const dailyPageSource = fs.readFileSync(path.join(desktopAppRoot, 'daily', 'page.tsx'), 'utf8');
   const onlineFirstRoutesSource = fs.readFileSync(path.join(root, 'src', 'app', 'onlineFirstRoutes.source.test.ts'), 'utf8');
   assert(
     dailyPageSource.includes('buildCanonicalAddedFlightRecords') &&
@@ -9235,7 +9236,7 @@ async function run() {
       !detailedPageSource.includes('const addedRecords = addedModificationsToFlightRecords(addedMods);'),
     'Daily and Detailed new-flight commits must use the shared canonical added FlightRecord builder, not page-local conversion paths'
   );
-  const dashboardPageSource = fs.readFileSync(path.join(root, 'src', 'app', 'dashboard', 'page.tsx'), 'utf8');
+  const dashboardPageSource = fs.readFileSync(path.join(desktopAppRoot, 'dashboard', 'page.tsx'), 'utf8');
   const dashboardAiSubmitStart = dashboardPageSource.indexOf('const submitAiPrompt');
   const dashboardAiSubmitEnd = dashboardPageSource.indexOf('const moveAiNotebookBlock', dashboardAiSubmitStart);
   const dashboardAiSubmitSource = dashboardAiSubmitStart >= 0 && dashboardAiSubmitEnd > dashboardAiSubmitStart
@@ -9457,20 +9458,20 @@ async function run() {
       mappedSkawldResultEvent.usage?.totalTokens === 30,
     `Skawld event mapper must preserve run ids, tool names, duration, status, and usage for Dashboard AI events, got ${JSON.stringify({ mappedSkawldInitEvent, mappedSkawldToolStartEvent, mappedSkawldToolEndEvent, mappedSkawldResultEvent })}`
   );
-  const layoutSource = fs.readFileSync(path.join(root, 'src', 'app', 'layout.tsx'), 'utf8');
+  const layoutSource = fs.readFileSync(path.join(desktopAppRoot, 'layout.tsx'), 'utf8');
   const globalCssSource = fs.readFileSync(path.join(root, 'src', 'app', 'globals.css'), 'utf8');
-  const appShellSource = fs.readFileSync(path.join(root, 'src', 'app', 'components', 'AppShell.tsx'), 'utf8');
+  const appShellSource = fs.readFileSync(path.join(desktopAppRoot, 'components', 'AppShell.tsx'), 'utf8');
   const releaseWorkflowSource = fs.readFileSync(path.join(root, '..', '.github', 'workflows', 'release.yml'), 'utf8');
-  const appSidebarSource = fs.readFileSync(path.join(root, 'src', 'app', 'components', 'AppSidebar.tsx'), 'utf8');
-  const workspacePageHeaderPath = path.join(root, 'src', 'app', 'components', 'WorkspacePageHeader.tsx');
+  const appSidebarSource = fs.readFileSync(path.join(desktopAppRoot, 'components', 'AppSidebar.tsx'), 'utf8');
+  const workspacePageHeaderPath = path.join(desktopAppRoot, 'components', 'WorkspacePageHeader.tsx');
   const workspacePageHeaderSource = fs.existsSync(workspacePageHeaderPath) ? fs.readFileSync(workspacePageHeaderPath, 'utf8') : '';
-  const headerActionMenuPath = path.join(root, 'src', 'app', 'components', 'HeaderActionMenu.tsx');
+  const headerActionMenuPath = path.join(desktopAppRoot, 'components', 'HeaderActionMenu.tsx');
   const headerActionMenuSource = fs.existsSync(headerActionMenuPath) ? fs.readFileSync(headerActionMenuPath, 'utf8') : '';
-  const nativeCloseCleanupGuardPath = path.join(root, 'src', 'app', 'components', 'NativeCloseCleanupGuard.tsx');
+  const nativeCloseCleanupGuardPath = path.join(desktopAppRoot, 'components', 'NativeCloseCleanupGuard.tsx');
   const nativeCloseCleanupGuardSource = fs.existsSync(nativeCloseCleanupGuardPath) ? fs.readFileSync(nativeCloseCleanupGuardPath, 'utf8') : '';
-  const nativeStartupSessionResetPath = path.join(root, 'src', 'app', 'components', 'NativeStartupSessionReset.tsx');
+  const nativeStartupSessionResetPath = path.join(desktopAppRoot, 'components', 'NativeStartupSessionReset.tsx');
   const nativeStartupSessionResetSource = fs.existsSync(nativeStartupSessionResetPath) ? fs.readFileSync(nativeStartupSessionResetPath, 'utf8') : '';
-  const loadingStatusPanelPath = path.join(root, 'src', 'app', 'components', 'LoadingStatusPanel.tsx');
+  const loadingStatusPanelPath = path.join(desktopAppRoot, 'components', 'LoadingStatusPanel.tsx');
   const loadingStatusPanelSource = fs.existsSync(loadingStatusPanelPath) ? fs.readFileSync(loadingStatusPanelPath, 'utf8') : '';
   const appUiFiles = walkFiles(path.join(root, 'src', 'app'), (filePath) => filePath.endsWith('.tsx'));
   const fixedViewportViolations = appUiFiles.flatMap((filePath) => {
@@ -9512,17 +9513,17 @@ async function run() {
   const tauriDefaultCapabilityPath = path.join(root, 'src-tauri', 'capabilities', 'default.json');
   const tauriDefaultCapabilitySource = fs.existsSync(tauriDefaultCapabilityPath) ? fs.readFileSync(tauriDefaultCapabilityPath, 'utf8') : '';
   const syncActionButtonSource = fs.readFileSync(
-    path.join(root, 'src', 'app', 'components', 'SyncActionButton.tsx'),
+    path.join(desktopAppRoot, 'components', 'SyncActionButton.tsx'),
     'utf8'
   );
-  const fetchServerUpdatesButtonPath = path.join(root, 'src', 'app', 'components', 'FetchServerUpdatesButton.tsx');
+  const fetchServerUpdatesButtonPath = path.join(desktopAppRoot, 'components', 'FetchServerUpdatesButton.tsx');
   const fetchServerUpdatesButtonSource = fs.existsSync(fetchServerUpdatesButtonPath)
     ? fs.readFileSync(fetchServerUpdatesButtonPath, 'utf8')
     : '';
-  const operatorAuthGatePath = path.join(root, 'src', 'app', 'components', 'OperatorAuthGate.tsx');
+  const operatorAuthGatePath = path.join(desktopAppRoot, 'components', 'OperatorAuthGate.tsx');
   const operatorAuthGateSource = fs.existsSync(operatorAuthGatePath) ? fs.readFileSync(operatorAuthGatePath, 'utf8') : '';
-  const pbbIconSource = fs.existsSync(path.join(root, 'src', 'app', 'components', 'PbbIcon.tsx'))
-    ? fs.readFileSync(path.join(root, 'src', 'app', 'components', 'PbbIcon.tsx'), 'utf8')
+  const pbbIconSource = fs.existsSync(path.join(desktopAppRoot, 'components', 'PbbIcon.tsx'))
+    ? fs.readFileSync(path.join(desktopAppRoot, 'components', 'PbbIcon.tsx'), 'utf8')
     : '';
   const seasonDataCacheSource = fs.readFileSync(path.join(root, 'src', 'lib', 'seasonDataCache.ts'), 'utf8');
   const appSessionCleanupPath = path.join(root, 'src', 'lib', 'appSessionCleanup.ts');
@@ -9555,9 +9556,9 @@ async function run() {
   const seasonChangeEventsSource = fs.readFileSync(path.join(root, 'src', 'lib', 'seasonChangeEvents.ts'), 'utf8');
   const seasonConflictResolutionSource = fs.readFileSync(path.join(root, 'src', 'lib', 'seasonConflictResolution.ts'), 'utf8');
   const iataSeasonSource = fs.readFileSync(path.join(root, 'src', 'lib', 'iataSeason.ts'), 'utf8');
-  const seasonSyncProviderSource = fs.readFileSync(path.join(root, 'src', 'app', 'components', 'SeasonSyncProvider.tsx'), 'utf8');
-  const seasonConflictReviewControlSource = fs.readFileSync(path.join(root, 'src', 'app', 'components', 'SeasonConflictReviewControl.tsx'), 'utf8');
-  const detailedConfirmModalSource = fs.readFileSync(path.join(root, 'src', 'app', 'detailed', 'ConfirmModal.tsx'), 'utf8');
+  const seasonSyncProviderSource = fs.readFileSync(path.join(desktopAppRoot, 'components', 'SeasonSyncProvider.tsx'), 'utf8');
+  const seasonConflictReviewControlSource = fs.readFileSync(path.join(desktopAppRoot, 'components', 'SeasonConflictReviewControl.tsx'), 'utf8');
+  const detailedConfirmModalSource = fs.readFileSync(path.join(desktopAppRoot, 'detailed', 'ConfirmModal.tsx'), 'utf8');
   const appRuntimeLegacySyncRefs = walkFiles(
     path.join(root, 'src', 'app'),
     (filePath) => /\.(?:ts|tsx|js|jsx)$/.test(filePath)
@@ -9647,10 +9648,10 @@ async function run() {
   const supabaseSchemaSource = fs.existsSync(supabaseSchemaPath) ? fs.readFileSync(supabaseSchemaPath, 'utf8') : '';
   const migrationScriptPath = path.join(root, 'scripts', 'migrate-firestore-to-supabase.mjs');
   const migrationScriptSource = fs.existsSync(migrationScriptPath) ? fs.readFileSync(migrationScriptPath, 'utf8') : '';
-  const auditPagePath = path.join(root, 'src', 'app', 'audit', 'page.tsx');
+  const auditPagePath = path.join(desktopAppRoot, 'audit', 'page.tsx');
   const auditPageSource = fs.existsSync(auditPagePath) ? fs.readFileSync(auditPagePath, 'utf8') : '';
-  const appRouteCachePath = path.join(root, 'src', 'app', 'components', 'AppRouteCache.tsx');
-  const routeCacheContextPath = path.join(root, 'src', 'app', 'components', 'RouteCacheContext.tsx');
+  const appRouteCachePath = path.join(desktopAppRoot, 'components', 'AppRouteCache.tsx');
+  const routeCacheContextPath = path.join(desktopAppRoot, 'components', 'RouteCacheContext.tsx');
   const appRouteCacheSource = fs.existsSync(appRouteCachePath) ? fs.readFileSync(appRouteCachePath, 'utf8') : '';
   const routeCacheContextSource = fs.existsSync(routeCacheContextPath) ? fs.readFileSync(routeCacheContextPath, 'utf8') : '';
   const skawldCheckScriptPath = path.join(root, 'scripts', 'check-skawld-sdk.mjs');
@@ -9661,12 +9662,12 @@ async function run() {
   const skawldHarnessTestScriptSource = fs.existsSync(skawldHarnessTestScriptPath) ? fs.readFileSync(skawldHarnessTestScriptPath, 'utf8') : '';
   const dashboardAiLocalSqlSourcePath = path.join(root, 'scripts', 'dashboard-ai-local-sql-source.mjs');
   const dashboardAiLocalSqlSource = fs.existsSync(dashboardAiLocalSqlSourcePath) ? fs.readFileSync(dashboardAiLocalSqlSourcePath, 'utf8') : '';
-  const seasonWorkspaceRefreshHookPath = path.join(root, 'src', 'app', 'hooks', 'useSeasonWorkspaceRefresh.ts');
+  const seasonWorkspaceRefreshHookPath = path.join(desktopAppRoot, 'hooks', 'useSeasonWorkspaceRefresh.ts');
   const seasonWorkspaceRefreshHookSource = fs.existsSync(seasonWorkspaceRefreshHookPath) ? fs.readFileSync(seasonWorkspaceRefreshHookPath, 'utf8') : '';
   const seasonWorkspaceStoreSource = fs.readFileSync(path.join(root, 'src', 'lib', 'seasonWorkspaceStore.ts'), 'utf8');
   const seasonWorkspaceReadModelSource = fs.readFileSync(path.join(root, 'src', 'lib', 'seasonWorkspaceReadModel.ts'), 'utf8');
-  const sessionStateHookSource = fs.readFileSync(path.join(root, 'src', 'app', 'hooks', 'useSessionState.ts'), 'utf8');
-  const sessionScrollHookSource = fs.readFileSync(path.join(root, 'src', 'app', 'hooks', 'useSessionScrollRestoration.ts'), 'utf8');
+  const sessionStateHookSource = fs.readFileSync(path.join(desktopAppRoot, 'hooks', 'useSessionState.ts'), 'utf8');
+  const sessionScrollHookSource = fs.readFileSync(path.join(desktopAppRoot, 'hooks', 'useSessionScrollRestoration.ts'), 'utf8');
   const skawldProductionImports = walkFiles(
     path.join(root, 'src'),
     (filePath) => /\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)
@@ -11623,7 +11624,7 @@ async function run() {
   const exportSaveSource = fs.existsSync(exportSavePath) ? fs.readFileSync(exportSavePath, 'utf8') : '';
   const dailyScheduleExportPath = path.join(root, 'src', 'lib', 'dailyScheduleExport.ts');
   const dailyScheduleExportSource = fs.existsSync(dailyScheduleExportPath) ? fs.readFileSync(dailyScheduleExportPath, 'utf8') : '';
-  const exportNotificationProviderPath = path.join(root, 'src', 'app', 'components', 'ExportNotificationProvider.tsx');
+  const exportNotificationProviderPath = path.join(desktopAppRoot, 'components', 'ExportNotificationProvider.tsx');
   const exportNotificationProviderSource = fs.existsSync(exportNotificationProviderPath)
     ? fs.readFileSync(exportNotificationProviderPath, 'utf8')
     : '';
@@ -11716,9 +11717,9 @@ async function run() {
   assertNoGroupAggregateRowCountContract(schemaSource, 'schema mirror');
   const dashboardAiFunctionSource = fs.readFileSync(path.join(root, 'supabase', 'functions', 'dashboard-ai-analysis', 'index.ts'), 'utf8');
   assertNoMojibakeMarkers(dashboardAiFunctionSource, 'dashboard-ai-analysis/index.ts');
-  const aiWorkspacePanelSource = fs.readFileSync(path.join(root, 'src', 'app', 'dashboard', 'components', 'AiWorkspacePanel.tsx'), 'utf8');
-  const aiNotebookCanvasSource = fs.readFileSync(path.join(root, 'src', 'app', 'dashboard', 'components', 'AiNotebookCanvas.tsx'), 'utf8');
-  const aiNotebookBlockRenderersSource = fs.readFileSync(path.join(root, 'src', 'app', 'dashboard', 'components', 'AiNotebookBlockRenderers.tsx'), 'utf8');
+  const aiWorkspacePanelSource = fs.readFileSync(path.join(desktopAppRoot, 'dashboard', 'components', 'AiWorkspacePanel.tsx'), 'utf8');
+  const aiNotebookCanvasSource = fs.readFileSync(path.join(desktopAppRoot, 'dashboard', 'components', 'AiNotebookCanvas.tsx'), 'utf8');
+  const aiNotebookBlockRenderersSource = fs.readFileSync(path.join(desktopAppRoot, 'dashboard', 'components', 'AiNotebookBlockRenderers.tsx'), 'utf8');
   const dashboardAiWorkspaceUiSource = [dashboardPageSource, aiWorkspacePanelSource, aiNotebookCanvasSource, aiNotebookBlockRenderersSource].join('\n');
   const queryAggregatedMigrationSource = fs.readFileSync(path.join(root, 'supabase', 'migrations', '20260523175500_reporting_query_aggregated.sql'), 'utf8');
   const queryAggregatedWrapperMigrationSource = fs.readFileSync(path.join(root, 'supabase', 'migrations', '20260523112828_public_dashboard_ai_query_aggregated.sql'), 'utf8');

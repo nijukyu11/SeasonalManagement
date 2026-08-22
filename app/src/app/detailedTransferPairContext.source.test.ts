@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 test('detailed multi-date paste builds and reuses one transfer pair context', () => {
-  const source = readFileSync(join(process.cwd(), 'src/app/detailed/page.tsx'), 'utf8');
+  const source = readFileSync(join(process.cwd(), 'src/app/(desktop)/detailed/page.tsx'), 'utf8');
   const pasteStart = source.indexOf("if ((e.ctrlKey || e.metaKey) && e.key === 'v')");
   const pasteEnd = source.indexOf("if ((e.ctrlKey || e.metaKey) && e.key === 'a')", pasteStart);
 

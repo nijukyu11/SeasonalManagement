@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const source = readFileSync(join(process.cwd(), 'src/app/hooks/useGanttDragScroll.ts'), 'utf8');
+const source = readFileSync(join(process.cwd(), 'src/app/(desktop)/hooks/useGanttDragScroll.ts'), 'utf8');
 
 test('drag scroll installs a non-passive wheel listener only used while active', () => {
   assert.match(source, /if \(!activeRef\.current\) return/);

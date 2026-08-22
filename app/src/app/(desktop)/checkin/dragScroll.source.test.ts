@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const source = readFileSync(join(process.cwd(), 'src/app/checkin/page.tsx'), 'utf8');
+const source = readFileSync(join(process.cwd(), 'src/app/(desktop)/checkin/page.tsx'), 'utf8');
 
 test('check-in allocation uses pointer capture instead of native drag and drop', () => {
   assert.match(source, /useGanttDragScroll\(/);

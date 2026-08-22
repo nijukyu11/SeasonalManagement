@@ -1,13 +1,13 @@
 import type { Metadata } from 'next';
 import AppShell from './components/AppShell';
-import './globals.css';
+import '../globals.css';
 
 export const metadata: Metadata = {
   title: 'Seasonal Schedule - Aviation Command',
   description: 'Aviation seasonal flight schedule management — Ops Control Center',
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function DesktopRootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="vi">
       <head>

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const source = readFileSync(join(process.cwd(), 'src/app/components/OperatorAuthGate.tsx'), 'utf8');
+const source = readFileSync(join(process.cwd(), 'src/app/(desktop)/components/OperatorAuthGate.tsx'), 'utf8');
 const cleanupSource = readFileSync(join(process.cwd(), 'src/lib/appSessionCleanup.ts'), 'utf8');
 const auditLogSource = readFileSync(join(process.cwd(), 'src/lib/auditLog.ts'), 'utf8');
 

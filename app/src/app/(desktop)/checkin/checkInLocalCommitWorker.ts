@@ -1,8 +1,8 @@
 import {
   applyLocalModificationBatchDelta,
   type LocalSyncMeta,
-} from '../../lib/localSeasonStore';
-import type { FlightModification } from '../../lib/types';
+} from '@/lib/localSeasonStore';
+import type { FlightModification } from '@/lib/types';
 
 interface CheckInLocalCommitWorkerCommitRequest {
   type: 'commit';

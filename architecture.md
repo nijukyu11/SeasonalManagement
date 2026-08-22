@@ -231,10 +231,30 @@ Route shells should use dynamic viewport height (`h-dvh`) rather than fixed `h-s
 | Check-in Allocation | Departure-only Gantt, counter assignment/time windows | Supabase allocation windows and server mutations |
 | Gate Allocation | Gate/stand Gantt allocation | Supabase allocation windows and server mutations |
 | Dashboard | Overview, MoM/WoW comparison, AI notebook | Supabase reporting/AI reads |
+| Public Traffic Report | Anonymous continuous Ops Date KPI, timeline, breakdown and aggregate export | Same-origin `/api/report/v1/*` through Nginx to aggregate-only Edge/RPC publication |
 | Settings | Operational resources, rules, route countries, AI providers, AI context docs | Supabase settings tables through `remoteStore` |
 | Audit | Audit session/log review | Supabase audit tables |
 
 Check-in and Gate routes must keep pointer/drag hot paths separate from durable persistence. Optimistic UI projections are allowed, but full workspace hydration, Supabase writes, and manual Save execution do not belong in drag-over, resize-move, or drop-preview handlers.
+
+### Public reporting boundary
+
+`/reports/traffic` lives under the `(public-report)` root layout. Every operational route lives under the pathless `(desktop)` root layout, which is the only root allowed to import `AppShell`. Navigation between the roots is intentionally a full document transition so the public chunk graph cannot inherit desktop/native providers.
+
+The reporting flow is:
+
+```text
+anonymous browser GET /api/report/v1/overview
+  -> Nginx rate limit + canonical shared cache
+  -> traffic-report Edge Function (no browser credentials)
+  -> one PostgREST call to get_public_traffic_report_overview_v1
+  -> one PostgreSQL statement snapshot
+  -> KPI + timeline + breakdown reporting functions
+```
+
+The public database seam is `reporting.public_traffic_effective`. It resolves cross-season candidates using the server event sequence, applies tombstones before removing deleted winners, quarantines ambiguous recency, calculates typed Ops Date at the 05:00 local boundary, and enriches only the approved Country/aircraft-group dimensions. Publication functions are revoked from `PUBLIC`, `anon` and `authenticated`; only the Edge server role receives execute rights.
+
+Nginx is the sole shared-cache owner for `/api/report`. Cloudflare cache is bypassed for the API path. Cached responses are fresh for 60 seconds, browser SWR is at most another 30 seconds, and Nginx stale/background update is disabled.
 
 ## Dashboard AI
 

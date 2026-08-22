@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const source = readFileSync(join(process.cwd(), 'src/app/hooks/useSeasonWorkspaceRefresh.ts'), 'utf8');
+const source = readFileSync(join(process.cwd(), 'src/app/(desktop)/hooks/useSeasonWorkspaceRefresh.ts'), 'utf8');
 
 test('season workspace refresh awaits refresh before handling the next event', () => {
   assert.match(source, /onRefresh\?:\s*\(event:\s*SeasonWorkspaceChangeEvent\)\s*=>\s*Promise<void>\s*\|\s*void/);

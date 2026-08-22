@@ -1,6 +1,6 @@
 'use client';
 
-import { useAppUpdate } from '@/app/components/AppUpdateProvider';
+import { useAppUpdate } from '../../components/AppUpdateProvider';
 import { formatUpdateDate } from '@/lib/appUpdater';
 
 function formatBytes(value: number): string {

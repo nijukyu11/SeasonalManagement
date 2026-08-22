@@ -4,6 +4,7 @@ import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 const supabaseBootstrapSql = `
 create role anon nologin;
 create role authenticated nologin;
+create role service_role nologin;
 create schema auth;
 create table auth.users (
   id uuid primary key,

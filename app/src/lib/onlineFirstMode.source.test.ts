@@ -21,8 +21,8 @@ test('remote store exposes server-authoritative mutation contract', () => {
 });
 
 test('conflict review is legacy-native fallback outside normal server-authoritative routes', () => {
-  const conflictControl = readFileSync(join(process.cwd(), 'src/app/components/SeasonConflictReviewControl.tsx'), 'utf8');
-  const provider = readFileSync(join(process.cwd(), 'src/app/components/SeasonSyncProvider.tsx'), 'utf8');
+  const conflictControl = readFileSync(join(process.cwd(), 'src/app/(desktop)/components/SeasonConflictReviewControl.tsx'), 'utf8');
+  const provider = readFileSync(join(process.cwd(), 'src/app/(desktop)/components/SeasonSyncProvider.tsx'), 'utf8');
   assert.match(conflictControl, /LEGACY_NATIVE_SYNC_ENABLED/);
   assert.doesNotMatch(conflictControl, /SERVER_AUTHORITATIVE_MODE/);
   assert.match(conflictControl, /return null/);
@@ -40,9 +40,9 @@ test('native route mutation seams commit through server-authoritative RPC', () =
 
 test('schedule route mutations pass server-authoritative module sources', () => {
   const nativeLocalStore = readFileSync(join(process.cwd(), 'src/lib/nativeLocalSeasonStore.ts'), 'utf8');
-  const seasonalPage = readFileSync(join(process.cwd(), 'src/app/SeasonalSchedulePage.tsx'), 'utf8');
-  const detailedPage = readFileSync(join(process.cwd(), 'src/app/detailed/page.tsx'), 'utf8');
-  const dailyPage = readFileSync(join(process.cwd(), 'src/app/daily/page.tsx'), 'utf8');
+  const seasonalPage = readFileSync(join(process.cwd(), 'src/app/(desktop)/SeasonalSchedulePage.tsx'), 'utf8');
+  const detailedPage = readFileSync(join(process.cwd(), 'src/app/(desktop)/detailed/page.tsx'), 'utf8');
+  const dailyPage = readFileSync(join(process.cwd(), 'src/app/(desktop)/daily/page.tsx'), 'utf8');
   const localSeasonStore = readFileSync(join(process.cwd(), 'src/lib/localSeasonStore.ts'), 'utf8');
 
   assert.doesNotMatch(nativeLocalStore, /applyServerAuthoritativeOperations\(seasonId,\s*'schedule'/);
@@ -62,14 +62,14 @@ test('server-authoritative writes do not depend on SQLite cursor or catch-up', (
 test('normal native startup and close do not preload or mutate SQLite', () => {
   const tauriConfig = readFileSync(join(process.cwd(), 'src-tauri/tauri.conf.json'), 'utf8');
   const sessionCleanup = readFileSync(join(process.cwd(), 'src/lib/appSessionCleanup.ts'), 'utf8');
-  const closeGuard = readFileSync(join(process.cwd(), 'src/app/components/NativeCloseCleanupGuard.tsx'), 'utf8');
+  const closeGuard = readFileSync(join(process.cwd(), 'src/app/(desktop)/components/NativeCloseCleanupGuard.tsx'), 'utf8');
   assert.doesNotMatch(tauriConfig, /sqlite:seasonal-management-local\.db/);
   assert.doesNotMatch(sessionCleanup, /discardAllLocalPendingChanges|localSeasonStore/);
   assert.doesNotMatch(closeGuard, /discardPendingLocalChanges|SQLite database|local database/);
 });
 
 test('gate commit resolves canonical server events before optimistic view can clear', () => {
-  const gatePage = readFileSync(join(process.cwd(), 'src/app/gate/page.tsx'), 'utf8');
+  const gatePage = readFileSync(join(process.cwd(), 'src/app/(desktop)/gate/page.tsx'), 'utf8');
   assert.match(
     gatePage,
     /findLatestSequencedModificationPatch\(\s*result\.appliedEvents,\s*legId,\s*'local-ack',\s*submittedModsByLegId\.get\(legId\),\s*\)/
@@ -80,8 +80,8 @@ test('gate commit resolves canonical server events before optimistic view can cl
 
 test('allocation mutations keep their module source in server-authoritative RPC', () => {
   const nativeLocalStore = readFileSync(join(process.cwd(), 'src/lib/nativeLocalSeasonStore.ts'), 'utf8');
-  const gatePage = readFileSync(join(process.cwd(), 'src/app/gate/page.tsx'), 'utf8');
-  const checkInPage = readFileSync(join(process.cwd(), 'src/app/checkin/page.tsx'), 'utf8');
+  const gatePage = readFileSync(join(process.cwd(), 'src/app/(desktop)/gate/page.tsx'), 'utf8');
+  const checkInPage = readFileSync(join(process.cwd(), 'src/app/(desktop)/checkin/page.tsx'), 'utf8');
   assert.match(nativeLocalStore, /type NativeLocalModificationSource = 'gate' \| 'checkin' \| 'allocation'/);
   assert.match(nativeLocalStore, /applyServerAuthoritativeOperations\(seasonId,\s*source,/);
   assert.match(gatePage, /runNativeLocalModificationBatchDeltaResult\(seasonId,\s*mods,[\s\S]*?,\s*'gate'\s*\)/);
@@ -89,7 +89,7 @@ test('allocation mutations keep their module source in server-authoritative RPC'
 });
 
 test('check-in writes try the shared mutation boundary before worker fallback', () => {
-  const checkInPage = readFileSync(join(process.cwd(), 'src/app/checkin/page.tsx'), 'utf8');
+  const checkInPage = readFileSync(join(process.cwd(), 'src/app/(desktop)/checkin/page.tsx'), 'utf8');
   const persistCheckInStart = checkInPage.indexOf('const persistCheckInModifications = useCallback');
   const persistCheckInEnd = checkInPage.indexOf(
     '}, [commitCheckInModificationsInWorker',
@@ -108,7 +108,7 @@ test('check-in writes try the shared mutation boundary before worker fallback', 
 });
 
 test('check-in persistence without sync metadata rolls back instead of silently succeeding', () => {
-  const checkInPage = readFileSync(join(process.cwd(), 'src/app/checkin/page.tsx'), 'utf8');
+  const checkInPage = readFileSync(join(process.cwd(), 'src/app/(desktop)/checkin/page.tsx'), 'utf8');
   assert.match(
     checkInPage,
     /if \(!result\.syncMeta\) \{[\s\S]*?throw withCheckInCommitFailureSource\([\s\S]*?new Error\('Check-in server mutation completed without sync metadata\.'\),[\s\S]*?result\.source \?\? 'checkin'[\s\S]*?\);[\s\S]*?\}/

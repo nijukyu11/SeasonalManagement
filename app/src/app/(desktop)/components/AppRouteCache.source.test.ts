@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const source = readFileSync(join(process.cwd(), 'src/app/components/AppRouteCache.tsx'), 'utf8');
+const source = readFileSync(join(process.cwd(), 'src/app/(desktop)/components/AppRouteCache.tsx'), 'utf8');
 
 test('route cache boundary does not keep heavy page modules mounted', () => {
   assert.doesNotMatch(source, /import .*Page from '\.\.\//);

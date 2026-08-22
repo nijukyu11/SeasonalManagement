@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 const source = readFileSync(
-  join(process.cwd(), 'src', 'app', 'components', 'SeasonalImportPreviewDialog.tsx'),
+  join(process.cwd(), 'src', 'app', '(desktop)', 'components', 'SeasonalImportPreviewDialog.tsx'),
   'utf8',
 );
 

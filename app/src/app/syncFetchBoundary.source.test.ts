@@ -4,12 +4,12 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 const routeFiles = [
-  'src/app/SeasonalSchedulePage.tsx',
-  'src/app/detailed/page.tsx',
-  'src/app/daily/page.tsx',
-  'src/app/checkin/page.tsx',
-  'src/app/gate/page.tsx',
-  'src/app/dashboard/page.tsx',
+  'src/app/(desktop)/SeasonalSchedulePage.tsx',
+  'src/app/(desktop)/detailed/page.tsx',
+  'src/app/(desktop)/daily/page.tsx',
+  'src/app/(desktop)/checkin/page.tsx',
+  'src/app/(desktop)/gate/page.tsx',
+  'src/app/(desktop)/dashboard/page.tsx',
 ];
 
 function extractFunctionBody(source: string, functionName: string): string {
@@ -32,8 +32,8 @@ function extractFunctionBody(source: string, functionName: string): string {
 }
 
 test('SyncActionButton remains submit-pending and never becomes Fetch data', () => {
-  const buttonSource = readFileSync(join(process.cwd(), 'src/app/components/SyncActionButton.tsx'), 'utf8');
-  const stateSource = readFileSync(join(process.cwd(), 'src/app/components/syncActionButtonState.ts'), 'utf8');
+  const buttonSource = readFileSync(join(process.cwd(), 'src/app/(desktop)/components/SyncActionButton.tsx'), 'utf8');
+  const stateSource = readFileSync(join(process.cwd(), 'src/app/(desktop)/components/syncActionButtonState.ts'), 'utf8');
   const submitUiSource = `${buttonSource}\n${stateSource}`;
   assert.match(buttonSource, /pendingCount/);
   assert.match(buttonSource, /getSyncActionButtonState/);
@@ -47,7 +47,7 @@ test('SyncActionButton remains submit-pending and never becomes Fetch data', () 
 });
 
 test('FetchServerUpdatesButton is read-only server refresh UI', () => {
-  const source = readFileSync(join(process.cwd(), 'src/app/components/FetchServerUpdatesButton.tsx'), 'utf8');
+  const source = readFileSync(join(process.cwd(), 'src/app/(desktop)/components/FetchServerUpdatesButton.tsx'), 'utf8');
   assert.match(source, /Fetch data/);
   assert.match(source, /Fetch latest data from server/);
   assert.match(source, /onFetch/);
@@ -64,7 +64,7 @@ test('primary route pages expose server fetch separately from Sync submit', () =
     assert.match(source, /<SyncActionButton/, file);
     assert.match(source, /pendingCount=\{syncPendingCount\}/, file);
     const fetchBody = extractFunctionBody(source, 'fetchServerData');
-    if (file === 'src/app/SeasonalSchedulePage.tsx') {
+    if (file === 'src/app/(desktop)/SeasonalSchedulePage.tsx') {
       assert.match(fetchBody, /loadSeasonRows\([^,]+,\s*true,/, file);
     } else {
       assert.match(fetchBody, /revalidateSeasonWorkspaceWindow\([\s\S]*force:\s*true,[\s\S]*initiator:\s*'immediate'/, file);

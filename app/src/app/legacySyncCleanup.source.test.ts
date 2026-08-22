@@ -9,18 +9,18 @@ function readSource(relativePath: string): string {
   return readFileSync(join(sourceRoot, relativePath), 'utf8');
 }
 
-const seasonSyncProviderSource = readSource('app/components/SeasonSyncProvider.tsx');
+const seasonSyncProviderSource = readSource('app/(desktop)/components/SeasonSyncProvider.tsx');
 const seasonAutoSyncSource = readSource('lib/seasonAutoSync.ts');
-const useSeasonWorkspaceRefreshSource = readSource('app/hooks/useSeasonWorkspaceRefresh.ts');
-const seasonRepairTabSource = readSource('app/settings/components/SeasonRepairTab.tsx');
+const useSeasonWorkspaceRefreshSource = readSource('app/(desktop)/hooks/useSeasonWorkspaceRefresh.ts');
+const seasonRepairTabSource = readSource('app/(desktop)/settings/components/SeasonRepairTab.tsx');
 
 const primaryRouteFiles = [
-  'app/SeasonalSchedulePage.tsx',
-  'app/detailed/page.tsx',
-  'app/daily/page.tsx',
-  'app/checkin/page.tsx',
-  'app/gate/page.tsx',
-  'app/dashboard/page.tsx',
+  'app/(desktop)/SeasonalSchedulePage.tsx',
+  'app/(desktop)/detailed/page.tsx',
+  'app/(desktop)/daily/page.tsx',
+  'app/(desktop)/checkin/page.tsx',
+  'app/(desktop)/gate/page.tsx',
+  'app/(desktop)/dashboard/page.tsx',
 ];
 
 test('SeasonSyncProvider no longer exposes old native catch-up actions', () => {
