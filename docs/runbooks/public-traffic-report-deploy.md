@@ -26,7 +26,7 @@ The repository workstation does not currently contain `nginx`, `cloudflared` or 
 3. Deploy the `traffic-report` Edge Function with JWT verification disabled. Confirm a browser request does not send or require Cookie, Authorization or apikey.
 4. Copy the immutable `app/out` artifact into a new timestamped staging release directory. Record its hash; do not overwrite the previous release.
 5. Install the Nginx config from `deploy/traffic-report/nginx.conf`, run `nginx -t`, then reload. Nginx owns the shared cache for `/api/report`; no stale cache serving or background update is allowed.
-6. Merge the hostname from `cloudflared-ingress.yml.example` into the existing named tunnel. Configure Cloudflare Cache Rules to bypass `/api/report/*`, validate the tunnel configuration, then reload the existing service.
+6. For staging, run the isolated `seasonal-traffic-report-staging-tunnel` Quick Tunnel service and record its temporary `trycloudflare.com` URL. After acceptance, remove that staging service, merge the production hostname from `cloudflared-ingress.yml.example` into the existing remotely managed named tunnel, and configure Cloudflare Cache Rules to bypass `/api/report/*`.
 7. Smoke `healthz`, report HTML, overview JSON, canonical 308, export `no-store`, cache MISS/HIT/Age and a 429 rate-limit response. Confirm maximum observable response age is at most 90 seconds.
 8. Run data reconciliation, accessibility, desktop-route/Tauri smoke and latency measurements. Ask the user to accept the staging URL.
 
