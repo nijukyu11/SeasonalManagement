@@ -6,6 +6,7 @@ const read = (file) => readFileSync(path.resolve(file), 'utf8');
 const edge = read('supabase/functions/traffic-report/index.ts');
 const config = read('supabase/config.toml');
 const migration = read('supabase/migrations/20260822090000_public_traffic_report_v1.sql');
+const phase23Migration = read('supabase/migrations/20260822150000_public_traffic_report_phase23.sql');
 const nginx = read('../deploy/traffic-report/nginx.conf');
 
 assert.match(config, /\[functions\.traffic-report\]\s*verify_jwt = false/);
@@ -28,8 +29,11 @@ for (const signature of [
   'reporting.get_traffic_report_breakdowns',
   'public.get_public_traffic_report_overview_v1',
 ]) {
-  assert.ok(migration.includes(signature), `migration is missing ${signature}`);
+  assert.ok(`${migration}\n${phase23Migration}`.includes(signature), `migration is missing ${signature}`);
 }
+assert.match(phase23Migration, /'day_of_week'/);
+assert.match(phase23Migration, /'filter_options'/);
+assert.match(phase23Migration, /generate_series\(0, \(1440 \/ p_bucket_minutes\) - 1\)/);
 assert.match(migration, /revoke execute[\s\S]+from public, anon, authenticated/);
 assert.match(migration, /grant execute on function public\.get_public_traffic_report_overview_v1[\s\S]+to service_role/);
 assert.match(migration, /effective_action is distinct from 'deleted'/);

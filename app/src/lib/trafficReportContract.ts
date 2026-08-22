@@ -51,6 +51,18 @@ export interface TrafficPeakHourRow {
   suppressed: boolean;
 }
 
+export interface TrafficDayOfWeekRow {
+  day_index: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  calendar_days: number | null;
+  total_flights: number | null;
+  average_flights: number | null;
+  min_flights: number | null;
+  max_flights: number | null;
+  arrivals: number | null;
+  departures: number | null;
+  suppressed: boolean;
+}
+
 export interface TrafficReportBundle {
   contract_version: typeof TRAFFIC_REPORT_CONTRACT_VERSION;
   request_hash: string;
@@ -64,6 +76,11 @@ export interface TrafficReportBundle {
     timeline_granularity: 'day';
     timeline_has_more: boolean;
     timeline_next_cursor: string | null;
+    filter_options: {
+      airline: string[];
+      route: string[];
+    };
+    filter_options_limit: 250;
   };
   kpis: {
     current: TrafficMetricSet;
@@ -87,6 +104,7 @@ export interface TrafficReportBundle {
     country: TrafficBreakdownRow[];
     aircraft_group: TrafficBreakdownRow[];
     peak_hour: TrafficPeakHourRow[];
+    day_of_week: TrafficDayOfWeekRow[];
   };
   quality: {
     unknown_country_legs: number | null;

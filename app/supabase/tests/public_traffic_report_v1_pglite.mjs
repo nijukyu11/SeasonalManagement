@@ -4,6 +4,7 @@ import { createSupabasePGlite } from './pglite_test_support.mjs';
 
 const schemaSql = await readFile(new URL('../schema.sql', import.meta.url), 'utf8');
 const migrationSql = await readFile(new URL('../migrations/20260822090000_public_traffic_report_v1.sql', import.meta.url), 'utf8');
+const phase23Sql = await readFile(new URL('../migrations/20260822150000_public_traffic_report_phase23.sql', import.meta.url), 'utf8');
 const db = await createSupabasePGlite();
 
 async function addSeason(id, code) {
@@ -29,6 +30,7 @@ try {
   // schema.sql mirrors the production migration. Re-applying it verifies the
   // additive migration stays safe for an already provisioned database.
   await db.exec(migrationSql);
+  await db.exec(phase23Sql);
 
   await addSeason('old-season', 'W25');
   await addSeason('new-season', 'S26');
@@ -81,6 +83,11 @@ try {
   assert.equal(overview.metadata.day_count, 1);
   assert.equal(overview.timeline.length, 1);
   assert.equal(overview.kpis.current.flights, overview.timeline[0].flights);
+  assert.equal(overview.breakdowns.peak_hour.length, 24, 'peak-hour publication must include every hour, including zero buckets');
+  assert.equal(overview.breakdowns.day_of_week.length, 7, 'day-of-week publication must include Monday through Sunday');
+  assert.deepEqual(overview.breakdowns.day_of_week.map((row) => row.day_index), [1, 2, 3, 4, 5, 6, 7]);
+  assert.ok(overview.metadata.filter_options.airline.includes('VN'), 'publishable airline options must come from the database snapshot');
+  assert.ok(overview.metadata.filter_options.route.includes('HAN'), 'publishable route options must come from the database snapshot');
   assert.ok(!JSON.stringify(overview).includes('flight_number'));
   assert.ok(!JSON.stringify(overview).includes('record_id'));
 

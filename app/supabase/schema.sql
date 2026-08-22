@@ -10948,7 +10948,59 @@ with filtered as materialized (
     'suppressed', (small or (small_count = 1 and flights >= 3 and visible_rank = 1))
   ) order by flights desc, label) as rows
   from dimension_rows group by dimension
-), hours as (
+), daily_counts as (
+  select ops_date,
+    count(*)::integer as flights,
+    count(*) filter (where type = 'A')::integer as arrivals,
+    count(*) filter (where type = 'D')::integer as departures
+  from filtered
+  group by ops_date
+), daily as (
+  select spine.ops_date,
+    extract(isodow from spine.ops_date)::integer as day_index,
+    coalesce(daily_counts.flights, 0)::integer as flights,
+    coalesce(daily_counts.arrivals, 0)::integer as arrivals,
+    coalesce(daily_counts.departures, 0)::integer as departures
+  from generate_series(p_from_date, p_to_date, interval '1 day') spine(ops_date)
+  left join daily_counts on daily_counts.ops_date = spine.ops_date::date
+), dow_grouped as (
+  select day_index,
+    count(*)::integer as calendar_days,
+    sum(flights)::integer as total_flights,
+    round(avg(flights), 2) as average_flights,
+    min(flights)::integer as min_flights,
+    max(flights)::integer as max_flights,
+    sum(arrivals)::integer as arrivals,
+    sum(departures)::integer as departures,
+    bool_or(flights between 1 and 2 or arrivals between 1 and 2 or departures between 1 and 2) as has_small_daily_cell
+  from daily
+  group by day_index
+), dow_spine as (
+  select day_index,
+    coalesce(calendar_days, 0)::integer as calendar_days,
+    coalesce(total_flights, 0)::integer as total_flights,
+    coalesce(average_flights, 0)::numeric as average_flights,
+    coalesce(min_flights, 0)::integer as min_flights,
+    coalesce(max_flights, 0)::integer as max_flights,
+    coalesce(arrivals, 0)::integer as arrivals,
+    coalesce(departures, 0)::integer as departures,
+    coalesce(has_small_daily_cell, false)
+      or total_flights between 1 and 2
+      or arrivals between 1 and 2
+      or departures between 1 and 2 as small
+  from generate_series(1, 7) day_index
+  left join dow_grouped using (day_index)
+), dow_stats as (
+  select count(*) filter (where small)::integer as small_count from dow_spine
+), dow_ranked as (
+  select dow_spine.*,
+    row_number() over (partition by total_flights >= 3 order by total_flights, day_index) as visible_rank
+  from dow_spine
+), dow_rows as (
+  select dow_ranked.*,
+    small or (dow_stats.small_count = 1 and total_flights >= 3 and visible_rank = 1) as suppressed
+  from dow_ranked cross join dow_stats
+), hour_counts as (
   select
     case when p_time_basis = 'utc' then utc_minutes / p_bucket_minutes else local_minutes / p_bucket_minutes end as bucket_index,
     count(*) filter (where type = 'A')::integer as arrivals,
@@ -10957,19 +11009,43 @@ with filtered as materialized (
   from filtered
   where (case when p_time_basis = 'utc' then utc_minutes else local_minutes end) is not null
   group by case when p_time_basis = 'utc' then utc_minutes / p_bucket_minutes else local_minutes / p_bucket_minutes end
+), hours as (
+  select bucket_index,
+    coalesce(hour_counts.arrivals, 0)::integer as arrivals,
+    coalesce(hour_counts.departures, 0)::integer as departures,
+    coalesce(hour_counts.flights, 0)::integer as flights,
+    coalesce(hour_counts.flights, 0) between 1 and 2
+      or coalesce(hour_counts.arrivals, 0) between 1 and 2
+      or coalesce(hour_counts.departures, 0) between 1 and 2 as small
+  from generate_series(0, (1440 / p_bucket_minutes) - 1) bucket_index
+  left join hour_counts using (bucket_index)
 ), hour_stats as (
-  select count(*) filter (where flights between 1 and 2 or arrivals between 1 and 2 or departures between 1 and 2)::integer as small_count from hours
-), hour_rows as (
+  select count(*) filter (where small)::integer as small_count from hours
+), hour_ranked as (
   select hours.*,
-    flights between 1 and 2 or arrivals between 1 and 2 or departures between 1 and 2
-      or (hour_stats.small_count = 1 and flights >= 3 and row_number() over (partition by flights >= 3 order by flights, bucket_index) = 1) as suppressed
-  from hours cross join hour_stats
+    row_number() over (partition by flights >= 3 order by flights, bucket_index) as visible_rank
+  from hours
+), hour_rows as (
+  select hour_ranked.*,
+    small or (hour_stats.small_count = 1 and flights >= 3 and visible_rank = 1) as suppressed
+  from hour_ranked cross join hour_stats
 )
 select jsonb_build_object(
   'airline', coalesce((select rows from dimension_json where dimension = 'airline'), '[]'::jsonb),
   'route', coalesce((select rows from dimension_json where dimension = 'route'), '[]'::jsonb),
   'country', coalesce((select rows from dimension_json where dimension = 'country'), '[]'::jsonb),
   'aircraft_group', coalesce((select rows from dimension_json where dimension = 'aircraft_group'), '[]'::jsonb),
+  'day_of_week', coalesce((select jsonb_agg(jsonb_build_object(
+    'day_index', day_index,
+    'calendar_days', case when not suppressed then calendar_days end,
+    'total_flights', case when not suppressed then total_flights end,
+    'average_flights', case when not suppressed then average_flights end,
+    'min_flights', case when not suppressed then min_flights end,
+    'max_flights', case when not suppressed then max_flights end,
+    'arrivals', case when not suppressed then arrivals end,
+    'departures', case when not suppressed then departures end,
+    'suppressed', suppressed
+  ) order by day_index) from dow_rows), '[]'::jsonb),
   'peak_hour', coalesce((select jsonb_agg(jsonb_build_object(
     'hour_bucket', lpad((bucket_index * p_bucket_minutes / 60)::text, 2, '0') || ':' || lpad((bucket_index * p_bucket_minutes % 60)::text, 2, '0'),
     'bucket_minutes', p_bucket_minutes,
@@ -11009,6 +11085,7 @@ declare
   v_to_date date;
   v_data_as_of timestamptz;
   v_filters jsonb;
+  v_filter_options jsonb;
   v_request jsonb;
   v_request_hash text;
   v_kpis jsonb;
@@ -11047,6 +11124,16 @@ begin
   v_kpis := reporting.get_traffic_report_kpis(v_from_date, v_to_date, v_filters, p_comparison, v_data_as_of);
   v_timeline := reporting.get_traffic_report_timeline(v_from_date, v_to_date, null, null, 'day', p_timeline_after, p_timeline_page_size, v_filters, v_data_as_of);
   v_breakdowns := reporting.get_traffic_report_breakdowns(v_from_date, v_to_date, v_filters, 10, p_time_basis, 60, v_data_as_of);
+  select jsonb_build_object(
+    'airline', coalesce((select jsonb_agg(label order by label) from (
+      select airline as label from reporting.public_traffic_effective
+      where airline <> '' group by airline having count(*) >= 3 order by airline limit 250
+    ) options), '[]'::jsonb),
+    'route', coalesce((select jsonb_agg(label order by label) from (
+      select route as label from reporting.public_traffic_effective
+      where route <> '' group by route having count(*) >= 3 order by route limit 250
+    ) options), '[]'::jsonb)
+  ) into v_filter_options;
 
   return jsonb_build_object(
     'contract_version', p_contract_version,
@@ -11065,6 +11152,8 @@ begin
         'comp', case p_comparison when 'previous_year' then 'year_ago' when 'none' then 'none' else 'previous' end,
         'tz', p_time_basis
       ),
+      'filter_options', v_filter_options,
+      'filter_options_limit', 250,
       'day_count', v_to_date - v_from_date + 1,
       'timeline_granularity', 'day',
       'timeline_has_more', coalesce((v_timeline->>'has_more')::boolean, false),
