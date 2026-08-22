@@ -64,21 +64,25 @@ with source_rows as (
           + substring(scheduled_time from '^[0-9]{1,2}:([0-9]{2})')::integer
     end as local_minutes
   from source_rows
+), entity_recency as materialized (
+  select season_id, target_id, max(server_seq)::bigint as server_seq
+  from public.season_change_events
+  where target_id is not null
+  group by season_id, target_id
+), import_recency as materialized (
+  select season_id, max(server_seq)::bigint as server_seq
+  from public.season_change_events
+  where target_type = 'seasonImport'
+  group by season_id
 ), recency as (
   select
     parsed.*,
-    coalesce(entity_event.server_seq, import_event.server_seq) as authoritative_server_seq
+    coalesce(entity_recency.server_seq, import_recency.server_seq) as authoritative_server_seq
   from parsed
-  left join lateral (
-    select max(e.server_seq)::bigint as server_seq
-    from public.season_change_events e
-    where e.season_id = parsed.season_id and e.target_id = parsed.record_id
-  ) entity_event on true
-  left join lateral (
-    select max(e.server_seq)::bigint as server_seq
-    from public.season_change_events e
-    where e.season_id = parsed.season_id and e.target_type = 'seasonImport'
-  ) import_event on true
+  left join entity_recency
+    on entity_recency.season_id = parsed.season_id and entity_recency.target_id = parsed.record_id
+  left join import_recency
+    on import_recency.season_id = parsed.season_id
 )
 select
   recency.*,
@@ -149,8 +153,6 @@ select
   case when ranked.effective_pax > 0 then 'reported' else 'unknown' end as pax_status,
   ranked.authoritative_server_seq
 from reporting.public_traffic_ranked_candidates ranked
-left join reporting.public_traffic_duplicate_quarantine quarantine
-  on quarantine.business_leg_key = ranked.business_leg_key
 left join public.operational_route_countries countries
   on upper(countries.route) = upper(ranked.effective_route)
 left join lateral (
@@ -162,7 +164,10 @@ left join lateral (
   limit 1
 ) groups on true
 where ranked.candidate_rank = 1
-  and quarantine.business_leg_key is null
+  and not (
+    ranked.candidate_count > 1
+    and (ranked.missing_recency_count > 0 or ranked.max_recency_count > 1)
+  )
   and ranked.effective_action is distinct from 'deleted';
 
 create or replace function reporting.get_traffic_report_kpis(
