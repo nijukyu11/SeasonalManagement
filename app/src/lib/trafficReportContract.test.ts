@@ -7,7 +7,9 @@ import {
   getTrafficReportPresetRange,
   parseTrafficReportSearchParams,
   toTrafficReportSearchParams,
+  type TrafficReportBundle,
 } from './trafficReportContract.ts';
+import { buildTrafficWorkbookData } from './trafficReportExcelExport.ts';
 
 test('URL contract allows no season and no dates for the initial overview', () => {
   const filter = parseTrafficReportSearchParams(new URLSearchParams());
@@ -41,4 +43,19 @@ test('latest completed Ops Date does not drift into future schedule dates', () =
 test('date preset detection keeps manually selected ranges custom', () => {
   assert.equal(detectTrafficReportDatePreset('2026-08-15', '2026-08-21', '2025-01-01', '2026-08-21'), '7d');
   assert.equal(detectTrafficReportDatePreset('2026-02-01', '2026-08-21', '2025-01-01', '2026-08-21'), null);
+});
+
+test('Excel workbook data stays aggregate-only and includes Phase 2 sheets', () => {
+  const bundle: TrafficReportBundle = {
+    contract_version: 'traffic-report-v1', request_hash: 'hash', data_as_of: '2026-08-22T00:00:00Z', source_watermark: 1,
+    metadata: { min_ops_date: '2026-01-01', max_ops_date: '2026-12-31', normalized_filter: { from: '2026-08-15', to: '2026-08-21', type: 'all', airline: [], route: [], country: [], comp: 'previous', tz: 'local' }, day_count: 7, timeline_granularity: 'day', timeline_has_more: false, timeline_next_cursor: null, filter_options: { airline: ['VN'], route: ['HAN'] }, filter_options_limit: 250 },
+    kpis: { current: { flights: 7, arrivals: 4, departures: 3, reported_pax: 100 }, comparison: { flights: 7, arrivals: 4, departures: 3, reported_pax: 100, from: '2026-08-08', to: '2026-08-14', mode: 'previous' }, peak_day: { ops_date: '2026-08-15', flights: 7, status: 'complete' }, pax_coverage: { reported_legs: 3, due_legs: 7, percent: 42.9, status: 'available' } },
+    timeline: [{ ops_date: '2026-08-15', flights: 7, arrivals: 4, departures: 3, reported_pax: 100, completeness: 'complete' }],
+    breakdowns: { airline: [], route: [], country: [], aircraft_group: [], peak_hour: [], day_of_week: [] },
+    quality: { unknown_country_legs: 0, pax_due_missing_legs: 4, quarantined_duplicate_candidates: 0, notes: [] },
+  };
+  const workbook = buildTrafficWorkbookData(bundle, bundle.timeline);
+  assert.deepEqual(Object.keys(workbook), ['Tổng quan', 'Timeline', 'Cơ cấu', '24 khung giờ', 'Thứ trong tuần']);
+  assert.ok(!JSON.stringify(workbook).includes('flight_number'));
+  assert.ok(!JSON.stringify(workbook).includes('record_id'));
 });

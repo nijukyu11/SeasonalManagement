@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
+import { DayOfWeekChart, FleetMixChart, PeakHourChart } from './TrafficReportAdvancedCharts';
+import { TrafficReportMultiSelect } from './TrafficReportMultiSelect';
 import {
   buildOverviewUrl,
   detectTrafficReportDatePreset,
@@ -17,6 +19,7 @@ import {
   type TrafficReportFilter,
   type TrafficTimelinePoint,
 } from '@/lib/trafficReportContract';
+import { downloadTrafficReportWorkbook } from '@/lib/trafficReportExcelExport';
 
 const numberFormat = new Intl.NumberFormat('vi-VN');
 const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
@@ -231,7 +234,10 @@ export default function TrafficReportClient() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [exportingExcel, setExportingExcel] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
+  const exportControllerRef = useRef<AbortController | null>(null);
   const lastSuccessfulQueryRef = useRef<string | null>(null);
   const parsed = useMemo(() => {
     try { return { filter: parseTrafficReportSearchParams(new URLSearchParams(searchParams.toString())), error: null }; }
@@ -273,7 +279,7 @@ export default function TrafficReportClient() {
     const canonical = parsed.filter ? toTrafficReportSearchParams(parsed.filter).toString() : null;
     if (parsed.filter && lastSuccessfulQueryRef.current !== canonical) void load(parsed.filter);
     else { setError(parsed.error); setLoading(false); }
-    return () => controllerRef.current?.abort();
+    return () => { controllerRef.current?.abort(); exportControllerRef.current?.abort(); };
   }, [load, parsed]);
 
   const loadMoreTimeline = async () => {
@@ -302,7 +308,7 @@ export default function TrafficReportClient() {
   };
 
   const applyFilter = (formData: FormData) => {
-    const split = (key: string) => String(formData.get(key) ?? '').split(',').map((item) => item.trim()).filter(Boolean);
+    const split = (key: string) => formData.getAll(key).flatMap((value) => String(value).split(',')).map((item) => item.trim()).filter(Boolean);
     const next: NormalizedTrafficReportFilter = {
       from: String(formData.get('from')),
       to: String(formData.get('to')),
@@ -324,6 +330,47 @@ export default function TrafficReportClient() {
     const next: NormalizedTrafficReportFilter = { ...bundle.metadata.normalized_filter, ...range };
     window.history.pushState(null, '', `${pathname}?${toTrafficReportSearchParams(next).toString()}`);
     window.dispatchEvent(new PopStateEvent('popstate'));
+  };
+
+  const applyTimeBasis = (basis: NormalizedTrafficReportFilter['tz']) => {
+    if (!bundle || bundle.metadata.normalized_filter.tz === basis) return;
+    const next: NormalizedTrafficReportFilter = { ...bundle.metadata.normalized_filter, tz: basis };
+    window.history.pushState(null, '', `${pathname}?${toTrafficReportSearchParams(next).toString()}`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  };
+
+  const exportExcel = async () => {
+    if (!bundle || exportingExcel) return;
+    exportControllerRef.current?.abort();
+    const controller = new AbortController();
+    exportControllerRef.current = controller;
+    setExportingExcel(true);
+    setExportError(null);
+    try {
+      const rows = new Map(bundle.timeline.map((row) => [row.ops_date, row]));
+      let cursor = bundle.metadata.timeline_next_cursor;
+      let hasMore = bundle.metadata.timeline_has_more;
+      while (hasMore && cursor) {
+        const query = toTrafficReportSearchParams(bundle.metadata.normalized_filter);
+        query.set('after', cursor);
+        query.set('page_size', '732');
+        const response = await fetch(`/api/report/v1/timeline?${query.toString()}`, { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+        const payload: unknown = await response.json();
+        if (!response.ok || !payload || typeof payload !== 'object') throw new Error(`Không thể tải đủ timeline cho Excel (${response.status}).`);
+        const page = payload as { timeline?: TrafficTimelinePoint[]; metadata?: Pick<TrafficReportBundle['metadata'], 'timeline_has_more' | 'timeline_next_cursor'> };
+        if (!Array.isArray(page.timeline) || !page.metadata) throw new Error('Trang timeline Excel không đúng contract.');
+        for (const row of page.timeline) rows.set(row.ops_date, row);
+        const nextCursor = page.metadata.timeline_next_cursor;
+        hasMore = page.metadata.timeline_has_more;
+        if (hasMore && (!nextCursor || nextCursor === cursor)) throw new Error('Cursor timeline Excel không tiến về phía trước.');
+        cursor = nextCursor;
+      }
+      await downloadTrafficReportWorkbook(bundle, [...rows.values()].sort((left, right) => left.ops_date.localeCompare(right.ops_date)));
+    } catch (reason) {
+      if (!controller.signal.aborted) setExportError(reason instanceof Error ? reason.message : 'Không thể tạo file Excel.');
+    } finally {
+      if (!controller.signal.aborted) setExportingExcel(false);
+    }
   };
 
   const current = bundle?.kpis.current;
@@ -362,7 +409,7 @@ export default function TrafficReportClient() {
       </section>
 
       <div className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur">
-        <form key={`${filter?.from}-${filter?.to}-${filter?.type}`} action={applyFilter} className="mx-auto grid max-w-7xl gap-3 px-5 py-4 sm:px-8 md:grid-cols-2 xl:grid-cols-8">
+        <form key={filter ? toTrafficReportSearchParams(filter).toString() : 'initial'} action={applyFilter} className="mx-auto grid max-w-7xl gap-3 px-5 py-4 sm:px-8 md:grid-cols-2 xl:grid-cols-8">
           <fieldset className="flex min-w-0 flex-wrap items-center gap-2 md:col-span-2 xl:col-span-8">
             <legend className="mr-1 text-xs font-semibold text-slate-600">Khoảng nhanh</legend>
             {([
@@ -383,8 +430,8 @@ export default function TrafficReportClient() {
           <label className="min-w-0 text-xs font-semibold text-slate-600">Đến ngày<input className="report-focus mt-1 min-h-11 min-w-0 w-full max-w-full rounded-lg border border-slate-300 px-3 text-sm" type="date" name="to" min={bundle?.metadata.min_ops_date} max={bundle?.metadata.max_ops_date} defaultValue={filter?.to ?? ''} required /></label>
           <label className="min-w-0 text-xs font-semibold text-slate-600">Loại chuyến<select className="report-focus mt-1 min-h-11 min-w-0 w-full max-w-full rounded-lg border border-slate-300 px-3 text-sm" name="type" defaultValue={filter?.type ?? 'all'}><option value="all">ARR + DEP</option><option value="A">ARR</option><option value="D">DEP</option></select></label>
           <label className="min-w-0 text-xs font-semibold text-slate-600">So sánh<select className="report-focus mt-1 min-h-11 min-w-0 w-full max-w-full rounded-lg border border-slate-300 px-3 text-sm" name="comp" defaultValue={filter?.comp ?? 'previous'}><option value="previous">Kỳ trước</option><option value="year_ago">Cùng kỳ năm trước</option><option value="none">Không so sánh</option></select></label>
-          <label className="min-w-0 text-xs font-semibold text-slate-600">Hãng bay<input className="report-focus mt-1 min-h-11 min-w-0 w-full max-w-full rounded-lg border border-slate-300 px-3 text-sm" name="airline" placeholder="VN,QH" defaultValue={filter?.airline.join(',')} /></label>
-          <label className="min-w-0 text-xs font-semibold text-slate-600">Đường bay<input className="report-focus mt-1 min-h-11 min-w-0 w-full max-w-full rounded-lg border border-slate-300 px-3 text-sm" name="route" placeholder="HAN,SGN" defaultValue={filter?.route.join(',')} /></label>
+          <TrafficReportMultiSelect name="airline" label="Hãng bay" options={bundle?.metadata.filter_options?.airline ?? []} selected={filter?.airline ?? []} placeholder="Tất cả hãng" />
+          <TrafficReportMultiSelect name="route" label="Đường bay" options={bundle?.metadata.filter_options?.route ?? []} selected={filter?.route ?? []} placeholder="Tất cả tuyến" />
           <label className="min-w-0 text-xs font-semibold text-slate-600">Quốc gia<input className="report-focus mt-1 min-h-11 min-w-0 w-full max-w-full rounded-lg border border-slate-300 px-3 text-sm" name="country" placeholder="Vietnam,Unknown" defaultValue={filter?.country.join(',')} /><input type="hidden" name="tz" value={filter?.tz ?? 'local'} /></label>
           <button className="report-focus min-h-11 self-end rounded-lg bg-[#234093] px-5 text-sm font-bold text-white hover:bg-[#172f77]" type="submit">Áp dụng</button>
         </form>
@@ -412,11 +459,20 @@ export default function TrafficReportClient() {
             {bundle.metadata.timeline_has_more ? <div className="mt-5 flex justify-center"><button className="report-focus min-h-11 rounded-lg border border-[#234093] px-5 text-sm font-bold text-[#234093] disabled:opacity-60" type="button" disabled={loadingMore} onClick={() => void loadMoreTimeline()}>{loadingMore ? 'Đang tải…' : 'Tải dãy ngày tiếp theo'}</button></div> : null}
           </section>
 
-          <section aria-labelledby="breakdown-title"><p className="text-sm font-bold uppercase tracking-[0.16em] text-[#234093]">Traffic composition</p><h2 id="breakdown-title" className="mt-2 text-3xl font-bold tracking-tight">Cơ cấu sản lượng</h2><div className="mt-6 grid gap-5 lg:grid-cols-2"><BreakdownTable title="Hãng bay" rows={bundle.breakdowns.airline} showShareBars /><BreakdownTable title="Đường bay" rows={bundle.breakdowns.route} showShareBars /><BreakdownTable title="Quốc gia" rows={bundle.breakdowns.country} /><BreakdownTable title="Nhóm tàu bay" rows={bundle.breakdowns.aircraft_group} /></div></section>
+          <section aria-labelledby="advanced-analytics-title">
+            <p className="text-sm font-bold uppercase text-[#234093]">Core analytics</p>
+            <h2 id="advanced-analytics-title" className="mt-2 text-balance text-3xl font-bold text-[#102033]">Nhịp vận hành theo giờ và theo Thứ</h2>
+            <div className="mt-6 grid gap-5 xl:grid-cols-2">
+              <PeakHourChart rows={bundle.breakdowns.peak_hour} dayCount={bundle.metadata.day_count} timeBasis={bundle.metadata.normalized_filter.tz} onTimeBasisChange={applyTimeBasis} />
+              <DayOfWeekChart rows={bundle.breakdowns.day_of_week ?? []} />
+            </div>
+          </section>
+
+          <section aria-labelledby="breakdown-title"><p className="text-sm font-bold uppercase tracking-[0.16em] text-[#234093]">Traffic composition</p><h2 id="breakdown-title" className="mt-2 text-3xl font-bold tracking-tight">Cơ cấu sản lượng</h2><div className="mt-6 grid gap-5 lg:grid-cols-2"><BreakdownTable title="Hãng bay" rows={bundle.breakdowns.airline} showShareBars /><BreakdownTable title="Đường bay" rows={bundle.breakdowns.route} showShareBars /><BreakdownTable title="Quốc gia" rows={bundle.breakdowns.country} /><FleetMixChart rows={bundle.breakdowns.aircraft_group} /></div></section>
 
           <section className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
             <article className="rounded-2xl bg-[#081322] p-6 text-white"><p className="text-sm font-bold uppercase tracking-[0.16em] text-[#42c1c7]">Data quality</p><h2 className="mt-2 text-2xl font-bold">Chất lượng & độ phủ</h2><dl className="mt-6 grid gap-4 sm:grid-cols-3"><div><dt className="text-sm text-slate-300">Country Unknown</dt><dd className="mt-1 text-2xl font-bold tabular-nums">{formatNumber(bundle.quality.unknown_country_legs)}</dd></div><div><dt className="text-sm text-slate-300">Pax đến hạn còn thiếu</dt><dd className="mt-1 text-2xl font-bold tabular-nums">{formatNumber(bundle.quality.pax_due_missing_legs)}</dd></div><div><dt className="text-sm text-slate-300">Duplicate quarantine</dt><dd className="mt-1 text-2xl font-bold tabular-nums">{formatNumber(bundle.quality.quarantined_duplicate_candidates)}</dd></div></dl><ul className="mt-6 space-y-2 text-sm leading-6 text-slate-300">{bundle.quality.notes.map((note) => <li key={note}>• {note}</li>)}</ul></article>
-            <article className="rounded-2xl border border-slate-200 bg-white p-6"><p className="text-sm font-bold uppercase tracking-[0.16em] text-[#234093]">Methodology</p><h2 className="mt-2 text-2xl font-bold">Cách đọc báo cáo</h2><p className="mt-4 text-sm leading-7 text-slate-600">Aggregate dưới 3 leg được ẩn hoặc gộp vào “Khác”. Pax coverage dùng các leg đã đến hạn T+1; cargo/ferry vẫn nằm trong mẫu số cho đến khi có cờ miễn trừ chuẩn.</p><a className="report-focus mt-5 inline-flex min-h-11 items-center rounded-lg border border-[#234093] px-4 text-sm font-bold text-[#234093]" href={`${'/api/report/v1/export'}?${toTrafficReportSearchParams(bundle.metadata.normalized_filter).toString()}`}>Tải CSV aggregate</a></article>
+            <article className="rounded-2xl border border-slate-200 bg-white p-6"><p className="text-sm font-bold uppercase tracking-[0.16em] text-[#234093]">Methodology</p><h2 className="mt-2 text-2xl font-bold">Cách đọc báo cáo</h2><p className="mt-4 text-pretty text-sm leading-7 text-slate-600">Aggregate dưới 3 leg được ẩn hoặc gộp vào “Khác”. Pax coverage dùng các leg đã đến hạn T+1; cargo/ferry vẫn nằm trong mẫu số cho đến khi có cờ miễn trừ chuẩn.</p><div className="mt-5 flex flex-wrap gap-3"><button className="report-focus min-h-11 rounded-lg bg-[#234093] px-4 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={exportingExcel} onClick={() => void exportExcel()}>{exportingExcel ? 'Đang tạo Excel…' : 'Tải Excel aggregate'}</button><a className="report-focus inline-flex min-h-11 items-center rounded-lg border border-[#234093] px-4 text-sm font-bold text-[#234093]" href={`${'/api/report/v1/export'}?${toTrafficReportSearchParams(bundle.metadata.normalized_filter).toString()}`}>Tải CSV aggregate</a></div>{exportError ? <p className="mt-3 text-sm font-semibold text-rose-800" role="alert">{exportError}</p> : null}<p className="mt-3 text-xs leading-5 text-slate-500">Excel chỉ chứa KPI, timeline và breakdown aggregate đã áp dụng suppression; không có flight-leg hoặc dữ liệu thô.</p></article>
           </section>
         </> : null}
       </div>
