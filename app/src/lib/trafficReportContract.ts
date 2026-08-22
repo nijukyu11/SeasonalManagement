@@ -4,6 +4,7 @@ export const TRAFFIC_REPORT_API_BASE = '/api/report/v1' as const;
 export type TrafficType = 'all' | 'A' | 'D';
 export type TrafficComparison = 'previous' | 'year_ago' | 'none';
 export type TrafficTimeBasis = 'local' | 'utc';
+export type TrafficDatePreset = '7d' | '30d' | 'ytd';
 
 export interface TrafficReportFilter {
   from: string | null;
@@ -98,6 +99,39 @@ export interface TrafficReportBundle {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const LIST_PARAMS = ['airline', 'route', 'country'] as const;
 const ALLOWED_PARAMS = new Set(['from', 'to', 'type', ...LIST_PARAMS, 'comp', 'tz']);
+
+function shiftIsoDate(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+export function getTrafficReportPresetRange(
+  preset: TrafficDatePreset,
+  minOpsDate: string,
+  maxOpsDate: string,
+): Pick<NormalizedTrafficReportFilter, 'from' | 'to'> {
+  if (!ISO_DATE.test(minOpsDate) || !ISO_DATE.test(maxOpsDate) || minOpsDate > maxOpsDate) {
+    throw new Error('Phạm vi Ops Date hiện có không hợp lệ.');
+  }
+  const candidate = preset === 'ytd'
+    ? `${maxOpsDate.slice(0, 4)}-01-01`
+    : shiftIsoDate(maxOpsDate, preset === '7d' ? -6 : -29);
+  return { from: candidate < minOpsDate ? minOpsDate : candidate, to: maxOpsDate };
+}
+
+export function detectTrafficReportDatePreset(
+  from: string,
+  to: string,
+  minOpsDate: string,
+  maxOpsDate: string,
+): TrafficDatePreset | null {
+  for (const preset of ['7d', '30d', 'ytd'] as const) {
+    const range = getTrafficReportPresetRange(preset, minOpsDate, maxOpsDate);
+    if (range.from === from && range.to === to) return preset;
+  }
+  return null;
+}
 
 function canonicalList(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
