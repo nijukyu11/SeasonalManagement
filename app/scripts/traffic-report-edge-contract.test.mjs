@@ -13,6 +13,7 @@ assert.match(edge, /request\.method !== 'GET'/);
 assert.match(edge, /unsupported query parameter/);
 assert.match(edge, /duplicate scalar parameter/);
 assert.match(edge, /status: 308/);
+assert.match(edge, /`\/api\/report\/v1\/\$\{endpoint\}/);
 assert.match(edge, /'Cache-Control': 'no-store'/);
 assert.doesNotMatch(edge, /request\.headers\.get\(['"]Authorization/);
 assert.match(edge, /get_public_traffic_report_overview_v1/);

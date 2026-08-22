@@ -171,7 +171,7 @@ Deno.serve(async (request: Request) => {
     const normalized = normalizeRequest(url, endpoint);
     const incomingQuery = url.searchParams.toString();
     if (incomingQuery !== normalized.canonicalQuery) {
-      const location = `${url.origin}${url.pathname}${normalized.canonicalQuery ? `?${normalized.canonicalQuery}` : ''}`;
+      const location = `/api/report/v1/${endpoint}${normalized.canonicalQuery ? `?${normalized.canonicalQuery}` : ''}`;
       return new Response(null, { status: 308, headers: { Location: location, 'Cache-Control': 'no-store' } });
     }
 
