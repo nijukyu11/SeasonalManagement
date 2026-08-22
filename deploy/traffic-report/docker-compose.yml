@@ -1,0 +1,22 @@
+services:
+  traffic-report-edge:
+    image: supabase/edge-runtime:v1.74.0
+    container_name: opsdata-traffic-report-edge
+    restart: unless-stopped
+    env_file:
+      - /etc/seasonal-traffic-report/edge.env
+    environment:
+      VERIFY_JWT: "false"
+    command: ["start", "--main-service", "/home/deno/functions/main"]
+    volumes:
+      - /home/ops/opsdata-supabase/volumes/functions:/home/deno/functions:ro
+    ports:
+      - "127.0.0.1:9001:9000"
+    networks:
+      - supabase
+
+networks:
+  supabase:
+    external: true
+    name: opsdata-supabase_default
+
