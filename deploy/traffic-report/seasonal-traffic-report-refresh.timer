@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh the public traffic report aggregate every 30 seconds
+
+[Timer]
+OnBootSec=15s
+OnUnitInactiveSec=30s
+AccuracySec=1s
+Persistent=true
+Unit=seasonal-traffic-report-refresh.service
+
+[Install]
+WantedBy=timers.target
+

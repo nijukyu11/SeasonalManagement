@@ -47,6 +47,7 @@ try {
   await addRecord({ seasonId: 'new-season', id: 'arrival-three', date: '2026-03-03', time: '08:30', flight: 'VN205', pax: 50 });
   await addRecord({ seasonId: 'new-season', id: 'departure-two', date: '2026-03-03', time: '09:00', type: 'D', flight: 'VN206', pax: 60 });
   await addRecord({ seasonId: 'new-season', id: 'departure-three', date: '2026-03-03', time: '09:30', type: 'D', flight: 'VN207', pax: null });
+  await db.exec('refresh materialized view reporting.public_traffic_effective');
 
   const effective = await db.query(`select ops_date::text, count(*)::integer as flights from reporting.public_traffic_effective group by ops_date order by ops_date`);
   assert.deepEqual(effective.rows, [
@@ -131,6 +132,7 @@ try {
   await addSeason('missing-two', 'S28');
   await addRecord({ seasonId: 'missing-one', id: 'missing-a', date: '2027-01-01', time: '06:00', flight: 'VN999', pax: 20 });
   await addRecord({ seasonId: 'missing-two', id: 'missing-b', date: '2027-01-01', time: '06:00', flight: 'VN999', pax: 30 });
+  await db.exec('refresh materialized view reporting.public_traffic_effective');
   const missingQuarantine = await db.query(`select reason from reporting.public_traffic_duplicate_quarantine where business_leg_key like 'A%' and business_leg_key like '%VN999'`);
   assert.deepEqual(missingQuarantine.rows, [{ reason: 'missing_authoritative_recency' }]);
   const missingPublished = await db.query(`select count(*)::integer as count from reporting.public_traffic_effective where ops_date = date '2027-01-01'`);

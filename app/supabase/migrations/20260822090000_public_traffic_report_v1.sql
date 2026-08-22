@@ -6,7 +6,20 @@ create index if not exists season_change_events_reporting_target_idx
 create index if not exists season_change_events_reporting_import_idx
   on public.season_change_events (season_id, target_type, server_seq desc);
 
-drop view if exists reporting.public_traffic_effective cascade;
+do $drop_effective$
+declare
+  v_relkind "char";
+begin
+  select relkind into v_relkind
+  from pg_catalog.pg_class
+  where oid = to_regclass('reporting.public_traffic_effective');
+  if v_relkind = 'm' then
+    execute 'drop materialized view reporting.public_traffic_effective cascade';
+  elsif v_relkind = 'v' then
+    execute 'drop view reporting.public_traffic_effective cascade';
+  end if;
+end;
+$drop_effective$;
 drop view if exists reporting.public_traffic_duplicate_quarantine cascade;
 drop view if exists reporting.public_traffic_ranked_candidates cascade;
 drop view if exists reporting.public_traffic_candidates cascade;
@@ -136,10 +149,9 @@ where candidate_count > 1
   and (missing_recency_count > 0 or max_recency_count > 1)
 group by business_leg_key;
 
-create view reporting.public_traffic_effective
-with (security_invoker = true)
-as
+create materialized view reporting.public_traffic_effective as
 select
+  ranked.business_leg_key,
   ranked.ops_date,
   ranked.type,
   upper(btrim(ranked.airline)) as airline,
@@ -151,7 +163,9 @@ select
   ranked.scheduled_local_at,
   ranked.effective_pax as pax,
   case when ranked.effective_pax > 0 then 'reported' else 'unknown' end as pax_status,
-  ranked.authoritative_server_seq
+  ranked.authoritative_server_seq,
+  statement_timestamp() as snapshot_refreshed_at,
+  (select max(events.server_seq)::bigint from public.season_change_events events) as snapshot_source_watermark
 from reporting.public_traffic_ranked_candidates ranked
 left join public.operational_route_countries countries
   on upper(countries.route) = upper(ranked.effective_route)
@@ -169,6 +183,19 @@ where ranked.candidate_rank = 1
     and (ranked.missing_recency_count > 0 or ranked.max_recency_count > 1)
   )
   and ranked.effective_action is distinct from 'deleted';
+
+create unique index public_traffic_effective_business_leg_idx
+  on reporting.public_traffic_effective (business_leg_key);
+create index public_traffic_effective_ops_date_idx
+  on reporting.public_traffic_effective (ops_date);
+create index public_traffic_effective_airline_ops_idx
+  on reporting.public_traffic_effective (airline, ops_date);
+create index public_traffic_effective_route_ops_idx
+  on reporting.public_traffic_effective (route, ops_date);
+create index public_traffic_effective_country_ops_idx
+  on reporting.public_traffic_effective (country, ops_date);
+create index public_traffic_effective_aircraft_group_ops_idx
+  on reporting.public_traffic_effective (aircraft_group, ops_date);
 
 create or replace function reporting.get_traffic_report_kpis(
   p_from_date date,
@@ -522,7 +549,7 @@ declare
   v_completed_date date;
   v_from_date date;
   v_to_date date;
-  v_data_as_of timestamptz := statement_timestamp();
+  v_data_as_of timestamptz;
   v_filters jsonb;
   v_request jsonb;
   v_request_hash text;
@@ -538,7 +565,9 @@ begin
   if p_types <@ array['A', 'D']::text[] is not true or cardinality(p_types) = 0 then raise exception 'invalid types' using errcode = '22023'; end if;
   if cardinality(p_airlines) > 24 or cardinality(p_routes) > 24 or cardinality(p_countries) > 24 or cardinality(p_aircraft_groups) > 24 then raise exception 'filter cardinality exceeds 24' using errcode = '54000'; end if;
 
-  select min(ops_date), max(ops_date) into v_min_date, v_max_date from reporting.public_traffic_effective;
+  select min(ops_date), max(ops_date), max(snapshot_refreshed_at), max(snapshot_source_watermark)
+    into v_min_date, v_max_date, v_data_as_of, v_watermark
+  from reporting.public_traffic_effective;
   if v_min_date is null or v_max_date is null then raise exception 'traffic report has no effective operations' using errcode = 'P0002'; end if;
   v_completed_date := (v_data_as_of at time zone 'Asia/Ho_Chi_Minh')::date
     - case when (v_data_as_of at time zone 'Asia/Ho_Chi_Minh')::time < time '05:00' then 2 else 1 end;
@@ -557,8 +586,6 @@ begin
   ));
   v_request := jsonb_build_object('from', v_from_date, 'to', v_to_date, 'filters', v_filters, 'comparison', p_comparison, 'time_basis', p_time_basis, 'contract_version', p_contract_version);
   v_request_hash := encode(extensions.digest(convert_to(v_request::text, 'UTF8'), 'sha256'), 'hex');
-  select max(server_seq)::bigint into v_watermark from public.season_change_events;
-
   v_kpis := reporting.get_traffic_report_kpis(v_from_date, v_to_date, v_filters, p_comparison, v_data_as_of);
   v_timeline := reporting.get_traffic_report_timeline(v_from_date, v_to_date, null, null, 'day', p_timeline_after, p_timeline_page_size, v_filters, v_data_as_of);
   v_breakdowns := reporting.get_traffic_report_breakdowns(v_from_date, v_to_date, v_filters, 10, p_time_basis, 60, v_data_as_of);

@@ -22,7 +22,7 @@ The repository workstation does not currently contain `nginx`, `cloudflared` or 
 ## Staging sequence
 
 1. Build and test the commit: `npm ci`, `npm run test:traffic-report-contract`, `npm run test:rules`, `npx tsc --noEmit --pretty false`, then `npm run build`.
-2. Apply `20260822090000_public_traffic_report_v1.sql` to staging. Verify `anon` and `authenticated` cannot execute the four RPCs or select the four reporting views; verify the Edge service role can execute only the publication wrapper needed by the gateway.
+2. Apply `20260822090000_public_traffic_report_v1.sql` to staging. Install and enable the `seasonal-traffic-report-refresh` systemd timer so the indexed aggregate snapshot refreshes every 30 seconds. Verify `anon` and `authenticated` cannot execute the four RPCs or select the reporting relations; verify the Edge service role can execute only aggregate RPCs used by the gateway.
 3. Deploy the `traffic-report` Edge Function with JWT verification disabled. Confirm a browser request does not send or require Cookie, Authorization or apikey.
 4. Copy the immutable `app/out` artifact into a new timestamped staging release directory. Record its hash; do not overwrite the previous release.
 5. Install the Nginx config from `deploy/traffic-report/nginx.conf`, run `nginx -t`, then reload. Nginx owns the shared cache for `/api/report`; no stale cache serving or background update is allowed.
@@ -34,6 +34,7 @@ The repository workstation does not currently contain `nginx`, `cloudflared` or 
 
 - commit, release directory and artifact SHA-256;
 - migration and Edge Function versions;
+- aggregate snapshot refresh time/watermark and successful 30-second refresh timer;
 - Nginx config fingerprint and successful config test;
 - named tunnel ID/config fingerprint and DNS route;
 - HTTP headers showing Cloudflare bypass and Nginx MISS then HIT;
