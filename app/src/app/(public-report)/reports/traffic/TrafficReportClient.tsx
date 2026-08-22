@@ -119,7 +119,7 @@ function buildInsights(bundle: TrafficReportBundle): string[] {
   const current = bundle.kpis.current;
   const comparison = bundle.kpis.comparison;
   const coverage = bundle.kpis.pax_coverage;
-  const topAirline = bundle.breakdowns.airline.find((row) => !row.suppressed);
+  const topAirline = bundle.breakdowns.airline.find((row) => !row.suppressed && row.label !== 'Khác');
   const insights = [
     bundle.kpis.peak_day.ops_date && bundle.kpis.peak_day.flights != null
       ? `Ngày cao điểm là ${formatDate(bundle.kpis.peak_day.ops_date)} với ${formatNumber(bundle.kpis.peak_day.flights)} chuyến.`
