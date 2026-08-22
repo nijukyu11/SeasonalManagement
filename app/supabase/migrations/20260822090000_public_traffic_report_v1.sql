@@ -404,6 +404,7 @@ select jsonb_build_object(
     'arrivals', case when not marked.suppressed and marked.arrivals not between 1 and 2 and marked.departures not between 1 and 2 then marked.arrivals end,
     'departures', case when not marked.suppressed and marked.arrivals not between 1 and 2 and marked.departures not between 1 and 2 then marked.departures end,
     'reported_pax', case when not marked.suppressed and marked.reported_legs not between 1 and 2 then marked.reported_pax end,
+    'suppressed', marked.suppressed,
     'status', case
       when marked.suppressed then 'suppressed'
       when marked.ops_date > ((p_data_as_of at time zone 'Asia/Ho_Chi_Minh')::date - case when (p_data_as_of at time zone 'Asia/Ho_Chi_Minh')::time < time '05:00' then 1 else 0 end) then 'future'

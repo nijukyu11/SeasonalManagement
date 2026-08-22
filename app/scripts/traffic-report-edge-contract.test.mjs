@@ -38,6 +38,7 @@ assert.match(migration, /generate_series/);
 assert.match(migration, /set statement_timeout = '7s'/);
 
 assert.match(nginx, /proxy_cache_valid 200 60s/);
+assert.match(nginx, /proxy_cache_lock on/);
 assert.match(nginx, /proxy_cache_background_update off/);
 assert.match(nginx, /proxy_cache_use_stale off/);
 assert.match(nginx, /\$uri\|\$is_args\$args/);

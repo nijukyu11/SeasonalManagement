@@ -64,6 +64,7 @@ try {
   assert.deepEqual(timeline.series.map((row) => row.ops_date), ['2026-03-02', '2026-03-03', '2026-03-04', '2026-03-05']);
   assert.equal(timeline.series.find((row) => row.ops_date === '2026-03-02').flights, null, 'the 1-leg day must be suppressed');
   assert.equal(timeline.series.find((row) => row.ops_date === '2026-03-03').flights, null, 'one additional publishable day must be complementary-suppressed');
+  assert.equal(timeline.series.filter((row) => row.suppressed).length, 2, 'primary and complementary suppression must both be explicit');
   assert.equal(timeline.series.find((row) => row.ops_date === '2026-03-04').flights, 0);
 
   const kpiResult = await db.query(`select reporting.get_traffic_report_kpis(date '2026-03-03', date '2026-03-03', '{}'::jsonb, 'none', timestamptz '2026-03-10 00:00:00+00') as result`);
