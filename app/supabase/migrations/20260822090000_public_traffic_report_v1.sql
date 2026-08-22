@@ -551,7 +551,7 @@ begin
     'aircraft_groups', case when cardinality(p_aircraft_groups) > 0 then to_jsonb((select array_agg(distinct value order by value) from unnest(p_aircraft_groups) value)) end
   ));
   v_request := jsonb_build_object('from', v_from_date, 'to', v_to_date, 'filters', v_filters, 'comparison', p_comparison, 'time_basis', p_time_basis, 'contract_version', p_contract_version);
-  v_request_hash := encode(digest(convert_to(v_request::text, 'UTF8'), 'sha256'), 'hex');
+  v_request_hash := encode(extensions.digest(convert_to(v_request::text, 'UTF8'), 'sha256'), 'hex');
   select max(server_seq)::bigint into v_watermark from public.season_change_events;
 
   v_kpis := reporting.get_traffic_report_kpis(v_from_date, v_to_date, v_filters, p_comparison, v_data_as_of);
