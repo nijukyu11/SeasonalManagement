@@ -1,6 +1,6 @@
 # Kế hoạch triển khai Web Traffic Report theo dãy Ops Date liên tục
 
-> **Trạng thái:** Đang thực hiện trên nhánh `codex/web-traffic-report`; local implementation/build/contract tests đã pass ngày 2026-08-22. Staging bị chặn bởi SSH/DNS/tunnel authority; production tiếp tục chờ nghiệm thu staging. Xem evidence tại `docs/superpowers/artifacts/2026-08-22-public-traffic-report-baseline-audit.md`.
+> **Trạng thái:** Staging đã triển khai trên nhánh `codex/web-traffic-report` tại Quick Tunnel tạm thời; production tiếp tục chờ nghiệm thu staging, named-tunnel và DNS. Xem evidence tại `docs/superpowers/artifacts/2026-08-22-public-traffic-report-baseline-audit.md`.
 >
 > **Ngày lập:** 2026-08-21.
 >
@@ -29,7 +29,7 @@ Trang báo cáo kết hợp:
 - Phân biệt được `0`, `thiếu dữ liệu`, `đang cập nhật` và `Pax chưa báo cáo`.
 - Filter nằm trong URL để reload, back/forward và chia sẻ link giữ nguyên trạng thái.
 - Summary chạy qua endpoint công khai chuyên biệt; không tải toàn bộ lịch bay về trình duyệt để aggregate.
-- Dữ liệu được tổng hợp live theo filter tại thời điểm request, không dùng snapshot định kỳ.
+- Filter được aggregate tại thời điểm request trên một snapshot hiệu lực có index, refresh mỗi 20 giây; kết hợp cache Nginx 60 giây để giữ tuổi dữ liệu quan sát dưới 90 giây. Đây là thay đổi staging cần được chấp nhận trước production.
 - Không công bố flight leg, record ID, số hiệu/giờ bay chi tiết hoặc field vận hành nhạy cảm.
 - Có publication boundary, field allowlist, cache và rate limit; không để service-role key trong frontend.
 - Có đối soát database, API, UI và workbook mẫu trước khi công bố.
