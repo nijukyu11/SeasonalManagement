@@ -59,7 +59,7 @@ Cells with 1-2 legs are suppressed or folded into `Khác`. When exactly one smal
 - `npm run build`: pass; static route `/reports/traffic` generated;
 - public source and built-chunk import graph: pass, no desktop/Tauri/auth sentinel;
 - local mocked browser smoke: one initial GET `/api/report/v1/overview`, no second metadata/overview request after URL normalization;
-- visual review: 1440 px desktop and 500 px narrow viewport pass for hero, summary, filter and KPI hierarchy; exact 390 px automation is limited by the installed headless browser minimum viewport, so a real-device 360/390 smoke remains a staging gate;
+- visual review: 1440x900 desktop, 375x812 mobile portrait and 812x375 mobile landscape pass for hero, summary, filters, charts and KPI hierarchy; there is no page-level horizontal overflow and primary controls measure at least 44 px high;
 - migration content at the end of `app/supabase/schema.sql` is byte-equivalent after newline normalization to `20260822090000_public_traffic_report_v1.sql`.
 
 Local PGlite validates query semantics and idempotent schema application. Real PostgreSQL, Nginx and Tunnel evidence is recorded below.
@@ -75,9 +75,10 @@ Local PGlite validates query semantics and idempotent schema application. Real P
 
 - Server: Debian 13, operator `ops`; existing remotely managed named Cloudflare Tunnel remained unchanged.
 - Staging URL: `https://exp-tell-nearly-imposed.trycloudflare.com/reports/traffic` through a separate Quick Tunnel service.
-- Current immutable static release: `/srv/seasonal-traffic-report/releases/20260822T142031Z-f7d7c64`.
-- Static artifact SHA-256: `53ec13ca7ddb8bf9f65e82c3e68230ed13bb55198199df41abbf75667ef42a1d` (179 files).
+- Current immutable static release: `/srv/seasonal-traffic-report/releases/20260822T165315Z-70a4602`.
+- Static artifact SHA-256: `6d26311fd5a958ae215984d265aa02f5ee461275b78cfbfaa9e064cbf836837c` (181 files).
 - Migration SHA-256: `a471a0deaee1f39354590e24b9caca282103f3fdd867e658e8b204e9da4b5cce`.
+- Phase 2/3 migration SHA-256: `caedc79d44d234c75a6efea151b7ff945a8cbab071faa530de1a7465b6a8c7cd`.
 - Edge source SHA-256: `89899d63748a30081869604caea10c49a09035e79afefa6cc50596b77201d873`.
 - Nginx config SHA-256: `9c10f16269dc33e233ea65c0ea0a519d06c07172e4729f496d35a6dbcfd46810`; `nginx -t` passed.
 - The public Edge Runtime is isolated at `127.0.0.1:9001`; shared authenticated Edge Functions retain `VERIFY_JWT=true`.
@@ -107,5 +108,18 @@ To meet practical query latency without copying data into a second database, sta
 - Airline and Route share bars expose named `progressbar` semantics and numeric percentage values; Country and Aircraft Group retain the compact aggregate table.
 - Browser QA passed at 1440x900 and 375x812. Preset targets measured 44 px high. At 375 px, document width was 360 px with no page-level horizontal overflow; the 420 px breakdown tables and 720 px timeline remained independently scrollable inside their cards.
 - `npm run test:traffic-report-contract`, targeted ESLint, `npx tsc --noEmit --pretty false`, production build, public HTML smoke and UTF-8/mojibake scan all passed.
+
+## Phase 2 and Phase 3 evidence
+
+- Commits: `0a1e3f8` adds the database contract for 24 hourly buckets, seven calendar-aware weekday rows and publishable Airline/Route filter options; `70a4602` adds the charts, searchable multi-select filters, Fleet Mix and client-side Excel export.
+- The production-like database migration ran in one transaction. A direct database smoke returned `24` hourly buckets, `7` weekday rows, `44` Airline options and `42` Route options. Execute privileges remained `anon=false`, `authenticated=false`, `service_role=true` for the public wrapper.
+- The public API returned HTTP 200 for `2026-08-14..2026-08-21` with the same `24/7/44/42` contract and a fresh Nginx `MISS`. The browser still makes one initial overview request; all sections derive from that single aggregate bundle.
+- Peak-hour shows stacked ARR/DEP averages for all 24 hours and supports URL-synchronized local/UTC selection. The dashed 14 flights/hour line is explicitly labeled as a visual reference, not approved capacity.
+- Day-of-week displays all seven calendar weekdays with average and Min-Max range. Zero-flight calendar dates stay in the denominator; rows affected by primary or complementary small-cell suppression render as hidden.
+- Fleet Mix keeps the database labels `Small`, `Big` and `Unknown`. It does not infer narrow-body/wide-body, seat configuration or stand compatibility from those labels.
+- Airline and Route use searchable native checkbox multi-select controls. Browser QA selected `VN`, produced `airline=VN` in SearchParams, reloaded the filtered report and exposed a removable selected-value chip. Country remains a database-backed text filter and supports `Unknown`.
+- Excel remains lazy-loaded and creates five aggregate-only sheets: `Tổng quan`, `Timeline`, `Cơ cấu`, `24 khung giờ` and `Thứ trong tuần`. The contract test serializes a real compressed `.xlsx`, reopens it, verifies all sheet names and representative cells, and confirms that `flight_number` and `record_id` never enter workbook data.
+- Browser QA passed at 1440x900, 375x812 and 812x375 with no page-level horizontal overflow. Apply, timezone and Excel controls measured 44 px high; the mobile multi-select panel measured 320 px inside the 375 px viewport. Local/UTC toggles updated and restored `tz` in the URL. No console errors or warnings were present.
+- Final verification passed: `npm run test:traffic-report-contract`, `npm run test:seasonal-schema-twice`, `npm run test:dashboard-contract`, `npm run test:rules`, targeted ESLint, `npx tsc --noEmit --pretty false`, production build, isolation import graph, `git diff --check` and UTF-8/mojibake scan.
 
 Remaining gates: user acceptance of the staging behavior/visuals, optional physical-device/screen-reader acceptance, resolution of the `<150 ms` warm database p95 target or acceptance of the measured result, and production named-tunnel/DNS configuration.

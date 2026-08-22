@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import * as XLSX from 'xlsx';
 import {
   buildOverviewUrl,
   detectTrafficReportDatePreset,
@@ -58,4 +59,14 @@ test('Excel workbook data stays aggregate-only and includes Phase 2 sheets', () 
   assert.deepEqual(Object.keys(workbook), ['Tổng quan', 'Timeline', 'Cơ cấu', '24 khung giờ', 'Thứ trong tuần']);
   assert.ok(!JSON.stringify(workbook).includes('flight_number'));
   assert.ok(!JSON.stringify(workbook).includes('record_id'));
+
+  const xlsxWorkbook = XLSX.utils.book_new();
+  for (const [sheetName, rows] of Object.entries(workbook)) {
+    XLSX.utils.book_append_sheet(xlsxWorkbook, XLSX.utils.aoa_to_sheet(rows), sheetName);
+  }
+  const serialized = XLSX.write(xlsxWorkbook, { type: 'buffer', bookType: 'xlsx', compression: true });
+  const reopened = XLSX.read(serialized, { type: 'buffer' });
+  assert.deepEqual(reopened.SheetNames, Object.keys(workbook));
+  assert.equal(reopened.Sheets['Tổng quan']?.A1?.v, 'BÁO CÁO SẢN LƯỢNG KHAI THÁC — AGGREGATE ONLY');
+  assert.equal(reopened.Sheets.Timeline?.A2?.v, '2026-08-15');
 });
