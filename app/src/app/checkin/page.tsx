@@ -624,6 +624,7 @@ type CheckInCommitPersistenceResult = {
   affectedIds?: string[];
   source?: CheckInCommitSource;
   appliedEvents?: SeasonChangeEvent[];
+  acknowledgedServerSeq?: number;
 };
 
 interface CheckInUndoEntry {
@@ -1176,6 +1177,7 @@ function CheckInAllocationContent() {
         affectedIds: nativeResult.affectedIds,
         source: 'checkin-native',
         appliedEvents: nativeResult.appliedEvents,
+        acknowledgedServerSeq: nativeResult.nextServerSeq,
       };
     });
   }, [enqueueLocalMutation]);
@@ -1838,6 +1840,7 @@ function CheckInAllocationContent() {
           legId,
           'local-ack',
           submittedModsByLegId.get(legId),
+          result.acknowledgedServerSeq,
         );
         const winner = ganttInteractionArbiter.settle(
           { seasonId: season.id, targetType: 'modification', targetId: legId },
@@ -1863,6 +1866,7 @@ function CheckInAllocationContent() {
       }
       if (appliedMods.length > 0) {
         applyOptimisticCheckInModifications(appliedMods);
+        promoteLatestCheckInModificationsForView();
         publishWorkspaceChange(
           season.id,
           result.syncMeta.localRevision,
@@ -1894,7 +1898,7 @@ function CheckInAllocationContent() {
     } finally {
       updateCheckInLocalCommitPending();
     }
-  }, [applyOptimisticCheckInModifications, persistCheckInModifications, publishWorkspaceChange, pushCheckInUndoEntry, rollbackAccumulatedCheckInCommit, scheduleCheckInAuditEntry, scheduleSyncSummaryUpdate, season, updateCheckInLocalCommitPending]);
+  }, [applyOptimisticCheckInModifications, persistCheckInModifications, promoteLatestCheckInModificationsForView, publishWorkspaceChange, pushCheckInUndoEntry, rollbackAccumulatedCheckInCommit, scheduleCheckInAuditEntry, scheduleSyncSummaryUpdate, season, updateCheckInLocalCommitPending]);
 
   const scheduleAccumulatedCheckInCommit = useCallback(({
     legIds,

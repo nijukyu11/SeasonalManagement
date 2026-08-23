@@ -36,6 +36,7 @@ export function findLatestSequencedModificationPatch(
   legId: string,
   source: SequencedModificationPatch['source'],
   submittedModification?: FlightModification | null,
+  acknowledgedServerSeq?: number | null,
 ): SequencedModificationPatch | null {
   let latest: SequencedModificationPatch | null = null;
   for (const event of events ?? []) {
@@ -57,6 +58,17 @@ export function findLatestSequencedModificationPatch(
       modification,
       source,
     });
+  }
+  if (
+    !latest
+    && submittedModification?.legId === legId
+    && Number.isFinite(acknowledgedServerSeq)
+  ) {
+    return {
+      serverSeq: acknowledgedServerSeq as number,
+      modification: submittedModification,
+      source,
+    };
   }
   return latest;
 }

@@ -177,6 +177,40 @@ test('applyServerModificationPatch updates only matching snapshots and rejects s
   assert.equal(store.getState().workspaces['season-1'].modificationsByLegId.get(target.id)?.gate, 7);
 });
 
+test('applyServerModificationPatch merges a partial event into the canonical modification', () => {
+  const store = useSeasonWorkspaceStore;
+  store.getState().resetSeasonWorkspaceStore();
+  const target = makeRecord({ id: 'LEG-PARTIAL', gate: 1 });
+  const existingModification = {
+    ...makeModification(target.id, 1),
+    stand: 5,
+  };
+  store.getState().replaceSeasonWindow({
+    seasonId: 'season-1',
+    records: [target],
+    modifications: [existingModification],
+    syncMeta: makeSyncMeta({ lastServerSeq: 100 }),
+    windowKey: 'checkin:partial',
+  });
+
+  assert.equal(store.getState().applyServerModificationPatch({
+    seasonId: 'season-1',
+    legId: target.id,
+    modification: { legId: target.id, action: 'modified', counter: [21, 22] },
+    serverSeq: 101,
+    operatorSessionEpoch: getOperatorSessionEpoch(),
+  }), 'applied');
+
+  const canonical = store.getState().workspaces['season-1'].modificationsByLegId.get(target.id);
+  assert.equal(canonical?.gate, 1);
+  assert.equal(canonical?.stand, 5);
+  assert.deepEqual(canonical?.counter, [21, 22]);
+  const snapshot = store.getState().workspaces['season-1'].windowSnapshots.get('checkin:partial');
+  assert.equal(snapshot?.modifications.get(target.id)?.gate, 1);
+  assert.equal(snapshot?.modifications.get(target.id)?.stand, 5);
+  assert.deepEqual(snapshot?.modifications.get(target.id)?.counter, [21, 22]);
+});
+
 test('a late server-window response cannot overwrite a newer direct modification patch', () => {
   const store = useSeasonWorkspaceStore;
   store.getState().resetSeasonWorkspaceStore();

@@ -163,6 +163,48 @@ test('uses the submitted modification when an applied acknowledgement omits its 
   assert.deepEqual(arbiter.settle(targetA, localAck), newerRemote);
 });
 
+test('uses the submitted modification when the server acknowledgement omits applied events', () => {
+  const submittedModification = {
+    legId: 'LEG-A',
+    action: 'modified' as const,
+    counter: [21, 22],
+  };
+
+  const localAck = findLatestSequencedModificationPatch(
+    [],
+    'LEG-A',
+    'local-ack',
+    submittedModification,
+    110,
+  );
+  assert.deepEqual(localAck, {
+    serverSeq: 110,
+    source: 'local-ack',
+    modification: submittedModification,
+  });
+
+  const arbiter = createGanttInteractionArbiter();
+  const newerRemote = {
+    serverSeq: 111,
+    source: 'remote' as const,
+    modification: { legId: 'LEG-A', action: 'modified' as const, counter: [31, 32] },
+  };
+  arbiter.begin(targetA);
+  arbiter.enqueueOrApply(targetA, newerRemote);
+  assert.deepEqual(arbiter.settle(targetA, localAck), newerRemote);
+});
+
+test('does not synthesize an acknowledgement without a finite confirmed server sequence', () => {
+  const submittedModification = { legId: 'LEG-A', action: 'modified' as const, counter: [21, 22] };
+  assert.equal(findLatestSequencedModificationPatch(
+    [],
+    'LEG-A',
+    'local-ack',
+    submittedModification,
+    null,
+  ), null);
+});
+
 test('prefers a canonical acknowledgement payload over the submitted fallback', () => {
   const canonicalModification = { legId: 'LEG-A', action: 'modified' as const, counter: [41, 42] };
   const event = {

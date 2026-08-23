@@ -422,7 +422,11 @@ export const useSeasonWorkspaceStore = create<SeasonWorkspaceStoreState>()((set,
     if (!targetExists) return 'missing-target';
 
     const modificationsByLegId = new Map(previous.modificationsByLegId);
-    modificationsByLegId.set(input.legId, input.modification);
+    const currentModification = modificationsByLegId.get(input.legId);
+    const mergedModification = currentModification
+      ? { ...currentModification, ...input.modification }
+      : input.modification;
+    modificationsByLegId.set(input.legId, mergedModification);
     const modificationServerHighWater = new Map(previous.modificationServerHighWater);
     modificationServerHighWater.set(input.legId, input.serverSeq);
 
@@ -432,7 +436,13 @@ export const useSeasonWorkspaceStore = create<SeasonWorkspaceStoreState>()((set,
         || snapshot.records.some((record) => record.id === input.legId);
       if (!containsTarget) continue;
       const modifications = new Map(snapshot.modifications);
-      modifications.set(input.legId, input.modification);
+      const currentSnapshotModification = modifications.get(input.legId);
+      modifications.set(
+        input.legId,
+        currentSnapshotModification
+          ? { ...currentSnapshotModification, ...input.modification }
+          : input.modification,
+      );
       windowSnapshots.set(key, {
         ...snapshot,
         modifications,

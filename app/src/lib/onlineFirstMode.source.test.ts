@@ -72,7 +72,7 @@ test('gate commit resolves canonical server events before optimistic view can cl
   const gatePage = readFileSync(join(process.cwd(), 'src/app/gate/page.tsx'), 'utf8');
   assert.match(
     gatePage,
-    /findLatestSequencedModificationPatch\(\s*result\.appliedEvents,\s*legId,\s*'local-ack',\s*submittedModsByLegId\.get\(legId\),\s*\)/
+    /findLatestSequencedModificationPatch\(\s*result\.appliedEvents,\s*legId,\s*'local-ack',\s*submittedModsByLegId\.get\(legId\),\s*result\.acknowledgedServerSeq,\s*\)/
   );
   assert.match(gatePage, /applyServerModificationPatch\(/);
   assert.match(gatePage, /promoteLatestGateModificationsForView\(\)/);

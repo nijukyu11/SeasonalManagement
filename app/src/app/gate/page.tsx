@@ -433,6 +433,7 @@ type GateCommitPersistenceResult = {
   affectedIds?: string[];
   source?: 'gate' | 'gate-worker' | 'gate-native';
   appliedEvents?: SeasonChangeEvent[];
+  acknowledgedServerSeq?: number;
 };
 
 interface PendingAccumulatedGateCommit {
@@ -954,6 +955,7 @@ function GateAllocationContent() {
         affectedIds: nativeResult.affectedIds,
         source: 'gate-native',
         appliedEvents: nativeResult.appliedEvents,
+        acknowledgedServerSeq: nativeResult.nextServerSeq,
       };
     });
   }, [enqueueLocalMutation]);
@@ -1148,6 +1150,7 @@ function GateAllocationContent() {
           legId,
           'local-ack',
           submittedModsByLegId.get(legId),
+          result.acknowledgedServerSeq,
         );
         const winner = ganttInteractionArbiter.settle(
           { seasonId: season.id, targetType: 'modification', targetId: legId },
