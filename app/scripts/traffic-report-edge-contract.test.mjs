@@ -8,6 +8,10 @@ const config = read('supabase/config.toml');
 const migration = read('supabase/migrations/20260822090000_public_traffic_report_v1.sql');
 const phase23Migration = read('supabase/migrations/20260822150000_public_traffic_report_phase23.sql');
 const nginx = read('../deploy/traffic-report/nginx.conf');
+const refreshTimer = read('../deploy/traffic-report/seasonal-traffic-report-refresh.timer');
+const refreshService = read('../deploy/traffic-report/seasonal-traffic-report-refresh.service');
+const manualRefresh = read('../deploy/traffic-report/seasonal-traffic-report-refresh-manual');
+const deployRunbook = read('../docs/runbooks/public-traffic-report-deploy.md');
 
 assert.match(config, /\[functions\.traffic-report\]\s*verify_jwt = false/);
 assert.match(edge, /request\.method !== 'GET'/);
@@ -49,5 +53,16 @@ assert.match(nginx, /\$uri\|\$is_args\$args/);
 assert.match(nginx, /proxy_set_header Cookie ""/);
 assert.match(nginx, /proxy_set_header Authorization ""/);
 assert.match(nginx, /limit_req zone=traffic_report_per_ip/);
+
+assert.match(refreshTimer, /keep this timer disabled/);
+assert.match(refreshTimer, /OnUnitInactiveSec=5m/);
+assert.doesNotMatch(refreshTimer, /OnUnitInactiveSec=20s/);
+assert.match(manualRefresh, /systemctl is-enabled --quiet/);
+assert.match(refreshService, /REFRESH MATERIALIZED VIEW CONCURRENTLY/i);
+assert.match(manualRefresh, /systemctl start "\$service_unit"/);
+assert.match(manualRefresh, /snapshot_source_watermark/);
+assert.match(manualRefresh, /source_changed_after_refresh/);
+assert.match(deployRunbook, /systemctl disable --now seasonal-traffic-report-refresh\.timer/);
+assert.match(deployRunbook, /at least 65 seconds before each staging acceptance session/);
 
 console.log(JSON.stringify({ suite: 'traffic-report-edge-contract', status: 'passed' }));

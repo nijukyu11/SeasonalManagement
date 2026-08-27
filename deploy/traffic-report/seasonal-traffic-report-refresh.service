@@ -1,5 +1,5 @@
 [Unit]
-Description=Refresh the public traffic report aggregate snapshot
+Description=Manually refresh the public traffic report aggregate snapshot
 After=docker.service
 Requires=docker.service
 
@@ -8,4 +8,3 @@ Type=oneshot
 ExecStart=/usr/bin/docker exec opsdata-supabase-db psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d postgres -c "REFRESH MATERIALIZED VIEW CONCURRENTLY reporting.public_traffic_effective"
 TimeoutStartSec=25
 NoNewPrivileges=true
-

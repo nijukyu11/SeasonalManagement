@@ -29,7 +29,7 @@ Trang báo cáo kết hợp:
 - Phân biệt được `0`, `thiếu dữ liệu`, `đang cập nhật` và `Pax chưa báo cáo`.
 - Filter nằm trong URL để reload, back/forward và chia sẻ link giữ nguyên trạng thái.
 - Summary chạy qua endpoint công khai chuyên biệt; không tải toàn bộ lịch bay về trình duyệt để aggregate.
-- Filter được aggregate tại thời điểm request trên một snapshot hiệu lực có index, refresh mỗi 20 giây; kết hợp cache Nginx 60 giây để giữ tuổi dữ liệu quan sát dưới 90 giây. Đây là thay đổi staging cần được chấp nhận trước production.
+- Filter được aggregate tại thời điểm request trên một snapshot hiệu lực có index. Trong staging chờ nghiệm thu, timer tự động bị disable và operator refresh thủ công ít nhất 65 giây trước mỗi buổi nghiệm thu để cache Nginx cũ hết hạn; SLA và cơ chế refresh production phải được chốt riêng trước khi công bố.
 - Không công bố flight leg, record ID, số hiệu/giờ bay chi tiết hoặc field vận hành nhạy cảm.
 - Có publication boundary, field allowlist, cache và rate limit; không để service-role key trong frontend.
 - Có đối soát database, API, UI và workbook mẫu trước khi công bố.
@@ -693,7 +693,7 @@ Tên chính xác phải được revalidate trên `origin/main` trước khi cod
 - [ ] Smoke HTML, assets, deep-link refresh, public API, cache HIT/MISS/SWR, 400/429 và same-origin qua tunnel.
 - [ ] Chứng minh param order canonical dùng cùng cache key; filter khác không collision; response lỗi không được cache.
 - [ ] Test biên cache Age 59/60 tại Nginx và tổng tuổi browser 89/90 giây; khi upstream treo/lỗi ở lúc Nginx hết hạn, Nginx không được phục vụ stale và không response nào vượt cửa sổ 90 giây.
-- [ ] Chứng minh thay đổi đã khả kiến trong reporting source xuất hiện trên report trong tối đa 90 giây theo policy 60s fresh + 30s SWR; kiểm tra `source_watermark` hoặc ghi rõ trạng thái `unknown`.
+- [ ] Trước production, chốt và chứng minh cơ chế refresh tự động đáp ứng freshness SLA đã duyệt. Staging manual mode chỉ yêu cầu helper trả `ready`, watermark snapshot/source khớp và cache cũ đã hết hạn trước buổi nghiệm thu; không tuyên bố freshness liên tục giữa hai buổi.
 - [ ] Ghi riêng benchmark DB/Edge/Nginx/Tunnel/browser; báo pass/fail warm DB p95 và Nginx cache-hit p95 target `<150ms`, không đồng nhất với uncached Internet SLO.
 - [ ] Smoke range toàn bộ `min_ops_date` đến `max_ops_date`: KPI hoàn tất; timeline/breakdown tải theo page/zoom mà không hở hoặc trùng bucket.
 - [ ] Kiểm tra bundle không chứa service-role key, tunnel token hoặc server secrets.
@@ -737,7 +737,7 @@ Tên chính xác phải được revalidate trên `origin/main` trước khi cod
 18. Wrapper overview và ba section nội bộ dùng cùng normalized filter, `request_hash`, `data_as_of` và MVCC snapshot đã được concurrency-test; initial render/filter commit chỉ có một browser request, một Edge-to-PostgREST request và một DB round-trip.
 19. Kỳ so sánh ngoài data domain trả `partial`/`unavailable`, không clamp hoặc biến thành 0.
 20. “Đã báo cáo 0 Pax” chỉ được tính là reported khi có tín hiệu nguồn độc lập; nếu chưa có thì contract trả `unknown`.
-21. Sau khi thay đổi đã commit và khả kiến trong reporting source, live aggregate phản ánh thay đổi trong tối đa 90 giây theo policy fresh 60 giây + SWR 30 giây; `source_watermark` đổi tương ứng hoặc khai báo rõ `unknown`, không cần chạy job snapshot.
+21. Trong staging manual mode, sau khi helper trả `ready` và cache cũ hết hạn, report phải phản ánh đúng `source_watermark`. Freshness liên tục và cơ chế refresh production là gate riêng, chưa được suy ra từ staging manual mode.
 22. Cache key không collision giữa filter/zoom/page khác nhau; request không chuẩn nhận `308 no-store` tới URL canonical, URL canonical tương đương dùng cùng cache entry và response lỗi không được cache.
 23. Benchmark tách DB, Edge, Nginx, Tunnel và browser; target `<150ms` được kết luận riêng cho warm DB/cache-hit, không được báo như uncached end-to-end SLA khi chưa có số đo.
 24. Mọi cohort/cell 1-2 leg trả `suppressed` hoặc được gộp/complementary-suppress; exact value không thể đọc từ một API/UI/tooltip/export response hoặc suy ra trực tiếp từ grand total.

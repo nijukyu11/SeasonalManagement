@@ -123,3 +123,14 @@ To meet practical query latency without copying data into a second database, sta
 - Final verification passed: `npm run test:traffic-report-contract`, `npm run test:seasonal-schema-twice`, `npm run test:dashboard-contract`, `npm run test:rules`, targeted ESLint, `npx tsc --noEmit --pretty false`, production build, isolation import graph, `git diff --check` and UTF-8/mojibake scan.
 
 Remaining gates: user acceptance of the staging behavior/visuals, optional physical-device/screen-reader acceptance, resolution of the `<150 ms` warm database p95 target or acceptance of the measured result, and production named-tunnel/DNS configuration.
+
+## Staging refresh policy change — 2026-08-27
+
+The 20-second automatic refresh described above is retained as historical staging evidence, not the current staging policy. To remove continuous background CPU/temp-I/O load while the report awaits acceptance, staging now keeps `seasonal-traffic-report-refresh.timer` disabled and inactive. The operator runs `/usr/local/sbin/seasonal-traffic-report-refresh-manual` at least 65 seconds before each acceptance session. The helper refreshes the materialized view, verifies a non-empty snapshot and matching snapshot/source watermarks, and then allows the existing Nginx cache entry to expire naturally. Production refresh SLA and automation remain a separate acceptance decision.
+
+Deployment verification:
+
+- Previous timer/service units were backed up to `/home/ops/seasonal-backups/20260827T080319Z-traffic-report-manual-refresh`; their SHA-256 values are `fc9beb50259bca5f988eaeb39f9fd784853ce544ac2df271ab763baa7b9acbff` and `7d55f1a2ded7ee4ea7fc34788a496b73ef39a1ab648e201dcca32533bd23a2e4`.
+- The deployed timer, service and manual helper match the local artifacts with SHA-256 `7103390f31875413bf0c31187bed6e790a5e0f9669ed602d5c9ae317afb34ad3`, `e86b02aec38220025d84478e11b2026cb0e3342602e5f8a0e706cb8081106fe2` and `9a61888e64660de0eb11333730277d7f684769eb624f3bcd5a9afb3fe3404ec1`.
+- `systemd-analyze verify` passed. The timer reported `disabled`/`inactive`, had no next trigger and did not appear in the timer list.
+- A real manual refresh completed successfully at `2026-08-27T08:04:09Z`: status `ready`, snapshot/source watermark `46044/46044`, `60,357` materialized rows, service result `success` and exit status `0`.
