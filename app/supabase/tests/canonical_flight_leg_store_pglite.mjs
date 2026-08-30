@@ -8,6 +8,7 @@ const dailyMigration = await readFile(new URL('../migrations/20260828090000_dail
 const seasonalInteractionMigration = await readFile(new URL('../migrations/20260828100000_preserve_daily_overlays_during_seasonal_replace.sql', import.meta.url), 'utf8');
 const canonicalMigration = await readFile(new URL('../migrations/20260829150000_canonical_flight_leg_store.sql', import.meta.url), 'utf8');
 const canonicalDailyMigration = await readFile(new URL('../migrations/20260829153000_daily_schedule_canonical_commit.sql', import.meta.url), 'utf8');
+const canonicalHelperGrantMigration = await readFile(new URL('../migrations/20260830053000_grant_canonical_helper_execute.sql', import.meta.url), 'utf8');
 
 const db = await createSupabasePGlite();
 const seasonId = 'season-canonical-store';
@@ -39,6 +40,16 @@ try {
 
   await db.exec(canonicalMigration);
   await db.exec(canonicalDailyMigration);
+  await db.exec(canonicalHelperGrantMigration);
+
+  const helperPrivileges = await db.query(`
+    select
+      has_function_privilege('authenticated', 'public.is_canonical_flight_leg_active_v1(text,text)', 'execute') as active,
+      has_function_privilege('authenticated', 'public.canonical_flight_leg_ops_date_v1(text,text,text,text,text)', 'execute') as ops_date,
+      has_function_privilege('authenticated', 'public.canonical_flight_leg_occurrence_key_v1(text,text,text,text,text,text,text,text,text,text,text)', 'execute') as occurrence,
+      has_function_privilege('anon', 'public.is_canonical_flight_leg_active_v1(text,text)', 'execute') as anon_active
+  `);
+  assert.deepEqual(helperPrivileges.rows, [{ active: true, ops_date: true, occurrence: true, anon_active: false }]);
 
   const sources = await db.query(`select source_kind,count(*)::integer as count from public.season_flight_records where season_id=$1 group by source_kind order by source_kind`, [seasonId]);
   assert.deepEqual(sources.rows, [

@@ -7,6 +7,7 @@ const root = resolve(import.meta.dirname, '../..');
 const migration = readFileSync(resolve(root, 'supabase/migrations/20260828090000_daily_schedule_import_v1.sql'), 'utf8');
 const seasonalMigration = readFileSync(resolve(root, 'supabase/migrations/20260828100000_preserve_daily_overlays_during_seasonal_replace.sql'), 'utf8');
 const canonicalCommitMigration = readFileSync(resolve(root, 'supabase/migrations/20260829153000_daily_schedule_canonical_commit.sql'), 'utf8');
+const canonicalHelperGrantMigration = readFileSync(resolve(root, 'supabase/migrations/20260830053000_grant_canonical_helper_execute.sql'), 'utf8');
 const page = readFileSync(resolve(root, 'src/app/daily/page.tsx'), 'utf8');
 
 test('Daily commit atomically supersedes canonical legs without mutating the legacy active pointer', () => {
@@ -44,4 +45,18 @@ test('Daily upload stages preview and cannot call the legacy local mutation path
   assert.match(page, /revalidateSeasonWorkspaceWindow/);
   assert.match(page, /getDailyScheduleImportV1Status/);
   assert.match(page, /draft\/pending changes/);
+});
+
+test('canonical security-invoker projections can execute their pure helpers', () => {
+  for (const helper of [
+    'is_canonical_flight_leg_active_v1\\(text,text\\)',
+    'canonical_flight_leg_ops_date_v1\\(text,text,text,text,text\\)',
+    'canonical_flight_leg_occurrence_key_v1\\(text,text,text,text,text,text,text,text,text,text,text\\)',
+  ]) {
+    assert.match(canonicalHelperGrantMigration, new RegExp(`revoke execute on function public\\.${helper}\\s+from public, anon`, 'i'));
+    assert.match(canonicalHelperGrantMigration, new RegExp(`grant execute on function public\\.${helper}\\s+to authenticated`, 'i'));
+  }
+  assert.doesNotMatch(canonicalHelperGrantMigration, /from public, anon, authenticated/i);
+  assert.match(canonicalHelperGrantMigration, /service_role/);
+  assert.match(canonicalHelperGrantMigration, /seasonal_bi_reader/);
 });

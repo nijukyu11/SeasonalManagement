@@ -34,6 +34,6 @@
 ## Production/clone status
 
 - PostgreSQL 17 isolated clone rehearsal đã pass trước production, với backup và reconciliation được giữ làm rollback evidence.
-- Production đã áp dụng tuần tự bảy migration canonical/Daily/Manual/Seasonal/reset/reporting. Final Daily batch `1280be3c-f83f-44c0-a1b2-0c442551849c` thay atomic range `2026-08-23` đến `2026-08-27` ở data version `16577`, high-water `47548`.
+- Production đã áp dụng tuần tự tám migration canonical/Daily/Manual/Seasonal/reset/reporting/ACL, gồm hotfix `20260830053000_grant_canonical_helper_execute.sql` cho security-invoker Workspace V2. Final Daily batch `1280be3c-f83f-44c0-a1b2-0c442551849c` thay atomic range `2026-08-23` đến `2026-08-27` ở data version `16577`, high-water `47548`.
 - Canonical effective state và public traffic snapshot cùng trả 594 flights, 593 Pax-known legs và 102.307 Pax; active occurrence collision và lifecycle mismatch đều bằng 0.
 - Public traffic materialized view đã cut over sang canonical effective source, refresh thành công và khớp watermark `47548/47548` tại thời điểm acceptance.

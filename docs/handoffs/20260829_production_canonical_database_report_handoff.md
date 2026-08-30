@@ -81,6 +81,9 @@ Migration `20260829190000_public_traffic_canonical_cutover.sql` đã thay `repor
 5. `20260829170000_seasonal_canonical_authority.sql`
 6. `20260829180000_daily_authority_reset.sql`
 7. `20260829190000_public_traffic_canonical_cutover.sql`
+8. `20260830053000_grant_canonical_helper_execute.sql`
+
+Migration thứ 8 được áp dụng ngày 2026-08-30 để cấp `EXECUTE` cho các helper canonical thuần/immutable mà security-invoker views và Workspace V2 gọi dưới role `authenticated`. Khi chạy raw `psql` trên self-hosted production, migration privilege này phải chạy bằng owner `supabase_admin`; chạy bằng role container `postgres` chỉ phát warning và không thay đổi ACL.
 
 Sau database cutover, report page đã áp dụng thêm bằng raw `psql` trong một transaction cho từng file:
 

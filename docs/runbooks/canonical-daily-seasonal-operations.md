@@ -48,3 +48,9 @@ Reset là repair có phá authority, không phải thao tác import bình thư�
 - Sau canonical commit: dùng audited reset/reversal, không hard-delete batch mới hoặc sửa preimage bằng tay.
 - Projection chỉ được đánh dấu fresh sau khi refresh thành công từ canonical source.
 - Drop legacy pointer/table là migration riêng sau rollback window và cần phê duyệt riêng.
+
+## 7. Canonical helper privileges
+
+- Các view `security_invoker` yêu cầu caller có `EXECUTE` trên `is_canonical_flight_leg_active_v1`, `canonical_flight_leg_ops_date_v1` và `canonical_flight_leg_occurrence_key_v1`.
+- Giữ `PUBLIC` và `anon` bị revoke; cấp cho `authenticated`, `service_role` và `seasonal_bi_reader` nếu role BI tồn tại.
+- Trên self-hosted production, chạy migration ACL bằng object owner `supabase_admin`. Sau đó probe Workspace V2 bằng role `authenticated`; không coi warning `no privileges were granted` là thành công.
