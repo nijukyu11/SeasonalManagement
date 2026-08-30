@@ -128,14 +128,13 @@ export async function loadTargetedCommittedImportRefresh(input: {
   if (snapshot.records.length !== snapshot.totalCount) {
     throw new Error(`Committed refresh record count does not match totalCount for season ${targetSeasonId}.`);
   }
-  const malformedSourceKind = snapshot.records.find((record) => (
-    record.sourceKind !== 'imported' && record.sourceKind !== 'added'
-  ));
+  const validSourceKinds = new Set(['seasonal', 'daily', 'manual', 'imported', 'added']);
+  const malformedSourceKind = snapshot.records.find((record) => !validSourceKinds.has(record.sourceKind));
   if (malformedSourceKind) {
     throw new Error(`Committed refresh record ${malformedSourceKind.id} has an invalid sourceKind.`);
   }
   const importedRecordCount = snapshot.records.reduce(
-    (count, record) => count + (record.sourceKind === 'imported' ? 1 : 0),
+    (count, record) => count + (record.sourceKind === 'seasonal' || record.sourceKind === 'imported' ? 1 : 0),
     0,
   );
   if (importedRecordCount !== input.committedImport.flightRecordCount) {

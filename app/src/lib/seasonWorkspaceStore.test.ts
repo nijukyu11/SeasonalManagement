@@ -183,7 +183,7 @@ test('applyServerModificationPatch merges a partial event into the canonical mod
   const target = makeRecord({ id: 'LEG-PARTIAL', gate: 1 });
   const existingModification = {
     ...makeModification(target.id, 1),
-    stand: 5,
+    stand: '5',
   };
   store.getState().replaceSeasonWindow({
     seasonId: 'season-1',

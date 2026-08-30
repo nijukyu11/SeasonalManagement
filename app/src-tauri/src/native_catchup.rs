@@ -649,7 +649,7 @@ pub fn ensure_native_schema(conn: &Connection) -> rusqlite::Result<()> {
           status TEXT,
           turnaround_id TEXT,
           gate INTEGER,
-          stand INTEGER,
+          stand TEXT,
           counter_json TEXT,
           check_in_start TEXT,
           check_in_end TEXT,
@@ -665,7 +665,7 @@ pub fn ensure_native_schema(conn: &Connection) -> rusqlite::Result<()> {
           sort_order INTEGER NOT NULL,
           action TEXT NOT NULL,
           gate INTEGER,
-          stand INTEGER,
+          stand TEXT,
           counter_json TEXT,
           check_in_start TEXT,
           check_in_end TEXT,
@@ -1780,7 +1780,7 @@ fn insert_snapshot_flight_records(
                     .or_else(|| record.get("turnaround_id"))
             ),
             value_to_i64(record.get("gate")),
-            value_to_i64(record.get("stand")),
+            value_to_string(record.get("stand")),
             value_to_json_string(record.get("counter")),
             value_to_string(
                 record
@@ -1825,7 +1825,7 @@ fn insert_snapshot_modifications(
             i64::try_from(index).unwrap_or(i64::MAX),
             action,
             value_to_i64(normalized.get("gate")),
-            value_to_i64(normalized.get("stand")),
+            value_to_string(normalized.get("stand")),
             value_to_json_string(normalized.get("counter")),
             value_to_string(
                 normalized
@@ -4749,7 +4749,7 @@ fn upsert_flight_record(
                     .or_else(|| normalized_payload.get("turnaround_id"))
             ),
             value_to_i64(normalized_payload.get("gate")),
-            value_to_i64(normalized_payload.get("stand")),
+            value_to_string(normalized_payload.get("stand")),
             value_to_json_string(normalized_payload.get("counter")),
             value_to_string(
                 normalized_payload
@@ -4830,7 +4830,7 @@ fn upsert_modification(
             sort_order,
             action,
             value_to_i64(normalized_payload.get("gate")),
-            value_to_i64(normalized_payload.get("stand")),
+            value_to_string(normalized_payload.get("stand")),
             value_to_json_string(normalized_payload.get("counter")),
             value_to_string(
                 normalized_payload

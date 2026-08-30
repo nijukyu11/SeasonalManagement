@@ -658,7 +658,7 @@ export function flattenRowsToFlightRecords(rows: ParsedRow[]): FlightRecord[] {
 
 export function flightRecordsToLegs(records: FlightRecord[]): FlightLeg[] {
   return records
-    .filter((record) => record.status !== 'deleted')
+    .filter((record) => record.status === 'active' && record.action !== 'deleted')
     .map((record) => ({
       id: record.id,
       linkId: record.linkId,

@@ -76,6 +76,7 @@ export interface CleanedFlight {
 }
 
 export type FlightCounter = string | Array<string | number> | Record<string, string | number | Array<string | number>> | null;
+export type StandValue = string | null;
 export type CheckInAllocationMode = 'grouped' | 'broken';
 
 export interface CheckInCounterWindow {
@@ -104,7 +105,7 @@ export interface FlightLeg {
   intDomInd: string | null;
   pax: number | null;
   gate: number | null;
-  stand: number | null;
+  stand: StandValue;
   counter: FlightCounter;
   checkInStart?: string | null;
   checkInEnd?: string | null;
@@ -134,7 +135,7 @@ export interface FlightLeg {
 
 /** Canonical editable flight occurrence. Source rows are import backup; records are truth. */
 export interface FlightRecord extends FlightLeg {
-  sourceKind: 'imported' | 'added';
+  sourceKind: 'seasonal' | 'daily' | 'manual' | 'imported' | 'added';
   sourceSide: 'ARR' | 'DEP';
   status: 'active' | 'deleted';
   turnaroundId?: string;
@@ -152,7 +153,7 @@ export interface FlightModification {
   codeShares?: string | null;
   pax?: number | null;
   gate?: number | null;
-  stand?: number | null;
+  stand?: StandValue;
   counter?: FlightCounter;
   checkInStart?: string | null;
   checkInEnd?: string | null;
@@ -296,7 +297,7 @@ export interface GateLock {
 
 export interface StandGateMapping {
   id: string;
-  stand: number;
+  stand: Exclude<StandValue, null>;
   gate: number;
   sortOrder: number;
   enabled: boolean;

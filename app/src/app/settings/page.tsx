@@ -201,7 +201,7 @@ function orderedGateLocks(locks: GateLock[]): GateLock[] {
 
 function orderedStandGateMappings(mappings: StandGateMapping[]): StandGateMapping[] {
   return [...mappings].sort((left, right) => (
-    left.sortOrder - right.sortOrder || left.stand - right.stand || left.gate - right.gate
+    left.sortOrder - right.sortOrder || left.stand.localeCompare(right.stand, undefined, { numeric: true }) || left.gate - right.gate
   ));
 }
 
@@ -1009,7 +1009,7 @@ export default function SettingsPage() {
         ...current.standGateMappings,
         {
           id: makeId('SGM'),
-          stand: Number(standMappingStand),
+          stand: String(standMappingStand).trim().toUpperCase(),
           gate: Number(standMappingGate),
           sortOrder: nextSortOrder(current.standGateMappings),
           enabled: true,

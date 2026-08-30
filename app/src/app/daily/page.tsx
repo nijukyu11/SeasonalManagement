@@ -4,11 +4,13 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import {
-  createSeason,
-  findSeasonByCode,
+  cancelDailyScheduleImportV1,
+  commitDailyScheduleImportV1,
+  getDailyScheduleImportV1Status,
   getOperationalSettings,
   getSeasons,
   loadSeasonWorkspaceWindow,
+  stageDailyScheduleImportV1,
 } from '@/lib/remoteStore';
 import { revalidateSeasonWorkspaceWindow } from '@/lib/seasonWorkspaceWindowCoordinator';
 import {
@@ -38,17 +40,16 @@ import {
   type DailyScheduleRow,
   type DailySortState,
 } from '@/lib/dailySchedule';
+import { analyzeDailyScheduleWorkbook } from '@/lib/dailyScheduleWorkbook';
 import {
-  buildDailyScheduleImportUpdate,
-  partitionDailyImportRowsByIataSeason,
-  parseDailyImportWorksheet,
-  type DailyImportSeasonBatch,
-  type DailyScheduleImportStats,
-} from '@/lib/dailyScheduleImport';
+  buildDailyImportStagePayloadV1,
+  confirmDailyImportZeroFlightDatesV1,
+  type DailyImportStagePayloadV1,
+} from '@/lib/dailyImportV1Contract';
+import type { DailyImportStageResultV1 } from '@/lib/dailyImportRpcContract';
 import { buildDailyScheduleExportFileName, buildDailyScheduleSummaryWorkbook } from '@/lib/dailyScheduleExport';
 import { saveWorkbookAsXlsx } from '@/lib/exportSave';
 import { buildDailyStandGateModifications } from '@/lib/gateAllocation';
-import { getSeasonDateRange } from '@/lib/iataSeason';
 import { buildSeasonDisplayLabel } from '@/lib/importSeasonRules';
 import {
   getCachedSeasons,
@@ -63,6 +64,7 @@ import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import type { LocalSyncMeta } from '@/lib/localSeasonStore';
 import type { FlightCounter, FlightModification, FlightRecord, ModHistoryEntry, OperationalSettings, Season } from '@/lib/types';
+import DailyImportPreviewDialog from '@/app/components/DailyImportPreviewDialog';
 import NewFlightModal from '../components/NewFlightModal';
 import { useAppDialog } from '../components/AppDialog';
 import { useExportNotifications } from '../components/ExportNotificationProvider';
@@ -90,7 +92,7 @@ const GRID_COLUMNS: Array<{ field: DailyGridField; label: string; numeric?: bool
   { field: 'from', label: 'From', className: 'min-w-[90px]' },
   { field: 'arrPax', label: 'ARR PAX', numeric: true, className: 'min-w-[88px]' },
   { field: 'carousel', label: 'Carousel', numeric: true, className: 'min-w-[96px]' },
-  { field: 'arrStand', label: 'Arr Stand', numeric: true, className: 'min-w-[92px]' },
+  { field: 'arrStand', label: 'Arr Stand', className: 'min-w-[92px]' },
   { field: 'arrCodeShare', label: 'Arr Code Share', className: 'min-w-[132px]' },
   { field: 'depFlight', label: 'Dep Flight', className: 'min-w-[112px]' },
   { field: 'std', label: 'STD', className: 'min-w-[82px]' },
@@ -101,38 +103,12 @@ const GRID_COLUMNS: Array<{ field: DailyGridField; label: string; numeric?: bool
   { field: 'counters', label: 'Counters', className: 'min-w-[116px]' },
 ];
 
-const NUMERIC_FILTER_FIELDS = new Set<DailyGridField>(['arrPax', 'carousel', 'arrStand', 'depPax', 'gate']);
+const NUMERIC_FILTER_FIELDS = new Set<DailyGridField>(['arrPax', 'carousel', 'depPax', 'gate']);
+const DAILY_IMPORT_V1_STAGE_ENABLED = process.env.NEXT_PUBLIC_DAILY_IMPORT_V1_STAGE_ENABLED !== 'false';
+const DAILY_IMPORT_V1_COMMIT_ENABLED = process.env.NEXT_PUBLIC_DAILY_IMPORT_V1_COMMIT_ENABLED === 'true';
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-function emptyDailyImportStats(): DailyScheduleImportStats {
-  return {
-    importedRows: 0,
-    updated: 0,
-    inserted: 0,
-    deleted: 0,
-    skipped: 0,
-  };
-}
-
-function addDailyImportStats(target: DailyScheduleImportStats, next: DailyScheduleImportStats): DailyScheduleImportStats {
-  return {
-    importedRows: target.importedRows + next.importedRows,
-    updated: target.updated + next.updated,
-    inserted: target.inserted + next.inserted,
-    deleted: target.deleted + next.deleted,
-    skipped: target.skipped + next.skipped,
-  };
-}
-
-function dailyImportDateRange(batch: DailyImportSeasonBatch): { from: string; to: string } {
-  const dates = [...batch.operationalDates].sort();
-  return {
-    from: dates[0],
-    to: dates[dates.length - 1],
-  };
 }
 
 function buildDailyWindowKey(fromDateTime: string, toDateTime: string): string {
@@ -412,6 +388,11 @@ function DailyScheduleContent() {
     buildLoadProgress('Loading daily schedule...', 10, 'Preparing workspace')
   );
   const [dailyImporting, setDailyImporting] = useState(false);
+  const [dailyImportCommitting, setDailyImportCommitting] = useState(false);
+  const [dailyImportPreview, setDailyImportPreview] = useState<{
+    payload: DailyImportStagePayloadV1;
+    result: DailyImportStageResultV1;
+  } | null>(null);
   const [exportingExcel, setExportingExcel] = useState(false);
   const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; lastLocalChangeAt: number | null }>(
     () => initialDailyRouteState?.syncSummary ?? {
@@ -767,7 +748,14 @@ function DailyScheduleContent() {
   }), [fromDateTime, toDateTime]);
   const hasSelectedRecords = selectedRecordIds.length > 0;
   const actionsDisabled = !season || syncWriteInProgress || dailyImporting;
-  const dailyImportDisabled = syncWriteInProgress || dailyImporting;
+  const dailyImportDisabled = !DAILY_IMPORT_V1_STAGE_ENABLED || syncWriteInProgress || dailyImporting || syncPendingCount > 0;
+  const hasDailyImportTargetDraft = dailyImportPreview?.payload.seasons.some((target) => (
+    (useSeasonWorkspaceStore.getState().workspaces[target.seasonId]?.syncMeta?.pendingCount ?? 0) > 0
+  )) ?? false;
+  const dailyImportCommitEnabled = DAILY_IMPORT_V1_COMMIT_ENABLED
+    && !syncWriteInProgress
+    && syncPendingCount === 0
+    && !hasDailyImportTargetDraft;
   const selectedArrCount = selectedRowRecords.filter((record) => record.type === 'A').length;
   const selectedDepCount = selectedRowRecords.filter((record) => record.type === 'D').length;
   const selectedHasLinkInfo = selectedRows.some(hasDailyLinkInfo) ||
@@ -912,148 +900,112 @@ function DailyScheduleContent() {
   }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, fromDateTime, modifications, publishDailyWorkspaceChange, season, settings, toDateTime]);
 
   const handleDailyImportFile = useCallback(async (file: File | null) => {
-    if (!file || syncWriteInProgress || dailyImporting) return;
+    if (!file || !DAILY_IMPORT_V1_STAGE_ENABLED || syncWriteInProgress || dailyImporting || syncPendingCount > 0) return;
     setDailyImporting(true);
     try {
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
-      const firstSheetName = workbook.SheetNames[0];
-      const firstSheet = firstSheetName ? workbook.Sheets[firstSheetName] : null;
-      if (!firstSheet) throw new Error('Import file does not contain a readable worksheet.');
-      const importRows = parseDailyImportWorksheet(firstSheet);
-      if (importRows.length === 0) {
-        void showAlert({ title: 'Daily Import', message: 'Import file contains no operational rows.', tone: 'warning' });
-        return;
-      }
-      const batches = partitionDailyImportRowsByIataSeason(importRows);
-      if (batches.length === 0) {
-        void showAlert({ title: 'Daily Import', message: 'Import file contains no importable flight legs.', tone: 'warning' });
-        return;
-      }
-
-      let importStats = emptyDailyImportStats();
-      let changed = false;
-      let finalTargetSeason: Season | null = null;
-      let nextSeasons = seasons;
-      await enqueueLocalMutation(async () => {
-        const seasonsByCode = new Map(nextSeasons.map((item) => [item.seasonCode.toUpperCase(), item]));
-        for (const batch of batches) {
-          const seasonCode = batch.seasonCode.toUpperCase();
-          let targetSeason = seasonsByCode.get(seasonCode) ?? await findSeasonByCode(seasonCode);
-          if (!targetSeason) {
-            const range = getSeasonDateRange(seasonCode);
-            const seasonFields: Omit<Season, 'id'> = {
-              seasonCode,
-              name: seasonCode,
-              fileName: file.name,
-              uploadedAt: Date.now(),
-              effectiveStart: range.start,
-              effectiveEnd: range.end,
-              totalLegs: batch.legCount,
-              totalSourceRows: 0,
-              dataVersion: 0,
-            };
-            const createdId = await createSeason(seasonFields);
-            targetSeason = { ...seasonFields, id: createdId };
-            nextSeasons = [...nextSeasons, targetSeason];
-            seasonsByCode.set(seasonCode, targetSeason);
-          }
-          if (!seasonsByCode.has(seasonCode)) {
-            nextSeasons = [...nextSeasons, targetSeason];
-            seasonsByCode.set(seasonCode, targetSeason);
-          }
-          const range = dailyImportDateRange(batch);
-          const currentWindow = await loadSeasonWorkspaceWindow({
-            seasonId: targetSeason.id,
-            dateFrom: range.from,
-            dateTo: range.to,
-            resourceType: 'schedule',
-            limit: 100000,
-          });
-          if (!currentWindow) throw new Error(`Server daily schedule window is unavailable for ${seasonCode}.`);
-          const currentModifications = currentWindow.modifications;
-          const timestamp = Date.now();
-          const maxRecordSourceIndex = Math.max(0, ...currentWindow.records.map((record) => record.sourceRowIndex ?? 0));
-          const update = buildDailyScheduleImportUpdate({
-            records: currentWindow.records,
-            modifications: currentModifications,
-            importRows: batch.rows,
-            timestamp,
-            historyId: `LOCAL_DAILY_IMPORT_${seasonCode}_${timestamp}_${++historySeqRef.current}`,
-            nextSourceRowIndex: maxRecordSourceIndex + 1,
-          });
-          importStats = addDailyImportStats(importStats, update.stats);
-          finalTargetSeason = targetSeason;
-          if (!update.historyEntry) continue;
-
-          const nativeSyncMeta = await runNativeScheduleMutation(
-            targetSeason.id,
-            update.historyEntry.recordChanges?.map((change) => change.newRecord).filter((record): record is FlightRecord => record != null) ?? [],
-            [],
-            update.historyEntry.changes.map((change) => change.newMod),
-            {
-              id: update.historyEntry.id,
-              timestamp: update.historyEntry.timestamp,
-              description: update.historyEntry.description,
-            },
-            [],
-            'daily'
-          );
-          if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
-          const affectedIds = [
-            ...update.historyEntry.changes.map((change) => change.legId),
-            ...(update.historyEntry.recordChanges?.map((change) => change.recordId) ?? []),
-          ];
-          if (targetSeason.id === season?.id) {
-            applyDailyNativeState(targetSeason.id, update.records, update.modifications, nativeSyncMeta, {
-              affectedIds,
-              replaceWindow: true,
-              season: targetSeason,
-              windowKey: buildDailyWindowKey(range.from, range.to),
-            });
-          }
-          publishDailyWorkspaceChange(targetSeason.id, nativeSyncMeta.localRevision, affectedIds, nativeSyncMeta);
-          setSelectedRowIds(new Set());
-          void appendAuditLogEntry(createFlightActionAuditFromHistory({
-            season: targetSeason,
-            module: 'daily',
-            operation: update.historyEntry.description,
-            beforeRecords: currentWindow.records,
-            afterRecords: update.records,
-            beforeModifications: currentModifications,
-            afterModifications: update.modifications,
-            targetRecordIds: affectedIds,
-            metadata: { stats: update.stats, seasonCode },
-          }));
-          changed = true;
-        }
+      const analysis = analyzeDailyScheduleWorkbook(workbook);
+      if (!analysis.selected) throw new Error(analysis.diagnostics.map((item) => item.message).join(' '));
+      const payload = await buildDailyImportStagePayloadV1({
+        fileName: file.name,
+        rawBuffer: buffer,
+        sheet: analysis.selected,
+        seasons,
       });
-
-      if (nextSeasons !== seasons) {
-        const refreshedSeasons = await getSeasons();
-        nextSeasons = refreshedSeasons.length > 0 ? refreshedSeasons : nextSeasons;
-        setSeasons(nextSeasons);
-        setCachedSeasons(nextSeasons);
+      const pendingTarget = payload.seasons.find((target) => (
+        (useSeasonWorkspaceStore.getState().workspaces[target.seasonId]?.syncMeta?.pendingCount ?? 0) > 0
+      ));
+      if (pendingTarget) {
+        throw new Error(`Season ${pendingTarget.seasonCode} đang có draft/pending changes; hãy Save hoặc xử lý draft trước khi stage Daily import.`);
       }
-      if (finalTargetSeason) {
-        const routedSeason = nextSeasons.find((item) => item.id === finalTargetSeason?.id) ?? finalTargetSeason;
-        router.push(`/daily?season=${routedSeason.id}`);
-      }
-      const stats = importStats;
-      void showAlert({
-        title: changed ? 'Daily Import Complete' : 'Daily Import',
-        message: changed
-          ? `Processed ${batches.length} season${batches.length === 1 ? '' : 's'}. Updated ${stats.updated}, inserted ${stats.inserted}, deleted ${stats.deleted}, skipped ${stats.skipped}. Use Save to push changes to the server.`
-          : `No Daily Schedule changes found. Skipped ${stats.skipped}.`,
-        tone: changed ? 'success' : 'info',
-      });
+      const result = await stageDailyScheduleImportV1(payload);
+      setDailyImportPreview({ payload, result });
     } catch (err) {
       void showAlert({ title: 'Daily Import Failed', message: (err as Error).message, tone: 'error' });
     } finally {
       setDailyImporting(false);
       if (dailyImportInputRef.current) dailyImportInputRef.current.value = '';
     }
-  }, [applyDailyNativeState, dailyImporting, enqueueLocalMutation, publishDailyWorkspaceChange, router, season?.id, seasons, showAlert, syncWriteInProgress]);
+  }, [dailyImporting, seasons, showAlert, syncPendingCount, syncWriteInProgress]);
+
+  const closeDailyImportPreview = useCallback(async () => {
+    const current = dailyImportPreview;
+    setDailyImportPreview(null);
+    if (current && current.result.status !== 'committed') {
+      try { await cancelDailyScheduleImportV1(current.result.batchId); } catch { /* Expiry/cancel recovery is server-authoritative. */ }
+    }
+  }, [dailyImportPreview]);
+
+  const confirmDailyZeroFlightDates = useCallback(async (datesBySeasonId: Record<string, string[]>) => {
+    if (!dailyImportPreview || dailyImporting) return;
+    setDailyImporting(true);
+    try {
+      const payload = await confirmDailyImportZeroFlightDatesV1(dailyImportPreview.payload, datesBySeasonId);
+      await cancelDailyScheduleImportV1(dailyImportPreview.result.batchId);
+      const result = await stageDailyScheduleImportV1(payload);
+      setDailyImportPreview({ payload, result });
+    } catch (error) {
+      void showAlert({ title: 'Zero-flight Confirmation Failed', message: (error as Error).message, tone: 'error' });
+    } finally {
+      setDailyImporting(false);
+    }
+  }, [dailyImportPreview, dailyImporting, showAlert]);
+
+  const applyCommittedDailyImport = useCallback(async (receipt: NonNullable<DailyImportStageResultV1['result']>) => {
+    setDailyImportPreview(null);
+    setSelectedRowIds(new Set());
+    if (season && receipt.seasons.some((item) => item.seasonId === season.id)) {
+      const windowKey = buildDailyWindowKey(fromDateTime, toDateTime);
+      const serverWindow = await revalidateSeasonWorkspaceWindow({
+        seasonId: season.id,
+        dateFrom: fromDateTime.slice(0, 10),
+        dateTo: toDateTime.slice(0, 10),
+        resourceType: 'schedule',
+        limit: 100000,
+      }, {
+        force: true,
+        initiator: 'immediate',
+      });
+      if (serverWindow?.syncMeta) {
+        loadedWindowKeyRef.current = windowKey;
+        applyDailyNativeState(season.id, serverWindow.records, serverWindow.modifications, serverWindow.syncMeta, {
+          replaceWindow: true,
+          season,
+          windowKey,
+        });
+      }
+    }
+    router.refresh();
+  }, [applyDailyNativeState, fromDateTime, router, season, toDateTime]);
+
+  const commitDailyImportPreview = useCallback(async () => {
+    if (!dailyImportPreview || dailyImportCommitting) return;
+    setDailyImportCommitting(true);
+    try {
+      const pendingTarget = dailyImportPreview.payload.seasons.find((target) => (
+        (useSeasonWorkspaceStore.getState().workspaces[target.seasonId]?.syncMeta?.pendingCount ?? 0) > 0
+      ));
+      if (syncPendingCount > 0 || pendingTarget) {
+        throw new Error('Daily import commit bị chặn vì target season đang có draft/pending changes.');
+      }
+      const expectedVersions = Object.fromEntries(dailyImportPreview.payload.seasons.map((target) => [target.seasonId, target.expectedDataVersion]));
+      let receipt;
+      try {
+        receipt = await commitDailyScheduleImportV1({ batchId: dailyImportPreview.result.batchId, expectedVersions, previewHash: dailyImportPreview.result.previewHash });
+      } catch (commitError) {
+        const recovered = await getDailyScheduleImportV1Status(dailyImportPreview.payload.requestId).catch(() => null);
+        if (recovered?.status !== 'committed' || !recovered.result) throw commitError;
+        receipt = recovered.result;
+      }
+      await applyCommittedDailyImport(receipt);
+      void showAlert({ title: 'Daily Import Complete', message: `Committed atomic batch ${receipt.batchId} for ${receipt.seasons.length} season(s).`, tone: 'success' });
+    } catch (error) {
+      void showAlert({ title: 'Daily Import Commit Failed', message: (error as Error).message, tone: 'error' });
+    } finally {
+      setDailyImportCommitting(false);
+    }
+  }, [applyCommittedDailyImport, dailyImportCommitting, dailyImportPreview, showAlert, syncPendingCount]);
 
   const handleAddFlights = useCallback(async (mods: FlightModification[]) => {
     if (!season || syncWriteInProgress) return;
@@ -1512,8 +1464,8 @@ function DailyScheduleContent() {
                 <button
                   onClick={() => dailyImportInputRef.current?.click()}
                   disabled={dailyImportDisabled}
-                  title="Import OperationalTurns file"
-                  aria-label="Import OperationalTurns file"
+                  title={DAILY_IMPORT_V1_STAGE_ENABLED ? 'Import Daily Schedule (.xls or .xlsx)' : 'Daily Import V1 staging is disabled'}
+                  aria-label="Import Daily Schedule file"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className={`material-symbols-outlined text-[19px] ${dailyImporting ? 'animate-spin' : ''}`}>
@@ -1734,6 +1686,17 @@ function DailyScheduleContent() {
           void handleAddFlights(mods);
         }}
       />
+      {dailyImportPreview && (
+        <DailyImportPreviewDialog
+          result={dailyImportPreview.result}
+          commitEnabled={dailyImportCommitEnabled}
+          committing={dailyImportCommitting}
+          restaging={dailyImporting}
+          onCancel={() => { void closeDailyImportPreview(); }}
+          onCommit={() => { void commitDailyImportPreview(); }}
+          onConfirmZeroFlightDates={(datesBySeasonId) => { void confirmDailyZeroFlightDates(datesBySeasonId); }}
+        />
+      )}
       {dialogNode}
     </div>
   );

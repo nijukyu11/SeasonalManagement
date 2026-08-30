@@ -1,6 +1,12 @@
 import * as XLSX from 'xlsx';
 import { assertNoDuplicateFlightNumbers, linkFlightRecordPairs } from './atomicSchedule';
 import { buildOperationalFlightMetadata, getOperationalDate } from './iataSeason';
+import {
+  normalizeDailyCarouselValue,
+  normalizeDailyCounterValue,
+  normalizeDailyGateValue,
+  normalizeStandValue,
+} from './operationalResourceValues';
 import type { FlightCounter, FlightModification, FlightRecord, ModHistoryEntry } from './types';
 
 export type DailyImportRawRow = Record<string, unknown>;
@@ -27,7 +33,7 @@ export interface DailyImportSeasonBatch {
   legCount: number;
 }
 
-interface ImportedLeg {
+export interface ImportedDailyLeg {
   side: 'ARR' | 'DEP';
   type: 'A' | 'D';
   rowNumber: number;
@@ -51,14 +57,34 @@ interface ImportedLeg {
   >>;
 }
 
+export interface DailyImportRowDiagnostic {
+  severity: 'blocking';
+  code: string;
+  message: string;
+  rowNumber: number;
+  side: 'ARR' | 'DEP';
+}
+
 interface ParsedDateTime {
   date: string | null;
   time: string;
 }
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-const EXCEL_EPOCH_UTC = Date.UTC(1899, 11, 30);
 const DAILY_IMPORT_HEADER_SCAN_ROWS = 10;
+const DAILY_IMPORT_DATE_TIME_COLUMNS = new Set([
+  'ARR-Scheduled',
+  'ARR-MCT',
+  'ARR-BagFirst',
+  'ARR-BagLast',
+  'DEP-Scheduled',
+  'DEP-MCT',
+]);
+
+export interface DailyImportParseOptions {
+  date1904?: boolean;
+  headerRowIndex?: number;
+  columnOffset?: number;
+}
 
 const DAILY_IMPORT_CANONICAL_COLUMNS: Record<number, string> = {
   1: 'AIRCRAFT_SERIES',
@@ -158,18 +184,23 @@ function rowHasValue(row: unknown[]): boolean {
   return row.some((value) => textValue(value) != null);
 }
 
-export function parseDailyImportWorksheet(sheet: XLSX.WorkSheet): DailyImportRawRow[] {
+export function parseDailyImportWorksheet(
+  sheet: XLSX.WorkSheet,
+  options: DailyImportParseOptions = {},
+): DailyImportRawRow[] {
   const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
     header: 1,
     defval: null,
-    raw: false,
+    raw: true,
     blankrows: false,
   });
-  const layout = detectDailyImportLayout(rows);
+  const layout = options.headerRowIndex != null && options.columnOffset != null
+    ? { headerIndex: options.headerRowIndex, columnOffset: options.columnOffset }
+    : detectDailyImportLayout(rows);
   if (!layout) {
     return XLSX.utils.sheet_to_json<DailyImportRawRow>(sheet, {
       defval: null,
-      raw: false,
+      raw: true,
     });
   }
 
@@ -180,7 +211,14 @@ export function parseDailyImportWorksheet(sheet: XLSX.WorkSheet): DailyImportRaw
       const normalized: DailyImportRawRow = {};
       for (const [oldIndexText, key] of Object.entries(DAILY_IMPORT_CANONICAL_COLUMNS)) {
         const value = row[Number(oldIndexText) + layout.columnOffset];
-        normalized[key] = value ?? null;
+        if (typeof value === 'number' && DAILY_IMPORT_DATE_TIME_COLUMNS.has(key)) {
+          const parsed = parseDailyImportDateTime(value, options);
+          normalized[key] = parsed?.date
+            ? `${parsed.date} ${parsed.time}:00`
+            : value;
+        } else {
+          normalized[key] = value ?? null;
+        }
       }
       return normalized;
     });
@@ -227,57 +265,56 @@ function nullableInteger(value: unknown): number | null {
   return parsed;
 }
 
-function nullablePositiveInteger(value: unknown): number | null {
-  const parsed = nullableInteger(value);
-  if (parsed == null) return null;
-  if (parsed <= 0) throw new Error(`Expected positive integer value, got ${parsed}`);
-  return parsed;
-}
-
-function nullableGateResource(value: unknown): number | null {
-  const text = textValue(value);
-  if (text == null) return null;
-  const gateMatch = /^G\s*0*(\d+)$/i.exec(text);
-  return nullablePositiveInteger(gateMatch ? gateMatch[1] : text);
-}
-
-function normalizeCounterTokenText(value: string): string {
-  const counterMatch = /^C\s*0*(\d+)$/i.exec(value.trim());
-  return counterMatch ? counterMatch[1] : value.trim().toUpperCase();
-}
-
-function normalizeCounter(value: unknown): FlightCounter {
-  const text = textValue(value);
-  if (text == null) return null;
-  return text
-    .split(/[,\s;]+/)
-    .map((part) => normalizeCounterTokenText(part))
-    .filter(Boolean)
-    .join(',');
-}
-
-function parseExcelSerialDateTime(value: number): ParsedDateTime | null {
+function parseExcelSerialDateTime(value: number, date1904 = false): ParsedDateTime | null {
   if (!Number.isFinite(value)) return null;
-  const wholeDays = Math.floor(value);
-  const fractionalDay = value - wholeDays;
-  const date = new Date(EXCEL_EPOCH_UTC + wholeDays * MS_PER_DAY);
-  const totalMinutes = Math.round(fractionalDay * 24 * 60);
-  const hours = Math.floor(totalMinutes / 60) % 24;
-  const minutes = totalMinutes % 60;
+  const parsed = XLSX.SSF.parse_date_code(value, { date1904 });
+  if (!parsed) return null;
   return {
-    date: isoFromParts(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate()),
-    time: `${pad2(hours)}:${pad2(minutes)}`,
+    date: isoFromParts(parsed.y, parsed.m, parsed.d),
+    time: `${pad2(parsed.H)}:${pad2(parsed.M)}`,
   };
 }
 
-export function parseDailyImportDateTime(value: unknown): ParsedDateTime | null {
+function validDateTimeParts(year: number, month: number, day: number, hour: number, minute: number): boolean {
+  if (!Number.isInteger(year) || year < 1900 || year > 9999) return false;
+  if (!Number.isInteger(month) || month < 1 || month > 12) return false;
+  if (!Number.isInteger(day) || day < 1 || day > 31) return false;
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return false;
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
+
+function parsedDateTime(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+): ParsedDateTime | null {
+  if (!validDateTimeParts(year, month, day, hour, minute)) return null;
+  return {
+    date: isoFromParts(year, month, day),
+    time: `${pad2(hour)}:${pad2(minute)}`,
+  };
+}
+
+export function parseDailyImportDateTime(
+  value: unknown,
+  options: DailyImportParseOptions = {},
+): ParsedDateTime | null {
   if (value == null || value === '') return null;
-  if (typeof value === 'number') return parseExcelSerialDateTime(value);
+  if (typeof value === 'number') return parseExcelSerialDateTime(value, options.date1904 === true);
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return {
-      date: isoFromParts(value.getFullYear(), value.getMonth() + 1, value.getDate()),
-      time: `${pad2(value.getHours())}:${pad2(value.getMinutes())}`,
-    };
+    return parsedDateTime(
+      value.getUTCFullYear(),
+      value.getUTCMonth() + 1,
+      value.getUTCDate(),
+      value.getUTCHours(),
+      value.getUTCMinutes(),
+    );
   }
 
   const text = String(value).trim();
@@ -285,20 +322,26 @@ export function parseDailyImportDateTime(value: unknown): ParsedDateTime | null 
 
   const isoMatch = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::\d{2})?)?$/.exec(text);
   if (isoMatch) {
-    return {
-      date: isoFromParts(Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3])),
-      time: `${pad2(Number(isoMatch[4] ?? 0))}:${isoMatch[5] ?? '00'}`,
-    };
+    return parsedDateTime(
+      Number(isoMatch[1]),
+      Number(isoMatch[2]),
+      Number(isoMatch[3]),
+      Number(isoMatch[4] ?? 0),
+      Number(isoMatch[5] ?? 0),
+    );
   }
 
   const slashMatch = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:[ T](\d{1,2}):(\d{2})(?::\d{2})?)?$/.exec(text);
   if (slashMatch) {
     const rawYear = Number(slashMatch[3]);
     const year = rawYear < 100 ? 2000 + rawYear : rawYear;
-    return {
-      date: isoFromParts(year, Number(slashMatch[2]), Number(slashMatch[1])),
-      time: `${pad2(Number(slashMatch[4] ?? 0))}:${slashMatch[5] ?? '00'}`,
-    };
+    return parsedDateTime(
+      year,
+      Number(slashMatch[2]),
+      Number(slashMatch[1]),
+      Number(slashMatch[4] ?? 0),
+      Number(slashMatch[5] ?? 0),
+    );
   }
 
   const timeMatch = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(text);
@@ -343,41 +386,61 @@ function normalizeFlightIdentity(value: unknown): { flightNumber: string; airlin
   };
 }
 
-function updateIfPresent<T extends keyof ImportedLeg['updates']>(
-  updates: ImportedLeg['updates'],
+function updateIfPresent<T extends keyof ImportedDailyLeg['updates']>(
+  updates: ImportedDailyLeg['updates'],
   row: DailyImportRawRow,
   names: string[],
   key: T,
-  normalize: (value: unknown) => ImportedLeg['updates'][T]
+  normalize: (value: unknown) => ImportedDailyLeg['updates'][T] | undefined
 ): void {
   const column = readColumn(row, names);
-  if (!column.present) return;
-  updates[key] = normalize(column.value);
+  if (!column.present || textValue(column.value) == null) return;
+  const normalized = normalize(column.value);
+  if (normalized !== undefined) updates[key] = normalized;
 }
 
-function parseImportedLeg(row: DailyImportRawRow, side: 'ARR' | 'DEP', rowNumber: number, sourceRowIndex: number): ImportedLeg | null {
+function normalizeImportedStand(value: unknown): string | undefined {
+  return normalizeStandValue(value) ?? undefined;
+}
+
+function normalizeImportedGate(value: unknown): number | undefined {
+  const normalized = normalizeDailyGateValue(value);
+  return normalized.kind === 'value' ? normalized.value : undefined;
+}
+
+function normalizeImportedCarousel(value: unknown): number | undefined {
+  const normalized = normalizeDailyCarouselValue(value);
+  return normalized.kind === 'value' ? normalized.value : undefined;
+}
+
+function normalizeImportedCounter(value: unknown): FlightCounter | undefined {
+  const normalized = normalizeDailyCounterValue(value);
+  return normalized.kind === 'value' ? normalized.value : undefined;
+}
+
+function parseImportedLeg(row: DailyImportRawRow, side: 'ARR' | 'DEP', rowNumber: number, sourceRowIndex: number): ImportedDailyLeg | null {
   const prefix = side;
   const type = side === 'ARR' ? 'A' : 'D';
   const flight = normalizeFlightIdentity(readColumn(row, [`${prefix}-AIRLINE_FLIGHT_SUFFIX`]).value);
   const scheduled = parseScheduled(readColumn(row, [`${prefix}-Scheduled`]).value);
   if (!flight || !scheduled) return null;
 
-  const updates: ImportedLeg['updates'] = {
+  const updates: ImportedDailyLeg['updates'] = {
     schedule: scheduled.schedule,
   };
   updateIfPresent(updates, row, [`${prefix}-ORIG_DEST_AIRPORT_CODE`], 'route', normalizeUpperText);
   updateIfPresent(updates, row, [`${prefix}-CODESHARES`], 'codeShares', normalizeNullableUpperText);
   updateIfPresent(updates, row, [`${prefix}-PAX`, `${prefix}_PAX`, `${prefix}-PAX_TOTAL`, `${prefix}_PAX_TOTAL`], 'pax', nullableInteger);
   updateIfPresent(updates, row, [`${prefix}-MCT`], 'mct', parseOperationalTime);
-  updateIfPresent(updates, row, [`${prefix}Stand`], 'stand', nullablePositiveInteger);
+  updateIfPresent(updates, row, [`${prefix}Stand`], 'stand', normalizeImportedStand);
 
   if (side === 'ARR') {
     updateIfPresent(updates, row, ['ARR-BagFirst'], 'fb', parseOperationalTime);
     updateIfPresent(updates, row, ['ARR-BagLast'], 'lb', parseOperationalTime);
-    updateIfPresent(updates, row, ['ARRReclaimBelt'], 'carousel', nullablePositiveInteger);
+    updateIfPresent(updates, row, ['ARRReclaimBelt'], 'carousel', normalizeImportedCarousel);
   } else {
-    updateIfPresent(updates, row, ['DEPGate'], 'gate', nullableGateResource);
-    updateIfPresent(updates, row, ['CheckInDesk'], 'counter', normalizeCounter);
+    updateIfPresent(updates, row, ['DEPGate'], 'gate', normalizeImportedGate);
+    updateIfPresent(updates, row, ['CheckInDesk'], 'counter', normalizeImportedCounter);
   }
   const route = updates.route ?? '';
   const metadata = buildOperationalFlightMetadata({
@@ -410,6 +473,50 @@ function parseImportedLeg(row: DailyImportRawRow, side: 'ARR' | 'DEP', rowNumber
   };
 }
 
+function sideHasAnyValue(row: DailyImportRawRow, side: 'ARR' | 'DEP'): boolean {
+  return Object.entries(row).some(([key, value]) => {
+    if (!isDailyImportSideKey(key, side) || textValue(value) == null) return false;
+    if (key === 'DEPGate') return normalizeDailyGateValue(value).kind === 'value';
+    return true;
+  });
+}
+
+export function parseDailyImportRowsStrict(importRows: DailyImportRawRow[]): {
+  legs: ImportedDailyLeg[];
+  diagnostics: DailyImportRowDiagnostic[];
+} {
+  const legs: ImportedDailyLeg[] = [];
+  const diagnostics: DailyImportRowDiagnostic[] = [];
+  const occurrenceKeys = new Set<string>();
+  importRows.forEach((row, index) => {
+    for (const side of ['ARR', 'DEP'] as const) {
+      if (!sideHasAnyValue(row, side)) continue;
+      const rowNumber = index + 1;
+      try {
+        const leg = parseImportedLeg(row, side, rowNumber, rowNumber);
+        if (!leg) {
+          diagnostics.push({ severity: 'blocking', code: 'DAILY_PARTIAL_SIDE', message: `${side} thiếu flight hoặc scheduled date/time.`, rowNumber, side });
+          continue;
+        }
+        if (!leg.updates.route) {
+          diagnostics.push({ severity: 'blocking', code: 'DAILY_ROUTE_REQUIRED', message: `${side} thiếu route.`, rowNumber, side });
+          continue;
+        }
+        const occurrenceKey = importedKey(leg);
+        if (occurrenceKeys.has(occurrenceKey)) {
+          diagnostics.push({ severity: 'blocking', code: 'DAILY_DUPLICATE_OCCURRENCE', message: `Trùng chuyến ${occurrenceKey}.`, rowNumber, side });
+          continue;
+        }
+        occurrenceKeys.add(occurrenceKey);
+        legs.push(leg);
+      } catch (error) {
+        diagnostics.push({ severity: 'blocking', code: 'DAILY_INVALID_VALUE', message: (error as Error).message, rowNumber, side });
+      }
+    }
+  });
+  return { legs, diagnostics };
+}
+
 function isDailyImportSideKey(key: string, side: 'ARR' | 'DEP'): boolean {
   if (side === 'ARR') return key.startsWith('ARR');
   return key.startsWith('DEP') || key === 'DEPGate' || key === 'DEPStand' || key === 'CheckInDesk';
@@ -440,7 +547,7 @@ export function partitionDailyImportRowsByIataSeason(importRows: DailyImportRawR
   importRows.forEach((row, index) => {
     const arrLeg = parseImportedLeg(row, 'ARR', index + 1, index + 1);
     const depLeg = parseImportedLeg(row, 'DEP', index + 1, index + 1);
-    const legs = [arrLeg, depLeg].filter((leg): leg is ImportedLeg => leg != null);
+    const legs = [arrLeg, depLeg].filter((leg): leg is ImportedDailyLeg => leg != null);
     if (legs.length === 0) return;
     const seasonCodes = new Set(legs.map((leg) => leg.iataSeasonCode));
     if (seasonCodes.size === 1) {
@@ -488,7 +595,7 @@ function recordLooseKey(record: Pick<FlightRecord, 'type' | 'airline' | 'flightN
   ].join('|');
 }
 
-function importedKey(leg: Pick<ImportedLeg, 'type' | 'airline' | 'flightNumber' | 'schedule' | 'date' | 'scheduledDate' | 'scheduledTime' | 'operationalDate' | 'updates'>): string {
+function importedKey(leg: Pick<ImportedDailyLeg, 'type' | 'airline' | 'flightNumber' | 'schedule' | 'date' | 'scheduledDate' | 'scheduledTime' | 'operationalDate' | 'updates'>): string {
   return [
     leg.operationalDate,
     leg.type,
@@ -499,7 +606,7 @@ function importedKey(leg: Pick<ImportedLeg, 'type' | 'airline' | 'flightNumber' 
   ].join('|');
 }
 
-function importedLooseKey(leg: Pick<ImportedLeg, 'type' | 'airline' | 'flightNumber' | 'operationalDate'>): string {
+function importedLooseKey(leg: Pick<ImportedDailyLeg, 'type' | 'airline' | 'flightNumber' | 'operationalDate'>): string {
   return [
     leg.operationalDate,
     leg.type,
@@ -508,7 +615,7 @@ function importedLooseKey(leg: Pick<ImportedLeg, 'type' | 'airline' | 'flightNum
   ].join('|');
 }
 
-function buildNewRecord(leg: ImportedLeg): FlightRecord {
+function buildNewRecord(leg: ImportedDailyLeg): FlightRecord {
   const id = [
     'DAILY_IMPORT',
     leg.type,
@@ -563,7 +670,7 @@ function isSameValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
-function effectiveValue(record: FlightRecord, mod: FlightModification | null, key: keyof ImportedLeg['updates']): unknown {
+function effectiveValue(record: FlightRecord, mod: FlightModification | null, key: keyof ImportedDailyLeg['updates']): unknown {
   if (mod && key in mod) return mod[key as keyof FlightModification];
   return record[key as keyof FlightRecord];
 }
@@ -571,7 +678,7 @@ function effectiveValue(record: FlightRecord, mod: FlightModification | null, ke
 function mergeImportedFields(
   record: FlightRecord,
   previousMod: FlightModification | null,
-  leg: ImportedLeg
+  leg: ImportedDailyLeg
 ): FlightModification | null {
   const changed: FlightModification = {
     ...(previousMod ?? { legId: record.id, action: 'modified' as const }),
@@ -580,7 +687,7 @@ function mergeImportedFields(
   };
   let hasChange = false;
 
-  for (const [key, value] of Object.entries(leg.updates) as Array<[keyof ImportedLeg['updates'], unknown]>) {
+  for (const [key, value] of Object.entries(leg.updates) as Array<[keyof ImportedDailyLeg['updates'], unknown]>) {
     if (isSameValue(effectiveValue(record, previousMod, key), value)) continue;
     (changed as unknown as Record<string, unknown>)[key] = value;
     hasChange = true;
@@ -646,7 +753,7 @@ export function buildDailyScheduleImportUpdate(input: {
     }
 
     const upserted: Partial<Record<'ARR' | 'DEP', FlightRecord>> = {};
-    for (const leg of [arrLeg, depLeg].filter((item): item is ImportedLeg => item != null)) {
+    for (const leg of [arrLeg, depLeg].filter((item): item is ImportedDailyLeg => item != null)) {
       importedKeys.add(importedKey(leg));
       importedLooseKeys.add(importedLooseKey(leg));
       importedOperationalDates.push(leg.operationalDate);

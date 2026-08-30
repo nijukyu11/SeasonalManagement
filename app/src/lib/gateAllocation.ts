@@ -1,4 +1,5 @@
 import type { DailyCellField, DailyScheduleRow } from './dailySchedule';
+import { normalizeStandValue } from './operationalResourceValues';
 import type { AirlineColorSetting, FlightModification, FlightRecord, OperationalSettings } from './types';
 
 const DEFAULT_GATE_START_OFFSET_MINUTES = -150;
@@ -463,7 +464,7 @@ export function buildGatePackedRows(items: GateFlightItem[], from: string, to: s
 }
 
 export function resolveGateForStand(stand: number | string | null | undefined, settings: OperationalSettings): number | null {
-  const normalizedStand = normalizePositiveInteger(stand);
+  const normalizedStand = normalizeStandValue(stand);
   if (normalizedStand == null) return null;
   return settings.standGateMappings
     .filter((mapping) => mapping.enabled)
@@ -645,7 +646,7 @@ export function buildDailyStandGateModifications({
   previousModifications: Map<string, FlightModification>;
 }): FlightModification[] {
   if (field !== 'stand' && field !== 'arrStand') return [];
-  const stand = normalizePositiveInteger(value);
+  const stand = normalizeStandValue(value);
   const gate = stand == null ? null : resolveGateForStand(stand, settings);
   const mods = new Map<string, FlightModification>();
   const standMod = mergePreviousModification(previousModifications, {

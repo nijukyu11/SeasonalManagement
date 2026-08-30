@@ -534,7 +534,7 @@ create table if not exists public.season_flight_records (
   int_dom_ind text,
   pax integer,
   gate integer,
-  stand integer,
+  stand text check (stand is null or stand ~ '^[1-9][0-9]*[A-Z]?$'),
   carousel integer,
   mct text,
   fb text,
@@ -591,7 +591,7 @@ create table if not exists public.season_modifications (
   code_shares text,
   pax integer,
   gate integer,
-  stand integer,
+  stand text check (stand is null or stand ~ '^[1-9][0-9]*[A-Z]?$'),
   carousel integer,
   mct text,
   fb text,
@@ -644,7 +644,7 @@ create table if not exists public.season_modification_added_legs (
   int_dom_ind text,
   pax integer,
   gate integer,
-  stand integer,
+  stand text check (stand is null or stand ~ '^[1-9][0-9]*[A-Z]?$'),
   carousel integer,
   mct text,
   fb text,
@@ -927,7 +927,7 @@ create table if not exists public.operational_gate_lock_members (
 
 create table if not exists public.operational_stand_gate_mappings (
   id text primary key,
-  stand integer not null,
+  stand text not null check (stand ~ '^[1-9][0-9]*[A-Z]?$'),
   gate integer not null,
   sort_order integer not null default 0,
   enabled boolean not null default true,
@@ -4709,7 +4709,7 @@ begin
     coalesce(record_payload->>'rawFlightNumber', record_payload->>'flightNumber', ''), record_payload->>'requestStatusCode',
     coalesce(record_payload->>'route', ''), coalesce(record_payload->>'schedule', ''), coalesce(record_payload->>'aircraft', ''),
     coalesce(record_payload->>'category', ''), record_payload->>'codeShares', record_payload->>'intDomInd',
-    nullif(record_payload->>'pax', '')::integer, nullif(record_payload->>'gate', '')::integer, nullif(record_payload->>'stand', '')::integer,
+    nullif(record_payload->>'pax', '')::integer, nullif(record_payload->>'gate', '')::integer, nullif(upper(btrim(record_payload->>'stand')), ''),
     nullif(record_payload->>'carousel', '')::integer, record_payload->>'mct', record_payload->>'fb', record_payload->>'lb',
     record_payload->>'bhs', record_payload->>'ghs', coalesce(record_payload->>'date', ''),
     coalesce(record_payload->>'scheduledDate', record_payload->>'date'),
@@ -4843,7 +4843,7 @@ begin
   values (
     p_season_id, v_leg_id, coalesce(mod_payload->>'action', 'modified'), v_changed_fields,
     mod_payload->>'schedule', mod_payload->>'aircraft', mod_payload->>'route', mod_payload->>'codeShares',
-    nullif(mod_payload->>'pax', '')::integer, nullif(mod_payload->>'gate', '')::integer, nullif(mod_payload->>'stand', '')::integer,
+    nullif(mod_payload->>'pax', '')::integer, nullif(mod_payload->>'gate', '')::integer, nullif(upper(btrim(mod_payload->>'stand')), ''),
     nullif(mod_payload->>'carousel', '')::integer, mod_payload->>'mct', mod_payload->>'fb', mod_payload->>'lb',
     mod_payload->>'bhs', mod_payload->>'ghs', mod_payload->>'checkInStart', mod_payload->>'checkInEnd',
     mod_payload->>'checkInAllocationMode'
@@ -4930,7 +4930,7 @@ begin
       coalesce(added_leg->>'rawFlightNumber', added_leg->>'flightNumber', ''), added_leg->>'requestStatusCode',
       coalesce(added_leg->>'route', ''), coalesce(added_leg->>'schedule', ''), coalesce(added_leg->>'aircraft', ''),
       coalesce(added_leg->>'category', ''), added_leg->>'codeShares', added_leg->>'intDomInd',
-      nullif(added_leg->>'pax', '')::integer, nullif(added_leg->>'gate', '')::integer, nullif(added_leg->>'stand', '')::integer,
+      nullif(added_leg->>'pax', '')::integer, nullif(added_leg->>'gate', '')::integer, nullif(upper(btrim(added_leg->>'stand')), ''),
       nullif(added_leg->>'carousel', '')::integer, added_leg->>'mct', added_leg->>'fb', added_leg->>'lb',
       added_leg->>'bhs', added_leg->>'ghs', coalesce(added_leg->>'date', ''),
       coalesce(added_leg->>'scheduledDate', added_leg->>'date'),
@@ -5665,7 +5665,7 @@ with source_rows as (
     null::text as mod_route,
     null::integer as mod_pax,
     null::integer as mod_gate,
-    null::integer as mod_stand,
+    null::text as mod_stand,
     null::integer as mod_carousel
   from public.season_modification_added_legs al
   join public.season_modifications m

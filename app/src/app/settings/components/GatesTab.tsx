@@ -219,7 +219,7 @@ export default function GatesTab({
           <div className="divide-y divide-surface-variant">
             {standGateMappings.map((mapping) => (
               <div key={mapping.id} className="grid gap-3 p-4 lg:grid-cols-[110px_110px_110px_120px_56px]">
-                <input value={String(mapping.stand)} onChange={(event) => updateStandGateMapping(mapping.id, { stand: Number(event.target.value) })} inputMode="numeric" aria-label={`${mapping.id} stand`} className="rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none" />
+                <input value={mapping.stand} onChange={(event) => updateStandGateMapping(mapping.id, { stand: event.target.value.toUpperCase() })} inputMode="text" aria-label={`${mapping.id} stand`} className="rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none" />
                 <input value={String(mapping.gate)} onChange={(event) => updateStandGateMapping(mapping.id, { gate: Number(event.target.value) })} inputMode="numeric" aria-label={`${mapping.id} gate`} className="rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none" />
                 <input value={String(mapping.sortOrder)} onChange={(event) => updateStandGateMapping(mapping.id, { sortOrder: Number(event.target.value) })} inputMode="numeric" aria-label={`${mapping.id} order`} className="rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none" />
                 <label className="inline-flex items-center gap-2 rounded-lg border border-outline-variant px-3 py-2 text-sm">

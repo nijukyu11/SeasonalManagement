@@ -1,6 +1,6 @@
 {
   "name": "app",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,14 @@
     "build": "next build",
     "test:dashboard-contract": "node --test src/lib/dashboardReportingContract.source.test.ts",
     "test:rules": "node scripts/rule-regression-tests.cjs",
+    "test:daily-import": "node --experimental-strip-types --test src/lib/dailyScheduleWorkbook.test.ts src/lib/dailyImportV1Contract.test.ts src/lib/dailyImportRpcContract.source.test.ts",
+    "test:atomic-flight": "node --experimental-strip-types --test src/lib/effectiveSeasonalLegs.test.ts src/lib/seasonalAtomicFlightContract.source.test.ts",
+    "test:daily-import-sql": "node supabase/tests/daily_schedule_import_v1_pglite.mjs",
+    "test:canonical-flight-store": "node supabase/tests/canonical_flight_leg_store_pglite.mjs",
+    "test:daily-canonical-commit": "node supabase/tests/daily_schedule_canonical_commit_pglite.mjs",
+    "test:canonical-manual": "node supabase/tests/canonical_manual_modifications_pglite.mjs",
+    "test:seasonal-canonical-authority": "node supabase/tests/seasonal_rebuild_daily_authority_pglite.mjs",
+    "shadow:daily-import-v1": "node scripts/daily-import-v1-shadow.cjs",
     "test:seasonal-import-sql": "node supabase/tests/seasonal_source_import_v2_pglite.mjs",
     "test:seasonal-import-v3-sql": "node supabase/tests/seasonal_partial_import_v3_pglite.mjs",
     "test:seasonal-import-v3-db": "node scripts/run-seasonal-import-v3-db-test.mjs",

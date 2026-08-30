@@ -20,6 +20,7 @@ import type {
   Season,
   StandGateMapping,
 } from './types.ts';
+import { normalizeStandValue } from './operationalResourceValues.ts';
 import {
   hydrateFlightModificationFromPersistence,
   hydrateFlightRecordFromPersistence,
@@ -97,7 +98,7 @@ export type FlightRecordRelationalRow = {
   int_dom_ind: string | null;
   pax: number | null;
   gate: number | null;
-  stand: number | null;
+  stand: string | null;
   carousel: number | null;
   mct: string | null;
   fb: string | null;
@@ -117,7 +118,7 @@ export type FlightRecordRelationalRow = {
   link_type: 'overnight' | 'sameday' | null;
   pair_anchor_date: string | null;
   linked_record_id: string | null;
-  source_kind: 'imported' | 'added' | null;
+  source_kind: 'seasonal' | 'daily' | 'manual' | 'imported' | 'added' | null;
   source_side: 'ARR' | 'DEP' | null;
   status: 'active' | 'deleted' | null;
   turnaround_id: string | null;
@@ -148,7 +149,7 @@ export type ModificationRelationalRow = {
   code_shares: string | null;
   pax: number | null;
   gate: number | null;
-  stand: number | null;
+  stand: string | null;
   carousel: number | null;
   mct: string | null;
   fb: string | null;
@@ -908,7 +909,7 @@ export function toGateLockMemberRows(settings: OperationalSettings): Array<{ loc
   );
 }
 
-export function toStandGateMappingRows(settings: OperationalSettings): Array<{ id: string; stand: number; gate: number; sort_order: number; enabled: boolean; created_at: number; updated_at: number }> {
+export function toStandGateMappingRows(settings: OperationalSettings): Array<{ id: string; stand: string; gate: number; sort_order: number; enabled: boolean; created_at: number; updated_at: number }> {
   return validateOperationalSettings(settings).standGateMappings.map((mapping) => ({
     id: mapping.id,
     stand: mapping.stand,
@@ -975,7 +976,7 @@ export function fromSettingsTableRows(input: {
   gateGroupMemberRows: Array<{ group_id: string; gate_id: string | null; sort_order: number | null }>;
   gateLockRows: Array<{ id: string; name: string | null; start_time: string | null; end_time: string | null; reason: string | null; enabled: boolean | null; created_at: number | null; updated_at: number | null }>;
   gateLockMemberRows: Array<{ lock_id: string; gate_id: string | null; sort_order: number | null }>;
-  standGateMappingRows: Array<{ id: string; stand: number | null; gate: number | null; sort_order: number | null; enabled: boolean | null; created_at: number | null; updated_at: number | null }>;
+  standGateMappingRows: Array<{ id: string; stand: string | number | null; gate: number | null; sort_order: number | null; enabled: boolean | null; created_at: number | null; updated_at: number | null }>;
   aiModelRows: Array<{ id: string; label: string | null; provider: string | null; model: string | null; base_url: string | null; enabled: boolean | null; key_updated_at: number | null; sort_order: number | null }>;
   aiContextDocumentRows: OperationalAiContextDocumentRow[];
 }): OperationalSettings {
@@ -1089,7 +1090,7 @@ export function fromSettingsTableRows(input: {
     })),
     standGateMappings: input.standGateMappingRows.map((row) => ({
       id: row.id,
-      stand: numberOrNull(row.stand) ?? 0,
+      stand: normalizeStandValue(row.stand) ?? '',
       gate: numberOrNull(row.gate) ?? 0,
       sortOrder: row.sort_order ?? 0,
       enabled: row.enabled ?? true,

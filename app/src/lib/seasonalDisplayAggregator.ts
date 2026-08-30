@@ -1,5 +1,5 @@
-import { flightRecordsToLegs } from './atomicSchedule';
-import type { FlightLeg, FlightModification, FlightRecord } from './types';
+import { materializeEffectiveSeasonalLegs } from './effectiveSeasonalLegs.ts';
+import type { FlightModification, FlightRecord } from './types';
 
 export interface SeasonalDisplayGroupSnapshot {
   key: string;
@@ -17,44 +17,6 @@ export interface SeasonalDisplayGroupSnapshot {
   linkTypes: Array<'overnight' | 'sameday'>;
 }
 
-function applyMods(legs: FlightLeg[], mods: Map<string, FlightModification>): FlightLeg[] {
-  const next = legs
-    .map((leg) => {
-      const mod = mods.get(leg.id);
-      if (!mod) return leg;
-      if (mod.action === 'deleted') return { ...leg, action: 'deleted' as const };
-      if (mod.action === 'modified') {
-        return {
-          ...leg,
-          schedule: mod.schedule ?? leg.schedule,
-          aircraft: mod.aircraft ?? leg.aircraft,
-          route: mod.route ?? leg.route,
-          codeShares: 'codeShares' in mod ? mod.codeShares ?? null : leg.codeShares,
-          pax: 'pax' in mod ? mod.pax ?? null : leg.pax,
-          gate: 'gate' in mod ? mod.gate ?? null : leg.gate,
-          stand: 'stand' in mod ? mod.stand ?? null : leg.stand,
-          counter: 'counter' in mod ? mod.counter ?? null : leg.counter,
-          carousel: 'carousel' in mod ? mod.carousel ?? null : leg.carousel,
-          mct: 'mct' in mod ? mod.mct ?? null : leg.mct,
-          fb: 'fb' in mod ? mod.fb ?? null : leg.fb,
-          lb: 'lb' in mod ? mod.lb ?? null : leg.lb,
-          bhs: 'bhs' in mod ? mod.bhs ?? null : leg.bhs,
-          ghs: 'ghs' in mod ? mod.ghs ?? null : leg.ghs,
-          action: 'modified' as const,
-        };
-      }
-      return leg;
-    })
-    .filter((leg) => leg.action !== 'deleted');
-
-  for (const mod of mods.values()) {
-    if (mod.action === 'added' && mod.addedLeg) {
-      next.push({ ...mod.addedLeg, action: 'added' });
-    }
-  }
-  return next;
-}
-
 function dayIndex(iso: string): number {
   const date = new Date(`${iso}T00:00:00Z`);
   return (date.getUTCDay() + 6) % 7;
@@ -70,7 +32,7 @@ export function buildSeasonalDisplayGroups(
   records: FlightRecord[],
   modifications: Map<string, FlightModification>
 ): SeasonalDisplayGroupSnapshot[] {
-  const legs = applyMods(flightRecordsToLegs(records), modifications);
+  const legs = materializeEffectiveSeasonalLegs(records, modifications);
   const legsById = new Map(legs.map((leg) => [leg.id, leg]));
   const groups = new Map<string, SeasonalDisplayGroupSnapshot & { _dates: string[] }>();
 

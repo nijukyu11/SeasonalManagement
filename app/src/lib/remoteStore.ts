@@ -21,6 +21,7 @@ import type {
   SeasonalImportV3CommittedResult,
   SeasonalImportV3StageResult,
 } from './seasonalImportV3Contract';
+import type { DailyImportCommittedResultV1, DailyImportStagePayloadV1, DailyImportStageResultV1 } from './dailyImportRpcContract';
 import {
   createOperatorSessionAbortError,
   getOperatorSessionEpoch,
@@ -206,6 +207,10 @@ export interface RemoteStore {
     batchId: string,
     options?: OperatorSessionCheckpointOptions,
   ): Promise<{ batchId: string; status: 'cancelled' }>;
+  stageDailyScheduleImportV1?(input: DailyImportStagePayloadV1, options?: OperatorSessionCheckpointOptions): Promise<DailyImportStageResultV1>;
+  commitDailyScheduleImportV1?(input: { batchId: string; expectedVersions: Record<string, number>; previewHash: string }, options?: OperatorSessionCheckpointOptions): Promise<DailyImportCommittedResultV1>;
+  getDailyScheduleImportV1Status?(requestId: string, options?: OperatorSessionCheckpointOptions): Promise<DailyImportStageResultV1>;
+  cancelDailyScheduleImportV1?(batchId: string, options?: OperatorSessionCheckpointOptions): Promise<DailyImportStageResultV1>;
   getFlightRecords(seasonId: string): Promise<FlightRecord[]>;
   getSeasonalExportSnapshot?(
     input: RemoteSeasonalExportSnapshotInput
@@ -501,6 +506,62 @@ export function cancelSeasonalImportV3(
         throw new Error('Seasonal import V3 cancel RPC is unavailable for the configured backend.');
       }
       return store.cancelSeasonalImportV3(batchId, { assertOperatorSessionCurrent });
+    },
+  });
+}
+
+export function stageDailyScheduleImportV1(
+  input: DailyImportStagePayloadV1,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<DailyImportStageResultV1> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store, assertOperatorSessionCurrent) => {
+      if (!store.stageDailyScheduleImportV1) throw new Error('Daily Schedule import V1 stage RPC is unavailable.');
+      return store.stageDailyScheduleImportV1(input, { assertOperatorSessionCurrent });
+    },
+  });
+}
+
+export function commitDailyScheduleImportV1(
+  input: { batchId: string; expectedVersions: Record<string, number>; previewHash: string },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<DailyImportCommittedResultV1> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store, assertOperatorSessionCurrent) => {
+      if (!store.commitDailyScheduleImportV1) throw new Error('Daily Schedule import V1 commit RPC is unavailable.');
+      return store.commitDailyScheduleImportV1(input, { assertOperatorSessionCurrent });
+    },
+  });
+}
+
+export function getDailyScheduleImportV1Status(
+  requestId: string,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<DailyImportStageResultV1> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store, assertOperatorSessionCurrent) => {
+      if (!store.getDailyScheduleImportV1Status) throw new Error('Daily Schedule import V1 status RPC is unavailable.');
+      return store.getDailyScheduleImportV1Status(requestId, { assertOperatorSessionCurrent });
+    },
+  });
+}
+
+export function cancelDailyScheduleImportV1(
+  batchId: string,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<DailyImportStageResultV1> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store, assertOperatorSessionCurrent) => {
+      if (!store.cancelDailyScheduleImportV1) throw new Error('Daily Schedule import V1 cancel RPC is unavailable.');
+      return store.cancelDailyScheduleImportV1(batchId, { assertOperatorSessionCurrent });
     },
   });
 }

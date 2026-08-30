@@ -32,6 +32,7 @@ import {
   revertFlightRecordHistoryList,
   revertModificationHistoryMap,
 } from '@/lib/detailedScheduleState';
+import { activeCanonicalFlightRecordIds } from '@/lib/effectiveSeasonalLegs';
 import type { CalendarSelectionMode, NewFlightDateSelection } from '@/lib/detailedScheduleState';
 import {
   getCachedSeasons,
@@ -834,7 +835,7 @@ function DetailedScheduleContent() {
 
   const commitDraftBeforeSave = useCallback(async () => {
     if (!season || !draftState || isSaving) return;
-    const baseRecordIds = new Set(draftState.baseRecords.map((record) => record.id));
+    const baseRecordIds = activeCanonicalFlightRecordIds(draftState.baseRecords);
     const addedRecords = flightRecords
       .filter((record) => !baseRecordIds.has(record.id) && currentMods.get(record.id)?.action !== 'deleted')
       .map((record) => applyModificationToAddedRecord(record, currentMods.get(record.id)));

@@ -1,5 +1,6 @@
 import { findDuplicateFlightNumberViolations, flightRecordsToLegs } from './atomicSchedule';
 import { applyModificationsToFlightLegs } from './detailedScheduleState';
+import { normalizeStandValue } from './operationalResourceValues';
 import type { FlightCounter, FlightLeg, FlightModification, FlightRecord } from './types';
 
 export type DailyCellField =
@@ -58,7 +59,7 @@ export interface DailyFilterState {
   from?: string;
   arrPax?: number | null;
   carousel?: number | null;
-  arrStand?: number | null;
+  arrStand?: string | null;
   arrCodeShare?: string;
   depFlight?: string;
   std?: string;
@@ -191,7 +192,7 @@ function counterText(counter: FlightCounter): string {
 
 function textMatches(actual: string | null | undefined, expected: string | undefined): boolean {
   if (!expected) return true;
-  return (actual ?? '').toLowerCase().includes(expected.toLowerCase());
+  return String(actual ?? '').toLowerCase().includes(String(expected).toLowerCase());
 }
 
 function numberMatches(actual: number | null | undefined, expected: number | null | undefined): boolean {
@@ -222,7 +223,7 @@ function rowFieldValue(row: DailyScheduleRow, field: DailySortState['field']): s
   if (field === 'arrPax') return row.arr?.pax ?? Number.MAX_SAFE_INTEGER;
   if (field === 'depPax') return row.dep?.pax ?? Number.MAX_SAFE_INTEGER;
   if (field === 'carousel') return row.arr?.carousel ?? Number.MAX_SAFE_INTEGER;
-  if (field === 'arrStand') return row.arr?.stand ?? Number.MAX_SAFE_INTEGER;
+  if (field === 'arrStand') return row.arr?.stand ?? '';
   if (field === 'arrCodeShare') return row.arr?.codeShares ?? '';
   if (field === 'counters') return counterText(row.dep?.counter ?? null);
   if (field === 'gate') return row.dep?.gate ?? Number.MAX_SAFE_INTEGER;
@@ -364,7 +365,7 @@ export function buildDailyCellModification(
       return mod;
     case 'stand':
     case 'arrStand':
-      mod.stand = nullablePositiveInteger(value, 'stand');
+      mod.stand = normalizeStandValue(value);
       return mod;
     case 'counter':
     case 'counters':
@@ -452,7 +453,7 @@ export function filterDailyRows(rows: DailyScheduleRow[], filters: DailyFilterSt
     if (!textMatches(row.arr?.route, filters.from)) return false;
     if (!numberMatches(row.arr?.pax, filters.arrPax)) return false;
     if (!numberMatches(row.arr?.carousel, filters.carousel)) return false;
-    if (!numberMatches(row.arr?.stand, filters.arrStand)) return false;
+    if (!textMatches(row.arr?.stand, filters.arrStand ?? undefined)) return false;
     if (!textMatches(row.arr?.codeShares, filters.arrCodeShare)) return false;
     if (!textMatches(row.dep?.flightNumber, filters.depFlight)) return false;
     if (!textMatches(formatDailyScheduleDateTime(row.dep), filters.std)) return false;

@@ -1,4 +1,5 @@
 import type { CheckInCounterWindowMap, FlightCounter, FlightLeg, FlightModification, FlightRecord, ModHistoryEntry, ParsedRow } from './types';
+import { normalizeStandValue } from './operationalResourceValues.ts';
 import { requireScheduleTime } from './scheduleTime.ts';
 
 type PersistedSourceRow = Omit<ParsedRow, 'arrFlightType' | 'depFlightType'> & {
@@ -40,6 +41,13 @@ function assertIntegerField(value: number | null | undefined, fieldName: string)
 function assertPositiveIntegerField(value: number | null | undefined, fieldName: string): void {
   if (value == null) return;
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${fieldName} must be a positive integer.`);
+}
+
+function assertStandField(value: unknown): void {
+  if (value == null) return;
+  if (normalizeStandValue(value) == null) {
+    throw new Error('stand must contain a positive stand number with an optional letter suffix.');
+  }
 }
 
 const OPERATIONAL_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -113,7 +121,7 @@ function assertCounterField(value: FlightCounter | undefined): void {
 function assertOperationalFields(value: Partial<FlightLeg | FlightModification>): void {
   assertIntegerField(value.pax, 'pax');
   assertPositiveIntegerField(value.gate, 'gate');
-  assertPositiveIntegerField(value.stand, 'stand');
+  assertStandField(value.stand);
   assertPositiveIntegerField(value.carousel, 'carousel');
   assertOperationalTimeField(value.mct, 'mct');
   assertOperationalTimeField(value.fb, 'fb');

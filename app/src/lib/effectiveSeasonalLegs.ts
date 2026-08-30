@@ -1,6 +1,16 @@
 import { buildOperationalFlightMetadata } from './iataSeason.ts';
 import type { FlightLeg, FlightModification, FlightRecord } from './types.ts';
 
+export function isActiveCanonicalFlightRecord(
+  record: Pick<FlightRecord, 'status' | 'action'>,
+): boolean {
+  return record.status === 'active' && record.action !== 'deleted';
+}
+
+export function activeCanonicalFlightRecordIds(records: FlightRecord[]): Set<string> {
+  return new Set(records.filter(isActiveCanonicalFlightRecord).map((record) => record.id));
+}
+
 function hasField<K extends keyof FlightModification>(
   modification: FlightModification,
   field: K,
@@ -73,19 +83,21 @@ export function materializeEffectiveSeasonalLegs(
   const persistedDeletedIds = new Set<string>();
 
   for (const record of records) {
-    if (!byId.has(record.id)) byId.set(record.id, { ...record });
-    if (
+    const persistedDeleted =
       record.action === 'deleted'
-      || ('status' in record && (record as FlightRecord).status === 'deleted')
-    ) {
+      || ('status' in record && !isActiveCanonicalFlightRecord(record as FlightRecord));
+    if (persistedDeleted) {
       persistedDeletedIds.add(record.id);
+      byId.delete(record.id);
+      continue;
     }
+    if (!persistedDeletedIds.has(record.id)) byId.set(record.id, { ...record });
   }
 
   for (const modification of modifications.values()) {
     if (modification.action !== 'added' || !modification.addedLeg) continue;
     const added = modification.addedLeg;
-    if (!byId.has(added.id)) {
+    if (!persistedDeletedIds.has(added.id) && !byId.has(added.id)) {
       byId.set(added.id, { ...added, action: 'added' });
     }
   }

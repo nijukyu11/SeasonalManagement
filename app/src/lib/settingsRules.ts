@@ -20,6 +20,7 @@ import type {
   RouteCountryMapping,
   StandGateMapping,
 } from './types';
+import { normalizeStandValue } from './operationalResourceValues.ts';
 import { listRouteCountries, normalizeRouteCode } from './routeCountry.ts';
 
 type SettingsInput = (Partial<Omit<OperationalSettings, 'dashboardAlerts'>> & {
@@ -450,10 +451,10 @@ export const DEFAULT_GATE_GROUPS: GateGroup[] = [
 ];
 
 export const DEFAULT_STAND_GATE_MAPPINGS: StandGateMapping[] = [
-  { id: 'STAND_14_GATE_7', stand: 14, gate: 7, sortOrder: 1, enabled: true, createdAt: 0, updatedAt: 0 },
-  { id: 'STAND_16_GATE_6', stand: 16, gate: 6, sortOrder: 2, enabled: true, createdAt: 0, updatedAt: 0 },
-  { id: 'STAND_18_GATE_5', stand: 18, gate: 5, sortOrder: 3, enabled: true, createdAt: 0, updatedAt: 0 },
-  { id: 'STAND_20_GATE_4', stand: 20, gate: 4, sortOrder: 4, enabled: true, createdAt: 0, updatedAt: 0 },
+  { id: 'STAND_14_GATE_7', stand: '14', gate: 7, sortOrder: 1, enabled: true, createdAt: 0, updatedAt: 0 },
+  { id: 'STAND_16_GATE_6', stand: '16', gate: 6, sortOrder: 2, enabled: true, createdAt: 0, updatedAt: 0 },
+  { id: 'STAND_18_GATE_5', stand: '18', gate: 5, sortOrder: 3, enabled: true, createdAt: 0, updatedAt: 0 },
+  { id: 'STAND_20_GATE_4', stand: '20', gate: 4, sortOrder: 4, enabled: true, createdAt: 0, updatedAt: 0 },
 ];
 
 function normalizeCode(value: unknown): string {
@@ -735,7 +736,7 @@ function normalizePositiveInteger(value: unknown): number {
 function normalizeStandGateMapping(mapping: Partial<StandGateMapping>): StandGateMapping {
   return {
     id: String(mapping.id ?? '').trim(),
-    stand: normalizePositiveInteger(mapping.stand),
+    stand: normalizeStandValue(mapping.stand) ?? '',
     gate: normalizePositiveInteger(mapping.gate),
     sortOrder: Number(mapping.sortOrder ?? 0),
     enabled: Boolean(mapping.enabled),
@@ -1001,12 +1002,12 @@ export function validateOperationalSettings(settings: SettingsInput): Operationa
   }
 
   const mappingIds = new Set<string>();
-  const mappingStands = new Set<number>();
+  const mappingStands = new Set<string>();
   for (const mapping of standGateMappings) {
     if (!mapping.id) throw new Error('Stand-gate mapping id is required.');
     if (mappingIds.has(mapping.id)) throw new Error(`Duplicate stand-gate mapping id ${mapping.id}.`);
     mappingIds.add(mapping.id);
-    if (!Number.isInteger(mapping.stand) || mapping.stand <= 0) throw new Error(`Stand-gate mapping ${mapping.id} stand must be a positive integer.`);
+    if (!normalizeStandValue(mapping.stand)) throw new Error(`Stand-gate mapping ${mapping.id} stand is required.`);
     if (!Number.isInteger(mapping.gate) || mapping.gate <= 0) throw new Error(`Stand-gate mapping ${mapping.id} gate must be a positive integer.`);
     if (mapping.enabled && mappingStands.has(mapping.stand)) throw new Error(`Stand ${mapping.stand} may map to only one enabled gate.`);
     if (mapping.enabled) mappingStands.add(mapping.stand);

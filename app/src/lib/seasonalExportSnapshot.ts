@@ -110,15 +110,19 @@ function validateFlightRecord(value: unknown, path: string, seasonId: string, ad
     'scheduled_date', 'scheduled_time', 'operational_date', 'iata_season_code', 'flight_series_id',
     'pair_anchor_date', 'linked_record_id', 'turnaround_id',
   ]) nullableStringField(row, field, path);
-  for (const field of ['pax', 'gate', 'stand', 'carousel', 'linked_source_row_index']) {
+  for (const field of ['pax', 'gate', 'carousel', 'linked_source_row_index']) {
     integerField(row, field, path, true);
+  }
+  if (row.stand !== null && row.stand !== undefined
+    && typeof row.stand !== 'string' && !Number.isInteger(row.stand)) {
+    throw new Error(`${path}.stand must be text, an integer, or null.`);
   }
   integerField(row, 'day_of_week', path);
   integerField(row, 'source_row_index', path);
   literalField(row, 'type', path, ['A', 'D']);
   literalField(row, 'action', path, ['modified', 'added', 'deleted'], true);
   literalField(row, 'link_type', path, ['overnight', 'sameday'], true);
-  literalField(row, 'source_kind', path, ['imported', 'added']);
+  literalField(row, 'source_kind', path, ['seasonal', 'daily', 'manual', 'imported', 'added']);
   literalField(row, 'source_side', path, ['ARR', 'DEP']);
   literalField(row, 'status', path, ['active', 'deleted']);
   return row;
@@ -249,6 +253,10 @@ export function parseSeasonalExportSnapshotRows(
     addedLeg.leg_id as string,
     addedLeg,
   ]));
+  const recordsById = new Map(arrays.flightRecords.map((record) => [
+    record.record_id as string,
+    record,
+  ]));
   arrays.modificationAddedLegs.forEach((row, index) => {
     const owner = modificationsById.get(row.leg_id as string);
     if (owner?.action !== 'added') {
@@ -267,12 +275,19 @@ export function parseSeasonalExportSnapshotRows(
     if (!changedFields.includes('addedLeg')) {
       throw new Error(`Added modification ${legId} changed_fields must include addedLeg.`);
     }
+    const canonicalManual = recordsById.get(legId);
     const addedLeg = addedLegsById.get(legId);
-    if (!addedLegIds.has(legId) || !addedLeg) {
-      throw new Error(`Added modification ${legId} must have exactly one matching added-leg child.`);
+    if (canonicalManual) {
+      if (canonicalManual.source_kind !== 'manual'
+        || canonicalManual.action !== 'added'
+        || canonicalManual.status !== 'active') {
+        throw new Error(`Added modification ${legId} must not reference a non-manual base flight record.`);
+      }
+      if (addedLeg) throw new Error(`Added modification ${legId} cannot have both canonical and legacy live rows.`);
+      return;
     }
-    if (recordIds.has(legId)) {
-      throw new Error(`Added modification ${legId} must not reference an existing base flight record.`);
+    if (!addedLegIds.has(legId) || !addedLeg) {
+      throw new Error(`Added modification ${legId} must have exactly one canonical manual row or one legacy added-leg child.`);
     }
     if (addedLeg.record_id !== legId) {
       throw new Error(`Added modification ${legId} child record_id must equal its parent leg_id.`);
@@ -340,6 +355,10 @@ export function materializeSeasonalExportSnapshot(
   const countersByLeg = groupRowsByKey(modificationCounters, (row) => row.leg_id);
   const windowsByLeg = groupRowsByKey(modificationWindows, (row) => row.leg_id);
   const addedLegsByLeg = new Map(modificationAddedLegs.map((row) => [row.leg_id, row]));
+  for (const row of flightRecordRows) {
+    if (row.source_kind !== 'manual' || row.action !== 'added') continue;
+    addedLegsByLeg.set(row.record_id, { ...row, leg_id: row.record_id } as ModificationAddedLegRelationalRow);
+  }
   const modifications = new Map(modificationRows.map((row) => [row.leg_id, fromModificationRows(
     row,
     countersByLeg.get(row.leg_id) ?? [],

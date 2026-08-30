@@ -116,6 +116,35 @@ test('canonical identity handles leading zeros and prefixed values without doubl
   }
 });
 
+test('season export emits only the active atomic flight after action history is compacted', () => {
+  const historicalDeleted = flightRecord({
+    id: 'history-old',
+    action: 'deleted',
+    status: 'deleted',
+    route: 'KIX',
+  });
+  const activeCanonical = flightRecord({
+    id: 'atomic-active',
+    route: 'ICN',
+  });
+  const modifications = new Map([
+    ['history-old', { legId: 'history-old', action: 'modified', route: 'SGN' }],
+    ['atomic-active', { legId: 'atomic-active', action: 'modified', route: 'HAN' }],
+  ]);
+
+  const result = buildCanonicalSeasonalRows({
+    records: [historicalDeleted, activeCanonical],
+    modifications,
+  });
+
+  assert.equal(result.effectiveLegs.length, 1);
+  assert.equal(result.effectiveLegs[0].id, 'atomic-active');
+  assert.equal(result.effectiveLegs[0].route, 'HAN');
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].arrRoute, 'HAN');
+  assert.equal(result.validation.valid, true, JSON.stringify(result.validation));
+});
+
 function flightRecord(overrides = {}) {
   const type = overrides.type ?? 'A';
   const date = overrides.date ?? '2026-05-27';

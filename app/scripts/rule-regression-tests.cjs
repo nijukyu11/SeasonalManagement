@@ -20,7 +20,7 @@ function compileFixtureModules() {
   fs.mkdirSync(tempDir, { recursive: true });
   fs.writeFileSync(path.join(tempDir, 'package.json'), '{"type":"commonjs"}\n');
 
-  for (const name of ['types', 'importSeasonRules', 'iataSeason', 'flightPairIntegrity', 'seasonalSourceRowValidation', 'parser', 'seasonalFileActionGuard', 'seasonalPairing', 'effectiveSeasonalLegs', 'seasonalExportSelection', 'exporter', 'canonicalSeasonalRows', 'sourceRowPatterns', 'atomicSchedule', 'firestoreWritePlanner', 'importProgress', 'settingsRules', 'settingsPageActions', 'modHistorySizing', 'auditLog', 'auditReadModel', 'operationalSettingsReadModel', 'detailedScheduleState', 'dailySchedule', 'dailyScheduleImport', 'dailyScheduleExport', 'ganttDragScroll', 'checkinAllocation', 'checkInCounterSettings', 'gateAllocation', 'checkinPdfExport', 'gatePdfExport', 'seasonDataCache', 'seasonWorkspaceStore', 'seasonalLinkActions', 'nativeRuntime', 'serverAuthoritativeMode', 'nativeSeasonCatchup', 'scheduleTime', 'nativeLocalSeasonStore', 'localSeasonStore', 'localSeasonSqlStore', 'seasonWorkspaceBootstrap', 'seasonChangeEvents', 'operatorSessionCacheRegistry', 'appSessionCleanup', 'exportSave', 'remoteStore', 'supabase', 'supabaseErrorPolicy', 'seasonWorkspaceWindowRpcV2Contract', 'seasonWorkspaceWindowV2Assembler', 'seasonalImportRpcContract', 'supabaseRelationalMappers', 'supabaseStore', 'seasonSync', 'seasonAutoSync', 'seasonalDisplayAggregator', 'routeCountry', 'dashboardAnalysis', 'dashboardAiShared', 'dashboardAiAnalysis', 'dashboardReportExport', 'persistenceSchema']) {
+  for (const name of ['types', 'operationalResourceValues', 'importSeasonRules', 'iataSeason', 'flightPairIntegrity', 'seasonalSourceRowValidation', 'parser', 'seasonalFileActionGuard', 'seasonalPairing', 'effectiveSeasonalLegs', 'seasonalExportSelection', 'exporter', 'canonicalSeasonalRows', 'sourceRowPatterns', 'atomicSchedule', 'firestoreWritePlanner', 'importProgress', 'settingsRules', 'settingsPageActions', 'modHistorySizing', 'auditLog', 'auditReadModel', 'operationalSettingsReadModel', 'detailedScheduleState', 'dailySchedule', 'dailyScheduleImport', 'dailyScheduleWorkbook', 'dailyImportV1Contract', 'dailyImportRpcContract', 'dailyScheduleExport', 'ganttDragScroll', 'checkinAllocation', 'checkInCounterSettings', 'gateAllocation', 'checkinPdfExport', 'gatePdfExport', 'seasonDataCache', 'seasonWorkspaceStore', 'seasonalLinkActions', 'nativeRuntime', 'serverAuthoritativeMode', 'nativeSeasonCatchup', 'scheduleTime', 'nativeLocalSeasonStore', 'localSeasonStore', 'localSeasonSqlStore', 'seasonWorkspaceBootstrap', 'seasonChangeEvents', 'operatorSessionCacheRegistry', 'appSessionCleanup', 'exportSave', 'remoteStore', 'supabase', 'supabaseErrorPolicy', 'seasonWorkspaceWindowRpcV2Contract', 'seasonWorkspaceWindowV2Assembler', 'seasonalImportRpcContract', 'supabaseRelationalMappers', 'supabaseStore', 'seasonSync', 'seasonAutoSync', 'seasonalDisplayAggregator', 'routeCountry', 'dashboardAnalysis', 'dashboardAiShared', 'dashboardAiAnalysis', 'dashboardReportExport', 'persistenceSchema']) {
     const sourcePath = name === 'dashboardAiShared'
       ? path.join(root, 'supabase', 'functions', '_shared', 'dashboardAiShared.ts')
       : path.join(root, 'src', 'lib', `${name}.ts`);
@@ -378,8 +378,15 @@ async function run() {
   const {
     buildDailyScheduleImportUpdate,
     partitionDailyImportRowsByIataSeason,
+    parseDailyImportDateTime,
+    parseDailyImportRowsStrict,
     parseDailyImportWorksheet,
   } = require(path.join(tempDir, 'dailyScheduleImport.js'));
+  const {
+    normalizeDailyCounterValue,
+    normalizeDailyGateValue,
+    normalizeStandValue,
+  } = require(path.join(tempDir, 'operationalResourceValues.js'));
   const {
     DAILY_SCHEDULE_EXPORT_HEADERS,
     buildDailyScheduleExportFileName,
@@ -793,16 +800,16 @@ async function run() {
       [17, '2026-04-02 00:13:00'],
       [18, '159'],
       [19, '2'],
-      [21, '18'],
+      [21, 'Stand20A'],
       [24, 'RF532'],
       [27, '02/04/2026 00:55'],
       [28, 'PAX'],
       [29, 'CJJ'],
       [30, 'J'],
       [37, '174'],
-      [38, 'G5'],
-      [39, 'C1, C2, C3, C4'],
-      [41, '18'],
+      [38, 'G1'],
+      [39, 'C30, M1'],
+      [41, 'Stand20A'],
     ]),
   ]));
   assert(
@@ -811,8 +818,8 @@ async function run() {
       newDailyRows[0]['ARR-AIRLINE_FLIGHT_SUFFIX'] === 'RF531' &&
       newDailyRows[0]['ARR-Scheduled'] === '01/04/2026 23:55' &&
       newDailyRows[0]['DEP-AIRLINE_FLIGHT_SUFFIX'] === 'RF532' &&
-      newDailyRows[0].DEPGate === 'G5' &&
-      newDailyRows[0].CheckInDesk === 'C1, C2, C3, C4',
+      newDailyRows[0].DEPGate === 'G1' &&
+      newDailyRows[0].CheckInDesk === 'C30, M1',
     `new OperationalTurns worksheet should ignore blank column A while preserving row 2 as data, got ${JSON.stringify(newDailyRows)}`
   );
   const newDailyImportUpdate = buildDailyScheduleImportUpdate({
@@ -831,9 +838,64 @@ async function run() {
       newDailyArrRecord.flightSeriesId &&
       newDailyDepRecord?.scheduledDate === '2026-04-02' &&
       newDailyDepRecord.operationalDate === '2026-04-01' &&
-      newDailyDepRecord.gate === 5 &&
-      newDailyDepRecord.counter === '1,2,3,4',
+      newDailyArrRecord.stand === '20A' &&
+      newDailyDepRecord.gate === 1 &&
+      newDailyDepRecord.counter === '30,M1' &&
+      newDailyDepRecord.stand === '20A',
     `new OperationalTurns import should normalize resources and preserve continuous metadata, got ${JSON.stringify({ arr: newDailyArrRecord, dep: newDailyDepRecord })}`
+  );
+  assert(
+    normalizeStandValue('Stand20A') === '20A' &&
+      normalizeDailyGateValue('G1').value === 1 &&
+      normalizeDailyGateValue('G').kind === 'missing' &&
+      normalizeDailyCounterValue('C30, M1').value === '30,M1',
+    'Daily resource normalization must preserve alphanumeric stands, strip G/C prefixes, keep M counters, and treat bare G as missing'
+  );
+  const bareGateUpdate = buildDailyScheduleImportUpdate({
+    records: newDailyImportUpdate.records.map((record) => record.type === 'D' ? { ...record, gate: 7 } : record),
+    modifications: new Map(),
+    importRows: [{ ...newDailyRows[0], DEPGate: 'G' }],
+    timestamp: 1770000000002,
+    historyId: 'daily-bare-g-preserves-existing',
+  });
+  assert(
+    bareGateUpdate.records.find((record) => record.type === 'D')?.gate === 7,
+    `bare G must not overwrite an existing gate, got ${JSON.stringify(bareGateUpdate.records)}`
+  );
+  const bareGateWithoutDeparture = parseDailyImportRowsStrict([{
+    AIRCRAFT_SERIES: '321',
+    'ARR-AIRLINE_FLIGHT_SUFFIX': 'VN101',
+    'ARR-Scheduled': '2026-08-23 06:00:00',
+    'ARR-ORIG_DEST_AIRPORT_CODE': 'HAN',
+    DEPGate: 'G',
+  }]);
+  assert(
+    bareGateWithoutDeparture.legs.length === 1 && bareGateWithoutDeparture.diagnostics.length === 0,
+    `bare G alone must not create a partial DEP side, got ${JSON.stringify(bareGateWithoutDeparture)}`
+  );
+  assert(
+    parseDailyImportDateTime('2026-02-29') === null &&
+      parseDailyImportDateTime('29/02/2028 04:59')?.date === '2028-02-29' &&
+      parseDailyImportDateTime('2026-13-01 06:00') === null,
+    'Daily date parsing must reject impossible ISO dates and accept a valid leap day without locale conversion'
+  );
+  const duplicateDailyRows = parseDailyImportRowsStrict([
+    {
+      AIRCRAFT_SERIES: '321',
+      'ARR-AIRLINE_FLIGHT_SUFFIX': 'VN101',
+      'ARR-Scheduled': '2026-08-23 06:00:00',
+      'ARR-ORIG_DEST_AIRPORT_CODE': 'HAN',
+    },
+    {
+      AIRCRAFT_SERIES: '321',
+      'ARR-AIRLINE_FLIGHT_SUFFIX': 'VN101',
+      'ARR-Scheduled': '2026-08-23 06:00:00',
+      'ARR-ORIG_DEST_AIRPORT_CODE': 'HAN',
+    },
+  ]);
+  assert(
+    duplicateDailyRows.legs.length === 1 && duplicateDailyRows.diagnostics.some((item) => item.code === 'DAILY_DUPLICATE_OCCURRENCE'),
+    `duplicate Daily occurrence must block instead of last-write-wins, got ${JSON.stringify(duplicateDailyRows)}`
   );
   const splitSeasonDailyBatches = partitionDailyImportRowsByIataSeason([
     {
@@ -969,7 +1031,7 @@ async function run() {
         { name: 'Gate PBB', gateIds: ['GATE_4', 'GATE_5', 'GATE_6', 'GATE_7'] },
         { name: 'Gate 8-10', gateIds: ['GATE_8', 'GATE_9', 'GATE_10'] },
       ]) &&
-      JSON.stringify(emptyOperationalSettings.standGateMappings.map((mapping) => [mapping.stand, mapping.gate])) === JSON.stringify([[14, 7], [16, 6], [18, 5], [20, 4]]),
+      JSON.stringify(emptyOperationalSettings.standGateMappings.map((mapping) => [mapping.stand, mapping.gate])) === JSON.stringify([['14', 7], ['16', 6], ['18', 5], ['20', 4]]),
     `missing operational settings should hydrate default gate inventory, groups, and stand mappings, got ${JSON.stringify(emptyOperationalSettings)}`
   );
   const gateRecord = {
@@ -1131,7 +1193,7 @@ async function run() {
   assert(
     standMods.length === 2 &&
       standMods[0].legId === 'arr-1' &&
-      standMods[0].stand === 16 &&
+      standMods[0].stand === '16' &&
       standMods[1].legId === 'dep-1' &&
       standMods[1].gate === 6,
     `editing Daily arrStand should also populate the linked departure gate from mapping, got ${JSON.stringify(standMods)}`
@@ -6770,8 +6832,8 @@ async function run() {
     `daily gate filter should read DEP gate only, not linked ARR gate, got ${JSON.stringify(filterDailyRows(wideDailyRows, { gate: 9 }))}`
   );
   assert(
-    filterDailyRows(wideDailyRows, { arrStand: 11 }).some((row) => row.arr?.id === 'DAILY-EARLY-A'),
-    `daily arrStand filter should match single-side ARR rows, got ${JSON.stringify(filterDailyRows(wideDailyRows, { arrStand: 11 }))}`
+    filterDailyRows(wideDailyRows, { arrStand: '11' }).some((row) => row.arr?.id === 'DAILY-EARLY-A'),
+    `daily arrStand filter should match single-side ARR rows, got ${JSON.stringify(filterDailyRows(wideDailyRows, { arrStand: '11' }))}`
   );
   const sortedByCarousel = sortDailyRows(wideDailyRows, { field: 'carousel', direction: 'asc' });
   assert(
@@ -6985,7 +7047,7 @@ async function run() {
       importedArrMod?.fb === '08:41' &&
       importedArrMod?.lb === '09:02' &&
       importedArrMod?.carousel === 2 &&
-      importedArrMod?.stand === 12 &&
+      importedArrMod?.stand === '12' &&
       importedArrMod?.route === 'HKG' &&
       importedArrMod?.codeShares === 'VN9001',
     `daily import should map ARR operational fields to a local modification, got ${JSON.stringify(importedArrMod)}`
@@ -6999,7 +7061,7 @@ async function run() {
       importedDep.pax === 130 &&
       importedDep.mct === '12:32' &&
       importedDep.gate === 4 &&
-      importedDep.stand === 12 &&
+      importedDep.stand === '12' &&
       importedDep.counter === 'M1,M2' &&
       importedDep.codeShares === 'VN9301',
     `daily import should create missing DEP records with mapped fields, got ${JSON.stringify(importedDep)}`
@@ -9540,6 +9602,9 @@ async function run() {
   const supabaseStoreSource = fs.existsSync(path.join(root, 'src', 'lib', 'supabaseStore.ts'))
     ? fs.readFileSync(path.join(root, 'src', 'lib', 'supabaseStore.ts'), 'utf8')
     : '';
+  const canonicalManualModificationMigrationSource = fs.existsSync(path.join(root, 'supabase', 'migrations', '20260829160000_canonical_manual_modifications.sql'))
+    ? fs.readFileSync(path.join(root, 'supabase', 'migrations', '20260829160000_canonical_manual_modifications.sql'), 'utf8')
+    : '';
   const seasonalImportRpcContractSource = fs.existsSync(path.join(root, 'src', 'lib', 'seasonalImportRpcContract.ts'))
     ? fs.readFileSync(path.join(root, 'src', 'lib', 'seasonalImportRpcContract.ts'), 'utf8')
     : '';
@@ -9615,18 +9680,14 @@ async function run() {
     'Detailed Confirm Changes modal must render proposed changes from a bounded record lookup, not only visible legs'
   );
   assert(
-    dailyPageSource.includes('partitionDailyImportRowsByIataSeason') &&
-      dailyPageSource.includes('for (const batch of batches)') &&
-      dailyPageSource.includes('findSeasonByCode(seasonCode)') &&
-      dailyPageSource.includes('createSeason(seasonFields)') &&
-      dailyPageSource.includes('getSeasonDateRange(seasonCode)') &&
-      dailyPageSource.includes('loadSeasonWorkspaceWindow({') &&
-      !dailyPageSource.includes('ensureNativeLocalSeason(targetSeason)') &&
-      dailyPageSource.includes('seasonId: targetSeason.id') &&
-      dailyPageSource.includes('runNativeScheduleMutation(') &&
-      dailyPageSource.includes('targetSeason.id,') &&
-      dailyPageSource.includes('router.push(`/daily?season=${routedSeason.id}`)'),
-    'Daily import must split files by inferred IATA season, load server state for missing seasons, and commit each batch to its target season_id'
+    dailyPageSource.includes('analyzeDailyScheduleWorkbook(workbook)') &&
+      dailyPageSource.includes('buildDailyImportStagePayloadV1({') &&
+      dailyPageSource.includes('stageDailyScheduleImportV1(payload)') &&
+      dailyPageSource.includes('commitDailyScheduleImportV1({') &&
+      dailyPageSource.includes('NEXT_PUBLIC_DAILY_IMPORT_V1_COMMIT_ENABLED') &&
+      !dailyPageSource.slice(dailyPageSource.indexOf('const handleDailyImportFile'), dailyPageSource.indexOf('const handleAddFlights')).includes('runNativeScheduleMutation(') &&
+      !dailyPageSource.includes('Use Save to push changes to the server.'),
+    'Daily import must stage a canonical multi-season preview and commit only through the feature-gated atomic V1 RPC'
   );
   const tsconfigSource = fs.readFileSync(path.join(root, 'tsconfig.json'), 'utf8');
   const packageJsonSource = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
@@ -10771,10 +10832,10 @@ async function run() {
     ? dailyPageSource.slice(dailyImportHandlerStart, dailyImportHandlerEnd)
     : '';
   assert(
-    dailyImportHandlerBody.includes('if (!file || syncWriteInProgress || dailyImporting) return;') &&
+    dailyImportHandlerBody.includes('if (!file || !DAILY_IMPORT_V1_STAGE_ENABLED || syncWriteInProgress || dailyImporting || syncPendingCount > 0) return;') &&
       dailyImportHandlerBody.includes('syncWriteInProgress') &&
-      dailyPageSource.includes('const dailyImportDisabled = syncWriteInProgress || dailyImporting;'),
-    'Daily OperationalTurns import must be disabled and guarded while save or Fetch data is active so bulk local import cannot race server reads'
+      dailyPageSource.includes('const dailyImportDisabled = !DAILY_IMPORT_V1_STAGE_ENABLED || syncWriteInProgress || dailyImporting || syncPendingCount > 0;'),
+    'Daily Schedule staging must be feature-gated and guarded while save or Fetch data is active so preview cannot race server reads'
   );
   assert(
       supabaseSchemaSource.includes('create or replace function public.get_season_workspace_snapshot') &&
@@ -10953,7 +11014,7 @@ async function run() {
   assert(
     dailyPageSource.includes('aria-label="Open Check-in Allocation for current day range"') &&
       dailyPageSource.includes('aria-label="Open Gate Allocation for current day range"') &&
-      dailyPageSource.includes('aria-label="Import OperationalTurns file"') &&
+      dailyPageSource.includes('aria-label="Import Daily Schedule file"') &&
       dailyPageSource.includes('aria-label="Add flight"') &&
       dailyPageSource.includes('aria-label="Link selected flights"') &&
       dailyPageSource.includes('aria-label="Unlink selected flights"') &&
@@ -10963,7 +11024,7 @@ async function run() {
   assert(
     dailyPageSource.includes('const syncWriteInProgress = syncInProgress || fetchingServerData;') &&
       dailyPageSource.includes('const actionsDisabled = !season || syncWriteInProgress || dailyImporting;') &&
-      dailyPageSource.includes('const dailyImportDisabled = syncWriteInProgress || dailyImporting;') &&
+      dailyPageSource.includes('const dailyImportDisabled = !DAILY_IMPORT_V1_STAGE_ENABLED || syncWriteInProgress || dailyImporting || syncPendingCount > 0;') &&
       dailyPageSource.includes('const handleAddFlights = useCallback(async (mods: FlightModification[]) => {\n    if (!season || syncWriteInProgress) return;') &&
       dailyPageSource.includes('const handleDeleteSelected = useCallback(async () => {\n    if (!season || syncWriteInProgress || selectedRecordIds.length === 0) return;') &&
       dailyPageSource.includes('const handleLinkSelected = useCallback(async () => {\n    if (!season || syncWriteInProgress || selectedRecordIds.length === 0) return;') &&
@@ -11276,13 +11337,13 @@ async function run() {
   const deleteModificationsStart = supabaseStoreSource.indexOf('async deleteModifications(seasonId: string, legIds: string[])');
   const deleteModificationsEnd = supabaseStoreSource.indexOf('async saveModificationsWithHistory', deleteModificationsStart);
   const deleteModificationsSource = supabaseStoreSource.slice(deleteModificationsStart, deleteModificationsEnd);
-  const modificationChildrenStart = supabaseStoreSource.indexOf('async function writeModificationChildren');
-  const modificationChildrenEnd = supabaseStoreSource.indexOf('async function readModificationChildren', modificationChildrenStart);
-  const modificationChildrenSource = supabaseStoreSource.slice(modificationChildrenStart, modificationChildrenEnd);
   assert(
-    removeModificationSource.includes(".from('season_modifications').delete().eq('season_id', seasonId).eq('leg_id', legId)") &&
-      deleteModificationsSource.includes(".from('season_modifications').delete().eq('season_id', seasonId).in('leg_id', chunk)") &&
-      modificationChildrenSource.includes(".from('season_modification_added_legs').delete().eq('season_id', seasonId).eq('leg_id', mod.legId)"),
+    removeModificationSource.includes("rpc('remove_canonical_season_modification_v1'") &&
+      removeModificationSource.includes('p_season_id: seasonId') &&
+      removeModificationSource.includes('p_leg_id: legId') &&
+      deleteModificationsSource.includes("rpc('remove_canonical_season_modification_v1'") &&
+      canonicalManualModificationMigrationSource.includes('where mods.season_id=p_season_id and mods.leg_id=p_leg_id for update') &&
+      canonicalManualModificationMigrationSource.includes('where season_id=p_season_id and leg_id=p_leg_id'),
     'Season-scoped modification deletes must filter by season_id before leg_id; no-schema pass only covers tables that already carry season_id'
   );
   const uniqueSeasonCodeMigrationPath = path.join(root, 'supabase', 'migrations', '20260616_unique_seasons_season_code.sql');

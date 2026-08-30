@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { materializeEffectiveSeasonalLegs } from './effectiveSeasonalLegs.ts';
+import {
+  activeCanonicalFlightRecordIds,
+  materializeEffectiveSeasonalLegs,
+} from './effectiveSeasonalLegs.ts';
 import type { FlightLeg, FlightModification, FlightRecord } from './types.ts';
 
 function record(overrides: Partial<FlightRecord> = {}): FlightRecord {
@@ -124,4 +127,58 @@ test('materializer deduplicates IDs, prefers base records, recomputes metadata, 
   assert.ok(effectiveAdded);
   assert.equal(effectiveAdded.scheduledTime, '03:30');
   assert.equal(effectiveAdded.operationalDate, '2026-03-28');
+});
+
+test('materializer keeps one terminal state for each atomic record id', () => {
+  const earlier = record({ id: 'atomic-1', route: 'KIX', action: null });
+  const latest = record({ id: 'atomic-1', route: 'ICN', action: 'modified' });
+  const deleted = record({ id: 'atomic-2', flightNumber: 'VN337', action: 'deleted', status: 'deleted' });
+  const staleActiveCopy = record({ id: 'atomic-2', flightNumber: 'VN337', route: 'HAN' });
+
+  const result = materializeEffectiveSeasonalLegs(
+    [earlier, latest, deleted, staleActiveCopy],
+    new Map([
+      ['atomic-2', { legId: 'atomic-2', action: 'modified', route: 'SGN' }],
+    ]),
+  );
+
+  assert.deepEqual(result.map((leg) => leg.id), ['atomic-1']);
+  assert.equal(result[0].route, 'ICN');
+});
+
+test('historical deleted occurrence and canonical manual overlay do not duplicate export or Detailed render state', () => {
+  const historical = record({ id: 'old-flight', status: 'deleted', action: 'deleted' });
+  const active = record({ id: 'active-flight', sourceKind: 'daily', gate: 2 });
+  const manual = record({
+    id: 'manual-flight',
+    flightNumber: 'VN338',
+    rawFlightNumber: '338',
+    sourceKind: 'manual',
+    action: 'added',
+  });
+  const modifications = new Map<string, FlightModification>([
+    ['old-flight', { legId: 'old-flight', action: 'modified', gate: 99 }],
+    ['active-flight', { legId: 'active-flight', action: 'modified', gate: 3 }],
+    ['manual-flight', { legId: 'manual-flight', action: 'added', addedLeg: addedLeg({
+      id: 'manual-flight',
+      flightNumber: 'VN338',
+      rawFlightNumber: '338',
+    }) }],
+  ]);
+
+  const result = materializeEffectiveSeasonalLegs([historical, active, manual], modifications);
+
+  assert.deepEqual(result.map((leg) => leg.id).sort(), ['active-flight', 'manual-flight']);
+  assert.equal(result.filter((leg) => leg.id === 'manual-flight').length, 1);
+  assert.equal(result.find((leg) => leg.id === 'active-flight')?.gate, 3);
+});
+
+test('Detailed Save eligibility excludes deleted and stale-action base records', () => {
+  const ids = activeCanonicalFlightRecordIds([
+    record({ id: 'active' }),
+    record({ id: 'deleted-status', status: 'deleted', action: 'deleted' }),
+    record({ id: 'deleted-action', status: 'active', action: 'deleted' }),
+  ]);
+
+  assert.deepEqual([...ids], ['active']);
 });

@@ -76,7 +76,6 @@ import {
   assertNoDuplicateFlightNumbers,
   findDuplicateFlightNumberViolations,
   flattenRowsToFlightRecords,
-  flightRecordsToLegs,
   linkFlightRecordPairs,
   unlinkFlightRecords,
 } from '@/lib/atomicSchedule';
@@ -180,47 +179,6 @@ function buildPatternRowsFromRecords(
     console.warn('Canonical seasonal pattern validation failed', canonical.diagnostics);
   }
   return canonical.rows;
-}
-
-function applyModificationsToLegs(
-  legs: FlightLeg[],
-  mods: Map<string, FlightModification>,
-  includeAdded: boolean
-): FlightLeg[] {
-  const next = legs.map(leg => {
-    const m = mods.get(leg.id);
-    if (!m) return leg;
-    if (m.action === 'deleted') return { ...leg, action: 'deleted' as const };
-    if (m.action === 'modified') return {
-      ...leg,
-      schedule: m.schedule ?? leg.schedule,
-      aircraft: m.aircraft ?? leg.aircraft,
-      route: m.route ?? leg.route,
-      codeShares: 'codeShares' in m ? m.codeShares ?? null : leg.codeShares,
-      pax: 'pax' in m ? m.pax ?? null : leg.pax,
-      gate: 'gate' in m ? m.gate ?? null : leg.gate,
-      stand: 'stand' in m ? m.stand ?? null : leg.stand,
-      counter: 'counter' in m ? m.counter ?? null : leg.counter,
-      carousel: 'carousel' in m ? m.carousel ?? null : leg.carousel,
-      mct: 'mct' in m ? m.mct ?? null : leg.mct,
-      fb: 'fb' in m ? m.fb ?? null : leg.fb,
-      lb: 'lb' in m ? m.lb ?? null : leg.lb,
-      bhs: 'bhs' in m ? m.bhs ?? null : leg.bhs,
-      ghs: 'ghs' in m ? m.ghs ?? null : leg.ghs,
-      action: 'modified' as const,
-    };
-    return leg;
-  }).filter(l => l.action !== 'deleted');
-
-  if (includeAdded) {
-    mods.forEach(m => {
-      if (m.action === 'added' && m.addedLeg) {
-        next.push({ ...m.addedLeg, action: 'added' });
-      }
-    });
-  }
-
-  return next;
 }
 
 function noOpModificationForRecord(record: FlightRecord): FlightModification {
@@ -850,7 +808,7 @@ export default function HomePage() {
   };
 
   const activeDisplayLegs = useMemo(
-    () => applyModificationsToLegs(flightRecordsToLegs(flightRecords), modifications, true),
+    () => materializeEffectiveSeasonalLegs(flightRecords, modifications),
     [flightRecords, modifications]
   );
 

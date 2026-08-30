@@ -46,6 +46,13 @@ import {
   type SeasonalImportV3StageResult,
 } from './seasonalImportV3Contract';
 import {
+  parseDailyImportCommittedResultV1,
+  parseDailyImportStageResultV1,
+  type DailyImportCommittedResultV1,
+  type DailyImportStagePayloadV1,
+  type DailyImportStageResultV1,
+} from './dailyImportRpcContract';
+import {
   fromFlightRecordRows,
   fromModHistoryRows,
   fromModificationRows,
@@ -69,10 +76,6 @@ import {
   toGateLockRows,
   toGateResourceRows,
   toModHistoryRows,
-  toModificationAddedLegRow,
-  toModificationCounterRows,
-  toModificationRow,
-  toModificationWindowRows,
   toOperationalSettingsRow,
   toRouteCountryRows,
   toSeasonRow,
@@ -432,6 +435,10 @@ function mapWorkspaceSnapshot(snapshot: SeasonWorkspaceSnapshotRpc): RemoteSeaso
   const countersByLeg = groupRowsByKey(snapshotArray(snapshot.modificationCounters), (row) => row.leg_id);
   const windowsByLeg = groupRowsByKey(snapshotArray(snapshot.modificationWindows), (row) => row.leg_id);
   const addedLegsByLeg = new Map(snapshotArray(snapshot.modificationAddedLegs).map((row) => [row.leg_id, row]));
+  for (const row of flightRecordRows) {
+    if (row.source_kind !== 'manual' || row.action !== 'added') continue;
+    addedLegsByLeg.set(row.record_id, { ...row, leg_id: row.record_id });
+  }
   const modifications = new Map(snapshotArray(snapshot.modifications).map((row) => [row.leg_id, fromModificationRows(
     row,
     countersByLeg.get(row.leg_id) ?? [],
@@ -526,7 +533,7 @@ async function loadSeasonWorkspaceSnapshotPaged(
   if (!season) return null;
   const modifications = await readModificationsForDashboardSeason(
     seasonId,
-    flightData.rows.map((row) => row.record_id)
+    flightData.rows
   );
   return {
     season,
@@ -795,29 +802,6 @@ async function readFlightRecordWindows(recordIds?: string[], options: RemoteRequ
   return selectAllRows<FlightRecordWindowRelationalRow>('season_flight_record_checkin_windows', [], 'load flight record windows');
 }
 
-async function writeModificationChildren(seasonId: string, mods: FlightModification[]): Promise<void> {
-  for (const mod of mods) {
-    assertOk(await client().from('season_modification_counters').delete().eq('leg_id', mod.legId), 'clear modification counters');
-    assertOk(await client().from('season_modification_checkin_windows').delete().eq('leg_id', mod.legId), 'clear modification windows');
-    assertOk(
-      await client().from('season_modification_added_legs').delete().eq('season_id', seasonId).eq('leg_id', mod.legId),
-      'clear modification added leg'
-    );
-    const counterRows = toModificationCounterRows(mod);
-    const windowRows = toModificationWindowRows(mod);
-    const addedLegRow = toModificationAddedLegRow(seasonId, mod);
-    if (counterRows.length > 0) {
-      assertOk(await client().from('season_modification_counters').upsert(counterRows, { onConflict: 'leg_id,counter_group,item_index' }), 'save modification counters');
-    }
-    if (windowRows.length > 0) {
-      assertOk(await client().from('season_modification_checkin_windows').upsert(windowRows, { onConflict: 'leg_id,counter_key' }), 'save modification windows');
-    }
-    if (addedLegRow) {
-      assertOk(await client().from('season_modification_added_legs').upsert(addedLegRow, { onConflict: 'leg_id' }), 'save modification added leg');
-    }
-  }
-}
-
 async function readModificationChildren(seasonId: string, legIds?: string[], options: RemoteRequestOptions = {}): Promise<{
   counterRows: ModificationCounterRelationalRow[];
   windowRows: ModificationWindowRelationalRow[];
@@ -874,15 +858,20 @@ async function readModificationRowsForDashboardSeason(
 
 async function readModificationsForDashboardSeason(
   seasonId: string,
-  recordIds: string[],
+  recordRows: FlightRecordRelationalRow[],
   options: RemoteRequestOptions = {}
 ): Promise<Map<string, FlightModification>> {
+  const recordIds = recordRows.map((row) => row.record_id);
   const rows = await readModificationRowsForDashboardSeason(seasonId, recordIds, options);
   const legIds = rows.map((row) => row.leg_id);
   const children = await readModificationChildren(seasonId, legIds, options);
   const countersByLeg = groupRowsByKey(children.counterRows, (row) => row.leg_id);
   const windowsByLeg = groupRowsByKey(children.windowRows, (row) => row.leg_id);
   const addedLegsByLeg = new Map(children.addedLegRows.map((row) => [row.leg_id, row]));
+  for (const row of recordRows) {
+    if (row.source_kind !== 'manual' || row.action !== 'added') continue;
+    addedLegsByLeg.set(row.record_id, { ...row, leg_id: row.record_id });
+  }
   return new Map(rows.map((row) => [row.leg_id, fromModificationRows(
     row,
     countersByLeg.get(row.leg_id) ?? [],
@@ -1104,6 +1093,50 @@ export const supabaseStore: RemoteStore = {
     );
   },
 
+  async stageDailyScheduleImportV1(
+    input: DailyImportStagePayloadV1,
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<DailyImportStageResultV1> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('stage_daily_schedule_import_v1', { p_import: input });
+    options.assertOperatorSessionCurrent();
+    return parseDailyImportStageResultV1(assertOk(response, 'stage Daily Schedule import V1'));
+  },
+
+  async commitDailyScheduleImportV1(
+    input: { batchId: string; expectedVersions: Record<string, number>; previewHash: string },
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<DailyImportCommittedResultV1> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('commit_daily_schedule_import_v1', {
+      p_batch_id: input.batchId,
+      p_expected_versions: input.expectedVersions,
+      p_preview_hash: input.previewHash,
+    });
+    options.assertOperatorSessionCurrent();
+    return parseDailyImportCommittedResultV1(assertOk(response, 'commit Daily Schedule import V1'));
+  },
+
+  async getDailyScheduleImportV1Status(
+    requestId: string,
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<DailyImportStageResultV1> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('get_daily_schedule_import_v1_status', { p_request_id: requestId });
+    options.assertOperatorSessionCurrent();
+    return parseDailyImportStageResultV1(assertOk(response, 'get Daily Schedule import V1 status'));
+  },
+
+  async cancelDailyScheduleImportV1(
+    batchId: string,
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<DailyImportStageResultV1> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('cancel_daily_schedule_import_v1', { p_batch_id: batchId });
+    options.assertOperatorSessionCurrent();
+    return parseDailyImportStageResultV1(assertOk(response, 'cancel Daily Schedule import V1'));
+  },
+
   async applySeasonalImportRemote(
     input: RemoteSeasonalImportInput,
     options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
@@ -1189,7 +1222,7 @@ export const supabaseStore: RemoteStore = {
     const flightData = await readFlightRecordsForDashboardSeason(seasonId);
     const modifications = await readModificationsForDashboardSeason(
       seasonId,
-      flightData.rows.map((row) => row.record_id)
+      flightData.rows
     );
     return {
       sourceRows: [],
@@ -1272,7 +1305,7 @@ export const supabaseStore: RemoteStore = {
     const flightData = await readFlightRecordRowsForDashboardSeason(seasonId);
     return readModificationsForDashboardSeason(
       seasonId,
-      flightData.rows.map((row) => row.record_id)
+      flightData.rows
     );
   },
 
@@ -1281,24 +1314,39 @@ export const supabaseStore: RemoteStore = {
   },
 
   async saveModifications(seasonId: string, mods: FlightModification[]): Promise<void> {
-    await upsertRows('season_modifications', mods.map((mod) => toModificationRow(seasonId, mod)), 'leg_id');
-    await writeModificationChildren(seasonId, mods);
+    for (const mod of mods) {
+      assertOk(
+        await client().rpc('save_canonical_season_modification_v1', {
+          p_season_id: seasonId,
+          p_mod_payload: serializeFlightModificationForPersistence(mod),
+        }),
+        'save canonical season modification'
+      );
+    }
   },
 
   async removeModification(seasonId: string, legId: string): Promise<void> {
     assertOk(
-      await client().from('season_modifications').delete().eq('season_id', seasonId).eq('leg_id', legId),
-      'remove modification'
+      await client().rpc('remove_canonical_season_modification_v1', {
+        p_season_id: seasonId,
+        p_leg_id: legId,
+      }),
+      'remove canonical season modification'
     );
   },
 
   async deleteModifications(seasonId: string, legIds: string[]): Promise<void> {
     if (legIds.length === 0) return;
     for (const chunk of chunkFirestoreWrites(legIds)) {
-      assertOk(
-        await client().from('season_modifications').delete().eq('season_id', seasonId).in('leg_id', chunk),
-        'delete modifications'
-      );
+      for (const legId of chunk) {
+        assertOk(
+          await client().rpc('remove_canonical_season_modification_v1', {
+            p_season_id: seasonId,
+            p_leg_id: legId,
+          }),
+          'delete canonical season modification'
+        );
+      }
       await pauseBetweenFirestoreWriteBatches();
     }
   },
