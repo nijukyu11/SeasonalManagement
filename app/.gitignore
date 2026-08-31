@@ -18,6 +18,8 @@ __pycache__/
 # next.js
 /.next/
 /out/
+/out-report/
+/.traffic-report-build/
 /outputs/
 /.firebase/
 /.tmp-sync-repair/

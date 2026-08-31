@@ -1,207 +1,88 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { DayOfWeekChart, FleetMixChart, PeakHourChart } from './TrafficReportAdvancedCharts';
-import { TrafficReportMultiSelect } from './TrafficReportMultiSelect';
+import { cn } from '@/lib/cn';
 import {
   buildOverviewUrl,
+  buildTimelineUrl,
   detectTrafficReportDatePreset,
   getLatestCompletedOpsDate,
   getTrafficReportPresetRange,
   isTrafficReportBundle,
-  parseTrafficReportSearchParams,
+  parseTrafficReportPageState,
+  toTrafficReportPageSearchParams,
   toTrafficReportSearchParams,
   type NormalizedTrafficReportFilter,
-  type TrafficBreakdownRow,
   type TrafficDatePreset,
   type TrafficReportBundle,
-  type TrafficReportFilter,
+  type TrafficReportPageState,
   type TrafficTimelinePoint,
 } from '@/lib/trafficReportContract';
 import { downloadTrafficReportWorkbook } from '@/lib/trafficReportExcelExport';
+import { getAverageFlightsPerSelectedDay } from '@/lib/trafficReportOperationalHours';
+import { DayOfWeekChart, FleetMixChart, PeakHourChart } from './TrafficReportAdvancedCharts';
+import { TrafficReportDimensionSection } from './TrafficReportDimensionSection';
+import { TrafficReportFilters } from './TrafficReportFilters';
+import { TrafficReportTrend } from './TrafficReportTrend';
 
 const numberFormat = new Intl.NumberFormat('vi-VN');
 const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
 const dateFormat = new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
-const tooltipDateFormat = new Intl.DateTimeFormat('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
 
-function formatNumber(value: number | null): string {
+function formatNumber(value: number | null | undefined): string {
   return value == null ? '—' : numberFormat.format(value);
 }
 
-function formatDate(value: string | null): string {
+function formatDate(value: string | null | undefined): string {
   if (!value) return '—';
   return dateFormat.format(new Date(`${value}T12:00:00+07:00`));
 }
 
-function formatTooltipDate(value: string): string {
-  return tooltipDateFormat.format(new Date(`${value}T12:00:00+07:00`));
-}
-
-function comparisonDelta(current: number | null, previous: number | null): number | null {
-  if (current == null || previous == null || previous === 0) return null;
+function comparisonDelta(current: number | null, previous: number | null, available: boolean): number | null {
+  if (!available || current == null || previous == null || previous === 0) return null;
   return ((current - previous) / previous) * 100;
 }
 
-function DeltaPill({ value, label }: { value: number | null; label: string }) {
-  const tone = value == null ? 'bg-slate-100 text-slate-600' : value >= 0 ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800';
+function DeltaPill({ value, label }: { value: number; label: string }) {
   return (
-    <span className={`inline-flex min-h-7 items-center rounded-full px-2.5 text-xs font-semibold ${tone}`}>
-      {value == null ? 'Không đủ dữ liệu' : `${value >= 0 ? '+' : ''}${percentFormat.format(value)}%`} · {label}
+    <span className={cn('inline-flex min-h-7 max-w-full items-center rounded-full px-2.5 text-pretty text-xs font-semibold leading-4', value >= 0 ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800')}>
+      {`${value >= 0 ? '+' : ''}${percentFormat.format(value)}% · ${label}`}
     </span>
   );
 }
 
-function KpiCard({ label, value, delta, comparisonLabel, note, suffix = '' }: { label: string; value: number | null; delta: number | null; comparisonLabel: string; note?: string; suffix?: string }) {
+function KpiMetric({ label, value, delta, comparisonLabel, divided = false }: {
+  label: string;
+  value: number | null;
+  delta: number | null;
+  comparisonLabel: string;
+  divided?: boolean;
+}) {
   return (
-    <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <p className="text-sm font-semibold text-slate-600">{label}</p>
-      <p className="mt-3 text-3xl font-bold tracking-tight text-[#102033] tabular-nums">{formatNumber(value)}{value == null ? '' : suffix}</p>
-      <div className="mt-4"><DeltaPill value={delta} label={comparisonLabel} /></div>
-      {note ? <p className="mt-3 text-xs leading-5 text-slate-500">{note}</p> : null}
-    </article>
-  );
-}
-
-function TimelineChart({ rows, totalFlights, dayCount }: { rows: TrafficTimelinePoint[]; totalFlights: number | null; dayCount: number }) {
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const chartRef = useRef<HTMLDivElement>(null);
-  const max = Math.max(1, ...rows.flatMap((row) => [row.flights ?? 0, row.arrivals ?? 0, row.departures ?? 0]));
-  const width = 960;
-  const height = 260;
-  const segmentsFor = (metric: 'flights' | 'arrivals' | 'departures') => {
-    const segments: string[] = [];
-    let current: string[] = [];
-    rows.forEach((row, index) => {
-      const value = row[metric];
-      if (value == null) {
-        if (current.length > 1) segments.push(current.join(' '));
-        current = [];
-        return;
-      }
-      const x = rows.length <= 1 ? width / 2 : (index / (rows.length - 1)) * width;
-      const y = height - (value / max) * (height - 30) - 15;
-      current.push(`${x},${y}`);
-    });
-    if (current.length > 1) segments.push(current.join(' '));
-    return segments;
-  };
-  const series = [
-    { key: 'flights' as const, label: 'Tổng', color: '#234093', width: 4 },
-    { key: 'arrivals' as const, label: 'ARR', color: '#00B4D8', width: 2.5 },
-    { key: 'departures' as const, label: 'DEP', color: '#42C1C7', width: 2.5 },
-  ];
-  const averageFlights = totalFlights == null || dayCount <= 0 ? 0 : totalFlights / dayCount;
-  const activeRow = activeIndex == null ? null : rows[activeIndex] ?? null;
-  const activePosition = activeIndex == null || rows.length <= 1 ? 50 : (activeIndex / (rows.length - 1)) * 100;
-  const activeX = (activePosition / 100) * width;
-  const averageRatio = activeRow?.flights == null || averageFlights === 0 ? null : (activeRow.flights / averageFlights) * 100;
-
-  const selectFromPointer = (event: PointerEvent<HTMLDivElement>) => {
-    if (rows.length === 0) return;
-    const bounds = chartRef.current?.getBoundingClientRect();
-    if (!bounds || bounds.width === 0) return;
-    const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
-    setActiveIndex(Math.round(ratio * (rows.length - 1)));
-  };
-
-  const selectFromKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (rows.length === 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    setActiveIndex((currentIndex) => {
-      if (event.key === 'Home') return 0;
-      if (event.key === 'End') return rows.length - 1;
-      const current = currentIndex ?? rows.length - 1;
-      return Math.min(rows.length - 1, Math.max(0, current + (event.key === 'ArrowLeft' ? -1 : 1)));
-    });
-  };
-
-  return (
-    <div>
-      <div className="overflow-x-auto pb-2">
-        <div
-          ref={chartRef}
-          className="report-focus relative min-w-[720px] cursor-crosshair rounded-lg"
-          role="group"
-          tabIndex={0}
-          aria-label="Biểu đồ sản lượng theo Ops Date. Dùng phím mũi tên trái hoặc phải để xem từng ngày."
-          aria-describedby="timeline-chart-help"
-          onFocus={() => setActiveIndex((currentIndex) => currentIndex ?? Math.max(0, rows.length - 1))}
-          onKeyDown={selectFromKeyboard}
-          onPointerDown={selectFromPointer}
-          onPointerMove={(event) => { if (event.pointerType !== 'touch') selectFromPointer(event); }}
-        >
-          <svg viewBox={`0 0 ${width} ${height}`} className="w-full" aria-hidden="true">
-            {[0.25, 0.5, 0.75, 1].map((ratio) => <line key={ratio} x1="0" y1={height * ratio - 1} x2={width} y2={height * ratio - 1} stroke="#d7e0e8" />)}
-            {series.flatMap((item) => segmentsFor(item.key).map((points, index) => <polyline key={`${item.key}-${index}`} points={points} fill="none" stroke={item.color} strokeWidth={item.width} strokeLinejoin="round" strokeLinecap="round" />))}
-            {activeRow ? <>
-              <line x1={activeX} y1="0" x2={activeX} y2={height} stroke="#081322" strokeWidth="1.5" strokeDasharray="5 5" />
-              {series.map((item) => {
-                const value = activeRow[item.key];
-                if (value == null) return null;
-                const y = height - (value / max) * (height - 30) - 15;
-                return <circle key={item.key} cx={activeX} cy={y} r={item.key === 'flights' ? 6 : 4.5} fill="white" stroke={item.color} strokeWidth="3" />;
-              })}
-            </> : null}
-          </svg>
-          {activeRow ? <div
-            className="pointer-events-none absolute top-3 w-60 rounded-xl border border-slate-200 bg-white p-3 text-left text-xs text-slate-700 shadow-lg"
-            style={{ left: `${Math.min(86, Math.max(14, activePosition))}%`, transform: 'translateX(-50%)' }}
-            role="tooltip"
-          >
-            <p className="font-bold capitalize text-[#102033]">{formatTooltipDate(activeRow.ops_date)}</p>
-            {activeRow.flights == null ? <p className="mt-2 font-semibold text-amber-800">Đã ẩn theo ngưỡng bảo vệ</p> : <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 tabular-nums">
-              <dt>Tổng chuyến</dt><dd className="text-right font-bold">{formatNumber(activeRow.flights)}</dd>
-              <dt>ARR</dt><dd className="text-right">{formatNumber(activeRow.arrivals)}</dd>
-              <dt>DEP</dt><dd className="text-right">{formatNumber(activeRow.departures)}</dd>
-              <dt>Pax báo cáo</dt><dd className="text-right">{formatNumber(activeRow.reported_pax)}</dd>
-              <dt>So với TB ngày</dt><dd className="text-right">{averageRatio == null ? '—' : `${percentFormat.format(averageRatio)}%`}</dd>
-            </dl>}
-          </div> : null}
-        </div>
-      </div>
-      <p id="timeline-chart-help" className="mt-2 text-xs text-slate-500">Di chuột, chạm vào biểu đồ hoặc dùng phím mũi tên để xem chi tiết từng Ops Date.</p>
-      <p className="sr-only" aria-live="polite">{activeRow ? `${formatTooltipDate(activeRow.ops_date)}: ${activeRow.flights == null ? 'đã ẩn theo ngưỡng bảo vệ' : `${formatNumber(activeRow.flights)} chuyến, ARR ${formatNumber(activeRow.arrivals)}, DEP ${formatNumber(activeRow.departures)}`}` : ''}</p>
-      <div className="mt-3 flex flex-wrap gap-4 text-xs font-semibold text-slate-600">{series.map((item) => <span key={item.key} className="inline-flex items-center gap-2"><span className="h-0.5 w-6" style={{ backgroundColor: item.color }} />{item.label}</span>)}</div>
-      <details className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
-        <summary className="report-focus cursor-pointer rounded-sm font-semibold text-[#234093]">Bảng dữ liệu biểu đồ</summary>
-        <div className="mt-4 max-h-80 overflow-auto">
-          <table className="w-full min-w-[560px] border-collapse text-left text-sm">
-            <thead><tr className="border-b border-slate-300"><th className="p-2">Ops Date</th><th className="p-2 text-right">Tổng</th><th className="p-2 text-right">ARR</th><th className="p-2 text-right">DEP</th><th className="p-2">Trạng thái</th></tr></thead>
-            <tbody>{rows.map((row) => <tr key={row.ops_date} className="border-b border-slate-200"><td className="p-2">{formatDate(row.ops_date)}</td><td className="p-2 text-right tabular-nums">{formatNumber(row.flights)}</td><td className="p-2 text-right tabular-nums">{formatNumber(row.arrivals)}</td><td className="p-2 text-right tabular-nums">{formatNumber(row.departures)}</td><td className="p-2">{row.completeness}</td></tr>)}</tbody>
-          </table>
-        </div>
-      </details>
+    <div className={cn('min-w-0', divided && 'border-l border-slate-200 pl-4')}>
+      <dt className="text-pretty text-xs font-semibold leading-5 text-slate-600">{label}</dt>
+      <dd className="mt-1 text-2xl font-bold text-slate-950 tabular-nums sm:text-3xl">{formatNumber(value)}</dd>
+      {delta != null ? <div className="mt-3"><DeltaPill value={delta} label={comparisonLabel} /></div> : null}
     </div>
   );
 }
 
-function BreakdownTable({ title, rows, showShareBars = false }: { title: string; rows: TrafficBreakdownRow[]; showShareBars?: boolean }) {
+function KpiCard({ label, flights, pax, flightDelta, paxDelta, comparisonLabel }: {
+  label: string;
+  flights: number | null;
+  pax: number | null;
+  flightDelta: number | null;
+  paxDelta: number | null;
+  comparisonLabel: string;
+}) {
   return (
-    <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h3 className="text-lg font-bold text-[#102033]">{title}</h3>
-      <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[420px] border-collapse text-sm">
-          <thead><tr className="border-b border-slate-300 text-left text-slate-500"><th className="py-2">Nhóm</th><th className="py-2 text-right">Chuyến</th>{showShareBars ? null : <th className="py-2 text-right">Tỷ trọng</th>}</tr></thead>
-          <tbody>{rows.map((row) => {
-            const sharePercent = row.share == null ? null : Math.min(100, Math.max(0, row.share * 100));
-            return <tr key={row.key} className="border-b border-slate-100">
-              <td className="py-3 pr-4 font-medium">
-                <span>{row.label}</span>
-                {showShareBars ? <div className="mt-2 flex items-center gap-2">
-                  <span className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100" role={sharePercent == null ? undefined : 'progressbar'} aria-label={sharePercent == null ? undefined : `Tỷ trọng ${row.label}`} aria-valuemin={sharePercent == null ? undefined : 0} aria-valuemax={sharePercent == null ? undefined : 100} aria-valuenow={sharePercent == null ? undefined : Number(sharePercent.toFixed(1))}>
-                    <span className="block h-full rounded-full bg-[#00b4d8]" style={{ width: `${sharePercent ?? 0}%` }} />
-                  </span>
-                  <span className="w-12 text-right text-xs font-semibold tabular-nums text-slate-600">{sharePercent == null ? '—' : `${percentFormat.format(sharePercent)}%`}</span>
-                </div> : null}
-              </td>
-              <td className="py-3 text-right tabular-nums">{row.suppressed ? 'Đã ẩn' : formatNumber(row.flights)}</td>
-              {showShareBars ? null : <td className="py-3 text-right tabular-nums">{row.share == null ? '—' : `${percentFormat.format(row.share * 100)}%`}</td>}
-            </tr>;
-          })}</tbody>
-        </table>
-      </div>
+    <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-label={`${label}: ${formatNumber(flights)} chuyến bay, sản lượng khách ${formatNumber(pax)}`}>
+      <h3 className="text-balance text-lg font-bold text-blue-950">{label}</h3>
+      <dl className="mt-4 grid grid-cols-2 gap-4">
+        <KpiMetric label="Sản lượng chuyến bay" value={flights} delta={flightDelta} comparisonLabel={comparisonLabel} />
+        <KpiMetric label="Sản lượng khách" value={pax} delta={paxDelta} comparisonLabel={comparisonLabel} divided />
+      </dl>
     </article>
   );
 }
@@ -209,22 +90,37 @@ function BreakdownTable({ title, rows, showShareBars = false }: { title: string;
 function buildInsights(bundle: TrafficReportBundle): string[] {
   const current = bundle.kpis.current;
   const comparison = bundle.kpis.comparison;
-  const coverage = bundle.kpis.pax_coverage;
   const topAirline = bundle.breakdowns.airline.find((row) => !row.suppressed && row.label !== 'Khác');
-  const insights = [
+  const comparisonAvailable = current.status === 'complete' && comparison.status === 'complete';
+  const delta = comparisonDelta(current.flights, comparison.flights, comparisonAvailable);
+  const arrivalPeak = bundle.breakdowns.peak_hour.reduce<(typeof bundle.breakdowns.peak_hour)[number] | null>((peak, row) => row.arrivals != null && (!peak || row.arrivals > (peak.arrivals ?? -1)) ? row : peak, null);
+  const departurePeak = bundle.breakdowns.peak_hour.reduce<(typeof bundle.breakdowns.peak_hour)[number] | null>((peak, row) => row.departures != null && (!peak || row.departures > (peak.departures ?? -1)) ? row : peak, null);
+  const averagePeakArrivals = getAverageFlightsPerSelectedDay(arrivalPeak?.arrivals ?? null, bundle.metadata.day_count);
+  const averagePeakDepartures = getAverageFlightsPerSelectedDay(departurePeak?.departures ?? null, bundle.metadata.day_count);
+  return [
     bundle.kpis.peak_day.ops_date && bundle.kpis.peak_day.flights != null
       ? `Ngày cao điểm là ${formatDate(bundle.kpis.peak_day.ops_date)} với ${formatNumber(bundle.kpis.peak_day.flights)} chuyến.`
-      : 'Chưa đủ dữ liệu để xác định ngày cao điểm.',
+      : null,
     topAirline?.flights != null
-      ? `${topAirline.label} dẫn đầu theo sản lượng với ${formatNumber(topAirline.flights)} chuyến.`
-      : 'Cơ cấu hãng bay đang được ẩn do ngưỡng bảo vệ dữ liệu nhỏ.',
-    coverage.percent != null
-      ? `Pax coverage đạt ${percentFormat.format(coverage.percent)}% (${formatNumber(coverage.reported_legs)}/${formatNumber(coverage.due_legs)} leg đến hạn).`
-      : 'Pax coverage chưa đủ cohort để công bố.',
-  ];
-  const delta = comparisonDelta(current.flights, comparison.flights);
-  insights.push(delta == null ? 'Kỳ so sánh không khả dụng hoặc chưa đủ dữ liệu.' : `Sản lượng ${delta >= 0 ? 'tăng' : 'giảm'} ${percentFormat.format(Math.abs(delta))}% so với kỳ đối chiếu.`);
-  return insights;
+      ? `${topAirline.label} có sản lượng chuyến bay cao nhất trong kỳ với ${formatNumber(topAirline.flights)} chuyến.`
+      : null,
+    arrivalPeak && departurePeak && averagePeakArrivals != null && averagePeakDepartures != null
+      ? `Giờ cao điểm chuyến bay đến là ${arrivalPeak.hour_bucket}, trung bình ${numberFormat.format(Math.round(averagePeakArrivals))} chuyến/ngày; chuyến bay đi là ${departurePeak.hour_bucket}, trung bình ${numberFormat.format(Math.round(averagePeakDepartures))} chuyến/ngày.`
+      : null,
+    delta == null
+      ? null
+      : `Sản lượng chuyến bay ${delta >= 0 ? 'tăng' : 'giảm'} ${percentFormat.format(Math.abs(delta))}% so với kỳ đối chiếu.`,
+  ].filter((insight): insight is string => insight != null);
+}
+
+function LoadingSkeleton() {
+  return (
+    <div className="space-y-6" role="status">
+      <div className="grid gap-4 lg:grid-cols-3">{Array.from({ length: 3 }, (_, index) => <div key={index} className="h-44 animate-pulse rounded-2xl bg-slate-200" />)}</div>
+      <div className="h-80 animate-pulse rounded-2xl bg-slate-200" />
+      <span className="sr-only">Đang tải báo cáo</span>
+    </div>
+  );
 }
 
 export default function TrafficReportClient() {
@@ -233,110 +129,98 @@ export default function TrafficReportClient() {
   const [bundle, setBundle] = useState<TrafficReportBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const exportControllerRef = useRef<AbortController | null>(null);
   const lastSuccessfulQueryRef = useRef<string | null>(null);
-  const parsed = useMemo(() => {
-    try { return { filter: parseTrafficReportSearchParams(new URLSearchParams(searchParams.toString())), error: null }; }
-    catch (reason) { return { filter: null, error: reason instanceof Error ? reason.message : 'Bộ lọc không hợp lệ.' }; }
-  }, [searchParams]);
 
-  const load = useCallback(async (filter: TrafficReportFilter) => {
+  const parsed = useMemo(() => {
+    try {
+      return { state: parseTrafficReportPageState(new URLSearchParams(searchParams.toString())), error: null };
+    } catch (reason) {
+      return { state: null, error: reason instanceof Error ? reason.message : 'Bộ lọc chưa hợp lệ.' };
+    }
+  }, [searchParams]);
+  const globalQuery = parsed.state ? toTrafficReportSearchParams(parsed.state.filter).toString() : null;
+
+  const requestBundle = useCallback(async (filter: TrafficReportPageState['filter']): Promise<TrafficReportBundle | null> => {
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(buildOverviewUrl(filter), {
-        method: 'GET',
-        credentials: 'omit',
-        headers: { Accept: 'application/json' },
-        signal: controller.signal,
-      });
-      const payload: unknown = await response.json();
+      const response = await fetch(buildOverviewUrl(filter), { method: 'GET', credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+      const payload: unknown = await response.json().catch(() => null);
       if (!response.ok) {
-        const message = payload && typeof payload === 'object' && 'error' in payload ? String((payload as { error: unknown }).error) : `HTTP ${response.status}`;
+        const message = payload && typeof payload === 'object' && 'error' in payload ? String((payload as { error: unknown }).error) : 'Báo cáo tạm thời chưa thể cập nhật.';
         throw new Error(message);
       }
-      if (!isTrafficReportBundle(payload)) throw new Error('Phản hồi báo cáo không đúng contract.');
+      if (!isTrafficReportBundle(payload)) throw new Error('Dữ liệu báo cáo chưa sẵn sàng.');
       setBundle(payload);
-      const currentCanonical = toTrafficReportSearchParams(payload.metadata.normalized_filter).toString();
-      lastSuccessfulQueryRef.current = currentCanonical;
-      if (currentCanonical !== searchParams.toString()) window.history.replaceState(null, '', `${pathname}?${currentCanonical}`);
+      lastSuccessfulQueryRef.current = toTrafficReportSearchParams(payload.metadata.normalized_filter).toString();
+      return payload;
     } catch (reason) {
-      if (controller.signal.aborted) return;
-      setError(reason instanceof Error ? reason.message : 'Không thể tải báo cáo.');
+      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Không thể tải báo cáo.');
+      return null;
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
-  }, [pathname, searchParams]);
+  }, []);
 
   useEffect(() => {
-    const canonical = parsed.filter ? toTrafficReportSearchParams(parsed.filter).toString() : null;
-    if (parsed.filter && lastSuccessfulQueryRef.current !== canonical) void load(parsed.filter);
-    else { setError(parsed.error); setLoading(false); }
-    return () => { controllerRef.current?.abort(); exportControllerRef.current?.abort(); };
-  }, [load, parsed]);
-
-  const loadMoreTimeline = async () => {
-    if (!bundle?.metadata.timeline_next_cursor || loadingMore) return;
-    const query = toTrafficReportSearchParams(bundle.metadata.normalized_filter);
-    query.set('after', bundle.metadata.timeline_next_cursor);
-    query.set('page_size', '366');
-    setLoadingMore(true);
-    try {
-      const response = await fetch(`/api/report/v1/timeline?${query.toString()}`, { credentials: 'omit', headers: { Accept: 'application/json' } });
-      const payload: unknown = await response.json();
-      if (!response.ok || !payload || typeof payload !== 'object') throw new Error(`Không thể tải trang timeline tiếp theo (${response.status}).`);
-      const page = payload as { timeline?: TrafficTimelinePoint[]; metadata?: Pick<TrafficReportBundle['metadata'], 'timeline_has_more' | 'timeline_next_cursor'> };
-      if (!Array.isArray(page.timeline) || !page.metadata) throw new Error('Trang timeline không đúng contract.');
-      setBundle((currentBundle) => {
-        if (!currentBundle) return currentBundle;
-        const rows = new Map(currentBundle.timeline.map((row) => [row.ops_date, row]));
-        for (const row of page.timeline ?? []) rows.set(row.ops_date, row);
-        return { ...currentBundle, timeline: [...rows.values()].sort((left, right) => left.ops_date.localeCompare(right.ops_date)), metadata: { ...currentBundle.metadata, ...page.metadata } };
+    if (!parsed.state) return;
+    if (lastSuccessfulQueryRef.current === globalQuery) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void requestBundle(parsed.state!.filter).then((payload) => {
+        if (!active || !payload) return;
+        const canonical = toTrafficReportPageSearchParams({ ...parsed.state!, filter: payload.metadata.normalized_filter }).toString();
+        if (canonical !== searchParams.toString()) window.history.replaceState(null, '', `${pathname}?${canonical}`);
       });
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Không thể tải trang timeline tiếp theo.');
-    } finally {
-      setLoadingMore(false);
-    }
-  };
+    }, 0);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [globalQuery, parsed.error, parsed.state, pathname, requestBundle, searchParams]);
 
-  const applyFilter = (formData: FormData) => {
-    const split = (key: string) => formData.getAll(key).flatMap((value) => String(value).split(',')).map((item) => item.trim()).filter(Boolean);
-    const next: NormalizedTrafficReportFilter = {
-      from: String(formData.get('from')),
-      to: String(formData.get('to')),
-      type: String(formData.get('type')) as NormalizedTrafficReportFilter['type'],
-      airline: split('airline'),
-      route: split('route'),
-      country: split('country'),
-      comp: String(formData.get('comp')) as NormalizedTrafficReportFilter['comp'],
-      tz: String(formData.get('tz')) as NormalizedTrafficReportFilter['tz'],
-    };
-    window.history.pushState(null, '', `${pathname}?${toTrafficReportSearchParams(next).toString()}`);
+  useEffect(() => () => {
+    controllerRef.current?.abort();
+    exportControllerRef.current?.abort();
+  }, []);
+
+  const pageState = parsed.state;
+  const normalizedFilter = bundle?.metadata.normalized_filter ?? (pageState?.filter.from && pageState.filter.to ? pageState.filter as NormalizedTrafficReportFilter : null);
+
+  const setUrlState = useCallback((next: TrafficReportPageState, mode: 'push' | 'replace' = 'push') => {
+    const url = `${pathname}?${toTrafficReportPageSearchParams(next).toString()}`;
+    if (mode === 'replace') window.history.replaceState(null, '', url);
+    else window.history.pushState(null, '', url);
     window.dispatchEvent(new PopStateEvent('popstate'));
+  }, [pathname]);
+
+  const applyFilter = async (nextFilter: NormalizedTrafficReportFilter): Promise<boolean> => {
+    if (!pageState) return false;
+    const payload = await requestBundle({ ...nextFilter, type: 'all' });
+    if (!payload) return false;
+    setUrlState({ ...pageState, filter: payload.metadata.normalized_filter });
+    return true;
   };
 
   const applyDatePreset = (preset: TrafficDatePreset) => {
-    if (!bundle) return;
-    const presetAnchor = getLatestCompletedOpsDate(bundle.data_as_of, bundle.metadata.max_ops_date);
-    const range = getTrafficReportPresetRange(preset, bundle.metadata.min_ops_date, presetAnchor);
-    const next: NormalizedTrafficReportFilter = { ...bundle.metadata.normalized_filter, ...range };
-    window.history.pushState(null, '', `${pathname}?${toTrafficReportSearchParams(next).toString()}`);
-    window.dispatchEvent(new PopStateEvent('popstate'));
+    if (!bundle || !pageState) return;
+    const latest = bundle.metadata.latest_completed_ops_date ?? getLatestCompletedOpsDate(bundle.data_as_of, bundle.metadata.max_ops_date);
+    const range = getTrafficReportPresetRange(preset, bundle.metadata.min_ops_date, latest);
+    void applyFilter({ ...bundle.metadata.normalized_filter, ...range, type: 'all' });
   };
 
-  const applyTimeBasis = (basis: NormalizedTrafficReportFilter['tz']) => {
-    if (!bundle || bundle.metadata.normalized_filter.tz === basis) return;
-    const next: NormalizedTrafficReportFilter = { ...bundle.metadata.normalized_filter, tz: basis };
-    window.history.pushState(null, '', `${pathname}?${toTrafficReportSearchParams(next).toString()}`);
-    window.dispatchEvent(new PopStateEvent('popstate'));
+  const updateViewState = (patch: Partial<Omit<TrafficReportPageState, 'filter'>>) => {
+    if (!pageState || !normalizedFilter) return;
+    setUrlState({ ...pageState, ...patch, filter: normalizedFilter });
+  };
+
+  const applyTimeBasis = (tz: NormalizedTrafficReportFilter['tz']) => {
+    if (!normalizedFilter || normalizedFilter.tz === tz) return;
+    void applyFilter({ ...normalizedFilter, tz });
   };
 
   const exportExcel = async () => {
@@ -347,24 +231,22 @@ export default function TrafficReportClient() {
     setExportingExcel(true);
     setExportError(null);
     try {
-      const rows = new Map(bundle.timeline.map((row) => [row.ops_date, row]));
-      let cursor = bundle.metadata.timeline_next_cursor;
-      let hasMore = bundle.metadata.timeline_has_more;
-      while (hasMore && cursor) {
-        const query = toTrafficReportSearchParams(bundle.metadata.normalized_filter);
-        query.set('after', cursor);
-        query.set('page_size', '732');
-        const response = await fetch(`/api/report/v1/timeline?${query.toString()}`, { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
-        const payload: unknown = await response.json();
-        if (!response.ok || !payload || typeof payload !== 'object') throw new Error(`Không thể tải đủ timeline cho Excel (${response.status}).`);
-        const page = payload as { timeline?: TrafficTimelinePoint[]; metadata?: Pick<TrafficReportBundle['metadata'], 'timeline_has_more' | 'timeline_next_cursor'> };
-        if (!Array.isArray(page.timeline) || !page.metadata) throw new Error('Trang timeline Excel không đúng contract.');
-        for (const row of page.timeline) rows.set(row.ops_date, row);
-        const nextCursor = page.metadata.timeline_next_cursor;
-        hasMore = page.metadata.timeline_has_more;
-        if (hasMore && (!nextCursor || nextCursor === cursor)) throw new Error('Cursor timeline Excel không tiến về phía trước.');
-        cursor = nextCursor;
+      const rows = new Map<string, TrafficTimelinePoint>();
+      let after: string | null = null;
+      let hasMore = true;
+      let requests = 0;
+      while (hasMore && requests < 50) {
+        const response = await fetch(buildTimelineUrl(bundle.metadata.normalized_filter, 'all', after), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+        const payload = await response.json().catch(() => null) as { error?: unknown; timeline?: TrafficTimelinePoint[]; metadata?: { timeline_has_more?: boolean; timeline_next_cursor?: string | null } } | null;
+        if (!response.ok || !payload || !Array.isArray(payload.timeline) || !payload.metadata) throw new Error(payload?.error ? String(payload.error) : 'Không thể tải đủ dãy ngày cho Excel.');
+        for (const row of payload.timeline) rows.set(row.ops_date, row);
+        hasMore = Boolean(payload.metadata.timeline_has_more);
+        const next = payload.metadata.timeline_next_cursor ?? null;
+        if (hasMore && (!next || next === after)) throw new Error('Không thể hoàn tất dãy ngày cho Excel.');
+        after = next;
+        requests += 1;
       }
+      if (hasMore) throw new Error('Phạm vi quá lớn để xuất trong một lần.');
       await downloadTrafficReportWorkbook(bundle, [...rows.values()].sort((left, right) => left.ops_date.localeCompare(right.ops_date)));
     } catch (reason) {
       if (!controller.signal.aborted) setExportError(reason instanceof Error ? reason.message : 'Không thể tạo file Excel.');
@@ -376,103 +258,158 @@ export default function TrafficReportClient() {
   const current = bundle?.kpis.current;
   const comparison = bundle?.kpis.comparison;
   const comparisonLabel = comparison?.mode === 'year_ago' ? 'cùng kỳ năm trước' : 'kỳ trước liền kề';
+  const comparisonAvailable = current?.status === 'complete' && comparison?.status === 'complete';
   const insights = bundle ? buildInsights(bundle) : [];
-  const filter = bundle?.metadata.normalized_filter ?? parsed.filter;
-  const presetAnchor = bundle ? getLatestCompletedOpsDate(bundle.data_as_of, bundle.metadata.max_ops_date) : null;
-  const activeDatePreset = bundle && presetAnchor && filter?.from && filter.to
-    ? detectTrafficReportDatePreset(filter.from, filter.to, bundle.metadata.min_ops_date, presetAnchor)
+  const fleetRows = useMemo(() => {
+    if (!bundle) return [];
+    const aircraftTypes = bundle.breakdowns.aircraft_type ?? [];
+    return bundle.breakdowns.aircraft_group.map((group) => ({
+      ...group,
+      children: aircraftTypes.filter((aircraftType) => aircraftType.aircraft_group === group.label),
+    }));
+  }, [bundle]);
+  const latestCompletedOpsDate = bundle ? (bundle.metadata.latest_completed_ops_date ?? getLatestCompletedOpsDate(bundle.data_as_of, bundle.metadata.max_ops_date)) : null;
+  const activeDatePreset = bundle && latestCompletedOpsDate && normalizedFilter
+    ? detectTrafficReportDatePreset(normalizedFilter.from, normalizedFilter.to, bundle.metadata.min_ops_date, latestCompletedOpsDate)
     : null;
+  const projection = bundle?.metadata.projection;
+  const reportUpdatedAt = projection?.refreshed_at ?? bundle?.data_as_of ?? null;
+  const projectionNotice = projection?.status === 'stale'
+    ? { title: 'Số liệu đang hiển thị theo lần cập nhật gần nhất.', tone: 'amber' as const }
+    : projection?.status === 'failed'
+      ? { title: 'Báo cáo chưa nhận được bản cập nhật mới. Vui lòng thử lại sau.', tone: 'rose' as const }
+      : projection?.status === 'empty'
+        ? { title: 'Chưa có dữ liệu cho báo cáo trong phạm vi này.', tone: 'rose' as const }
+        : null;
+  const visibleError = parsed.error ?? error;
 
   return (
     <>
-      <section className="relative overflow-hidden bg-[#081322] text-white">
-        <div className="absolute inset-y-0 right-0 w-1/2 bg-[radial-gradient(circle_at_center,#234093_0%,transparent_68%)] opacity-60" />
-        <div className="relative mx-auto grid max-w-7xl gap-10 px-5 py-16 sm:px-8 lg:grid-cols-[1.2fr_0.8fr] lg:py-24">
-          <div>
-            <p className="text-sm font-bold uppercase tracking-[0.2em] text-[#42c1c7]">State of Airport Operations</p>
-            <h1 className="report-headline mt-5 max-w-4xl font-bold">Dòng chảy khai thác, nhìn theo từng Ops Date.</h1>
-            <p className="mt-6 max-w-2xl text-pretty text-lg leading-8 text-slate-300">Một dãy ngày liên tục, không phụ thuộc mùa. Sản lượng phản ánh lịch hiệu lực mới nhất; Pax chỉ cộng số đã báo cáo và luôn đi kèm coverage.</p>
-          </div>
-          <div className="self-end border-l border-white/20 pl-6">
-            <p className="text-sm text-slate-300">Tổng chuyến trong kỳ</p>
-            <p className="report-display mt-3 font-bold text-[#00b4d8] tabular-nums">{formatNumber(current?.flights ?? null)}</p>
-            <p className="mt-4 text-sm text-slate-300">{filter?.from && filter?.to ? `${formatDate(filter.from)} — ${formatDate(filter.to)}` : 'Đang xác định phạm vi dữ liệu'}</p>
-          </div>
-        </div>
-      </section>
-
-      <section className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
-          <p className="text-sm font-bold uppercase tracking-[0.16em] text-[#234093]">Executive summary</p>
-          <div className="mt-5 grid gap-4 md:grid-cols-2">{insights.map((insight, index) => <p key={insight} className="text-pretty border-l-2 border-[#00b4d8] pl-4 leading-7 text-slate-700"><span className="mr-2 font-bold text-[#234093]">0{index + 1}</span>{insight}</p>)}</div>
-        </div>
-      </section>
-
-      <div className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur">
-        <form key={filter ? toTrafficReportSearchParams(filter).toString() : 'initial'} action={applyFilter} className="mx-auto grid max-w-7xl gap-3 px-5 py-4 sm:px-8 md:grid-cols-2 xl:grid-cols-8">
-          <fieldset className="flex min-w-0 flex-wrap items-center gap-2 md:col-span-2 xl:col-span-8">
-            <legend className="mr-1 text-xs font-semibold text-slate-600">Khoảng nhanh</legend>
-            {([
-              ['7d', '7 ngày'],
-              ['30d', '30 ngày'],
-              ['ytd', 'YTD'],
-            ] as const).map(([preset, label]) => <button
-              key={preset}
-              className={activeDatePreset === preset ? 'report-focus min-h-11 rounded-full bg-[#234093] px-4 text-sm font-bold text-white' : 'report-focus min-h-11 rounded-full border border-slate-300 bg-white px-4 text-sm font-bold text-[#234093] hover:border-[#234093]'}
-              type="button"
-              aria-pressed={activeDatePreset === preset}
-              disabled={!bundle || loading}
-              onClick={() => applyDatePreset(preset)}
-            >{label}</button>)}
-            <span className="inline-flex min-h-11 items-center px-2 text-xs font-semibold text-slate-500" aria-live="polite">{activeDatePreset ? `Đang chọn ${activeDatePreset === 'ytd' ? 'YTD' : activeDatePreset === '7d' ? '7 ngày' : '30 ngày'}` : 'Tùy chọn'}</span>
-          </fieldset>
-          <label className="min-w-0 text-xs font-semibold text-slate-600">Từ ngày<input className="report-focus mt-1 min-h-11 min-w-0 w-full max-w-full rounded-lg border border-slate-300 px-3 text-sm" type="date" name="from" min={bundle?.metadata.min_ops_date} max={bundle?.metadata.max_ops_date} defaultValue={filter?.from ?? ''} required /></label>
-          <label className="min-w-0 text-xs font-semibold text-slate-600">Đến ngày<input className="report-focus mt-1 min-h-11 min-w-0 w-full max-w-full rounded-lg border border-slate-300 px-3 text-sm" type="date" name="to" min={bundle?.metadata.min_ops_date} max={bundle?.metadata.max_ops_date} defaultValue={filter?.to ?? ''} required /></label>
-          <label className="min-w-0 text-xs font-semibold text-slate-600">Loại chuyến<select className="report-focus mt-1 min-h-11 min-w-0 w-full max-w-full rounded-lg border border-slate-300 px-3 text-sm" name="type" defaultValue={filter?.type ?? 'all'}><option value="all">ARR + DEP</option><option value="A">ARR</option><option value="D">DEP</option></select></label>
-          <label className="min-w-0 text-xs font-semibold text-slate-600">So sánh<select className="report-focus mt-1 min-h-11 min-w-0 w-full max-w-full rounded-lg border border-slate-300 px-3 text-sm" name="comp" defaultValue={filter?.comp ?? 'previous'}><option value="previous">Kỳ trước</option><option value="year_ago">Cùng kỳ năm trước</option><option value="none">Không so sánh</option></select></label>
-          <TrafficReportMultiSelect name="airline" label="Hãng bay" options={bundle?.metadata.filter_options?.airline ?? []} selected={filter?.airline ?? []} placeholder="Tất cả hãng" />
-          <TrafficReportMultiSelect name="route" label="Đường bay" options={bundle?.metadata.filter_options?.route ?? []} selected={filter?.route ?? []} placeholder="Tất cả tuyến" />
-          <label className="min-w-0 text-xs font-semibold text-slate-600">Quốc gia<input className="report-focus mt-1 min-h-11 min-w-0 w-full max-w-full rounded-lg border border-slate-300 px-3 text-sm" name="country" placeholder="Vietnam,Unknown" defaultValue={filter?.country.join(',')} /><input type="hidden" name="tz" value={filter?.tz ?? 'local'} /></label>
-          <button className="report-focus min-h-11 self-end rounded-lg bg-[#234093] px-5 text-sm font-bold text-white hover:bg-[#172f77]" type="submit">Áp dụng</button>
-        </form>
-      </div>
-
-      <div className="mx-auto max-w-7xl space-y-10 px-5 py-10 sm:px-8">
-        {loading ? <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-4 text-cyan-900" role="status">Đang cập nhật số liệu…</div> : null}
-        {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-rose-900" role="alert"><p className="font-semibold">Không thể tải báo cáo</p><p className="mt-1 text-sm">{error}</p>{parsed.filter ? <button className="report-focus mt-3 min-h-11 rounded-lg bg-rose-800 px-4 text-sm font-bold text-white" onClick={() => void load(parsed.filter!)} type="button">Thử lại</button> : null}</div> : null}
-
-        {bundle ? <>
-          <section aria-labelledby="kpi-title">
-            <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm font-bold uppercase tracking-[0.16em] text-[#234093]">Operating pulse</p><h2 id="kpi-title" className="mt-2 text-3xl font-bold tracking-tight text-[#102033]">Tóm tắt vận hành</h2></div><div className="text-right text-xs text-slate-500"><p>Cập nhật: {new Date(bundle.data_as_of).toLocaleString('vi-VN')}</p><p>Mã truy vấn: {bundle.request_hash.slice(0, 12)}</p></div></div>
-            <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-              <KpiCard label="Tổng chuyến" value={current?.flights ?? null} delta={comparisonDelta(current?.flights ?? null, comparison?.flights ?? null)} comparisonLabel={comparisonLabel} />
-              <KpiCard label="ARR" value={current?.arrivals ?? null} delta={comparisonDelta(current?.arrivals ?? null, comparison?.arrivals ?? null)} comparisonLabel={comparisonLabel} />
-              <KpiCard label="DEP" value={current?.departures ?? null} delta={comparisonDelta(current?.departures ?? null, comparison?.departures ?? null)} comparisonLabel={comparisonLabel} />
-              <KpiCard label="Pax đã báo cáo" value={current?.reported_pax ?? null} delta={comparisonDelta(current?.reported_pax ?? null, comparison?.reported_pax ?? null)} comparisonLabel={comparisonLabel} note="Không suy diễn Pax = 0 là đã báo cáo." />
-              <KpiCard label="Pax coverage" value={bundle.kpis.pax_coverage.percent} suffix="%" delta={null} comparisonLabel="leg đến hạn T+1" note={`${formatNumber(bundle.kpis.pax_coverage.reported_legs)}/${formatNumber(bundle.kpis.pax_coverage.due_legs)} leg`} />
+      <section className="bg-slate-950 text-white">
+        <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8 sm:py-10">
+          <p className="text-sm font-semibold text-cyan-300">Báo cáo vận hành công khai</p>
+          <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <h1 className="text-balance text-3xl font-bold sm:text-4xl">Báo cáo sản lượng khai thác</h1>
+              <p className="mt-3 max-w-3xl text-pretty text-sm leading-6 text-slate-300">Dữ liệu theo dãy ngày khai thác liên tục, không phụ thuộc mùa. Sản lượng khách chỉ tính số khách đã báo cáo.</p>
             </div>
+            {normalizedFilter ? <p className="text-sm font-semibold text-slate-200">{formatDate(normalizedFilter.from)}–{formatDate(normalizedFilter.to)}</p> : null}
+          </div>
+        </div>
+      </section>
+
+      {bundle && normalizedFilter && latestCompletedOpsDate ? <TrafficReportFilters
+        filter={normalizedFilter}
+        minOpsDate={bundle.metadata.min_ops_date}
+        maxOpsDate={bundle.metadata.max_ops_date}
+        latestCompletedOpsDate={latestCompletedOpsDate}
+        filterOptions={{
+          airline: bundle.metadata.filter_options.airline,
+          route: bundle.metadata.filter_options.route,
+          country: bundle.metadata.filter_options.country ?? [],
+        }}
+        activePreset={activeDatePreset}
+        loading={loading}
+        onApply={applyFilter}
+        onPreset={applyDatePreset}
+      /> : null}
+
+      <div className="mx-auto max-w-7xl space-y-12 px-5 py-8 sm:px-8 sm:py-10">
+        {loading && !bundle && parsed.state ? <LoadingSkeleton /> : null}
+        {loading && bundle ? <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-4 text-cyan-950" role="status">Đang cập nhật số liệu theo bộ lọc mới…</div> : null}
+        {visibleError ? <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-rose-950" role="alert"><p className="font-semibold">Không thể cập nhật báo cáo</p><p className="mt-1 text-sm">{visibleError}</p>{pageState ? <button className="report-focus mt-3 min-h-11 rounded-lg bg-rose-800 px-4 text-sm font-bold text-white" type="button" onClick={() => void requestBundle(pageState.filter)}>Thử lại</button> : null}</div> : null}
+
+        {bundle && normalizedFilter && pageState ? <>
+          {projectionNotice ? <aside className={cn('rounded-xl border px-4 py-3 text-sm', projectionNotice.tone === 'rose' ? 'border-rose-300 bg-rose-50 text-rose-950' : 'border-amber-300 bg-amber-50 text-amber-950')} aria-label="Lưu ý cập nhật báo cáo" role="status"><p className="text-pretty font-semibold">{projectionNotice.title}</p></aside> : null}
+
+          <section aria-labelledby="overview-title">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <div><p className="text-sm font-bold text-blue-900">Sản lượng Tổng quan</p><h2 id="overview-title" className="mt-1 text-balance text-3xl font-bold text-slate-950">Các chỉ số nổi bật</h2></div>
+              <div className="text-right text-xs text-slate-600">
+                <p>{reportUpdatedAt ? `Cập nhật ${new Date(reportUpdatedAt).toLocaleString('vi-VN')}` : 'Chưa có thời điểm cập nhật'}</p>
+              </div>
+            </div>
+            <div className="mt-6 grid gap-4 lg:grid-cols-3">
+              <KpiCard
+                label="Tổng"
+                flights={current?.flights ?? null}
+                pax={current?.reported_pax ?? null}
+                flightDelta={comparisonDelta(current?.flights ?? null, comparison?.flights ?? null, comparisonAvailable)}
+                paxDelta={comparisonDelta(current?.reported_pax ?? null, comparison?.reported_pax ?? null, comparisonAvailable)}
+                comparisonLabel={comparisonLabel}
+              />
+              <KpiCard
+                label="Chuyến bay đến"
+                flights={current?.arrivals ?? null}
+                pax={current?.arrival_reported_pax ?? null}
+                flightDelta={comparisonDelta(current?.arrivals ?? null, comparison?.arrivals ?? null, comparisonAvailable)}
+                paxDelta={comparisonDelta(current?.arrival_reported_pax ?? null, comparison?.arrival_reported_pax ?? null, comparisonAvailable)}
+                comparisonLabel={comparisonLabel}
+              />
+              <KpiCard
+                label="Chuyến bay đi"
+                flights={current?.departures ?? null}
+                pax={current?.departure_reported_pax ?? null}
+                flightDelta={comparisonDelta(current?.departures ?? null, comparison?.departures ?? null, comparisonAvailable)}
+                paxDelta={comparisonDelta(current?.departure_reported_pax ?? null, comparison?.departure_reported_pax ?? null, comparisonAvailable)}
+                comparisonLabel={comparisonLabel}
+              />
+            </div>
+            <p className="mt-3 text-pretty text-xs leading-5 text-slate-600">Sản lượng khách chỉ tính số khách đã báo cáo; dấu — nghĩa là chưa có số liệu.</p>
+            {!comparisonAvailable && comparison?.mode !== 'none' ? <p className="mt-4 text-sm text-slate-600">Chưa đủ dữ liệu để đối chiếu với {comparisonLabel}.</p> : null}
+            <div className="mt-5 grid gap-3 md:grid-cols-2">{insights.map((insight, index) => <p key={insight} className="rounded-xl border-l-4 border-cyan-600 bg-white p-4 text-pretty text-sm leading-6 text-slate-700 shadow-sm"><span className="mr-2 font-bold text-blue-900">{index + 1}.</span>{insight}</p>)}</div>
           </section>
 
-          <section aria-labelledby="trend-title" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
-            <p className="text-sm font-bold uppercase tracking-[0.16em] text-[#234093]">Continuous trend</p><h2 id="trend-title" className="mt-2 text-2xl font-bold text-[#102033]">Sản lượng theo Ops Date</h2><p className="mt-2 text-sm text-slate-600">{bundle.metadata.day_count} ngày liên tục · ngày không có chuyến hiển thị 0, ngày chưa đủ dữ liệu có trạng thái riêng.</p>
-            <div className="mt-6"><TimelineChart rows={bundle.timeline} totalFlights={bundle.kpis.current.flights} dayCount={bundle.metadata.day_count} /></div>
-            {bundle.metadata.timeline_has_more ? <div className="mt-5 flex justify-center"><button className="report-focus min-h-11 rounded-lg border border-[#234093] px-5 text-sm font-bold text-[#234093] disabled:opacity-60" type="button" disabled={loadingMore} onClick={() => void loadMoreTimeline()}>{loadingMore ? 'Đang tải…' : 'Tải dãy ngày tiếp theo'}</button></div> : null}
-          </section>
+          <TrafficReportTrend filter={normalizedFilter} scope={pageState.trendType} onScopeChange={(trendType) => updateViewState({ trendType })} />
 
-          <section aria-labelledby="advanced-analytics-title">
-            <p className="text-sm font-bold uppercase text-[#234093]">Core analytics</p>
-            <h2 id="advanced-analytics-title" className="mt-2 text-balance text-3xl font-bold text-[#102033]">Nhịp vận hành theo giờ và theo Thứ</h2>
-            <div className="mt-6 grid gap-5 xl:grid-cols-2">
-              <PeakHourChart rows={bundle.breakdowns.peak_hour} dayCount={bundle.metadata.day_count} timeBasis={bundle.metadata.normalized_filter.tz} onTimeBasisChange={applyTimeBasis} />
+          <TrafficReportDimensionSection
+            key={`market-${globalQuery}-${pageState.marketDimension}-${pageState.marketType}`}
+            kind="market"
+            filter={normalizedFilter}
+            scope={pageState.marketType}
+            marketDimension={pageState.marketDimension}
+            onScopeChange={(marketType) => updateViewState({ marketType })}
+            onMarketDimensionChange={(marketDimension) => updateViewState({ marketDimension })}
+          />
+
+          <TrafficReportDimensionSection
+            key={`airline-${globalQuery}-${pageState.airlineType}`}
+            kind="airline"
+            filter={normalizedFilter}
+            scope={pageState.airlineType}
+            onScopeChange={(airlineType) => updateViewState({ airlineType })}
+          />
+
+          <section aria-labelledby="operations-title">
+            <div><p className="text-sm font-bold text-blue-900">Thông tin khai thác</p><h2 id="operations-title" className="mt-1 text-balance text-3xl font-bold text-slate-950">Giờ và cơ cấu khai thác</h2><p className="mt-2 text-pretty text-sm leading-6 text-slate-600">Xem giờ cao điểm của chuyến bay đến, chuyến bay đi và cơ cấu tàu bay trong phạm vi đã chọn.</p></div>
+            <div className="mt-6">
+              <PeakHourChart
+                rows={bundle.breakdowns.peak_hour}
+                monthlyRows={bundle.breakdowns.peak_hour_monthly ?? []}
+                timeBasis={bundle.metadata.normalized_filter.tz}
+                selectedDayCount={bundle.metadata.day_count}
+                fromDate={bundle.metadata.normalized_filter.from}
+                toDate={bundle.metadata.normalized_filter.to}
+                onTimeBasisChange={applyTimeBasis}
+              />
+            </div>
+            <div className="mt-5 grid gap-5 xl:grid-cols-2">
               <DayOfWeekChart rows={bundle.breakdowns.day_of_week ?? []} />
+              <FleetMixChart rows={fleetRows} />
             </div>
           </section>
 
-          <section aria-labelledby="breakdown-title"><p className="text-sm font-bold uppercase tracking-[0.16em] text-[#234093]">Traffic composition</p><h2 id="breakdown-title" className="mt-2 text-3xl font-bold tracking-tight">Cơ cấu sản lượng</h2><div className="mt-6 grid gap-5 lg:grid-cols-2"><BreakdownTable title="Hãng bay" rows={bundle.breakdowns.airline} showShareBars /><BreakdownTable title="Đường bay" rows={bundle.breakdowns.route} showShareBars /><BreakdownTable title="Quốc gia" rows={bundle.breakdowns.country} /><FleetMixChart rows={bundle.breakdowns.aircraft_group} /></div></section>
-
-          <section className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-            <article className="rounded-2xl bg-[#081322] p-6 text-white"><p className="text-sm font-bold uppercase tracking-[0.16em] text-[#42c1c7]">Data quality</p><h2 className="mt-2 text-2xl font-bold">Chất lượng & độ phủ</h2><dl className="mt-6 grid gap-4 sm:grid-cols-3"><div><dt className="text-sm text-slate-300">Country Unknown</dt><dd className="mt-1 text-2xl font-bold tabular-nums">{formatNumber(bundle.quality.unknown_country_legs)}</dd></div><div><dt className="text-sm text-slate-300">Pax đến hạn còn thiếu</dt><dd className="mt-1 text-2xl font-bold tabular-nums">{formatNumber(bundle.quality.pax_due_missing_legs)}</dd></div><div><dt className="text-sm text-slate-300">Duplicate quarantine</dt><dd className="mt-1 text-2xl font-bold tabular-nums">{formatNumber(bundle.quality.quarantined_duplicate_candidates)}</dd></div></dl><ul className="mt-6 space-y-2 text-sm leading-6 text-slate-300">{bundle.quality.notes.map((note) => <li key={note}>• {note}</li>)}</ul></article>
-            <article className="rounded-2xl border border-slate-200 bg-white p-6"><p className="text-sm font-bold uppercase tracking-[0.16em] text-[#234093]">Methodology</p><h2 className="mt-2 text-2xl font-bold">Cách đọc báo cáo</h2><p className="mt-4 text-pretty text-sm leading-7 text-slate-600">Aggregate dưới 3 leg được ẩn hoặc gộp vào “Khác”. Pax coverage dùng các leg đã đến hạn T+1; cargo/ferry vẫn nằm trong mẫu số cho đến khi có cờ miễn trừ chuẩn.</p><div className="mt-5 flex flex-wrap gap-3"><button className="report-focus min-h-11 rounded-lg bg-[#234093] px-4 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={exportingExcel} onClick={() => void exportExcel()}>{exportingExcel ? 'Đang tạo Excel…' : 'Tải Excel aggregate'}</button><a className="report-focus inline-flex min-h-11 items-center rounded-lg border border-[#234093] px-4 text-sm font-bold text-[#234093]" href={`${'/api/report/v1/export'}?${toTrafficReportSearchParams(bundle.metadata.normalized_filter).toString()}`}>Tải CSV aggregate</a></div>{exportError ? <p className="mt-3 text-sm font-semibold text-rose-800" role="alert">{exportError}</p> : null}<p className="mt-3 text-xs leading-5 text-slate-500">Excel chỉ chứa KPI, timeline và breakdown aggregate đã áp dụng suppression; không có flight-leg hoặc dữ liệu thô.</p></article>
+          <section>
+            <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="text-balance text-2xl font-bold text-slate-950">Tải dữ liệu và cách đọc</h2>
+              <p className="mt-3 text-pretty text-sm leading-6 text-slate-600">File tải xuống chỉ chứa dữ liệu tổng hợp theo bộ lọc đang áp dụng, không chứa thông tin từng chuyến bay.</p>
+              <div className="mt-5 flex flex-wrap gap-3">
+                <button className="report-focus min-h-11 rounded-lg bg-blue-900 px-4 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={exportingExcel} onClick={() => void exportExcel()}>{exportingExcel ? 'Đang tạo Excel…' : 'Tải Excel toàn báo cáo'}</button>
+                <a className="report-focus inline-flex min-h-11 items-center rounded-lg border border-blue-900 px-4 text-sm font-bold text-blue-900 hover:bg-blue-50" href={`/api/report/v1/export?${toTrafficReportSearchParams(bundle.metadata.normalized_filter).toString()}`}>Tải CSV tổng hợp</a>
+              </div>
+              {exportError ? <p className="mt-3 text-sm font-semibold text-rose-800" role="alert">{exportError}</p> : null}
+              <details className="mt-5 rounded-xl bg-slate-50 p-4"><summary className="report-focus cursor-pointer rounded-sm font-semibold text-blue-900">Ghi chú dữ liệu</summary><ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600"><li>• Sản lượng khách chỉ tính số khách đã báo cáo; dấu — nghĩa là chưa có số liệu.</li><li>• Quốc gia chưa xác định được hiển thị là Unknown.</li><li>• File tải xuống sử dụng cùng phạm vi và bộ lọc với trang báo cáo.</li></ul></details>
+            </article>
           </section>
         </> : null}
       </div>

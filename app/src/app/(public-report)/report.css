@@ -20,23 +20,291 @@
   font-family: Arial, "Helvetica Neue", sans-serif;
 }
 
-.report-display {
-  font-size: clamp(2.75rem, 7vw, 4.375rem);
-  line-height: 0.95;
-  letter-spacing: -0.055em;
-}
-
-.report-headline {
-  font-size: clamp(2.25rem, 6vw, 3.75rem);
-  line-height: 0.98;
-  letter-spacing: -0.045em;
-  text-wrap: balance;
-  overflow-wrap: anywhere;
-}
-
 .report-focus:focus-visible {
   outline: 3px solid var(--report-cyan);
   outline-offset: 3px;
+}
+
+.report-filter-dialog[open] {
+  position: fixed;
+  inset: auto 0 0;
+  display: block;
+}
+
+.report-filter-dialog::backdrop {
+  background: rgb(8 19 34 / 58%);
+}
+
+body:has(.report-filter-dialog[open]) {
+  overflow: hidden;
+}
+
+.kpi-admin-dialog::backdrop {
+  background: rgb(2 6 23 / 78%);
+}
+
+.kpi-admin-dialog {
+  width: min(92vw, 34rem);
+}
+
+.kpi-monthly-chart {
+  min-width: 680px;
+  height: 250px;
+}
+
+body:has(.kpi-admin-dialog[open]) {
+  overflow: hidden;
+}
+
+.kpi-dashboard {
+  min-width: 320px;
+  background:
+    radial-gradient(circle at 72% -10%, rgb(14 165 233 / 12%), transparent 32rem),
+    linear-gradient(145deg, #071424 0%, #06101f 54%, #07101d 100%);
+  color: #eaf5ff;
+  color-scheme: dark;
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+}
+
+.kpi-dashboard .dashboard-shell {
+  display: grid;
+  width: min(100%, 1920px);
+  min-height: 100dvh;
+  margin-inline: auto;
+  padding-inline: clamp(1rem, 2.2vw, 2.75rem);
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  gap: clamp(0.65rem, 1.25vh, 1rem);
+}
+
+.kpi-dashboard .hero-grid,
+.kpi-dashboard .bottom-grid,
+.kpi-dashboard .metrics-grid {
+  display: grid;
+  gap: clamp(0.65rem, 1vw, 1rem);
+}
+
+.kpi-dashboard .hero-grid {
+  grid-template-columns: minmax(0, 1.75fr) minmax(280px, 0.75fr);
+}
+
+.kpi-dashboard .metrics-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.kpi-dashboard .bottom-grid {
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.kpi-dashboard .hero-panel,
+.kpi-dashboard .status-panel,
+.kpi-dashboard .chart-panel,
+.kpi-dashboard .metric-card {
+  border: 1px solid rgb(148 163 184 / 12%);
+  background: linear-gradient(145deg, rgb(14 30 51 / 94%), rgb(8 22 39 / 92%));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 2.5%), 0 18px 48px rgb(0 0 0 / 12%);
+}
+
+.kpi-dashboard .hero-panel,
+.kpi-dashboard .status-panel,
+.kpi-dashboard .chart-panel {
+  border-radius: clamp(1rem, 1.5vw, 1.4rem);
+  padding: clamp(1rem, 1.7vw, 1.75rem);
+}
+
+.kpi-dashboard .hero-panel {
+  min-height: clamp(250px, 31vh, 330px);
+}
+
+.kpi-dashboard .status-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.kpi-dashboard .metric-card {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.8rem;
+  border-radius: 1rem;
+  padding: clamp(0.85rem, 1vw, 1.1rem);
+}
+
+.kpi-dashboard .chart-panel {
+  min-height: 0;
+}
+
+.kpi-dashboard .metric-label {
+  color: #8da1b9;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.kpi-dashboard .soft-stat {
+  border: 1px solid rgb(148 163 184 / 10%);
+  border-radius: 0.9rem;
+  background: rgb(2 10 22 / 32%);
+  padding: 0.85rem;
+}
+
+.kpi-dashboard .completion-ring {
+  --progress: 0deg;
+  position: relative;
+  display: grid;
+  width: clamp(9rem, 11vw, 11.75rem);
+  aspect-ratio: 1;
+  flex: none;
+  place-items: center;
+  border-radius: 999px;
+  background: conic-gradient(#43d9ff var(--progress), rgb(148 163 184 / 13%) 0);
+  box-shadow: 0 0 36px rgb(67 217 255 / 9%);
+}
+
+.kpi-dashboard .completion-ring-missing {
+  background: conic-gradient(rgb(148 163 184 / 13%) 360deg, rgb(148 163 184 / 13%) 0);
+  box-shadow: none;
+}
+
+.kpi-dashboard .completion-ring::before {
+  position: absolute;
+  width: calc(clamp(9rem, 11vw, 11.75rem) - 0.95rem);
+  aspect-ratio: 1;
+  border: 1px solid rgb(148 163 184 / 10%);
+  border-radius: 999px;
+  background: #0a1728;
+  content: "";
+}
+
+.kpi-dashboard .completion-ring > div {
+  position: relative;
+  display: grid;
+  text-align: center;
+}
+
+.kpi-dashboard .completion-ring span {
+  color: white;
+  font-size: clamp(1.9rem, 2.7vw, 2.8rem);
+  font-weight: 750;
+  letter-spacing: -0.05em;
+  line-height: 1;
+}
+
+.kpi-dashboard .completion-ring small {
+  margin-top: 0.3rem;
+  color: #8da1b9;
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.kpi-dashboard .kpi-progress-track {
+  position: relative;
+  height: 0.625rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #1e293b;
+}
+
+.kpi-dashboard .kpi-progress-value,
+.kpi-dashboard .kpi-progress-missing {
+  position: absolute;
+  inset: 0;
+  transform-origin: left;
+}
+
+.kpi-dashboard .kpi-progress-value {
+  background: linear-gradient(90deg, #06b6d4, #7dd3fc);
+}
+
+.kpi-dashboard .kpi-progress-missing {
+  background: repeating-linear-gradient(135deg, transparent 0 8px, rgb(148 163 184 / 10%) 8px 16px);
+}
+
+.kpi-dashboard .kpi-admin-year-control select {
+  display: block;
+  width: 100%;
+  min-height: 3rem;
+  margin-top: 0.5rem;
+  border: 1px solid rgb(148 163 184 / 18%);
+  border-radius: 0.75rem;
+  background: #0b1729;
+  padding: 0.45rem 2.5rem 0.45rem 1rem;
+  color: #eaf5ff;
+  font-size: 1rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.kpi-dashboard .kpi-admin-year-control select:focus-visible {
+  outline: 2px solid #43d9ff;
+  outline-offset: 2px;
+}
+
+.kpi-dashboard .kpi-trend-chart {
+  width: 100%;
+  height: clamp(190px, 28vh, 290px);
+}
+
+.kpi-dashboard .recharts-default-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.kpi-dashboard .recharts-legend-item {
+  margin-right: 0 !important;
+}
+
+@media (min-width: 768px) {
+  .report-filter-dialog[open] {
+    inset: 0;
+    margin: auto;
+  }
+}
+
+@media (max-width: 1023px) {
+  .kpi-dashboard .dashboard-shell {
+    padding-bottom: 1rem;
+  }
+
+  .kpi-dashboard .hero-grid,
+  .kpi-dashboard .bottom-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .kpi-dashboard .metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 639px) {
+  .kpi-dashboard .dashboard-shell {
+    gap: 0.75rem;
+    padding-inline: 0.75rem;
+  }
+
+  .kpi-dashboard .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .kpi-dashboard .hero-panel,
+  .kpi-dashboard .status-panel,
+  .kpi-dashboard .chart-panel {
+    border-radius: 1rem;
+    padding: 1rem;
+  }
+
+  .kpi-dashboard .hero-panel {
+    min-height: 340px;
+  }
+
 }
 
 @media (prefers-reduced-motion: reduce) {

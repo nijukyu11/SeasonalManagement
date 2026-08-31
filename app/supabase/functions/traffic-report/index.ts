@@ -1,10 +1,16 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 
 const CONTRACT_VERSION = 'traffic-report-v1';
-const ALLOWED_QUERY_KEYS = new Set(['from', 'to', 'type', 'airline', 'route', 'country', 'aircraft_group', 'comp', 'tz', 'after', 'page_size']);
+const ALLOWED_QUERY_KEYS = new Set(['from', 'to', 'type', 'airline', 'route', 'country', 'aircraft_group', 'comp', 'tz', 'after', 'dimension', 'sort', 'page', 'page_size']);
 const LIST_KEYS = new Set(['airline', 'route', 'country', 'aircraft_group']);
 const SCALAR_KEYS = [...ALLOWED_QUERY_KEYS].filter((key) => !LIST_KEYS.has(key));
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const KPI_YEAR = /^\d{4}$/;
+const KPI_ADMIN_COOKIE = 'annual_kpi_admin';
+const KPI_ADMIN_SESSION_SECONDS = 10 * 60;
+const KPI_ADMIN_FAILURE_WINDOW_MS = 15 * 60 * 1000;
+const KPI_ADMIN_MAX_FAILURES = 5;
+const KPI_ADMIN_FAILURES = new Map<string, number[]>();
 
 type NormalizedRequest = {
   from: string | null;
@@ -18,6 +24,9 @@ type NormalizedRequest = {
   timeBasis: 'local' | 'utc';
   after: string | null;
   pageSize: number;
+  dimension: 'route' | 'country' | 'airline' | null;
+  sort: 'flights' | 'reported_pax' | 'flight_share' | 'pax_share' | 'label';
+  page: number;
   canonicalQuery: string;
 };
 
@@ -60,9 +69,22 @@ function normalizeRequest(url: URL, endpoint: string): NormalizedRequest {
   if (!['local', 'utc'].includes(timeBasis)) throw new Error('invalid tz');
   const after = url.searchParams.get('after');
   if (after && !ISO_DATE.test(after)) throw new Error('after must use YYYY-MM-DD');
+  const dimensionEndpoint = endpoint === 'dimension' || endpoint === 'dimension-export';
+  const rawDimension = url.searchParams.get('dimension');
+  const dimension = rawDimension && ['route', 'country', 'airline'].includes(rawDimension) ? rawDimension as NormalizedRequest['dimension'] : null;
+  if (dimensionEndpoint && !dimension) throw new Error('dimension is required');
+  if (!dimensionEndpoint && rawDimension) throw new Error('dimension is not supported for this endpoint');
+  const rawSort = url.searchParams.get('sort') ?? 'flights';
+  if (!['flights', 'reported_pax', 'flight_share', 'pax_share', 'label'].includes(rawSort)) throw new Error('invalid sort');
+  if (!dimensionEndpoint && url.searchParams.has('sort')) throw new Error('sort is not supported for this endpoint');
+  const rawPage = url.searchParams.get('page');
+  const page = rawPage ? Number(rawPage) : 1;
+  if (!Number.isInteger(page) || page < 1) throw new Error('page must be a positive integer');
+  if (!dimensionEndpoint && rawPage) throw new Error('page is not supported for this endpoint');
   const rawPageSize = url.searchParams.get('page_size');
-  const pageSize = rawPageSize ? Number(rawPageSize) : 366;
+  const pageSize = rawPageSize ? Number(rawPageSize) : dimensionEndpoint ? (endpoint === 'dimension-export' ? 732 : 50) : 366;
   if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 732) throw new Error('page_size must be between 1 and 732');
+  if (dimensionEndpoint && after) throw new Error('after is not supported for dimension endpoints');
 
   const airlines = canonicalList(url.searchParams.getAll('airline'), true);
   const routes = canonicalList(url.searchParams.getAll('route'), true);
@@ -80,6 +102,9 @@ function normalizeRequest(url: URL, endpoint: string): NormalizedRequest {
   if (comp !== 'previous') canonical.set('comp', comp);
   if (timeBasis !== 'local') canonical.set('tz', timeBasis);
   if (after) canonical.set('after', after);
+  if (dimension) canonical.set('dimension', dimension);
+  if (dimensionEndpoint && rawSort !== 'flights') canonical.set('sort', rawSort);
+  if (dimensionEndpoint && page !== 1) canonical.set('page', String(page));
   if (rawPageSize) canonical.set('page_size', String(pageSize));
 
   return {
@@ -94,15 +119,20 @@ function normalizeRequest(url: URL, endpoint: string): NormalizedRequest {
     timeBasis: timeBasis as 'local' | 'utc',
     after,
     pageSize,
+    dimension,
+    sort: rawSort as NormalizedRequest['sort'],
+    page,
     canonicalQuery: canonical.toString(),
   };
 }
 
 async function postgrestRpc(functionName: string, args: Record<string, unknown>): Promise<unknown> {
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const configuredRestUrl = Deno.env.get('SUPABASE_REST_URL');
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!supabaseUrl || !serviceKey) throw new Error('report origin is not configured');
-  const response = await fetch(`${supabaseUrl}/rest/v1/rpc/${functionName}`, {
+  const restUrl = (configuredRestUrl ?? `${supabaseUrl}/rest/v1`).replace(/\/$/u, '');
+  const response = await fetch(`${restUrl}/rpc/${functionName}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -119,6 +149,193 @@ async function postgrestRpc(functionName: string, args: Record<string, unknown>)
     throw new Error(message);
   }
   return payload;
+}
+
+function annualKpiYear(url: URL): number {
+  for (const key of url.searchParams.keys()) {
+    if (key !== 'year') throw new Error(`unsupported query parameter: ${key}`);
+  }
+  if (url.searchParams.getAll('year').length !== 1) throw new Error('year is required');
+  const rawYear = url.searchParams.get('year') ?? '';
+  if (!KPI_YEAR.test(rawYear)) throw new Error('year must use YYYY');
+  const year = Number(rawYear);
+  if (!Number.isInteger(year) || year < 2000 || year > 2200) throw new Error('year must be between 2000 and 2200');
+  return year;
+}
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+}
+
+function decodeBase64(value: string): Uint8Array {
+  const normalized = value.replaceAll('-', '+').replaceAll('_', '/');
+  const padding = '='.repeat((4 - normalized.length % 4) % 4);
+  const binary = atob(`${normalized}${padding}`);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function constantTimeEqual(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) difference |= left[index] ^ right[index];
+  return difference === 0;
+}
+
+async function sha256Etag(value: unknown): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value)));
+  return `"${base64Url(new Uint8Array(digest))}"`;
+}
+
+async function verifyConfiguredPin(pin: string): Promise<boolean> {
+  const encoded = Deno.env.get('ANNUAL_KPI_ADMIN_PIN_HASH') ?? '';
+  const [scheme, rawIterations, rawSalt, rawHash] = encoded.split('$');
+  const iterations = Number(rawIterations);
+  if (scheme !== 'pbkdf2_sha256' || !Number.isInteger(iterations) || iterations < 210_000 || !rawSalt || !rawHash) {
+    throw new Error('annual KPI admin PIN is not configured');
+  }
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  const expected = decodeBase64(rawHash);
+  const derived = new Uint8Array(await crypto.subtle.deriveBits({
+    name: 'PBKDF2',
+    hash: 'SHA-256',
+    salt: decodeBase64(rawSalt),
+    iterations,
+  }, key, expected.length * 8));
+  return constantTimeEqual(derived, expected);
+}
+
+async function hmac(value: string): Promise<string> {
+  const secret = Deno.env.get('ANNUAL_KPI_ADMIN_SESSION_SECRET');
+  if (!secret || secret.length < 32) throw new Error('annual KPI admin session is not configured');
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value));
+  return base64Url(new Uint8Array(signature));
+}
+
+async function createAdminSession(): Promise<string> {
+  const expiresAt = Math.floor(Date.now() / 1000) + KPI_ADMIN_SESSION_SECONDS;
+  const nonce = base64Url(crypto.getRandomValues(new Uint8Array(18)));
+  const unsigned = `v1.${expiresAt}.${nonce}`;
+  return `${unsigned}.${await hmac(unsigned)}`;
+}
+
+function cookieValue(request: Request, name: string): string | null {
+  const cookie = request.headers.get('Cookie') ?? '';
+  for (const pair of cookie.split(';')) {
+    const separator = pair.indexOf('=');
+    if (separator < 0) continue;
+    if (pair.slice(0, separator).trim() === name) return pair.slice(separator + 1).trim();
+  }
+  return null;
+}
+
+async function hasValidAdminSession(request: Request): Promise<boolean> {
+  const token = cookieValue(request, KPI_ADMIN_COOKIE);
+  if (!token) return false;
+  const [version, rawExpiry, nonce, signature, ...rest] = token.split('.');
+  const expiry = Number(rawExpiry);
+  if (rest.length > 0 || version !== 'v1' || !Number.isInteger(expiry) || expiry <= Math.floor(Date.now() / 1000) || !nonce || !signature) return false;
+  const unsigned = `${version}.${rawExpiry}.${nonce}`;
+  const expected = await hmac(unsigned);
+  return constantTimeEqual(new TextEncoder().encode(signature), new TextEncoder().encode(expected));
+}
+
+function adminOriginAllowed(request: Request): boolean {
+  const origin = request.headers.get('Origin');
+  if (!origin) return false;
+  const configured = Deno.env.get('ANNUAL_KPI_ADMIN_ALLOWED_ORIGINS')
+    ?? 'https://report.ahtops.xyz,http://localhost:3000,http://127.0.0.1:3000';
+  return configured.split(',').map((item) => item.trim()).filter(Boolean).includes(origin);
+}
+
+function clientAddress(request: Request): string {
+  return (request.headers.get('X-Forwarded-For') ?? request.headers.get('X-Real-IP') ?? 'unknown')
+    .split(',')[0].trim().slice(0, 128);
+}
+
+function activePinFailures(address: string): number[] {
+  const cutoff = Date.now() - KPI_ADMIN_FAILURE_WINDOW_MS;
+  const failures = (KPI_ADMIN_FAILURES.get(address) ?? []).filter((timestamp) => timestamp >= cutoff);
+  if (failures.length > 0) KPI_ADMIN_FAILURES.set(address, failures);
+  else KPI_ADMIN_FAILURES.delete(address);
+  return failures;
+}
+
+async function requestJson(request: Request): Promise<Record<string, unknown>> {
+  const contentLength = Number(request.headers.get('Content-Length') ?? '0');
+  if (contentLength > 4096) throw new Error('request body exceeds limit');
+  const payload: unknown = await request.json().catch(() => null);
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('invalid JSON body');
+  return payload as Record<string, unknown>;
+}
+
+async function discardRequestBody(request: Request): Promise<void> {
+  const contentLength = Number(request.headers.get('Content-Length') ?? '0');
+  if (contentLength > 4096) throw new Error('request body exceeds limit');
+  if (request.body) await request.arrayBuffer();
+}
+
+function sessionCookie(value: string, maxAge: number): string {
+  return `${KPI_ADMIN_COOKIE}=${value}; Path=/api/report/v1/kpi-admin; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Strict`;
+}
+
+async function handleAnnualKpiAdmin(request: Request, url: URL): Promise<Response> {
+  if (!adminOriginAllowed(request)) return json({ error_code: 'ADMIN_ORIGIN_REJECTED', error: 'Yêu cầu quản trị không hợp lệ.' }, 403, { 'Cache-Control': 'no-store' });
+
+  if (url.pathname.endsWith('/kpi-admin/unlock')) {
+    if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405, { Allow: 'POST' });
+    const address = clientAddress(request);
+    const failures = activePinFailures(address);
+    if (failures.length >= KPI_ADMIN_MAX_FAILURES) {
+      return json({ error_code: 'ADMIN_RATE_LIMITED', error: 'Đã nhập sai quá nhiều lần. Vui lòng thử lại sau 15 phút.' }, 429, { 'Cache-Control': 'no-store', 'Retry-After': '900' });
+    }
+    const payload = await requestJson(request);
+    const pin = typeof payload.pin === 'string' ? payload.pin : '';
+    if (pin.length < 4 || pin.length > 128 || !await verifyConfiguredPin(pin)) {
+      failures.push(Date.now());
+      KPI_ADMIN_FAILURES.set(address, failures);
+      return json({ error_code: 'ADMIN_PIN_INVALID', error: 'PIN không đúng.' }, 401, { 'Cache-Control': 'no-store' });
+    }
+    KPI_ADMIN_FAILURES.delete(address);
+    const token = await createAdminSession();
+    return json({ unlocked: true, expires_in_seconds: KPI_ADMIN_SESSION_SECONDS }, 200, {
+      'Cache-Control': 'no-store',
+      'Set-Cookie': sessionCookie(token, KPI_ADMIN_SESSION_SECONDS),
+    });
+  }
+
+  if (url.pathname.endsWith('/kpi-admin/lock')) {
+    if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405, { Allow: 'POST' });
+    await discardRequestBody(request);
+    return json({ unlocked: false }, 200, {
+      'Cache-Control': 'no-store',
+      // Overwrite the valid session immediately. A one-second invalid token is
+      // more reliable through the public proxy than an expired-cookie header.
+      'Set-Cookie': sessionCookie('locked', 1),
+    });
+  }
+
+  const yearMatch = /\/kpi-admin\/(\d{4})$/u.exec(url.pathname);
+  if (!yearMatch) return json({ error: 'not found' }, 404, { 'Cache-Control': 'no-store' });
+  if (request.method !== 'PUT') return json({ error: 'method not allowed' }, 405, { Allow: 'PUT' });
+  if (!await hasValidAdminSession(request)) {
+    return json({ error_code: 'ADMIN_SESSION_REQUIRED', error: 'Phiên chỉnh sửa đã hết hạn. Vui lòng nhập lại PIN.' }, 401, { 'Cache-Control': 'no-store' });
+  }
+  const year = Number(yearMatch[1]);
+  const payload = await requestJson(request);
+  const target = typeof payload.target_reported_pax === 'number' ? payload.target_reported_pax : Number(payload.target_reported_pax);
+  if (!Number.isSafeInteger(target) || target <= 0) throw new Error('target_reported_pax must be a positive integer');
+  const saved = await postgrestRpc('upsert_annual_passenger_kpi_v1', { p_year: year, p_target_reported_pax: target });
+  const snapshot = await postgrestRpc('get_public_annual_passenger_kpi_v1', { p_year: year, p_today: null });
+  return json({ config: saved, snapshot }, 200, { 'Cache-Control': 'no-store' });
 }
 
 async function requestHash(request: NormalizedRequest): Promise<string> {
@@ -146,6 +363,26 @@ function overviewArgs(request: NormalizedRequest): Record<string, unknown> {
   };
 }
 
+function dimensionArgs(
+  request: NormalizedRequest,
+  page = request.page,
+  dataAsOf = new Date().toISOString(),
+): Record<string, unknown> {
+  return {
+    p_from_date: request.from,
+    p_to_date: request.to,
+    p_dimension: request.dimension,
+    p_types: request.types,
+    p_airlines: request.airlines,
+    p_routes: request.routes,
+    p_countries: request.countries,
+    p_sort: request.sort,
+    p_page: page,
+    p_page_size: request.pageSize,
+    p_data_as_of: dataAsOf,
+  };
+}
+
 function csvCell(value: unknown): string {
   const text = value == null ? '' : String(value);
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -161,13 +398,68 @@ function buildAggregateCsv(bundle: Record<string, unknown>): string {
   return `\uFEFF${lines.map((row) => row.map(csvCell).join(',')).join('\r\n')}`;
 }
 
+function buildDimensionCsv(payload: Record<string, unknown>): string {
+  const rows = Array.isArray(payload.rows) ? payload.rows as Array<Record<string, unknown>> : [];
+  const lines = [[
+    'dimension', 'scope', 'label', 'flights', 'flight_share', 'reported_pax', 'pax_share',
+    'reported_legs', 'due_legs', 'pax_coverage_pct', 'suppressed', 'pax_status',
+  ]];
+  for (const row of rows) {
+    lines.push([
+      payload.dimension, payload.type, row.label, row.flights, row.flight_share, row.reported_pax,
+      row.pax_share, row.reported_legs, row.due_legs, row.pax_coverage_pct, row.suppressed, row.pax_status,
+    ]);
+  }
+  return `\uFEFF${lines.map((row) => row.map(csvCell).join(',')).join('\r\n')}`;
+}
+
 Deno.serve(async (request: Request) => {
-  if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405, { Allow: 'GET' });
   const url = new URL(request.url);
   const endpoint = url.pathname.split('/').filter(Boolean).at(-1) ?? 'overview';
-  if (!['overview', 'timeline', 'breakdowns', 'export'].includes(endpoint)) return json({ error: 'not found' }, 404);
 
   try {
+    if (url.pathname.includes('/kpi-admin/')) return await handleAnnualKpiAdmin(request, url);
+    if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405, { Allow: 'GET' });
+
+    if (endpoint === 'annual-kpi' || endpoint === 'dashboard-version' || endpoint === 'kpi-config') {
+      if (endpoint === 'kpi-config' && !url.searchParams.has('year') && [...url.searchParams.keys()].length > 0) {
+        throw new Error('unsupported query parameter');
+      }
+      const year = endpoint === 'kpi-config' && !url.searchParams.has('year') ? null : annualKpiYear(url);
+      const functionName = endpoint === 'annual-kpi'
+        ? 'get_public_annual_passenger_kpi_v1'
+        : endpoint === 'dashboard-version'
+          ? 'get_public_annual_passenger_kpi_version_v1'
+          : 'get_public_annual_passenger_kpi_config_v1';
+      const payload = await postgrestRpc(functionName, endpoint === 'annual-kpi'
+        ? { p_year: year, p_today: null }
+        : { p_year: year });
+      const etag = await sha256Etag(payload);
+      if (request.headers.get('If-None-Match') === etag) {
+        return new Response(null, {
+          status: 304,
+          headers: {
+            ETag: etag,
+            'Cache-Control': endpoint === 'dashboard-version'
+              ? 'public, max-age=0, s-maxage=300'
+              : endpoint === 'kpi-config'
+                ? 'no-store'
+                : 'public, max-age=0, s-maxage=60',
+          },
+        });
+      }
+      return json(payload, 200, {
+        ETag: etag,
+        'Cache-Control': endpoint === 'dashboard-version'
+          ? 'public, max-age=0, s-maxage=300'
+          : endpoint === 'kpi-config'
+            ? 'no-store'
+            : 'public, max-age=0, s-maxage=60',
+        Vary: 'Accept-Encoding',
+      });
+    }
+
+    if (!['overview', 'timeline', 'breakdowns', 'dimension', 'dimension-export', 'export'].includes(endpoint)) return json({ error: 'not found' }, 404);
     const normalized = normalizeRequest(url, endpoint);
     const incomingQuery = url.searchParams.toString();
     if (incomingQuery !== normalized.canonicalQuery) {
@@ -178,6 +470,46 @@ Deno.serve(async (request: Request) => {
     const startedAt = performance.now();
     const dataAsOf = new Date().toISOString();
     const canonicalRequestHash = await requestHash(normalized);
+    if (endpoint === 'dimension' || endpoint === 'dimension-export') {
+      const firstPayload = await postgrestRpc('get_public_traffic_report_dimension_v2', dimensionArgs(normalized));
+      if (!firstPayload || typeof firstPayload !== 'object' || Array.isArray(firstPayload)) throw new Error('invalid dimension payload');
+      const dimensionPayload = firstPayload as Record<string, unknown>;
+      const dimensionDataAsOf = typeof dimensionPayload.data_as_of === 'string'
+        ? dimensionPayload.data_as_of
+        : dataAsOf;
+      if (endpoint === 'dimension-export') {
+        const rows = Array.isArray(dimensionPayload.rows) ? [...dimensionPayload.rows] : [];
+        let page = normalized.page;
+        let hasMore = Boolean(dimensionPayload.has_more);
+        while (hasMore && page < normalized.page + 25) {
+          page += 1;
+          const nextPayload = await postgrestRpc(
+            'get_public_traffic_report_dimension_v2',
+            dimensionArgs(normalized, page, dimensionDataAsOf),
+          );
+          if (!nextPayload || typeof nextPayload !== 'object' || Array.isArray(nextPayload)) throw new Error('invalid dimension export payload');
+          const next = nextPayload as Record<string, unknown>;
+          if (Array.isArray(next.rows)) rows.push(...next.rows);
+          hasMore = Boolean(next.has_more);
+        }
+        if (hasMore) throw new Error('dimension export exceeds resource budget');
+        const csv = buildDimensionCsv({ ...dimensionPayload, rows });
+        return new Response(csv, {
+          headers: {
+            'Content-Type': 'text/csv; charset=utf-8',
+            'Content-Disposition': `attachment; filename="traffic-report-${normalized.dimension}-${normalized.types.join('').toLowerCase()}.csv"`,
+            'Cache-Control': 'no-store',
+            'X-Report-Origin-Ms': String(Math.round(performance.now() - startedAt)),
+            'X-Content-Type-Options': 'nosniff',
+          },
+        });
+      }
+      return json({ ...dimensionPayload, contract_version: CONTRACT_VERSION, request_hash: canonicalRequestHash, data_as_of: dimensionDataAsOf }, 200, {
+        'Cache-Control': 'public, max-age=0, s-maxage=60, stale-while-revalidate=30',
+        'X-Report-Origin-Ms': String(Math.round(performance.now() - startedAt)),
+        Vary: 'Accept-Encoding',
+      });
+    }
     const payload = await postgrestRpc('get_public_traffic_report_overview_v1', overviewArgs(normalized));
     const duration = Math.round(performance.now() - startedAt);
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('invalid report payload');
@@ -222,7 +554,18 @@ Deno.serve(async (request: Request) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'report request failed';
+    const adminRequest = url.pathname.includes('/kpi-admin/');
+    if (adminRequest) {
+      const unavailable = /not configured/i.test(message);
+      return json({
+        error_code: unavailable ? 'ADMIN_NOT_CONFIGURED' : 'ADMIN_REQUEST_INVALID',
+        error: unavailable ? 'Trình chỉnh sửa KPI chưa được cấu hình trên máy chủ.' : 'Thông tin KPI chưa hợp lệ.',
+      }, unavailable ? 503 : 400, { 'Cache-Control': 'no-store' });
+    }
     const clientError = /invalid|unsupported|must|required|cardinality|outside|provided|exceed/i.test(message);
-    return json({ error: message }, clientError ? 400 : 503, { 'Cache-Control': 'no-store' });
+    return json({
+      error_code: clientError ? 'INVALID_REPORT_FILTER' : 'REPORT_TEMPORARILY_UNAVAILABLE',
+      error: clientError ? 'Bộ lọc báo cáo chưa hợp lệ. Vui lòng kiểm tra phạm vi ngày và các lựa chọn.' : 'Báo cáo tạm thời chưa thể cập nhật. Vui lòng thử lại.',
+    }, clientError ? 400 : 503, { 'Cache-Control': 'no-store' });
   }
 });

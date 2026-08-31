@@ -5,6 +5,9 @@ export type TrafficType = 'all' | 'A' | 'D';
 export type TrafficComparison = 'previous' | 'year_ago' | 'none';
 export type TrafficTimeBasis = 'local' | 'utc';
 export type TrafficDatePreset = '7d' | '30d' | 'ytd';
+export type TrafficMarketDimension = 'route' | 'country';
+export type TrafficDimension = TrafficMarketDimension | 'airline';
+export type TrafficDimensionSort = 'flights' | 'reported_pax' | 'flight_share' | 'pax_share' | 'label';
 
 export interface TrafficReportFilter {
   from: string | null;
@@ -22,17 +25,35 @@ export interface NormalizedTrafficReportFilter extends Omit<TrafficReportFilter,
   to: string;
 }
 
+export interface TrafficReportPageState {
+  filter: TrafficReportFilter;
+  trendType: TrafficType;
+  marketDimension: TrafficMarketDimension;
+  marketType: TrafficType;
+  airlineType: TrafficType;
+}
+
 export interface TrafficMetricSet {
   flights: number | null;
   arrivals: number | null;
   departures: number | null;
   reported_pax: number | null;
-  status?: 'complete' | 'partial' | 'unavailable' | 'suppressed';
+  status?: 'complete' | 'partial' | 'missing' | 'future' | 'zero' | 'unavailable' | 'suppressed';
+}
+
+export interface TrafficKpiMetricSet extends TrafficMetricSet {
+  arrival_reported_pax?: number | null;
+  departure_reported_pax?: number | null;
 }
 
 export interface TrafficTimelinePoint extends TrafficMetricSet {
   ops_date: string;
   completeness: 'complete' | 'missing' | 'partial';
+  reported_legs?: number | null;
+  due_legs?: number | null;
+  pax_coverage_pct?: number | null;
+  pax_status?: 'available' | 'not_due' | 'unavailable' | 'suppressed';
+  suppressed?: boolean;
 }
 
 export interface TrafficBreakdownRow extends TrafficMetricSet {
@@ -42,13 +63,69 @@ export interface TrafficBreakdownRow extends TrafficMetricSet {
   suppressed: boolean;
 }
 
+export interface TrafficAircraftTypeBreakdownRow extends TrafficBreakdownRow {
+  aircraft_group_key: string;
+  aircraft_group: string;
+}
+
+export interface TrafficDimensionRow extends TrafficMetricSet {
+  key: string;
+  label: string;
+  flight_share: number | null;
+  pax_share: number | null;
+  reported_legs: number | null;
+  due_legs: number | null;
+  pax_coverage_pct: number | null;
+  pax_status: 'available' | 'not_due' | 'unavailable' | 'suppressed';
+  suppressed: boolean;
+}
+
+export interface TrafficDimensionResponse {
+  contract_version: typeof TRAFFIC_REPORT_CONTRACT_VERSION;
+  request_hash: string;
+  data_as_of: string;
+  dimension: TrafficDimension;
+  type: TrafficType;
+  page: number;
+  page_size: number;
+  total_rows: number;
+  has_more: boolean;
+  rows: TrafficDimensionRow[];
+}
+
 export interface TrafficPeakHourRow {
   hour_bucket: string;
   bucket_minutes: 60;
   time_basis: TrafficTimeBasis;
   arrivals: number | null;
   departures: number | null;
+  regular_flights?: {
+    arrivals: TrafficRegularFlight[];
+    departures: TrafficRegularFlight[];
+  };
   suppressed: boolean;
+}
+
+export interface TrafficRegularFlight {
+  airline: string;
+  flight_number: string;
+  route: string;
+  typical_time: string;
+  operating_days: Array<1 | 2 | 3 | 4 | 5 | 6 | 7>;
+  occurrence_days: number;
+  eligible_days: number;
+  consistency_percent: number;
+}
+
+export interface TrafficMonthlyPeakRow {
+  month: string;
+  time_basis: TrafficTimeBasis;
+  arrival_hour: string | null;
+  arrival_flights: number | null;
+  departure_hour: string | null;
+  departure_flights: number | null;
+  arrival_suppressed: boolean;
+  departure_suppressed: boolean;
 }
 
 export interface TrafficDayOfWeekRow {
@@ -71,6 +148,7 @@ export interface TrafficReportBundle {
   metadata: {
     min_ops_date: string;
     max_ops_date: string;
+    latest_completed_ops_date?: string;
     normalized_filter: NormalizedTrafficReportFilter;
     day_count: number;
     timeline_granularity: 'day';
@@ -79,12 +157,27 @@ export interface TrafficReportBundle {
     filter_options: {
       airline: string[];
       route: string[];
+      country?: string[];
     };
+    available_dimensions?: TrafficDimension[];
+    projection?: {
+      status: 'fresh' | 'stale' | 'failed' | 'empty';
+      source_data_version: number | null;
+      current_data_version: number | null;
+      source_watermark: number | null;
+      current_watermark: number | null;
+      refreshed_at: string | null;
+      snapshot_rows: number | null;
+    };
+    selected_day_count?: number;
+    covered_day_count?: number;
+    partial_day_count?: number;
+    missing_day_count?: number;
     filter_options_limit: 250;
   };
   kpis: {
-    current: TrafficMetricSet;
-    comparison: TrafficMetricSet & {
+    current: TrafficKpiMetricSet;
+    comparison: TrafficKpiMetricSet & {
       from: string | null;
       to: string | null;
       mode: TrafficComparison;
@@ -103,7 +196,9 @@ export interface TrafficReportBundle {
     route: TrafficBreakdownRow[];
     country: TrafficBreakdownRow[];
     aircraft_group: TrafficBreakdownRow[];
+    aircraft_type?: TrafficAircraftTypeBreakdownRow[];
     peak_hour: TrafficPeakHourRow[];
+    peak_hour_monthly?: TrafficMonthlyPeakRow[];
     day_of_week: TrafficDayOfWeekRow[];
   };
   quality: {
@@ -117,6 +212,8 @@ export interface TrafficReportBundle {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const LIST_PARAMS = ['airline', 'route', 'country'] as const;
 const ALLOWED_PARAMS = new Set(['from', 'to', 'type', ...LIST_PARAMS, 'comp', 'tz']);
+const PAGE_ONLY_PARAMS = ['trend_type', 'market_dimension', 'market_type', 'airline_type'] as const;
+const PAGE_ALLOWED_PARAMS = new Set([...ALLOWED_PARAMS, ...PAGE_ONLY_PARAMS]);
 
 function shiftIsoDate(value: string, days: number): string {
   const date = new Date(`${value}T00:00:00Z`);
@@ -215,6 +312,43 @@ export function toTrafficReportSearchParams(filter: TrafficReportFilter): URLSea
   return output;
 }
 
+function parseTrafficType(value: string | null, fallback: TrafficType): TrafficType {
+  const resolved = value ?? fallback;
+  if (!['all', 'A', 'D'].includes(resolved)) throw new Error('Phạm vi chuyến bay không hợp lệ.');
+  return resolved as TrafficType;
+}
+
+export function parseTrafficReportPageState(input: URLSearchParams): TrafficReportPageState {
+  for (const key of input.keys()) {
+    if (!PAGE_ALLOWED_PARAMS.has(key)) throw new Error(`Tham số không được hỗ trợ: ${key}`);
+  }
+  const apiParams = new URLSearchParams();
+  for (const key of ALLOWED_PARAMS) {
+    for (const value of input.getAll(key)) apiParams.append(key, value);
+  }
+  const legacyType = parseTrafficType(input.get('type'), 'all');
+  apiParams.delete('type');
+  const filter = parseTrafficReportSearchParams(apiParams);
+  const marketDimension = input.get('market_dimension') ?? 'route';
+  if (!['route', 'country'].includes(marketDimension)) throw new Error('Chiều phân tích thị trường không hợp lệ.');
+  return {
+    filter: { ...filter, type: 'all' },
+    trendType: parseTrafficType(input.get('trend_type'), legacyType),
+    marketDimension: marketDimension as TrafficMarketDimension,
+    marketType: parseTrafficType(input.get('market_type'), legacyType),
+    airlineType: parseTrafficType(input.get('airline_type'), legacyType),
+  };
+}
+
+export function toTrafficReportPageSearchParams(state: TrafficReportPageState): URLSearchParams {
+  const output = toTrafficReportSearchParams({ ...state.filter, type: 'all' });
+  if (state.trendType !== 'all') output.set('trend_type', state.trendType);
+  if (state.marketDimension !== 'route') output.set('market_dimension', state.marketDimension);
+  if (state.marketType !== 'all') output.set('market_type', state.marketType);
+  if (state.airlineType !== 'all') output.set('airline_type', state.airlineType);
+  return output;
+}
+
 export function withNormalizedDates(
   filter: TrafficReportFilter,
   normalized: Pick<NormalizedTrafficReportFilter, 'from' | 'to'>,
@@ -227,14 +361,125 @@ export function buildOverviewUrl(filter: TrafficReportFilter): string {
   return `${TRAFFIC_REPORT_API_BASE}/overview${query ? `?${query}` : ''}`;
 }
 
+export function buildTimelineUrl(filter: TrafficReportFilter, type: TrafficType, after?: string | null, pageSize = 732): string {
+  const query = toTrafficReportSearchParams({ ...filter, type });
+  if (after) query.set('after', after);
+  query.set('page_size', String(pageSize));
+  return `${TRAFFIC_REPORT_API_BASE}/timeline?${query.toString()}`;
+}
+
+export function buildDimensionUrl(
+  filter: TrafficReportFilter,
+  dimension: TrafficDimension,
+  type: TrafficType,
+  sort: TrafficDimensionSort,
+  page = 1,
+  pageSize = 50,
+  exportCsv = false,
+): string {
+  if (!filter.from || !filter.to) throw new Error('Phạm vi ngày chưa sẵn sàng.');
+  const query = toTrafficReportSearchParams({ ...filter, type });
+  query.set('dimension', dimension);
+  if (sort !== 'flights') query.set('sort', sort);
+  if (page !== 1) query.set('page', String(page));
+  query.set('page_size', String(pageSize));
+  return `${TRAFFIC_REPORT_API_BASE}/${exportCsv ? 'dimension-export' : 'dimension'}?${query.toString()}`;
+}
+
+function isNullableNumber(value: unknown): value is number | null {
+  return value === null || typeof value === 'number';
+}
+
+function isTrafficAircraftTypeBreakdownRow(value: unknown): value is TrafficAircraftTypeBreakdownRow {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.key === 'string'
+    && typeof row.aircraft_group_key === 'string'
+    && typeof row.aircraft_group === 'string'
+    && typeof row.label === 'string'
+    && isNullableNumber(row.flights)
+    && isNullableNumber(row.arrivals)
+    && isNullableNumber(row.departures)
+    && isNullableNumber(row.reported_pax)
+    && isNullableNumber(row.share)
+    && typeof row.suppressed === 'boolean';
+}
+
+function isTrafficRegularFlight(value: unknown): value is TrafficRegularFlight {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.airline === 'string'
+    && typeof row.flight_number === 'string'
+    && typeof row.route === 'string'
+    && /^\d{2}:\d{2}$/.test(String(row.typical_time))
+    && Array.isArray(row.operating_days)
+    && row.operating_days.every((day) => Number.isInteger(day) && Number(day) >= 1 && Number(day) <= 7)
+    && typeof row.occurrence_days === 'number'
+    && typeof row.eligible_days === 'number'
+    && typeof row.consistency_percent === 'number';
+}
+
+function isTrafficPeakHourRow(value: unknown): value is TrafficPeakHourRow {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const regularFlights = row.regular_flights;
+  const regularFlightsAreValid = regularFlights === undefined || (
+    !!regularFlights
+    && typeof regularFlights === 'object'
+    && !Array.isArray(regularFlights)
+    && Array.isArray((regularFlights as Record<string, unknown>).arrivals)
+    && ((regularFlights as Record<string, unknown>).arrivals as unknown[]).every(isTrafficRegularFlight)
+    && Array.isArray((regularFlights as Record<string, unknown>).departures)
+    && ((regularFlights as Record<string, unknown>).departures as unknown[]).every(isTrafficRegularFlight)
+  );
+  return /^\d{2}:\d{2}$/.test(String(row.hour_bucket))
+    && row.bucket_minutes === 60
+    && ['local', 'utc'].includes(String(row.time_basis))
+    && isNullableNumber(row.arrivals)
+    && isNullableNumber(row.departures)
+    && regularFlightsAreValid
+    && typeof row.suppressed === 'boolean';
+}
+
 export function isTrafficReportBundle(value: unknown): value is TrafficReportBundle {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const root = value as Record<string, unknown>;
+  const metadata = root.metadata && typeof root.metadata === 'object' && !Array.isArray(root.metadata)
+    ? root.metadata as Record<string, unknown>
+    : null;
+  const projection = metadata?.projection;
+  const breakdowns = root.breakdowns && typeof root.breakdowns === 'object' && !Array.isArray(root.breakdowns)
+    ? root.breakdowns as Record<string, unknown>
+    : null;
+  const projectionIsValid = projection === undefined || (
+    !!projection
+    && typeof projection === 'object'
+    && !Array.isArray(projection)
+    && ['fresh', 'stale', 'failed', 'empty'].includes(String((projection as Record<string, unknown>).status))
+  );
   return root.contract_version === TRAFFIC_REPORT_CONTRACT_VERSION
     && typeof root.request_hash === 'string'
     && typeof root.data_as_of === 'string'
-    && !!root.metadata
+    && !!metadata
+    && projectionIsValid
     && !!root.kpis
     && Array.isArray(root.timeline)
-    && !!root.breakdowns;
+    && !!breakdowns
+    && Array.isArray(breakdowns.peak_hour)
+    && breakdowns.peak_hour.every(isTrafficPeakHourRow)
+    && (breakdowns.aircraft_type === undefined || (
+      Array.isArray(breakdowns.aircraft_type)
+      && breakdowns.aircraft_type.every(isTrafficAircraftTypeBreakdownRow)
+    ));
+}
+
+export function isTrafficDimensionResponse(value: unknown): value is TrafficDimensionResponse {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const root = value as Record<string, unknown>;
+  return root.contract_version === TRAFFIC_REPORT_CONTRACT_VERSION
+    && ['route', 'country', 'airline'].includes(String(root.dimension))
+    && ['all', 'A', 'D'].includes(String(root.type))
+    && typeof root.page === 'number'
+    && typeof root.total_rows === 'number'
+    && Array.isArray(root.rows);
 }

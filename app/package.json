@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:traffic-report": "node scripts/build-traffic-report-only.mjs",
+    "generate:kpi-pin-hash": "node scripts/generate-annual-kpi-pin-hash.mjs",
     "test:dashboard-contract": "node --test src/lib/dashboardReportingContract.source.test.ts",
-    "test:traffic-report-contract": "node --experimental-strip-types --test src/lib/trafficReportContract.test.ts && node supabase/tests/public_traffic_report_v1_pglite.mjs && node scripts/traffic-report-edge-contract.test.mjs && node scripts/traffic-report-isolation-test.mjs",
+    "test:traffic-report-contract": "node --experimental-strip-types --test src/lib/trafficReportContract.test.ts src/lib/annualPassengerKpiContract.test.ts && node --experimental-strip-types --test \"src/app/(public-report)/reports/traffic/TrafficReportPresentation.source.test.ts\" \"src/app/(public-report)/reports/traffic/dashboard/AnnualPassengerKpiDashboard.source.test.ts\" && node --experimental-strip-types --test src/lib/trafficReportOperationalHours.test.ts && node supabase/tests/public_traffic_report_v1_pglite.mjs && node scripts/traffic-report-edge-contract.test.mjs && node scripts/traffic-report-isolation-test.mjs",
     "test:rules": "node scripts/rule-regression-tests.cjs",
     "test:seasonal-import-sql": "node supabase/tests/seasonal_source_import_v2_pglite.mjs",
     "test:seasonal-import-v3-sql": "node supabase/tests/seasonal_partial_import_v3_pglite.mjs",
@@ -42,6 +44,7 @@
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-sql": "^2.4.0",
     "@tauri-apps/plugin-updater": "^2.10.1",
+    "clsx": "^2.1.1",
     "firebase": "^12.12.1",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
@@ -49,6 +52,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.8.1",
+    "tailwind-merge": "^3.6.0",
     "xlsx": "^0.18.5",
     "zustand": "^5.0.14"
   },

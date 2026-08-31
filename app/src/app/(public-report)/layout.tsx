@@ -4,7 +4,7 @@ import './report.css';
 
 export const metadata: Metadata = {
   title: 'Báo cáo sản lượng khai thác',
-  description: 'Báo cáo công khai sản lượng chuyến bay và hành khách theo dãy ngày liên tục.',
+  description: 'Báo cáo công khai sản lượng chuyến bay và sản lượng khách theo dãy ngày liên tục.',
 };
 
 export default function PublicReportRootLayout({ children }: { children: React.ReactNode }) {
