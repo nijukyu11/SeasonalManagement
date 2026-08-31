@@ -48,7 +48,7 @@ async function analyzeFile(filePath) {
   if (!analysis.selected) {
     return { file: path.basename(filePath), valid: false, diagnostics: analysis.diagnostics };
   }
-  const strict = parseDailyImportRowsStrict(analysis.selected.rows);
+  const strict = parseDailyImportRowsStrict(analysis.selected.rows, { workbookProfile: analysis.selected.profile });
   const seasonCodes = [...new Set(strict.legs.map((leg) => leg.iataSeasonCode))].sort();
   const seasons = seasonCodes.map((seasonCode) => ({
     id: `shadow-${seasonCode.toLowerCase()}`,

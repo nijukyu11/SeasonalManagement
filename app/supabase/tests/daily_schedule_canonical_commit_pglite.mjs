@@ -9,6 +9,9 @@ const files = [
   '../migrations/20260828100000_preserve_daily_overlays_during_seasonal_replace.sql',
   '../migrations/20260829150000_canonical_flight_leg_store.sql',
   '../migrations/20260829153000_daily_schedule_canonical_commit.sql',
+  '../migrations/20260831010000_fix_daily_multiseason_event_identity.sql',
+  '../migrations/20260831103000_daily_overlay_lineage_match.sql',
+  '../migrations/20260831124500_daily_overlay_authority_scope_match.sql',
   '../migrations/20260829180000_daily_authority_reset.sql',
 ];
 const sql = await Promise.all(files.map((file) => readFile(new URL(file, import.meta.url), 'utf8')));
@@ -227,6 +230,132 @@ try {
     [resetRequestId, seasonId, resetPreview.confirmationText],
   );
   assert.deepEqual(retryReset.rows[0].result, resetResult.rows[0].result);
+
+  const deletedLineageSeason = 'season-daily-deleted-lineage';
+  await db.query(`
+    insert into public.seasons(
+      id,season_code,name,file_name,uploaded_at,effective_start,effective_end,
+      total_legs,total_source_rows,data_version
+    ) values ($1,'S28','S28','',0,'2028-03-26','2028-10-28',0,0,0)
+  `, [deletedLineageSeason]);
+  await db.query(`
+    insert into public.season_flight_records(
+      season_id,record_id,type,flight_number,raw_flight_number,airline,route,schedule,
+      date,scheduled_date,scheduled_time,operational_date,source_kind,source_side,
+      status,action,deletion_reason,lifecycle_changed_at,source_import_batch_id,supersedes_record_id
+    ) values
+      ($1,'DELETED-BASE','D','VN888','888','VN','SGN','05:00','2028-04-01',
+        '2028-04-01','05:00','2028-04-01','seasonal','DEP','deleted','deleted',
+        'overlay_deleted','2028-04-01T00:00:00Z',null,null),
+      ($1,'DELETED-DAILY-LATEST','D','VN888','888','VN','SGN','06:00','2028-04-01',
+        '2028-04-01','06:00','2028-04-01','daily','DEP','deleted','deleted',
+        'overlay_deleted','2028-04-02T00:00:00Z',$2,'DELETED-BASE')
+  `, [deletedLineageSeason, replacement.batchId]);
+  await db.query(`
+    insert into public.season_modifications(season_id,leg_id,action,changed_fields)
+    values ($1,'DELETED-BASE','deleted','{}'),($1,'DELETED-DAILY-LATEST','deleted','{}')
+  `, [deletedLineageSeason]);
+  await db.query(`
+    insert into public.schedule_replacement_scopes(
+      season_id,ops_date,authority_source,source_batch_id,expected_leg_count,
+      canonical_checksum,data_version,committed_by
+    ) values ($1,'2028-04-01','daily',$2,0,'deleted-lineage',0,$3)
+  `, [deletedLineageSeason, replacement.batchId, userId]);
+  const deletedLineagePayload = payload('10000000-0000-4000-8000-000000000125', 0, 5, 160);
+  deletedLineagePayload.legs[0] = {
+    ...deletedLineagePayload.legs[0],
+    seasonCode: 'S28',
+    operationalDate: '2028-04-01',
+    scheduledDate: '2028-04-01',
+    flightNumber: 'VN888',
+    rawFlightNumber: '888',
+    occurrenceKey: 'S28|2028-04-01|DEP|VN|VN888|SGN|06:00',
+    looseOccurrenceKey: 'S28|2028-04-01|DEP|VN|VN888',
+  };
+  deletedLineagePayload.seasons = [{
+    seasonId: deletedLineageSeason,
+    seasonCode: 'S28',
+    expectedDataVersion: 0,
+    rangeStart: '2028-04-01',
+    rangeEnd: '2028-04-01',
+    affectedDates: ['2028-04-01'],
+    confirmedZeroFlightDates: [],
+    legCount: 1,
+  }];
+  const deletedLineageStage = await stage(deletedLineagePayload);
+  assert.equal(deletedLineageStage.status, 'validated');
+  assert.equal(deletedLineageStage.preview.seasons[0].counts.matchedCount, 1);
+  assert.equal(deletedLineageStage.preview.seasons[0].counts.effectiveAfterCount, 0);
+  const deletedLineageMatch = await db.query(`
+    select matched_record_id from public.daily_schedule_import_batch_legs where batch_id=$1
+  `, [deletedLineageStage.batchId]);
+  assert.deepEqual(deletedLineageMatch.rows, [{ matched_record_id: 'DELETED-DAILY-LATEST' }]);
+
+  const multiSeasonA = 'season-daily-multi-w26';
+  const multiSeasonB = 'season-daily-multi-s27';
+  await db.query(`
+    insert into public.seasons(
+      id,season_code,name,file_name,uploaded_at,effective_start,effective_end,
+      total_legs,total_source_rows,data_version
+    ) values
+      ($1,'W26','W26','',0,'2026-10-25','2027-03-27',0,0,0),
+      ($2,'S27','S27','',0,'2027-03-28','2027-10-30',0,0,0)
+  `, [multiSeasonA, multiSeasonB]);
+  const multiPayload = payload('10000000-0000-4000-8000-000000000130', 0, 5, 150);
+  const firstMultiLeg = {
+    ...multiPayload.legs[0],
+    seasonCode: 'W26',
+    operationalDate: '2026-11-01',
+    scheduledDate: '2026-11-01',
+    occurrenceKey: 'W26|2026-11-01|DEP|VN|VN101|SGN|06:00',
+    looseOccurrenceKey: 'W26|2026-11-01|DEP|VN|VN101',
+  };
+  const secondMultiLeg = {
+    ...multiPayload.legs[0],
+    seasonCode: 'S27',
+    operationalDate: '2027-04-01',
+    scheduledDate: '2027-04-01',
+    flightNumber: 'VN102',
+    rawFlightNumber: '102',
+    occurrenceKey: 'S27|2027-04-01|DEP|VN|VN102|SGN|06:00',
+    looseOccurrenceKey: 'S27|2027-04-01|DEP|VN|VN102',
+  };
+  multiPayload.legs = [firstMultiLeg, secondMultiLeg];
+  multiPayload.seasons = [
+    {
+      seasonId: multiSeasonA,
+      seasonCode: 'W26',
+      expectedDataVersion: 0,
+      rangeStart: '2026-11-01',
+      rangeEnd: '2026-11-01',
+      affectedDates: ['2026-11-01'],
+      confirmedZeroFlightDates: [],
+      legCount: 1,
+    },
+    {
+      seasonId: multiSeasonB,
+      seasonCode: 'S27',
+      expectedDataVersion: 0,
+      rangeStart: '2027-04-01',
+      rangeEnd: '2027-04-01',
+      affectedDates: ['2027-04-01'],
+      confirmedZeroFlightDates: [],
+      legCount: 1,
+    },
+  ];
+  const multiStage = await stage(multiPayload);
+  const multiCommitResult = await db.query(
+    `select public.commit_daily_schedule_import_v1($1,$2::jsonb,$3) as result`,
+    [multiStage.batchId, JSON.stringify({ [multiSeasonA]: 0, [multiSeasonB]: 0 }), multiStage.previewHash],
+  );
+  assert.equal(multiCommitResult.rows[0].result.status, 'committed');
+  assert.equal(multiCommitResult.rows[0].result.seasons.length, 2);
+  const multiEvents = await db.query(`
+    select count(*)::integer as count, count(distinct op_id)::integer as distinct_op_ids
+    from public.season_change_events
+    where client_id='daily-canonical-v2' and op_payload->>'batchId'=$1
+  `, [multiStage.batchId]);
+  assert.deepEqual(multiEvents.rows, [{ count: 2, distinct_op_ids: 2 }]);
 
   console.log(JSON.stringify({ suite: 'daily-schedule-canonical-commit', status: 'passed' }));
 } finally {

@@ -873,6 +873,50 @@ async function run() {
     bareGateWithoutDeparture.legs.length === 1 && bareGateWithoutDeparture.diagnostics.length === 0,
     `bare G alone must not create a partial DEP side, got ${JSON.stringify(bareGateWithoutDeparture)}`
   );
+  const orphanResourcesWithoutDeparture = parseDailyImportRowsStrict([{
+    AIRCRAFT_SERIES: '321',
+    'ARR-AIRLINE_FLIGHT_SUFFIX': 'VN101',
+    'ARR-Scheduled': '2026-08-23 06:00:00',
+    'ARR-ORIG_DEST_AIRPORT_CODE': 'HAN',
+    DEPGate: 'G1',
+    CheckInDesk: 'C30 M1',
+    DEPStand: '18',
+  }]);
+  assert(
+    orphanResourcesWithoutDeparture.legs.length === 1 && orphanResourcesWithoutDeparture.diagnostics.length === 0,
+    `resource-only orphan side must not create a partial DEP leg, got ${JSON.stringify(orphanResourcesWithoutDeparture)}`
+  );
+  const scheduledWithoutFlight = parseDailyImportRowsStrict([{
+    'DEP-Scheduled': '2026-08-23 08:00:00',
+    'DEP-ORIG_DEST_AIRPORT_CODE': 'SGN',
+    DEPStand: '18',
+  }]);
+  assert(
+    scheduledWithoutFlight.legs.length === 0 && scheduledWithoutFlight.diagnostics.some((item) => item.code === 'DAILY_PARTIAL_SIDE'),
+    `a side with one flight identity anchor missing must remain blocking, got ${JSON.stringify(scheduledWithoutFlight)}`
+  );
+  const statusFilterRow = {
+    'ARR-AIRLINE_FLIGHT_SUFFIX': 'VN100',
+    'ARR-Scheduled': '2026-08-23 06:00:00',
+    'ARR-ORIG_DEST_AIRPORT_CODE': 'HAN',
+    'ARR-STATUS_CODE': 'CX',
+    'DEP-AIRLINE_FLIGHT_SUFFIX': 'VN101',
+    'DEP-Scheduled': '2026-08-23 08:00:00',
+    'DEP-ORIG_DEST_AIRPORT_CODE': 'SGN',
+    'DEP-STATUS_CODE': 'CANCELLED',
+  };
+  const operationalTurnsStatusFilter = parseDailyImportRowsStrict([statusFilterRow], { workbookProfile: 'legacy-operationalturns' });
+  const compactLbStatusFilter = parseDailyImportRowsStrict([statusFilterRow], { workbookProfile: 'compact-lb' });
+  assert(
+    operationalTurnsStatusFilter.diagnostics.length === 0 &&
+      operationalTurnsStatusFilter.legs.map((leg) => leg.flightNumber).join(',') === 'VN101',
+    `OperationalTurns must exclude only CX sides, got ${JSON.stringify(operationalTurnsStatusFilter)}`
+  );
+  assert(
+    compactLbStatusFilter.diagnostics.length === 0 &&
+      compactLbStatusFilter.legs.map((leg) => leg.flightNumber).join(',') === 'VN100',
+    `compact LB must exclude only CANCELLED sides, got ${JSON.stringify(compactLbStatusFilter)}`
+  );
   assert(
     parseDailyImportDateTime('2026-02-29') === null &&
       parseDailyImportDateTime('29/02/2028 04:59')?.date === '2028-02-29' &&
