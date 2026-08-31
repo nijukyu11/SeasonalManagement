@@ -5,6 +5,6 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/docker exec opsdata-supabase-db psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d postgres -c "REFRESH MATERIALIZED VIEW CONCURRENTLY reporting.public_traffic_effective"
-TimeoutStartSec=25
+ExecStart=/usr/local/sbin/seasonal-traffic-report-refresh
+TimeoutStartSec=300
 NoNewPrivileges=true

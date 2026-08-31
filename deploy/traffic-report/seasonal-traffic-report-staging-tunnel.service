@@ -6,11 +6,10 @@ Requires=nginx.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8780
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8781
 Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
-

@@ -23,7 +23,10 @@ status="$({
         select
           max(snapshot_refreshed_at) as refreshed_at,
           max(snapshot_source_watermark) as snapshot_watermark,
-          count(*)::bigint as row_count
+          count(*)::bigint as row_count,
+          count(*) filter (
+            where aircraft_type is null or btrim(aircraft_type) = ''
+          )::bigint as invalid_aircraft_type_rows
         from reporting.public_traffic_effective
       ), source as (
         select max(server_seq)::bigint as source_watermark
@@ -32,13 +35,15 @@ status="$({
       select
         case
           when snapshot.refreshed_at is null or snapshot.row_count = 0 then 'empty_snapshot'
+          when snapshot.invalid_aircraft_type_rows > 0 then 'invalid_aircraft_type_snapshot'
           when snapshot.snapshot_watermark is not distinct from source.source_watermark then 'ready'
           else 'source_changed_after_refresh'
         end,
         to_char(snapshot.refreshed_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),
         coalesce(snapshot.snapshot_watermark::text, 'null'),
         coalesce(source.source_watermark::text, 'null'),
-        snapshot.row_count::text
+        snapshot.row_count::text,
+        snapshot.invalid_aircraft_type_rows::text
       from snapshot cross join source;
     "
 } 2>&1)" || {
@@ -46,7 +51,7 @@ status="$({
   exit 1
 }
 
-printf 'status|refreshed_at_utc|snapshot_watermark|source_watermark|row_count\n%s\n' "$status"
+printf 'status|refreshed_at_utc|snapshot_watermark|source_watermark|row_count|invalid_aircraft_type_rows\n%s\n' "$status"
 
 case "$status" in
   ready\|*) ;;
