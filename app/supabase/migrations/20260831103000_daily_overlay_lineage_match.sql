@@ -12,7 +12,13 @@ begin
   select pg_get_functiondef('public.stage_daily_schedule_import_v1(jsonb)'::regprocedure)
     into v_definition;
 
-  if position(v_new in v_definition) > 0 then
+  -- pg_get_functiondef normalizes whitespace and keyword casing differently
+  -- across PostgreSQL/PGlite versions. Detect the semantic selector rather than
+  -- requiring the original source formatting to survive byte-for-byte.
+  if position('canonical_flight_leg_occurrence_key_v1' in lower(v_definition)) > 0
+    and position('array_agg(records.record_id' in lower(v_definition)) > 0
+    and position('records.lifecycle_changed_at' in lower(v_definition)) > 0
+  then
     return;
   end if;
   if position(v_old in v_definition) = 0 then

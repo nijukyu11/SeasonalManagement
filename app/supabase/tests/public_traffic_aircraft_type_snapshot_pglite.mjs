@@ -10,7 +10,6 @@ const db = await createSupabasePGlite();
 
 try {
   await db.exec(`
-    create role service_role nologin;
     create schema reporting;
 
     create table public.seasons (data_version integer);

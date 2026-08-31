@@ -10,7 +10,7 @@ const canonicalCommitMigration = readFileSync(resolve(root, 'supabase/migrations
 const canonicalHelperGrantMigration = readFileSync(resolve(root, 'supabase/migrations/20260830053000_grant_canonical_helper_execute.sql'), 'utf8');
 const multiSeasonEventIdentityMigration = readFileSync(resolve(root, 'supabase/migrations/20260831010000_fix_daily_multiseason_event_identity.sql'), 'utf8');
 const overlayLineageMigration = readFileSync(resolve(root, 'supabase/migrations/20260831103000_daily_overlay_lineage_match.sql'), 'utf8');
-const page = readFileSync(resolve(root, 'src/app/daily/page.tsx'), 'utf8');
+const page = readFileSync(resolve(root, 'src/app/(desktop)/daily/page.tsx'), 'utf8');
 
 test('Daily commit atomically supersedes canonical legs without mutating the legacy active pointer', () => {
   const commit = canonicalCommitMigration.slice(canonicalCommitMigration.indexOf('create or replace function public.commit_daily_schedule_import_v1'));
