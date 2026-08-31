@@ -14,6 +14,7 @@ const removeSuppressionSql = await readFile(new URL('../migrations/2026083021300
 const regularFlightsSql = await readFile(new URL('../migrations/20260831120000_public_traffic_report_regular_flights.sql', import.meta.url), 'utf8');
 const annualPassengerKpiSql = await readFile(new URL('../migrations/20260831150000_public_annual_passenger_kpi.sql', import.meta.url), 'utf8');
 const annualPassengerKpiOwnerSql = await readFile(new URL('../migrations/20260831190000_annual_passenger_kpi_owner.sql', import.meta.url), 'utf8');
+const liveAggregateV2Sql = await readFile(new URL('../migrations/20260831210000_public_traffic_live_aggregate_v2.sql', import.meta.url), 'utf8');
 const db = await createSupabasePGlite();
 
 async function addSeason(id, code) {
@@ -67,6 +68,8 @@ try {
   await db.exec(annualPassengerKpiSql);
   await db.exec(annualPassengerKpiOwnerSql);
   await db.exec(annualPassengerKpiOwnerSql);
+  await db.exec(liveAggregateV2Sql);
+  await db.exec(liveAggregateV2Sql);
 
   await addSeason('old-season', 'W25');
   await addSeason('new-season', 'S26');
@@ -200,6 +203,91 @@ try {
   assert.equal(noPaxOverview.kpis.current.departure_reported_pax, null, 'an all-NULL departure scope must stay unknown instead of becoming zero');
   assert.equal(noPaxOverview.breakdowns.route.find((row) => row.label === 'SGN').reported_pax, null, 'an all-NULL breakdown bucket must remain unknown');
   assert.equal(noPaxOverview.breakdowns.aircraft_type.find((row) => row.label === 'A321').reported_pax, null, 'an all-NULL aircraft type must remain unknown');
+
+  const liveV2 = (await db.query(`select public.get_public_traffic_report_v2(
+    date '2026-03-03', date '2026-03-03', 'all', array[]::text[], array[]::text[],
+    array[]::text[], 'none', 'local', null, 'traffic-report-v2'
+  ) as result`)).rows[0].result;
+  assert.equal(liveV2.contract_version, 'traffic-report-v2');
+  assert.equal(liveV2.source_mode, 'live');
+  assert.equal(liveV2.timeline.length, 1);
+  assert.equal(liveV2.current.flights, 7);
+  assert.equal(liveV2.current.arrivals + liveV2.current.departures, liveV2.current.flights);
+  assert.equal(liveV2.current.reported_pax, 150, 'live v2 must include positive and true-zero reported Pax without reading the snapshot');
+  assert.equal(liveV2.current.reported_legs, 4, 'Pax zero is a reported leg in live v2');
+  assert.equal(liveV2.current.true_zero_reported_legs, 1);
+  assert.equal(liveV2.current.missing_due_legs, 3);
+  assert.equal(liveV2.timeline[0].reported_pax, 150);
+  assert.ok(!JSON.stringify(liveV2).includes('record_id'), 'the live public contract must remain aggregate-only');
+  assert.equal(liveV2.source_watermark, overview.source_watermark, 'v1/v2 differential comparison requires one source watermark');
+  assert.deepEqual(
+    {
+      flights: liveV2.current.flights,
+      arrivals: liveV2.current.arrivals,
+      departures: liveV2.current.departures,
+      reported_pax: liveV2.current.reported_pax,
+    },
+    {
+      flights: overview.kpis.current.flights,
+      arrivals: overview.kpis.current.arrivals,
+      departures: overview.kpis.current.departures,
+      reported_pax: overview.kpis.current.reported_pax,
+    },
+    'v1 snapshot and v2 live KPI aggregates must match at the same watermark',
+  );
+  assert.deepEqual(
+    liveV2.timeline.map((row) => [row.ops_date, row.flights, row.arrivals, row.departures, row.reported_pax]),
+    overview.timeline.map((row) => [row.ops_date, row.flights, row.arrivals, row.departures, row.reported_pax]),
+    'v1 snapshot and v2 live daily aggregates must match at the same watermark',
+  );
+  assert.deepEqual(
+    liveV2.dimensions.route.map((row) => [row.label, row.flights, row.reported_pax]),
+    overview.breakdowns.route.map((row) => [row.label, row.flights, row.reported_pax]),
+    'v1 snapshot and v2 live route aggregates must match at the same watermark',
+  );
+
+  const liveV2EmptyDays = (await db.query(`select public.get_public_traffic_report_v2(
+    date '2026-03-04', date '2026-03-06', 'all', array[]::text[], array[]::text[],
+    array[]::text[], 'none', 'local', null, 'traffic-report-v2'
+  ) as result`)).rows[0].result;
+  assert.deepEqual(
+    liveV2EmptyDays.timeline.map((row) => [row.ops_date, row.flights, row.status]),
+    [
+      ['2026-03-04', 0, 'zero'],
+      ['2026-03-05', 0, 'zero'],
+      ['2026-03-06', null, 'missing'],
+    ],
+    'v2 must distinguish certified zero-flight days from uncovered missing days',
+  );
+
+  const liveV2NoPax = (await db.query(`select public.get_public_traffic_report_v2(
+    date '2026-03-03', date '2026-03-03', 'D', array[]::text[], array['SGN'],
+    array[]::text[], 'none', 'local', null, 'traffic-report-v2'
+  ) as result`)).rows[0].result;
+  assert.equal(liveV2NoPax.current.flights, 3);
+  assert.equal(liveV2NoPax.current.reported_pax, null, 'an all-NULL live scope must remain NULL rather than zero');
+  assert.equal(liveV2NoPax.current.reported_legs, 0);
+  assert.equal(liveV2NoPax.dimensions.route[0].reported_pax, null);
+
+  const liveV2Arrival = (await db.query(`select public.get_public_traffic_report_v2(
+    date '2026-03-03', date '2026-03-03', 'A', array[]::text[], array[]::text[],
+    array[]::text[], 'none', 'local', null, 'traffic-report-v2'
+  ) as result`)).rows[0].result;
+  const liveV2Departure = (await db.query(`select public.get_public_traffic_report_v2(
+    date '2026-03-03', date '2026-03-03', 'D', array[]::text[], array[]::text[],
+    array[]::text[], 'none', 'local', null, 'traffic-report-v2'
+  ) as result`)).rows[0].result;
+  assert.equal(liveV2Arrival.current.flights + liveV2Departure.current.flights, liveV2.current.flights);
+  assert.equal(liveV2Arrival.current.reported_pax + liveV2Departure.current.reported_pax, liveV2.current.reported_pax);
+  assert.equal(liveV2Arrival.source_watermark, liveV2.source_watermark);
+  assert.equal(liveV2Departure.source_watermark, liveV2.source_watermark);
+  await assert.rejects(
+    db.query(`select public.get_public_traffic_report_v2(
+      date '2026-03-03', date '2026-03-03', 'all', array[]::text[], array[]::text[],
+      array[]::text[], 'none', 'local', 0, 'traffic-report-v2'
+    )`),
+    /DATA_VERSION_CHANGED/,
+  );
 
   const dimensionResult = await db.query(`select public.get_public_traffic_report_dimension_v2(date '2026-03-03', date '2026-03-03', 'route', array['A','D'], array[]::text[], array[]::text[], array[]::text[], 'flights', 1, 50, timestamptz '2026-03-10 00:00:00+00') as result`);
   const dimension = dimensionResult.rows[0].result;

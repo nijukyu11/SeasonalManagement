@@ -14,6 +14,7 @@ const aircraftTypeMigration = read('supabase/migrations/20260830200000_public_tr
 const regularFlightsMigration = read('supabase/migrations/20260831120000_public_traffic_report_regular_flights.sql');
 const annualKpiMigration = read('supabase/migrations/20260831150000_public_annual_passenger_kpi.sql');
 const annualKpiOwnerMigration = read('supabase/migrations/20260831190000_annual_passenger_kpi_owner.sql');
+const liveAggregateV2Migration = read('supabase/migrations/20260831210000_public_traffic_live_aggregate_v2.sql');
 const nginx = read('../deploy/traffic-report/nginx.conf');
 const stagingNginx = read('../deploy/traffic-report/nginx-staging.conf');
 const stagingTunnel = read('../deploy/traffic-report/seasonal-traffic-report-staging-tunnel.service');
@@ -32,10 +33,17 @@ assert.match(edge, /SUPABASE_REST_URL/);
 assert.match(edge, /unsupported query parameter/);
 assert.match(edge, /duplicate scalar parameter/);
 assert.match(edge, /status: 308/);
-assert.match(edge, /`\/api\/report\/v1\/\$\{endpoint\}/);
+assert.match(edge, /`\/api\/report\/\$\{isV2 \? 'v2' : 'v1'\}\/\$\{endpoint\}/);
 assert.match(edge, /'Cache-Control': 'no-store'/);
 assert.doesNotMatch(edge, /request\.headers\.get\(['"]Authorization/);
 assert.match(edge, /get_public_traffic_report_overview_v1/);
+assert.match(edge, /get_public_traffic_report_v2/);
+assert.match(edge, /expected_watermark/);
+assert.match(edge, /DATA_VERSION_CHANGED/);
+assert.match(edge, /status: 304/);
+assert.match(edge, /X-Report-Source-Mode/);
+assert.match(edge, /query: normalized\.canonicalQuery/);
+assert.match(edge, /next_cursor/);
 assert.match(edge, /get_public_traffic_report_dimension_v2/);
 assert.match(edge, /dimension-export/);
 assert.match(edge, /dimensionDataAsOf = typeof dimensionPayload\.data_as_of === 'string'/);
@@ -76,6 +84,19 @@ assert.match(annualKpiMigration, /when v_forecast_pct >= 98 then 'on_track'/);
 assert.match(annualKpiMigration, /revoke execute[\s\S]+from public, anon, authenticated/);
 assert.match(annualKpiOwnerMigration, /alter table reporting\.annual_passenger_kpis owner to postgres/);
 assert.match(annualKpiOwnerMigration, /revoke all on reporting\.annual_passenger_kpis[\s\S]+service_role/);
+assert.match(liveAggregateV2Migration, /from reporting\.public_traffic_candidates candidates/);
+assert.match(liveAggregateV2Migration, /candidates\.ops_date between v_scan_from - 1 and v_scan_to \+ 1/);
+assert.match(liveAggregateV2Migration, /effective_action is distinct from 'deleted'/);
+assert.match(liveAggregateV2Migration, /candidate_rank = 1/);
+assert.match(liveAggregateV2Migration, /DATA_VERSION_CHANGED/);
+assert.match(liveAggregateV2Migration, /pax is not null/);
+assert.match(liveAggregateV2Migration, /pax = 0/);
+assert.match(liveAggregateV2Migration, /generate_series\(v_from_date, v_to_date/);
+assert.match(liveAggregateV2Migration, /revoke execute[\s\S]+public, anon, authenticated, service_role/);
+assert.match(liveAggregateV2Migration, /grant execute[\s\S]+to service_role/);
+assert.doesNotMatch(liveAggregateV2Migration, /from public\.season_flight_records/i);
+assert.doesNotMatch(liveAggregateV2Migration, /from reporting\.public_traffic_effective/i);
+assert.doesNotMatch(liveAggregateV2Migration, /from reporting\.public_traffic_ranked_candidates/i);
 
 for (const signature of [
   'reporting.get_traffic_report_kpis',

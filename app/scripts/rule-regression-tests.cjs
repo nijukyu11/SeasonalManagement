@@ -11612,12 +11612,14 @@ async function run() {
   );
   assert(
     dashboardPageSource.includes('Seasonal Dashboard') &&
-      dashboardPageSource.includes("type DashboardView = 'operations' | 'comparison' | 'ai-workspace'") &&
+      dashboardPageSource.includes("type DashboardView = 'operations' | 'report' | 'comparison' | 'ai-workspace'") &&
       dashboardPageSource.includes("type LegacyDashboardView = 'overview' | 'analysis'") &&
+      dashboardPageSource.includes("const TRAFFIC_REPORT_V2_ENABLED = process.env.NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED === '1';") &&
       dashboardPageSource.includes("useSessionState<DashboardView>('dashboard:view', 'operations')") &&
       dashboardPageSource.includes("if (value === 'overview') return 'operations';") &&
       dashboardPageSource.includes("if (value === 'analysis') return 'comparison';") &&
       dashboardPageSource.includes('Vận hành ca trực') &&
+      dashboardPageSource.includes('Số liệu Report') &&
       dashboardPageSource.includes('AI Workspace') &&
       dashboardPageSource.includes('So sánh sản lượng') &&
       !dashboardPageSource.includes('Tổng quan') &&
@@ -11682,18 +11684,19 @@ async function run() {
       !dashboardPageSource.includes('No material driver movement'),
     'Dashboard route must render the operations/comparison replacement UI and migrate legacy dashboard tab state'
   );
-  const dashboardTabSectionStart = dashboardPageSource.indexOf('<div className="mt-1 grid grid-cols-1');
+  const dashboardTabSectionStart = dashboardPageSource.indexOf("<div className={cn('mt-1 grid grid-cols-1");
   const dashboardTabSectionEnd = dashboardPageSource.indexOf('<div className="text-left text-xs', dashboardTabSectionStart);
   const dashboardTabSection = dashboardTabSectionStart >= 0 && dashboardTabSectionEnd > dashboardTabSectionStart
     ? dashboardPageSource.slice(dashboardTabSectionStart, dashboardTabSectionEnd)
     : dashboardPageSource;
   assert(
-    dashboardTabSection.includes('sm:grid-cols-3') &&
+    dashboardTabSection.includes("TRAFFIC_REPORT_V2_ENABLED ? 'sm:grid-cols-4' : 'sm:grid-cols-3'") &&
       dashboardTabSection.includes('min-h-11') &&
     dashboardTabSection.indexOf('Vận hành ca trực') >= 0 &&
-      dashboardTabSection.indexOf('Vận hành ca trực') < dashboardTabSection.indexOf('So sánh sản lượng') &&
+      dashboardTabSection.indexOf('Vận hành ca trực') < dashboardTabSection.indexOf('Số liệu Report') &&
+      dashboardTabSection.indexOf('Số liệu Report') < dashboardTabSection.indexOf('So sánh sản lượng') &&
       dashboardTabSection.indexOf('So sánh sản lượng') < dashboardTabSection.indexOf('AI Workspace'),
-    'Dashboard tab order must be Vận hành ca trực, So sánh sản lượng, AI Workspace'
+    'Dashboard tab order must be Vận hành ca trực, gated Số liệu Report, So sánh sản lượng, AI Workspace'
   );
   const dashboardComparisonSectionStart = dashboardPageSource.indexOf("{dashboardView === 'comparison' &&");
   const dashboardComparisonSectionEnd = dashboardPageSource.indexOf("{dashboardView === 'ai-workspace' &&", dashboardComparisonSectionStart);

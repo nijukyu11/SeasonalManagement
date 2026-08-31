@@ -121,21 +121,21 @@ function readSourceBlock(source: string, startMarker: string, endMarker: string,
 test('dashboard replacement UI labels are the active visible contract', () => {
   const dashboardPage = readWorkspaceFile('src/app/(desktop)/dashboard/page.tsx');
   const aiBlockRenderers = readWorkspaceFile('src/app/(desktop)/dashboard/components/AiNotebookBlockRenderers.tsx');
-  const tabControls = readSourceBlock(dashboardPage, '<div className="mt-1 grid grid-cols-1', '<div className="text-left text-xs', 'dashboard tab controls');
-  assertContainsAll(dashboardPage, ['Vận hành ca trực', 'So sánh sản lượng', 'AI Workspace'], 'dashboard page labels');
-  assert.match(tabControls, /sm:grid-cols-3/, 'dashboard tabs must stack on small screens and keep three columns on wider screens');
+  const tabControls = readSourceBlock(dashboardPage, "<div className={cn('mt-1 grid grid-cols-1", '<div className="text-left text-xs', 'dashboard tab controls');
+  assertContainsAll(dashboardPage, ['Vận hành ca trực', 'Số liệu Report', 'So sánh sản lượng', 'AI Workspace'], 'dashboard page labels');
+  assert.match(tabControls, /TRAFFIC_REPORT_V2_ENABLED \? 'sm:grid-cols-4' : 'sm:grid-cols-3'/, 'dashboard tabs must add Report Mode only behind the v2 feature gate');
   assert.match(tabControls, /min-h-11/, 'dashboard tab controls must keep usable touch target height');
   assert.match(dashboardPage, /xl:grid-cols-\[minmax\(160px,0\.9fr\)_minmax\(260px,1\.2fr\)_repeat\(2,minmax\(160px,1fr\)\)\]/, 'comparison filter grid must wrap into four stable columns instead of overflowing in one row');
   assert.doesNotMatch(dashboardPage, /repeat\(5,minmax\(130px/, 'comparison filter grid must not force all eight filters into one wide row');
   assert.match(
     tabControls,
-    /Vận hành ca trực[\s\S]*So sánh sản lượng[\s\S]*AI Workspace/,
-    'dashboard tabs must be ordered operations, comparison, AI Workspace'
+    /Vận hành ca trực[\s\S]*Số liệu Report[\s\S]*So sánh sản lượng[\s\S]*AI Workspace/,
+    'dashboard tabs must be ordered operations, Report Mode, comparison, AI Workspace'
   );
   assert.match(
     dashboardPage,
-    /type\s+DashboardView\s*=\s*'operations'\s*\|\s*'comparison'\s*\|\s*'ai-workspace'/,
-    'dashboard page view union must use operations/comparison/ai-workspace'
+    /type\s+DashboardView\s*=\s*'operations'\s*\|\s*'report'\s*\|\s*'comparison'\s*\|\s*'ai-workspace'/,
+    'dashboard page view union must include the gated Report Mode'
   );
   assert.doesNotMatch(dashboardPage, /Tổng quan|Phân tích MoM \/ WoW/, 'old dashboard tab labels must be removed');
   assert.doesNotMatch(dashboardPage, /h-screen|bg-gradient/, 'dashboard page must avoid fixed viewport height and decorative gradients');

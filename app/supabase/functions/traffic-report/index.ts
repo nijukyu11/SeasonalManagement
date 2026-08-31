@@ -1,7 +1,8 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 
 const CONTRACT_VERSION = 'traffic-report-v1';
-const ALLOWED_QUERY_KEYS = new Set(['from', 'to', 'type', 'airline', 'route', 'country', 'aircraft_group', 'comp', 'tz', 'after', 'dimension', 'sort', 'page', 'page_size']);
+const V2_CONTRACT_VERSION = 'traffic-report-v2';
+const ALLOWED_QUERY_KEYS = new Set(['from', 'to', 'type', 'airline', 'route', 'country', 'aircraft_group', 'comp', 'tz', 'after', 'dimension', 'sort', 'page', 'page_size', 'expected_watermark']);
 const LIST_KEYS = new Set(['airline', 'route', 'country', 'aircraft_group']);
 const SCALAR_KEYS = [...ALLOWED_QUERY_KEYS].filter((key) => !LIST_KEYS.has(key));
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -27,6 +28,7 @@ type NormalizedRequest = {
   dimension: 'route' | 'country' | 'airline' | null;
   sort: 'flights' | 'reported_pax' | 'flight_share' | 'pax_share' | 'label';
   page: number;
+  expectedWatermark: number | null;
   canonicalQuery: string;
 };
 
@@ -47,7 +49,7 @@ function canonicalList(values: string[], uppercase: boolean): string[] {
     .sort((left, right) => left.localeCompare(right, 'en'));
 }
 
-function normalizeRequest(url: URL, endpoint: string): NormalizedRequest {
+function normalizeRequest(url: URL, endpoint: string, contractVersion: 'v1' | 'v2' = 'v1'): NormalizedRequest {
   for (const key of url.searchParams.keys()) {
     if (!ALLOWED_QUERY_KEYS.has(key)) throw new Error(`unsupported query parameter: ${key}`);
   }
@@ -85,6 +87,13 @@ function normalizeRequest(url: URL, endpoint: string): NormalizedRequest {
   const pageSize = rawPageSize ? Number(rawPageSize) : dimensionEndpoint ? (endpoint === 'dimension-export' ? 732 : 50) : 366;
   if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 732) throw new Error('page_size must be between 1 and 732');
   if (dimensionEndpoint && after) throw new Error('after is not supported for dimension endpoints');
+  if (contractVersion === 'v1' && url.searchParams.has('expected_watermark')) throw new Error('expected_watermark is not supported for v1');
+  if (contractVersion === 'v2' && url.searchParams.has('aircraft_group')) throw new Error('aircraft_group is not supported for v2');
+  const rawExpectedWatermark = url.searchParams.get('expected_watermark');
+  const expectedWatermark = rawExpectedWatermark === null ? null : Number(rawExpectedWatermark);
+  if (rawExpectedWatermark !== null && (!Number.isSafeInteger(expectedWatermark) || expectedWatermark < 0)) {
+    throw new Error('expected_watermark must be a non-negative integer');
+  }
 
   const airlines = canonicalList(url.searchParams.getAll('airline'), true);
   const routes = canonicalList(url.searchParams.getAll('route'), true);
@@ -106,6 +115,7 @@ function normalizeRequest(url: URL, endpoint: string): NormalizedRequest {
   if (dimensionEndpoint && rawSort !== 'flights') canonical.set('sort', rawSort);
   if (dimensionEndpoint && page !== 1) canonical.set('page', String(page));
   if (rawPageSize) canonical.set('page_size', String(pageSize));
+  if (expectedWatermark !== null) canonical.set('expected_watermark', String(expectedWatermark));
 
   return {
     from,
@@ -122,6 +132,7 @@ function normalizeRequest(url: URL, endpoint: string): NormalizedRequest {
     dimension,
     sort: rawSort as NormalizedRequest['sort'],
     page,
+    expectedWatermark,
     canonicalQuery: canonical.toString(),
   };
 }
@@ -363,6 +374,24 @@ function overviewArgs(request: NormalizedRequest): Record<string, unknown> {
   };
 }
 
+function v2Args(request: NormalizedRequest): Record<string, unknown> {
+  const type = request.types.length === 2 ? 'all' : request.types[0];
+  return {
+    p_from_date: request.from,
+    p_to_date: request.to,
+    p_type: type,
+    p_airlines: request.airlines,
+    p_routes: request.routes,
+    p_countries: request.countries,
+    p_comparison: request.comparison === 'previous_period'
+      ? 'previous'
+      : request.comparison === 'previous_year' ? 'year_ago' : 'none',
+    p_time_basis: request.timeBasis,
+    p_expected_watermark: request.expectedWatermark,
+    p_contract_version: V2_CONTRACT_VERSION,
+  };
+}
+
 function dimensionArgs(
   request: NormalizedRequest,
   page = request.page,
@@ -413,9 +442,28 @@ function buildDimensionCsv(payload: Record<string, unknown>): string {
   return `\uFEFF${lines.map((row) => row.map(csvCell).join(',')).join('\r\n')}`;
 }
 
+function buildV2AggregateCsv(bundle: Record<string, unknown>): string {
+  const dimensions = bundle.dimensions && typeof bundle.dimensions === 'object'
+    ? bundle.dimensions as Record<string, unknown>
+    : {};
+  const lines: unknown[][] = [[
+    'dimension', 'label', 'flights', 'arrivals', 'departures', 'reported_pax',
+    'reported_legs', 'due_legs', 'missing_due_legs', 'true_zero_reported_legs',
+  ]];
+  for (const dimension of ['airline', 'route', 'country']) {
+    const rows = Array.isArray(dimensions[dimension]) ? dimensions[dimension] as Array<Record<string, unknown>> : [];
+    for (const row of rows) lines.push([
+      dimension, row.label, row.flights, row.arrivals, row.departures, row.reported_pax,
+      row.reported_legs, row.due_legs, row.missing_due_legs, row.true_zero_reported_legs,
+    ]);
+  }
+  return `\uFEFF${lines.map((row) => row.map(csvCell).join(',')).join('\r\n')}`;
+}
+
 Deno.serve(async (request: Request) => {
   const url = new URL(request.url);
   const endpoint = url.pathname.split('/').filter(Boolean).at(-1) ?? 'overview';
+  const isV2 = /\/api\/report\/v2(?:\/|$)/u.test(url.pathname);
 
   try {
     if (url.pathname.includes('/kpi-admin/')) return await handleAnnualKpiAdmin(request, url);
@@ -459,15 +507,94 @@ Deno.serve(async (request: Request) => {
       });
     }
 
-    if (!['overview', 'timeline', 'breakdowns', 'dimension', 'dimension-export', 'export'].includes(endpoint)) return json({ error: 'not found' }, 404);
-    const normalized = normalizeRequest(url, endpoint);
+    const supportedEndpoints = isV2
+      ? ['overview', 'timeline', 'dimension', 'export']
+      : ['overview', 'timeline', 'breakdowns', 'dimension', 'dimension-export', 'export'];
+    if (!supportedEndpoints.includes(endpoint)) return json({ error: 'not found' }, 404);
+    const normalized = normalizeRequest(url, endpoint, isV2 ? 'v2' : 'v1');
     const incomingQuery = url.searchParams.toString();
     if (incomingQuery !== normalized.canonicalQuery) {
-      const location = `/api/report/v1/${endpoint}${normalized.canonicalQuery ? `?${normalized.canonicalQuery}` : ''}`;
+      const location = `/api/report/${isV2 ? 'v2' : 'v1'}/${endpoint}${normalized.canonicalQuery ? `?${normalized.canonicalQuery}` : ''}`;
       return new Response(null, { status: 308, headers: { Location: location, 'Cache-Control': 'no-store' } });
     }
 
     const startedAt = performance.now();
+    if (isV2) {
+      const payload = await postgrestRpc('get_public_traffic_report_v2', v2Args(normalized));
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('invalid traffic-report-v2 payload');
+      const bundle = payload as Record<string, unknown>;
+      const sourceWatermark = bundle.source_watermark;
+      const filterHash = bundle.filter_hash;
+      if (!Number.isSafeInteger(sourceWatermark) || typeof filterHash !== 'string') throw new Error('invalid traffic-report-v2 version envelope');
+      const etag = await sha256Etag({ endpoint, sourceWatermark, filterHash, query: normalized.canonicalQuery });
+      if (request.headers.get('If-None-Match') === etag) {
+        return new Response(null, { status: 304, headers: { ETag: etag, 'Cache-Control': 'public, max-age=0, s-maxage=30' } });
+      }
+      const version = {
+        contract_version: bundle.contract_version,
+        data_as_of: bundle.data_as_of,
+        source_watermark: bundle.source_watermark,
+        data_version: bundle.data_version,
+        filter_hash: bundle.filter_hash,
+        source_mode: bundle.source_mode,
+        normalized_filter: bundle.normalized_filter,
+      };
+      if (endpoint === 'export') {
+        return new Response(buildV2AggregateCsv(bundle), {
+          headers: {
+            'Content-Type': 'text/csv; charset=utf-8',
+            'Content-Disposition': 'attachment; filename="traffic-report-v2-aggregate.csv"',
+            'Cache-Control': 'no-store',
+            'X-Report-Source-Mode': String(bundle.source_mode ?? 'live'),
+            'X-Content-Type-Options': 'nosniff',
+          },
+        });
+      }
+      let responsePayload: Record<string, unknown> = bundle;
+      if (endpoint === 'timeline') {
+        const allRows = Array.isArray(bundle.timeline) ? bundle.timeline as Array<Record<string, unknown>> : [];
+        const firstIndex = normalized.after
+          ? allRows.findIndex((row) => String(row.ops_date) > normalized.after!)
+          : 0;
+        const offset = firstIndex < 0 ? allRows.length : firstIndex;
+        const rows = allRows.slice(offset, offset + normalized.pageSize);
+        responsePayload = {
+          ...version,
+          page_size: normalized.pageSize,
+          has_more: offset + rows.length < allRows.length,
+          next_cursor: offset + rows.length < allRows.length && rows.length > 0
+            ? String(rows.at(-1)?.ops_date ?? '')
+            : null,
+          timeline: rows,
+        };
+      }
+      if (endpoint === 'dimension') {
+        const dimensions = bundle.dimensions && typeof bundle.dimensions === 'object'
+          ? bundle.dimensions as Record<string, unknown>
+          : {};
+        const allRows = normalized.dimension && Array.isArray(dimensions[normalized.dimension])
+          ? dimensions[normalized.dimension] as unknown[]
+          : [];
+        const offset = (normalized.page - 1) * normalized.pageSize;
+        responsePayload = {
+          ...version,
+          dimension: normalized.dimension,
+          page: normalized.page,
+          page_size: normalized.pageSize,
+          total_rows: allRows.length,
+          has_more: offset + normalized.pageSize < allRows.length,
+          rows: allRows.slice(offset, offset + normalized.pageSize),
+        };
+      }
+      return json(responsePayload, 200, {
+        ETag: etag,
+        'Cache-Control': 'public, max-age=0, s-maxage=30, stale-while-revalidate=15',
+        'X-Report-Origin-Ms': String(Math.round(performance.now() - startedAt)),
+        'X-Report-Source-Mode': String(bundle.source_mode ?? 'live'),
+        Vary: 'Accept-Encoding',
+      });
+    }
+
     const dataAsOf = new Date().toISOString();
     const canonicalRequestHash = await requestHash(normalized);
     if (endpoint === 'dimension' || endpoint === 'dimension-export') {
@@ -561,6 +688,16 @@ Deno.serve(async (request: Request) => {
         error_code: unavailable ? 'ADMIN_NOT_CONFIGURED' : 'ADMIN_REQUEST_INVALID',
         error: unavailable ? 'Trình chỉnh sửa KPI chưa được cấu hình trên máy chủ.' : 'Thông tin KPI chưa hợp lệ.',
       }, unavailable ? 503 : 400, { 'Cache-Control': 'no-store' });
+    }
+    if (/DATA_VERSION_CHANGED/i.test(message)) {
+      const expected = /expected=(\d+)/u.exec(message)?.[1] ?? null;
+      const actual = /actual=(\d+)/u.exec(message)?.[1] ?? null;
+      return json({
+        error_code: 'DATA_VERSION_CHANGED',
+        error: 'Dữ liệu báo cáo đã thay đổi. Vui lòng tải lại toàn bộ báo cáo.',
+        expected_watermark: expected === null ? null : Number(expected),
+        actual_watermark: actual === null ? null : Number(actual),
+      }, 409, { 'Cache-Control': 'no-store' });
     }
     const clientError = /invalid|unsupported|must|required|cardinality|outside|provided|exceed/i.test(message);
     return json({

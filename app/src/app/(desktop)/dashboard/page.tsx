@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { cn } from '@/lib/cn';
 import { getOperationalSettings, getSeasons, loadSeasonWorkspaceWindow } from '@/lib/remoteStore';
 import { revalidateSeasonWorkspaceWindow } from '@/lib/seasonWorkspaceWindowCoordinator';
 import { publishSeasonWorkspaceChanged } from '@/lib/seasonDataCache';
@@ -94,6 +95,7 @@ import { useSeasonWorkspaceRefresh } from '../hooks/useSeasonWorkspaceRefresh';
 import { AiWorkspacePanel, type AiWorkspacePreset } from './components/AiWorkspacePanel';
 import type { AiNotebookLoadingStep } from './components/AiNotebookCanvas';
 import type { AiNotebookRendererData } from './components/AiNotebookBlockRenderers';
+import { TrafficReportModePanel } from './components/TrafficReportModePanel';
 
 const METRICS: Array<{ value: DashboardMetric; label: string }> = [
   { value: 'flights', label: 'Chuyến bay' },
@@ -189,8 +191,9 @@ const HEATMAP_CELL_TONES = [
 ];
 const MONTH_LABELS = ['Thg 1', 'Thg 2', 'Thg 3', 'Thg 4', 'Thg 5', 'Thg 6', 'Thg 7', 'Thg 8', 'Thg 9', 'Thg 10', 'Thg 11', 'Thg 12'];
 const numberFormat = new Intl.NumberFormat('en-US');
-type DashboardView = 'operations' | 'comparison' | 'ai-workspace';
+type DashboardView = 'operations' | 'report' | 'comparison' | 'ai-workspace';
 type LegacyDashboardView = 'overview' | 'analysis';
+const TRAFFIC_REPORT_V2_ENABLED = process.env.NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED === '1';
 type PeakDayCalendarCell = {
   key: string;
   date: string;
@@ -264,6 +267,7 @@ function readInitialDashboardRouteState(targetSeasonId: string | null): Dashboar
 function normalizeDashboardView(value: DashboardView | LegacyDashboardView | unknown): DashboardView {
   if (value === 'analysis') return 'comparison';
   if (value === 'overview') return 'operations';
+  if (value === 'report') return TRAFFIC_REPORT_V2_ENABLED ? 'report' : 'operations';
   if (value === 'comparison' || value === 'ai-workspace' || value === 'operations') return value;
   return 'operations';
 }
@@ -2438,7 +2442,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Bảng điều khiển</div>
-                <div className="mt-1 grid grid-cols-1 rounded-lg border border-outline-variant bg-surface p-1 sm:grid-cols-3">
+                <div className={cn('mt-1 grid grid-cols-1 rounded-lg border border-outline-variant bg-surface p-1', TRAFFIC_REPORT_V2_ENABLED ? 'sm:grid-cols-4' : 'sm:grid-cols-3')}>
                   <button
                     type="button"
                     onClick={() => setDashboardView('operations')}
@@ -2447,6 +2451,16 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
                     <span className="material-symbols-outlined text-[18px]">monitoring</span>
                     <span className="min-w-0 truncate">Vận hành ca trực</span>
                   </button>
+                  {TRAFFIC_REPORT_V2_ENABLED ? (
+                    <button
+                      type="button"
+                      onClick={() => setDashboardView('report')}
+                      className={`inline-flex min-h-11 min-w-0 items-center justify-start gap-2 rounded-md px-3 py-2 text-sm font-semibold sm:justify-center ${dashboardView === 'report' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}
+                    >
+                      <span className="material-symbols-outlined text-[18px]">query_stats</span>
+                      <span className="min-w-0 truncate">Số liệu Report</span>
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => setDashboardView('comparison')}
@@ -2471,6 +2485,8 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
               </div>
             </div>
           </section>
+
+          {dashboardView === 'report' && TRAFFIC_REPORT_V2_ENABLED ? <TrafficReportModePanel /> : null}
 
           {dashboardView === 'operations' && (
             <>
