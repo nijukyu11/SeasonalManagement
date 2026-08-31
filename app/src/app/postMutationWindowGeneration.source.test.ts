@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const seasonal = readFileSync(new URL('SeasonalSchedulePage.tsx', import.meta.url), 'utf8');
-const settings = readFileSync(new URL('settings/page.tsx', import.meta.url), 'utf8');
+const seasonal = readFileSync(new URL('(desktop)/SeasonalSchedulePage.tsx', import.meta.url), 'utf8');
+const settings = readFileSync(new URL('(desktop)/settings/page.tsx', import.meta.url), 'utf8');
 
 test('both Seasonal import entry points reconcile only through the post-mutation coordinator', () => {
   for (const [name, source] of [['Seasonal', seasonal], ['Settings repair', settings]] as const) {

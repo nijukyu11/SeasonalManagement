@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+timer_unit="seasonal-traffic-report-refresh.timer"
+service_unit="seasonal-traffic-report-refresh.service"
+
+if systemctl is-active --quiet "$timer_unit" || systemctl is-enabled --quiet "$timer_unit"; then
+  echo "ERROR: $timer_unit must be disabled and inactive for staging manual-refresh mode." >&2
+  exit 1
+fi
+
+systemctl start "$service_unit"
+
+if systemctl is-failed --quiet "$service_unit"; then
+  systemctl status "$service_unit" --no-pager >&2 || true
+  exit 1
+fi
+
+status="$({
+  /usr/bin/docker exec opsdata-supabase-db \
+    psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d postgres -At -F '|' -c "
+      with snapshot as (
+        select
+          max(snapshot_refreshed_at) as refreshed_at,
+          max(snapshot_source_watermark) as snapshot_watermark,
+          count(*)::bigint as row_count,
+          count(*) filter (
+            where aircraft_type is null or btrim(aircraft_type) = ''
+          )::bigint as invalid_aircraft_type_rows
+        from reporting.public_traffic_effective
+      ), source as (
+        select max(server_seq)::bigint as source_watermark
+        from public.season_change_events
+      )
+      select
+        case
+          when snapshot.refreshed_at is null or snapshot.row_count = 0 then 'empty_snapshot'
+          when snapshot.invalid_aircraft_type_rows > 0 then 'invalid_aircraft_type_snapshot'
+          when snapshot.snapshot_watermark is not distinct from source.source_watermark then 'ready'
+          else 'source_changed_after_refresh'
+        end,
+        to_char(snapshot.refreshed_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),
+        coalesce(snapshot.snapshot_watermark::text, 'null'),
+        coalesce(source.source_watermark::text, 'null'),
+        snapshot.row_count::text,
+        snapshot.invalid_aircraft_type_rows::text
+      from snapshot cross join source;
+    "
+} 2>&1)" || {
+  printf '%s\n' "$status" >&2
+  exit 1
+}
+
+printf 'status|refreshed_at_utc|snapshot_watermark|source_watermark|row_count|invalid_aircraft_type_rows\n%s\n' "$status"
+
+case "$status" in
+  ready\|*) ;;
+  *)
+    echo "ERROR: snapshot is not ready for acceptance; wait for writes to stop and run this command again." >&2
+    exit 1
+    ;;
+esac
+
+echo "Snapshot is ready. Allow up to 60 seconds for an existing Nginx API cache entry to expire before acceptance."

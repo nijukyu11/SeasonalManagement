@@ -4,12 +4,12 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 const routeFiles = [
-  'src/app/SeasonalSchedulePage.tsx',
-  'src/app/detailed/page.tsx',
-  'src/app/daily/page.tsx',
-  'src/app/checkin/page.tsx',
-  'src/app/gate/page.tsx',
-  'src/app/dashboard/page.tsx',
+  'src/app/(desktop)/SeasonalSchedulePage.tsx',
+  'src/app/(desktop)/detailed/page.tsx',
+  'src/app/(desktop)/daily/page.tsx',
+  'src/app/(desktop)/checkin/page.tsx',
+  'src/app/(desktop)/gate/page.tsx',
+  'src/app/(desktop)/dashboard/page.tsx',
 ];
 
 function extractBalancedBlock(source: string, openIndex: number): string {
@@ -115,7 +115,7 @@ test('Fetch data actions force server workspace reload and bypass native submit 
     const source = readFileSync(join(process.cwd(), file), 'utf8');
     assert.match(source, /loadSeasonWorkspaceWindow/, file);
     const fetchSource = extractFunctionBody(source, 'fetchServerData');
-    if (file === 'src/app/SeasonalSchedulePage.tsx') {
+    if (file === 'src/app/(desktop)/SeasonalSchedulePage.tsx') {
       assert.match(fetchSource, /loadSeasonRows\(activeSeason,\s*true,/, file);
     } else {
       assert.match(fetchSource, /revalidateSeasonWorkspaceWindow\([\s\S]*force:\s*true,[\s\S]*initiator:\s*'immediate'/, file);
@@ -129,9 +129,9 @@ test('Fetch data actions force server workspace reload and bypass native submit 
 
 test('heavy operational routes use a cache-first initial load before server workspace fetch', () => {
   const files = [
-    ['src/app/daily/page.tsx', 'tryApplyCachedDailyRouteWindow'],
-    ['src/app/checkin/page.tsx', 'tryApplyCachedCheckInRouteWindow'],
-    ['src/app/gate/page.tsx', 'tryApplyCachedGateRouteWindow'],
+    ['src/app/(desktop)/daily/page.tsx', 'tryApplyCachedDailyRouteWindow'],
+    ['src/app/(desktop)/checkin/page.tsx', 'tryApplyCachedCheckInRouteWindow'],
+    ['src/app/(desktop)/gate/page.tsx', 'tryApplyCachedGateRouteWindow'],
   ] as const;
 
   for (const [file, helperName] of files) {
@@ -144,10 +144,10 @@ test('heavy operational routes use a cache-first initial load before server work
 
 test('remounted heavy routes seed initial route state from cached workspace before first loading render', () => {
   const files = [
-    ['src/app/daily/page.tsx', 'Daily', 'initialDailyRouteState'],
-    ['src/app/checkin/page.tsx', 'CheckIn', 'initialCheckInRouteState'],
-    ['src/app/gate/page.tsx', 'Gate', 'initialGateRouteState'],
-    ['src/app/dashboard/page.tsx', 'Dashboard', 'initialDashboardRouteState'],
+    ['src/app/(desktop)/daily/page.tsx', 'Daily', 'initialDailyRouteState'],
+    ['src/app/(desktop)/checkin/page.tsx', 'CheckIn', 'initialCheckInRouteState'],
+    ['src/app/(desktop)/gate/page.tsx', 'Gate', 'initialGateRouteState'],
+    ['src/app/(desktop)/dashboard/page.tsx', 'Dashboard', 'initialDashboardRouteState'],
   ] as const;
 
   for (const [file, routeName, stateName] of files) {
@@ -168,12 +168,12 @@ test('remounted heavy routes seed initial route state from cached workspace befo
 
 test('workspace activation refresh hydrates route state from shared store instead of stale native SQLite', () => {
   const refreshFunctions = [
-    ['src/app/SeasonalSchedulePage.tsx', 'refreshSeasonalWindow'],
-    ['src/app/detailed/page.tsx', 'refreshDetailedWindow'],
-    ['src/app/daily/page.tsx', 'refreshDailyWindow'],
-    ['src/app/checkin/page.tsx', 'refreshCheckInWindow'],
-    ['src/app/gate/page.tsx', 'refreshGateWindow'],
-    ['src/app/dashboard/page.tsx', 'refreshDashboardWindow'],
+    ['src/app/(desktop)/SeasonalSchedulePage.tsx', 'refreshSeasonalWindow'],
+    ['src/app/(desktop)/detailed/page.tsx', 'refreshDetailedWindow'],
+    ['src/app/(desktop)/daily/page.tsx', 'refreshDailyWindow'],
+    ['src/app/(desktop)/checkin/page.tsx', 'refreshCheckInWindow'],
+    ['src/app/(desktop)/gate/page.tsx', 'refreshGateWindow'],
+    ['src/app/(desktop)/dashboard/page.tsx', 'refreshDashboardWindow'],
   ] as const;
 
   for (const [file, functionName] of refreshFunctions) {
@@ -186,13 +186,13 @@ test('workspace activation refresh hydrates route state from shared store instea
 });
 
 test('server-authoritative schedule pages reject missing server windows without native fallback', () => {
-  const seasonalSource = readFileSync(join(process.cwd(), 'src/app/SeasonalSchedulePage.tsx'), 'utf8');
+  const seasonalSource = readFileSync(join(process.cwd(), 'src/app/(desktop)/SeasonalSchedulePage.tsx'), 'utf8');
   const seasonalLoad = extractFunctionBody(seasonalSource, 'loadSeasonRows');
   assert.match(seasonalLoad, /if \(serverWindow\) \{[\s\S]*?return;[\s\S]*?\}\s*throw new Error\(/, 'seasonal');
   assert.doesNotMatch(seasonalLoad, /\bensureNativeSeasonBaseline\b/, 'seasonal');
   assert.doesNotMatch(seasonalLoad, /\bqueryNativeScheduleWindow\b/, 'seasonal');
 
-  const detailedSource = readFileSync(join(process.cwd(), 'src/app/detailed/page.tsx'), 'utf8');
+  const detailedSource = readFileSync(join(process.cwd(), 'src/app/(desktop)/detailed/page.tsx'), 'utf8');
   const detailedLoad = detailedSource;
   assert.match(detailedLoad, /if \(serverWindow\) \{[\s\S]*?return;[\s\S]*?\}\s*throw new Error\(/, 'detailed');
   assert.doesNotMatch(detailedLoad, /\bensureNativeSeasonBaseline\b/, 'detailed');
@@ -200,7 +200,7 @@ test('server-authoritative schedule pages reject missing server windows without 
 });
 
 test('Seasonal export reads one strict full server snapshot instead of a window or native SQLite', () => {
-  const source = readFileSync(join(process.cwd(), 'src/app/SeasonalSchedulePage.tsx'), 'utf8');
+  const source = readFileSync(join(process.cwd(), 'src/app/(desktop)/SeasonalSchedulePage.tsx'), 'utf8');
   const exportSource = extractFunctionBody(source, 'handleExportUpdated');
   assert.match(exportSource, /getSeasonalExportSnapshot/, 'seasonal export');
   assert.match(exportSource, /materializeEffectiveSeasonalLegs\(\s*exportSnapshot\.records,\s*exportSnapshot\.modifications/, 'seasonal export');
@@ -210,41 +210,41 @@ test('Seasonal export reads one strict full server snapshot instead of a window 
 });
 
 test('Fetch data does not submit unsent route-local commits before server reads', () => {
-  const dailySource = readFileSync(join(process.cwd(), 'src/app/daily/page.tsx'), 'utf8');
+  const dailySource = readFileSync(join(process.cwd(), 'src/app/(desktop)/daily/page.tsx'), 'utf8');
   const dailyFetch = extractFunctionBody(dailySource, 'fetchServerData');
   assertBefore(dailyFetch, 'await currentMutationRef.current', 'revalidateSeasonWorkspaceWindow', 'daily');
   assertBefore(dailyFetch, 'await commitQueueRef.current', 'revalidateSeasonWorkspaceWindow', 'daily');
 
-  const checkInSource = readFileSync(join(process.cwd(), 'src/app/checkin/page.tsx'), 'utf8');
+  const checkInSource = readFileSync(join(process.cwd(), 'src/app/(desktop)/checkin/page.tsx'), 'utf8');
   const checkInFetch = extractFunctionBody(checkInSource, 'fetchServerData');
   assert.doesNotMatch(checkInFetch, /flushPendingCheckInLocalCommit/, 'checkin');
   assertBefore(checkInFetch, 'checkInCommitAccumulatorRef.current', 'revalidateSeasonWorkspaceWindow', 'checkin');
   assertBefore(checkInFetch, 'await currentMutationRef.current', 'revalidateSeasonWorkspaceWindow', 'checkin');
   assertBefore(checkInFetch, 'await commitQueueRef.current', 'revalidateSeasonWorkspaceWindow', 'checkin');
 
-  const gateSource = readFileSync(join(process.cwd(), 'src/app/gate/page.tsx'), 'utf8');
+  const gateSource = readFileSync(join(process.cwd(), 'src/app/(desktop)/gate/page.tsx'), 'utf8');
   const gateFetch = extractFunctionBody(gateSource, 'fetchServerData');
   assert.doesNotMatch(gateFetch, /flushPendingGateLocalCommit/, 'gate');
   assertBefore(gateFetch, 'gateCommitAccumulatorRef.current', 'revalidateSeasonWorkspaceWindow', 'gate');
   assertBefore(gateFetch, 'await currentMutationRef.current', 'revalidateSeasonWorkspaceWindow', 'gate');
   assertBefore(gateFetch, 'await commitQueueRef.current', 'revalidateSeasonWorkspaceWindow', 'gate');
 
-  const seasonalSource = readFileSync(join(process.cwd(), 'src/app/SeasonalSchedulePage.tsx'), 'utf8');
+  const seasonalSource = readFileSync(join(process.cwd(), 'src/app/(desktop)/SeasonalSchedulePage.tsx'), 'utf8');
   const seasonalFetch = extractFunctionBody(seasonalSource, 'fetchServerData');
   assert.match(seasonalFetch, /hasDraftChanges/, 'seasonal');
 
-  const detailedSource = readFileSync(join(process.cwd(), 'src/app/detailed/page.tsx'), 'utf8');
+  const detailedSource = readFileSync(join(process.cwd(), 'src/app/(desktop)/detailed/page.tsx'), 'utf8');
   const detailedFetch = extractFunctionBody(detailedSource, 'fetchServerData');
   assert.match(detailedFetch, /hasDraftChanges/, 'detailed');
 });
 
 test('manual Fetch failures do not replace already loaded route data with load error state', () => {
   const files = [
-    'src/app/daily/page.tsx',
-    'src/app/detailed/page.tsx',
-    'src/app/checkin/page.tsx',
-    'src/app/gate/page.tsx',
-    'src/app/dashboard/page.tsx',
+    'src/app/(desktop)/daily/page.tsx',
+    'src/app/(desktop)/detailed/page.tsx',
+    'src/app/(desktop)/checkin/page.tsx',
+    'src/app/(desktop)/gate/page.tsx',
+    'src/app/(desktop)/dashboard/page.tsx',
   ];
   for (const file of files) {
     const source = readFileSync(join(process.cwd(), file), 'utf8');
@@ -259,7 +259,7 @@ test('manual Fetch failures do not replace already loaded route data with load e
     assert.match(catchSource, /if \(!hasRouteDataLoaded\)/, file);
   }
 
-  const seasonalSource = readFileSync(join(process.cwd(), 'src/app/SeasonalSchedulePage.tsx'), 'utf8');
+  const seasonalSource = readFileSync(join(process.cwd(), 'src/app/(desktop)/SeasonalSchedulePage.tsx'), 'utf8');
   const seasonalFetch = extractFunctionBody(seasonalSource, 'fetchServerData');
   assert.match(seasonalFetch, /loadSeasonRows\(activeSeason,\s*true,/, 'seasonal');
   assert.doesNotMatch(seasonalFetch, /setLoadError/, 'seasonal');
@@ -272,7 +272,7 @@ test('manual Fetch responses are ignored after season or window changes', () => 
     assert.match(source, /latestRouteWindowRef/, file);
     const fetchSource = extractFunctionBody(source, 'fetchServerData');
     assert.match(fetchSource, /requestId/, file);
-    if (file === 'src/app/SeasonalSchedulePage.tsx') {
+    if (file === 'src/app/(desktop)/SeasonalSchedulePage.tsx') {
       assert.match(source, /requestGuard[\s\S]*?latestRouteWindowRef\.current\.seasonId/, file);
     } else {
       assert.match(fetchSource, /latestRouteWindowRef\.current\.seasonId !== requestedSeasonId/, file);

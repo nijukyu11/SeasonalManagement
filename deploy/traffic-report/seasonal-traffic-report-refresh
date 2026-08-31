@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+database_container="opsdata-supabase-db"
+psql=(/usr/bin/docker exec "$database_container" psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d postgres)
+
+mark_failed() {
+  "${psql[@]}" -c "select reporting.mark_public_traffic_projection_failed_v1('refresh job failed')" >/dev/null 2>&1 || true
+}
+
+# This command may be called by a five-minute timer. The check is deliberately
+# cheap: a full materialized-view refresh runs only after a committed source
+# change advances the watermark, or when the previous projection is not usable.
+read -r projection_status projection_watermark source_watermark < <(
+  "${psql[@]}" -At -F ' ' -c "
+    select coalesce(state.status, 'stale'),
+      coalesce(state.source_watermark, -1),
+      coalesce((select max(server_seq)::bigint from public.season_change_events), -1)
+    from (values (1)) seed(value)
+    left join reporting.public_traffic_projection_state state
+      on state.projection_name = 'public_traffic_effective'
+  "
+)
+
+if [[ "$projection_status" =~ ^(fresh|empty)$ && "$projection_watermark" = "$source_watermark" ]]; then
+  printf 'unchanged source_watermark=%s\n' "$source_watermark"
+  exit 0
+fi
+
+if ! "${psql[@]}" -c "refresh materialized view concurrently reporting.public_traffic_effective"; then
+  mark_failed
+  exit 1
+fi
+
+if ! "${psql[@]}" -c "select reporting.mark_public_traffic_projection_fresh_v1()"; then
+  mark_failed
+  exit 1
+fi

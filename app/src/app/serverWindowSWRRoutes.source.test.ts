@@ -3,12 +3,12 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const ROUTES = [
-  'SeasonalSchedulePage.tsx',
-  'detailed/page.tsx',
-  'daily/page.tsx',
-  'checkin/page.tsx',
-  'gate/page.tsx',
-  'dashboard/page.tsx',
+  '(desktop)/SeasonalSchedulePage.tsx',
+  '(desktop)/detailed/page.tsx',
+  '(desktop)/daily/page.tsx',
+  '(desktop)/checkin/page.tsx',
+  '(desktop)/gate/page.tsx',
+  '(desktop)/dashboard/page.tsx',
 ] as const;
 
 test('heavy schedule routes render any existing snapshot before background revalidation', () => {

@@ -1,0 +1,8 @@
+# Merge this hostname into the existing named tunnel. Do not create a second
+# tunnel process on the server. Cloudflare Cache Rules must bypass /api/report/*.
+ingress:
+  - hostname: report.ahtops.xyz
+    service: http://127.0.0.1:8780
+    originRequest:
+      noTLSVerify: false
+  - service: http_status:404

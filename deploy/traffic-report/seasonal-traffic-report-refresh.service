@@ -1,0 +1,10 @@
+[Unit]
+Description=Manually refresh the public traffic report aggregate snapshot
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/seasonal-traffic-report-refresh
+TimeoutStartSec=300
+NoNewPrivileges=true

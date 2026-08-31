@@ -2,6 +2,8 @@
 
 This app is a static Next.js export designed for development in a browser and operational use inside the Tauri Windows desktop shell. Authenticated self-hosted Supabase is the normal durable read/write authority. Zustand keeps operator-scoped server snapshots in memory so route remounts can render immediately; IndexedDB and SQLite are not schedule-read or failure fallbacks.
 
+The same export also contains the isolated anonymous route `/reports/traffic`. Its `(public-report)` root does not import the Tauri/authenticated desktop graph and reads only versioned aggregate GET endpoints under `/api/report/v1`. See `../docs/runbooks/public-traffic-report-deploy.md` for the Nginx/Cloudflare staging and rollout boundary.
+
 ## Development
 
 ```bash

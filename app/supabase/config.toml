@@ -4,6 +4,9 @@ verify_jwt = true
 [functions.rotate-dashboard-ai-key]
 verify_jwt = true
 
+[functions.traffic-report]
+verify_jwt = false
+
 [functions.schedule-telegram-notify]
 enabled = true
 verify_jwt = true
