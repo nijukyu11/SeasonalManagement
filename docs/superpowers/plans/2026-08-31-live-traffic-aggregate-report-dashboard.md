@@ -2,7 +2,9 @@
 
 **Ngày lập:** 2026-08-31
 
-**Trạng thái:** Đã thống nhất hướng kiến trúc — chưa commit, chưa merge, chưa sửa runtime, chưa chạy migration, chưa deploy
+**Trạng thái:** Đang thực hiện trên `codex/live-traffic-aggregate-integration` — đã merge local, implement additive và rehearsal clone; chưa deploy/migration production, UI v2 mặc định tắt
+
+**Implementation receipt:** `docs/superpowers/artifacts/2026-08-31-live-traffic-aggregate-implementation-receipt.md`
 
 **Quyết định mục tiêu:** Report và phần Report Mode của Dashboard dùng chung một live aggregate contract đọc từ canonical effective flight legs, có watermark/data version và cache ngắn; Dashboard Operational Mode tiếp tục dùng workspace RPC riêng.
 
