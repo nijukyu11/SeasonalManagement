@@ -4,7 +4,7 @@ import type { Season } from './types.ts';
 export { confirmDailyImportZeroFlightDatesV1 } from './dailyImportScope.ts';
 
 export const DAILY_IMPORT_CONTRACT_VERSION = 1;
-export const DAILY_RESOURCE_POLICY_VERSION = 'stand-text_gate-int_counter-token_v1';
+export const DAILY_RESOURCE_POLICY_VERSION = 'stand-text_gate-int_counter-token_status-filter_v2';
 
 export interface CanonicalDailyImportLegV1 {
   sourceRowNumber: number;
@@ -142,7 +142,7 @@ export async function buildDailyImportStagePayloadV1(input: {
   sheet: DailyWorkbookSheetCandidate;
   seasons: Season[];
 }): Promise<DailyImportStagePayloadV1> {
-  const strict = parseDailyImportRowsStrict(input.sheet.rows);
+  const strict = parseDailyImportRowsStrict(input.sheet.rows, { workbookProfile: input.sheet.profile });
   const diagnostics: DailyImportDiagnosticV1[] = strict.diagnostics.map((diagnostic) => ({
     ...diagnostic,
     sheetName: input.sheet.sheetName,

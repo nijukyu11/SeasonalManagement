@@ -210,7 +210,12 @@ begin
     order by seasons.id limit 1;
     if not found then continue; end if;
 
-    select count(*), min(records.record_id)
+    select count(distinct public.canonical_flight_leg_occurrence_key_v1(
+        records.season_id, records.operational_date, records.scheduled_date, records.date,
+        records.scheduled_time, records.schedule, records.type, records.airline,
+        records.flight_number, records.raw_flight_number, records.route
+      )),
+      (array_agg(records.record_id order by records.lifecycle_changed_at desc nulls last, records.record_id desc))[1]
       into v_match_count, v_matched_record_id
     from public.season_flight_records records
     where records.season_id=v_season.id
@@ -630,7 +635,7 @@ begin
       changed_fields,op_payload
     ) values (
       'daily-canonical-v2:'||p_batch_id::text||':'||v_target.season_id,
-      v_target.season_id,'daily-canonical-v2',p_batch_id::text,auth.uid(),
+      v_target.season_id,'daily-canonical-v2',p_batch_id::text||':'||v_target.season_id,auth.uid(),
       'dailyImport',v_target.season_id,array['canonicalFlightLegs','seasonMetadata'],
       jsonb_build_object(
         'kind','commit_daily_schedule_canonical_v2','batchId',p_batch_id,

@@ -7,6 +7,7 @@ import {
   normalizeDailyGateValue,
   normalizeStandValue,
 } from './operationalResourceValues';
+import type { DailyWorkbookProfile } from './dailyScheduleWorkbook.ts';
 import type { FlightCounter, FlightModification, FlightRecord, ModHistoryEntry } from './types';
 
 export type DailyImportRawRow = Record<string, unknown>;
@@ -473,15 +474,28 @@ function parseImportedLeg(row: DailyImportRawRow, side: 'ARR' | 'DEP', rowNumber
   };
 }
 
-function sideHasAnyValue(row: DailyImportRawRow, side: 'ARR' | 'DEP'): boolean {
-  return Object.entries(row).some(([key, value]) => {
-    if (!isDailyImportSideKey(key, side) || textValue(value) == null) return false;
-    if (key === 'DEPGate') return normalizeDailyGateValue(value).kind === 'value';
-    return true;
-  });
+function sideHasFlightIdentityValue(row: DailyImportRawRow, side: 'ARR' | 'DEP'): boolean {
+  return [
+    readColumn(row, [`${side}-AIRLINE_FLIGHT_SUFFIX`]).value,
+    readColumn(row, [`${side}-Scheduled`]).value,
+  ].some((value) => textValue(value) != null);
 }
 
-export function parseDailyImportRowsStrict(importRows: DailyImportRawRow[]): {
+function shouldExcludeDailyImportSide(
+  row: DailyImportRawRow,
+  side: 'ARR' | 'DEP',
+  workbookProfile: DailyWorkbookProfile | undefined,
+): boolean {
+  const status = normalizeUpperText(readColumn(row, [`${side}-STATUS_CODE`]).value);
+  if (workbookProfile === 'legacy-operationalturns') return status === 'CX';
+  if (workbookProfile === 'compact-lb') return status === 'CANCELLED';
+  return false;
+}
+
+export function parseDailyImportRowsStrict(
+  importRows: DailyImportRawRow[],
+  options: { workbookProfile?: DailyWorkbookProfile } = {},
+): {
   legs: ImportedDailyLeg[];
   diagnostics: DailyImportRowDiagnostic[];
 } {
@@ -490,7 +504,8 @@ export function parseDailyImportRowsStrict(importRows: DailyImportRawRow[]): {
   const occurrenceKeys = new Set<string>();
   importRows.forEach((row, index) => {
     for (const side of ['ARR', 'DEP'] as const) {
-      if (!sideHasAnyValue(row, side)) continue;
+      if (shouldExcludeDailyImportSide(row, side, options.workbookProfile)) continue;
+      if (!sideHasFlightIdentityValue(row, side)) continue;
       const rowNumber = index + 1;
       try {
         const leg = parseImportedLeg(row, side, rowNumber, rowNumber);
