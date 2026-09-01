@@ -507,6 +507,7 @@ begin
       'due_legs', case when coverage_status = 'missing' and flights is null then null else coalesce(due_legs, 0) end,
       'missing_due_legs', case when coverage_status = 'missing' and flights is null then null else coalesce(missing_due_legs, 0) end,
       'true_zero_reported_legs', case when coverage_status = 'missing' and flights is null then null else coalesce(true_zero_reported_legs, 0) end,
+      'completeness', coverage_status,
       'status', case when ops_date > v_latest_completed then 'future'
         when coverage_status = 'missing' then 'missing'
         when coverage_status = 'partial' or missing_due_legs > 0 then 'partial'

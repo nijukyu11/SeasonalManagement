@@ -254,8 +254,13 @@ begin
     v_missing_due_legs := coalesce((v_metrics #>> '{current,missing_due_legs}')::integer, 0);
     v_true_zero_reported_legs := coalesce((v_metrics #>> '{current,true_zero_reported_legs}')::integer, 0);
     v_source_data_version := (v_metrics ->> 'data_version')::integer;
-    v_missing_days := coalesce((v_metrics #>> '{report,coverage,missing_day_count}')::integer, 0);
-    v_partial_days := coalesce((v_metrics #>> '{report,coverage,partial_day_count}')::integer, 0);
+    select
+      count(*) filter (where timeline.completeness = 'missing')::integer,
+      count(*) filter (where timeline.completeness = 'partial')::integer
+    into v_missing_days, v_partial_days
+    from jsonb_to_recordset(coalesce(v_metrics -> 'timeline', '[]'::jsonb)) as timeline(
+      completeness text
+    );
     v_coverage := case when v_due_legs > 0
       then round(v_reported_legs * 100.0 / v_due_legs, 2) end;
 

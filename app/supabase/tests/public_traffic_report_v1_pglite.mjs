@@ -17,6 +17,7 @@ const annualPassengerKpiOwnerSql = await readFile(new URL('../migrations/2026083
 const liveCandidateSliceSql = await readFile(new URL('../migrations/20260831205000_public_traffic_candidate_slice_v1.sql', import.meta.url), 'utf8');
 const liveAggregateV2Sql = await readFile(new URL('../migrations/20260831210000_public_traffic_live_aggregate_v2.sql', import.meta.url), 'utf8');
 const dashboardDailyPublicationSql = await readFile(new URL('../migrations/20260901090000_public_dashboard_daily_publication.sql', import.meta.url), 'utf8');
+const dashboardTimelineQualitySql = await readFile(new URL('../migrations/20260901113000_public_dashboard_publication_timeline_quality.sql', import.meta.url), 'utf8');
 const db = await createSupabasePGlite();
 
 async function addSeason(id, code) {
@@ -81,6 +82,8 @@ try {
   await db.exec(liveAggregateV2Sql);
   await db.exec(dashboardDailyPublicationSql);
   await db.exec(dashboardDailyPublicationSql);
+  await db.exec(dashboardTimelineQualitySql);
+  await db.exec(dashboardTimelineQualitySql);
 
   await addSeason('old-season', 'W25');
   await addSeason('new-season', 'S26');
@@ -175,6 +178,7 @@ try {
   let repeatedPublication;
   let rejectedPublication;
   let correctionPublication;
+  let incompleteCoveragePublication;
   let dashboardPublication;
   try {
     firstPublication = (await db.query(`select public.publish_public_dashboard_daily_v1(
@@ -225,6 +229,24 @@ try {
       /permission denied/,
       'the Edge service role must not read the private publication ledger directly',
     );
+  } finally {
+    await db.exec('reset role');
+  }
+
+  await db.query(`insert into reporting.public_traffic_coverage (
+    from_date, to_date, status, reason_code, certified_at
+  ) values (date '2026-03-02', date '2026-03-02', 'partial', 'test-incomplete-publication', now() + interval '1 second')`);
+  await db.exec('set role service_role');
+  try {
+    incompleteCoveragePublication = (await db.query(`select public.publish_public_dashboard_daily_v1(
+      2026, date '2026-03-02', $1, 'test-2026-03-02-incomplete', 'rehearsal', 'Incomplete coverage rehearsal'
+    ) as result`, [publicationWatermark])).rows[0].result;
+    const preservedDashboard = (await db.query(`
+      select public.get_public_dashboard_publication_v1(2026) as result
+    `)).rows[0].result;
+    assert.equal(incompleteCoveragePublication.status, 'incomplete', 'timeline completeness must fail closed even when the lightweight payload omits report.coverage');
+    assert.equal(preservedDashboard.publication.publication_id, correctionPublication.publication_id, 'incomplete coverage must preserve the last-known-good publication head');
+    assert.equal(preservedDashboard.publication.freshness, 'stale', 'a newer incomplete attempt must be visible without replacing the head');
   } finally {
     await db.exec('reset role');
   }
@@ -341,6 +363,7 @@ try {
   assert.equal(liveV2.current.true_zero_reported_legs, 1);
   assert.equal(liveV2.current.missing_due_legs, 3);
   assert.equal(liveV2.timeline[0].reported_pax, 150);
+  assert.equal(liveV2.timeline[0].completeness, 'partial', 'live timeline must expose source coverage separately from Pax/UI status');
   assert.equal(liveV2.report.min_ops_date, overview.metadata.min_ops_date);
   assert.equal(liveV2.report.max_ops_date, overview.metadata.max_ops_date);
   assert.equal(liveV2.report.breakdowns.peak_hour.length, 24);

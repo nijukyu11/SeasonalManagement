@@ -2,7 +2,7 @@
 
 **Ngày:** 2026-09-01
 
-**Trạng thái:** Release A production hoàn tất; Release B shadow publication và mọi UI cutover còn chờ duyệt
+**Trạng thái:** Release A hoàn tất; Release B fail-closed shadow đã chạy, ready publication đang chờ coverage acceptance authority; mọi UI cutover chưa thực hiện
 
 **ADR:** `docs/adr/2026-09-01-report-live-dashboard-daily-publication.md`
 
@@ -310,6 +310,14 @@ Version/head read phải nhỏ, có ETag và không thực hiện annual canonic
 - Produce Daily Publication but Dashboard vẫn đọc v1.
 - Compare several accepted Business Dates.
 - Alert on publication lag/failure/differential.
+
+Trạng thái 2026-09-01:
+
+- Timeline Interface đã tách `completeness` (source coverage) khỏi `status` (coverage + Pax/UI state).
+- Production shadow cho Business Date 30/08/2026 tạo attempt `incomplete`, không advance head vì coverage ledger chưa có chứng nhận.
+- Payload attempt khớp live v2 ở cùng watermark/data-as-of và checksum hợp lệ; retry idempotent.
+- Không backfill `complete` từ tên event import. Cần chốt và implement authority/hook ghi coverage sau daily import/reconciliation acceptance trước khi có ready shadow.
+- Receipt: `docs/superpowers/artifacts/2026-09-01-report-dashboard-release-b-shadow-production.md`.
 
 ### Release C — Dashboard cutover
 

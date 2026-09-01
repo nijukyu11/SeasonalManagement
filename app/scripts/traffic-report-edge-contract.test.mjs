@@ -17,6 +17,7 @@ const annualKpiOwnerMigration = read('supabase/migrations/20260831190000_annual_
 const liveCandidateSliceMigration = read('supabase/migrations/20260831205000_public_traffic_candidate_slice_v1.sql');
 const liveAggregateV2Migration = read('supabase/migrations/20260831210000_public_traffic_live_aggregate_v2.sql');
 const dashboardDailyPublicationMigration = read('supabase/migrations/20260901090000_public_dashboard_daily_publication.sql');
+const dashboardTimelineQualityMigration = read('supabase/migrations/20260901113000_public_dashboard_publication_timeline_quality.sql');
 const nginx = read('../deploy/traffic-report/nginx.conf');
 const stagingNginx = read('../deploy/traffic-report/nginx-staging.conf');
 const stagingTunnel = read('../deploy/traffic-report/seasonal-traffic-report-staging-tunnel.service');
@@ -124,6 +125,7 @@ assert.match(liveAggregateV2Migration, /v_data_as_of timestamptz := coalesce\(p_
 assert.match(liveAggregateV2Migration, /pax is not null/);
 assert.match(liveAggregateV2Migration, /pax = 0/);
 assert.match(liveAggregateV2Migration, /generate_series\(v_from_date, v_to_date/);
+assert.match(liveAggregateV2Migration, /'completeness', coverage_status/);
 assert.match(liveAggregateV2Migration, /revoke execute[\s\S]+public, anon, authenticated, service_role/);
 assert.match(liveAggregateV2Migration, /grant execute[\s\S]+to service_role/);
 assert.doesNotMatch(liveAggregateV2Migration, /from public\.season_flight_records/i);
@@ -136,6 +138,10 @@ assert.match(dashboardDailyPublicationMigration, /get_public_traffic_report_v2\(
 assert.match(dashboardDailyPublicationMigration, /v_after_watermark is distinct from p_expected_watermark/);
 assert.match(dashboardDailyPublicationMigration, /v_due_legs = v_flights/);
 assert.match(dashboardDailyPublicationMigration, /v_due_legs <> v_flights/);
+assert.match(dashboardDailyPublicationMigration, /jsonb_to_recordset\(coalesce\(v_metrics -> 'timeline'/);
+assert.match(dashboardDailyPublicationMigration, /timeline\.completeness = 'missing'/);
+assert.match(dashboardDailyPublicationMigration, /timeline\.completeness = 'partial'/);
+assert.doesNotMatch(dashboardDailyPublicationMigration, /\{report,coverage,(?:missing|partial)_day_count\}/);
 assert.match(dashboardDailyPublicationMigration, /if v_publication_status = 'ready' then[\s\S]+public_dashboard_publication_heads/);
 assert.match(dashboardDailyPublicationMigration, /ready\/final dashboard publications are immutable/);
 assert.match(dashboardDailyPublicationMigration, /before update or delete/);
@@ -144,6 +150,11 @@ assert.match(dashboardDailyPublicationMigration, /public_dashboard_publication_h
 assert.match(dashboardDailyPublicationMigration, /revoke all on reporting\.public_dashboard_publications from public, anon, authenticated, service_role/);
 assert.doesNotMatch(dashboardDailyPublicationMigration, /coalesce\(v_(?:reported|arrival_reported|departure_reported)_pax,\s*0\)/i);
 assert.match(dashboardDailyPublicationMigration, /'reported_pax', case when v_reported_legs > 0 then v_reported_pax end/);
+assert.match(dashboardTimelineQualityMigration, /pg_get_functiondef/);
+assert.match(dashboardTimelineQualityMigration, /'completeness', coverage_status/);
+assert.match(dashboardTimelineQualityMigration, /timeline\.completeness = 'missing'/);
+assert.match(dashboardTimelineQualityMigration, /timeline\.completeness = 'partial'/);
+assert.match(dashboardTimelineQualityMigration, /timeline quality patch refused/);
 
 for (const signature of [
   'reporting.get_traffic_report_kpis',
