@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+database_container="${TRAFFIC_REPORT_DB_CONTAINER:-opsdata-supabase-db}"
+event_server_seq="${1:-}"
+expected_watermark="${2:-}"
+accepted_by="${3:-daily-acceptance-runner}"
+reason="${4:-Canonical Daily import committed and reconciled}"
+
+if [[ ! "$event_server_seq" =~ ^[1-9][0-9]*$ ]]; then
+  echo "usage: $0 EVENT_SERVER_SEQ EXPECTED_WATERMARK [ACCEPTED_BY] [REASON]" >&2
+  exit 64
+fi
+if [[ ! "$expected_watermark" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: EXPECTED_WATERMARK must be a non-negative integer." >&2
+  exit 64
+fi
+if (( ${#accepted_by} < 3 || ${#accepted_by} > 200 )); then
+  echo "ERROR: accepted_by must contain 3..200 characters." >&2
+  exit 64
+fi
+if (( ${#reason} < 4 || ${#reason} > 500 )); then
+  echo "ERROR: reason must contain 4..500 characters." >&2
+  exit 64
+fi
+
+psql=(/usr/bin/docker exec -i "$database_container" psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d postgres)
+receipt="$("${psql[@]}" -At \
+  -v event_server_seq="$event_server_seq" \
+  -v expected_watermark="$expected_watermark" \
+  -v accepted_by="$accepted_by" \
+  -v reason="$reason" <<'SQL'
+begin;
+set local role service_role;
+select public.accept_public_traffic_coverage_event_v1(
+  :'event_server_seq'::bigint,
+  :'expected_watermark'::bigint,
+  :'reason',
+  :'accepted_by'
+);
+commit;
+SQL
+)"
+
+status="$(printf '%s' "$receipt" | /usr/bin/sed -n 's/.*"status": "\([^"]*\)".*/\1/p')"
+if [[ "$status" != "accepted" ]]; then
+  echo "ERROR: Daily coverage acceptance returned an invalid receipt." >&2
+  exit 70
+fi
+
+printf '%s\n' "$receipt"

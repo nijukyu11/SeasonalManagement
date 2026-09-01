@@ -18,6 +18,7 @@ const liveCandidateSliceMigration = read('supabase/migrations/20260831205000_pub
 const liveAggregateV2Migration = read('supabase/migrations/20260831210000_public_traffic_live_aggregate_v2.sql');
 const dashboardDailyPublicationMigration = read('supabase/migrations/20260901090000_public_dashboard_daily_publication.sql');
 const dashboardTimelineQualityMigration = read('supabase/migrations/20260901113000_public_dashboard_publication_timeline_quality.sql');
+const dailyAcceptanceMigration = read('supabase/migrations/20260901114500_public_traffic_daily_acceptance.sql');
 const nginx = read('../deploy/traffic-report/nginx.conf');
 const stagingNginx = read('../deploy/traffic-report/nginx-staging.conf');
 const stagingTunnel = read('../deploy/traffic-report/seasonal-traffic-report-staging-tunnel.service');
@@ -27,6 +28,7 @@ const refreshService = read('../deploy/traffic-report/seasonal-traffic-report-re
 const refreshRunner = read('../deploy/traffic-report/seasonal-traffic-report-refresh');
 const manualRefresh = read('../deploy/traffic-report/seasonal-traffic-report-refresh-manual');
 const dashboardPublisher = read('../deploy/traffic-report/seasonal-traffic-dashboard-publish');
+const dashboardAcceptance = read('../deploy/traffic-report/seasonal-traffic-dashboard-accept');
 const deployRunbook = read('../docs/runbooks/public-traffic-report-deploy.md');
 const reportOnlyBuild = read('scripts/build-traffic-report-only.mjs');
 const packageJson = read('package.json');
@@ -155,6 +157,14 @@ assert.match(dashboardTimelineQualityMigration, /'completeness', coverage_status
 assert.match(dashboardTimelineQualityMigration, /timeline\.completeness = 'missing'/);
 assert.match(dashboardTimelineQualityMigration, /timeline\.completeness = 'partial'/);
 assert.match(dashboardTimelineQualityMigration, /timeline quality patch refused/);
+assert.match(dailyAcceptanceMigration, /accept_public_traffic_coverage_event_v1/);
+assert.match(dailyAcceptanceMigration, /commit_daily_schedule_canonical_v2/);
+assert.match(dailyAcceptanceMigration, /schedule_replacement_scopes/);
+assert.match(dailyAcceptanceMigration, /source_batch_id is distinct from v_batch_id/);
+assert.match(dailyAcceptanceMigration, /affectedDates must exactly cover rangeStart\.\.rangeEnd/);
+assert.match(dailyAcceptanceMigration, /capture_public_traffic_daily_acceptance/);
+assert.match(dailyAcceptanceMigration, /grant execute[\s\S]+to service_role/);
+assert.match(dailyAcceptanceMigration, /revoke execute[\s\S]+from public,anon,authenticated/);
 
 for (const signature of [
   'reporting.get_traffic_report_kpis',
@@ -283,7 +293,14 @@ assert.match(dashboardPublisher, /publish_public_dashboard_daily_v1/);
 assert.match(dashboardPublisher, /get_public_dashboard_publication_version_v1/);
 assert.match(dashboardPublisher, /status.*ready/);
 assert.match(dashboardPublisher, /idempotency_key/);
+assert.match(dashboardPublisher, /docker exec -i/);
 assert.doesNotMatch(dashboardPublisher, /refresh materialized view/i);
+assert.match(dashboardAcceptance, /EXPECTED_WATERMARK/);
+assert.match(dashboardAcceptance, /set local role service_role/);
+assert.match(dashboardAcceptance, /accept_public_traffic_coverage_event_v1/);
+assert.match(dashboardAcceptance, /status.*accepted/);
+assert.match(dashboardAcceptance, /docker exec -i/);
+assert.doesNotMatch(dashboardAcceptance, /insert into reporting\.public_traffic_coverage/i);
 assert.match(deployRunbook, /systemctl disable --now seasonal-traffic-report-refresh\.timer/);
 assert.match(deployRunbook, /allow the command to finish, then allow another 60 seconds/);
 

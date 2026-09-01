@@ -18,6 +18,7 @@ const liveCandidateSliceSql = await readFile(new URL('../migrations/202608312050
 const liveAggregateV2Sql = await readFile(new URL('../migrations/20260831210000_public_traffic_live_aggregate_v2.sql', import.meta.url), 'utf8');
 const dashboardDailyPublicationSql = await readFile(new URL('../migrations/20260901090000_public_dashboard_daily_publication.sql', import.meta.url), 'utf8');
 const dashboardTimelineQualitySql = await readFile(new URL('../migrations/20260901113000_public_dashboard_publication_timeline_quality.sql', import.meta.url), 'utf8');
+const dailyAcceptanceSql = await readFile(new URL('../migrations/20260901114500_public_traffic_daily_acceptance.sql', import.meta.url), 'utf8');
 const db = await createSupabasePGlite();
 
 async function addSeason(id, code) {
@@ -84,9 +85,27 @@ try {
   await db.exec(dashboardDailyPublicationSql);
   await db.exec(dashboardTimelineQualitySql);
   await db.exec(dashboardTimelineQualitySql);
+  await db.exec(`create table if not exists public.schedule_replacement_scopes (
+    season_id text not null,
+    ops_date date not null,
+    authority_source text not null,
+    source_batch_id uuid not null,
+    expected_leg_count integer not null,
+    canonical_checksum text not null,
+    data_version integer not null,
+    committed_at timestamptz not null default now(),
+    committed_by uuid,
+    reset_at timestamptz,
+    reset_by uuid,
+    reset_reason text,
+    primary key(season_id,ops_date)
+  )`);
+  await db.exec(dailyAcceptanceSql);
+  await db.exec(dailyAcceptanceSql);
 
   await addSeason('old-season', 'W25');
   await addSeason('new-season', 'S26');
+  await addSeason('acceptance-season', 'A26');
   await db.query(`insert into public.operational_aircraft_groups (id, name) values ('narrowbody', 'Narrowbody')`);
   await db.query(`insert into public.operational_aircraft_group_types (group_id, aircraft_type) values ('narrowbody', 'A320'), ('narrowbody', 'A321'), ('narrowbody', 'B738')`);
   await db.query(`insert into public.season_change_events (season_id, client_id, op_id, target_type, target_id) values ('old-season', 'import', 'old', 'seasonImport', 'old-season')`);
@@ -96,6 +115,44 @@ try {
   await addRecord({ seasonId: 'new-season', id: 'new-duplicate', date: '2026-03-02', time: '06:00', flight: 'VN101', pax: 120 });
   await db.query(`insert into public.season_modifications (season_id, leg_id, action) values ('new-season', 'new-duplicate', 'deleted')`);
   await db.query(`insert into public.season_change_events (season_id, client_id, op_id, target_type, target_id) values ('new-season', 'edit', 'delete', 'modification', 'new-duplicate')`);
+
+  await db.query(`insert into public.schedule_replacement_scopes(
+    season_id,ops_date,authority_source,source_batch_id,expected_leg_count,
+    canonical_checksum,data_version,committed_by
+  ) values (
+    'acceptance-season',date '2026-03-02','daily','11111111-1111-1111-1111-111111111111',1,
+    'day-checksum',2,'11111111-1111-1111-1111-111111111112'
+  )`);
+  const acceptedDailyEvent = Number((await db.query(`insert into public.season_change_events(
+    season_id,client_id,op_id,target_type,target_id,op_payload
+  ) values (
+    'acceptance-season','daily-canonical-v2','accepted-daily-event','dailyImport','acceptance-season',
+    jsonb_build_object(
+      'kind','commit_daily_schedule_canonical_v2',
+      'batchId','11111111-1111-1111-1111-111111111111',
+      'rangeStart','2026-03-02','rangeEnd','2026-03-02',
+      'affectedDates',jsonb_build_array('2026-03-02'),
+      'dataVersion',2,'rawChecksum','raw-checksum','canonicalChecksum','canonical-checksum'
+    )
+  ) returning server_seq`)).rows[0].server_seq);
+  assert.equal((await db.query(`select count(*)::integer as count from reporting.public_traffic_coverage where source_batch_id=$1`, [`daily-event:${acceptedDailyEvent}`])).rows[0].count, 1, 'canonical Daily commit trigger must append one coverage acceptance');
+  const acceptanceWatermark = Number((await db.query(`select max(server_seq)::bigint as watermark from public.season_change_events`)).rows[0].watermark);
+  await db.exec('set role service_role');
+  try {
+    const repeatedAcceptance = (await db.query(`select public.accept_public_traffic_coverage_event_v1(
+      $1,$2,'Accepted canonical Daily import','pglite-acceptance'
+    ) as result`, [acceptedDailyEvent, acceptanceWatermark])).rows[0].result;
+    assert.equal(repeatedAcceptance.status, 'accepted');
+    assert.equal(repeatedAcceptance.event_server_seq, acceptedDailyEvent);
+    await assert.rejects(
+      db.query(`select reporting.accept_public_traffic_coverage_event_v1($1,'Bypass','pglite')`, [acceptedDailyEvent]),
+      /permission denied/,
+      'service role must not bypass the public acceptance Interface',
+    );
+  } finally {
+    await db.exec('reset role');
+  }
+  assert.equal((await db.query(`select count(*)::integer as count from reporting.public_traffic_coverage where source_batch_id=$1`, [`daily-event:${acceptedDailyEvent}`])).rows[0].count, 1, 'manual retry must not duplicate the trigger acceptance');
 
   await addRecord({ seasonId: 'new-season', id: 'before-five', date: '2026-03-03', time: '04:59', flight: 'VN201', pax: 80 });
   await addRecord({ seasonId: 'new-season', id: 'at-five', date: '2026-03-03', time: '05:00', flight: 'VN202', pax: 0 });

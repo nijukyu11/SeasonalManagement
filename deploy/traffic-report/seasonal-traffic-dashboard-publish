@@ -29,7 +29,7 @@ if (( ${#idempotency_key} < 8 || ${#idempotency_key} > 200 )); then
   exit 64
 fi
 
-psql=(/usr/bin/docker exec "$database_container" psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d postgres)
+psql=(/usr/bin/docker exec -i "$database_container" psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d postgres)
 actual_watermark="$("${psql[@]}" -At -c "select coalesce(max(server_seq), 0)::bigint from public.season_change_events")"
 if [[ "$actual_watermark" != "$expected_watermark" ]]; then
   echo "ERROR: source watermark changed before publication expected=$expected_watermark actual=$actual_watermark" >&2
@@ -41,18 +41,20 @@ receipt="$("${psql[@]}" -At \
   -v expected_watermark="$expected_watermark" \
   -v trigger_kind="$trigger_kind" \
   -v reason="$reason" \
-  -v idempotency_key="$idempotency_key" \
-  -c "begin;
-      set local role service_role;
-      select public.publish_public_dashboard_daily_v1(
-        extract(year from :'business_date'::date)::integer,
-        :'business_date'::date,
-        :'expected_watermark'::bigint,
-        :'idempotency_key',
-        :'trigger_kind',
-        :'reason'
-      );
-      commit;")"
+  -v idempotency_key="$idempotency_key" <<'SQL'
+begin;
+set local role service_role;
+select public.publish_public_dashboard_daily_v1(
+  extract(year from :'business_date'::date)::integer,
+  :'business_date'::date,
+  :'expected_watermark'::bigint,
+  :'idempotency_key',
+  :'trigger_kind',
+  :'reason'
+);
+commit;
+SQL
+)"
 
 status="$(printf '%s' "$receipt" | /usr/bin/sed -n 's/.*"status": "\([^"]*\)".*/\1/p')"
 publication_id="$(printf '%s' "$receipt" | /usr/bin/sed -n 's/.*"publication_id": \([0-9][0-9]*\).*/\1/p')"

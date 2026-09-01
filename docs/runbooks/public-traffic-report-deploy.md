@@ -161,6 +161,9 @@ Install the Dashboard publisher only on an approved clone/staging host first:
 sudo install -o root -g root -m 0755 \
   deploy/traffic-report/seasonal-traffic-dashboard-publish \
   /usr/local/sbin/seasonal-traffic-dashboard-publish
+sudo install -o root -g root -m 0755 \
+  deploy/traffic-report/seasonal-traffic-dashboard-accept \
+  /usr/local/sbin/seasonal-traffic-dashboard-accept
 ```
 
 After daily import/reconciliation has been accepted, capture the committed `season_change_events.server_seq` watermark and invoke the publisher with an explicit completed Business Date and that exact watermark:
@@ -169,6 +172,16 @@ After daily import/reconciliation has been accepted, capture the committed `seas
 sudo /usr/local/sbin/seasonal-traffic-dashboard-publish \
   2026-09-01 <EXPECTED_WATERMARK> daily_acceptance "Daily data accepted"
 ```
+
+For a canonical Daily import, accept each current `dailyImport` receipt before publishing. The acceptance command verifies that every affected Ops Date still belongs to the same committed replacement batch/data version; a superseded event is rejected:
+
+```bash
+sudo /usr/local/sbin/seasonal-traffic-dashboard-accept \
+  EVENT_SERVER_SEQ EXPECTED_WATERMARK daily-acceptance-runner \
+  "Canonical Daily import committed and reconciled"
+```
+
+Future canonical Daily commits are captured automatically by the database trigger. The command remains the idempotent recovery/backfill Interface for already committed events.
 
 The helper fails closed if the watermark changed, the receipt is not `ready`, or the current pointer does not equal the returned publication id. `incomplete`, `empty`, `rejected_version` and `failed` attempts remain audit evidence and never replace last-known-good. A correction uses `manual_correction`, a reason and an explicit new idempotency key; it creates a new immutable row rather than editing the old one.
 
