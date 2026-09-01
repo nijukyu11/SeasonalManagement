@@ -318,6 +318,25 @@ try {
     overview.breakdowns.route.map((row) => [row.label, row.flights, row.reported_pax]),
     'v1 snapshot and v2 live route aggregates must match at the same watermark',
   );
+  const liveV2TimelineScope = (await db.query(`select public.get_public_traffic_report_v2(
+    date '2026-03-03', date '2026-03-03', 'all', array[]::text[], array[]::text[],
+    array[]::text[], 'none', 'local', null, 'traffic-report-v2', 'timeline'
+  ) as result`)).rows[0].result;
+  const liveV2DimensionScope = (await db.query(`select public.get_public_traffic_report_v2(
+    date '2026-03-03', date '2026-03-03', 'all', array[]::text[], array[]::text[],
+    array[]::text[], 'none', 'local', null, 'traffic-report-v2', 'dimensions'
+  ) as result`)).rows[0].result;
+  assert.deepEqual(liveV2TimelineScope.timeline, liveV2.timeline, 'timeline scope must preserve the full bundle timeline');
+  assert.deepEqual(liveV2DimensionScope.dimensions, liveV2.dimensions, 'dimension scope must preserve the full bundle dimensions');
+  assert.equal(liveV2TimelineScope.source_watermark, liveV2.source_watermark);
+  assert.equal(liveV2DimensionScope.source_watermark, liveV2.source_watermark);
+  await assert.rejects(
+    db.query(`select public.get_public_traffic_report_v2(
+      date '2026-03-03', date '2026-03-03', 'all', array[]::text[], array[]::text[],
+      array[]::text[], 'none', 'local', null, 'traffic-report-v2', 'raw'
+    )`),
+    /invalid payload_scope/,
+  );
 
   const liveV2EmptyDays = (await db.query(`select public.get_public_traffic_report_v2(
     date '2026-03-04', date '2026-03-06', 'all', array[]::text[], array[]::text[],

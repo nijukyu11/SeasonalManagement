@@ -135,6 +135,15 @@ Sau khi bổ sung toàn bộ Report feature parity, benchmark end-to-end qua SSH
 
 Concurrency sau feature parity, trong lúc transaction clone update 100 canonical rows, giữ lock 8 giây rồi rollback: 8/8 response đúng 3.817 chuyến, 0 lỗi, median 1.845 ms, max 2.246 ms.
 
+Edge subresources dùng internal `payload_scope`: overview=`full`, timeline=`timeline`, dimension/export=`dimensions`. Clone xác nhận timeline/dimensions scoped khớp byte-level JSON của full bundle và cùng watermark. Warm benchmark qua SSH:
+
+| Range | Full | Timeline scope | Dimensions scope |
+|---|---:|---:|---:|
+| 30 ngày | 2.988 ms / 76.794 B | 2.583 ms / 13.870 B | 2.588 ms / 35.836 B |
+| YTD | 10.309 ms / 151.771 B | 6.850 ms / 60.654 B | 7.016 ms / 43.993 B |
+
+Scope giảm đáng kể response serialization và bỏ recurring/detail work khỏi request phụ, nhưng canonical candidate scan vẫn là chi phí nền. Vì vậy đây là tối ưu an toàn cho UI fan-out, chưa đủ để gỡ No-Go YTD/full-range.
+
 Đánh giá: correctness/concurrency gate đạt ở mức rehearsal 8-way, nhưng latency gate **chưa đạt** cho YTD/full-range payload. Trước staging cutover cần profile/tách hoặc lazy-load phần detail nặng, rồi đo p50/p95/p99 ở concurrency 10/50 và qua gateway timeout. Clone test 8-way chưa thay thế load test production-like đầy đủ.
 
 ## 5.1 Phát hiện as-of quan trọng

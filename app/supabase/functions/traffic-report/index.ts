@@ -374,7 +374,7 @@ function overviewArgs(request: NormalizedRequest): Record<string, unknown> {
   };
 }
 
-function v2Args(request: NormalizedRequest): Record<string, unknown> {
+function v2Args(request: NormalizedRequest, payloadScope: 'full' | 'timeline' | 'dimensions'): Record<string, unknown> {
   const type = request.types.length === 2 ? 'all' : request.types[0];
   return {
     p_from_date: request.from,
@@ -389,6 +389,7 @@ function v2Args(request: NormalizedRequest): Record<string, unknown> {
     p_time_basis: request.timeBasis,
     p_expected_watermark: request.expectedWatermark,
     p_contract_version: V2_CONTRACT_VERSION,
+    p_payload_scope: payloadScope,
   };
 }
 
@@ -520,7 +521,10 @@ Deno.serve(async (request: Request) => {
 
     const startedAt = performance.now();
     if (isV2) {
-      const payload = await postgrestRpc('get_public_traffic_report_v2', v2Args(normalized));
+      const payloadScope = endpoint === 'timeline'
+        ? 'timeline'
+        : endpoint === 'overview' ? 'full' : 'dimensions';
+      const payload = await postgrestRpc('get_public_traffic_report_v2', v2Args(normalized, payloadScope));
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('invalid traffic-report-v2 payload');
       const bundle = payload as Record<string, unknown>;
       const sourceWatermark = bundle.source_watermark;

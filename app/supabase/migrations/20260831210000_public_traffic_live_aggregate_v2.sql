@@ -2,6 +2,10 @@
 -- The function consumes the canonical ranked candidate boundary, never raw
 -- history, and returns only aggregates captured in one PostgreSQL snapshot.
 
+drop function if exists public.get_public_traffic_report_v2(
+  date,date,text,text[],text[],text[],text,text,bigint,text
+);
+
 create or replace function public.get_public_traffic_report_v2(
   p_from_date date default null,
   p_to_date date default null,
@@ -12,7 +16,8 @@ create or replace function public.get_public_traffic_report_v2(
   p_comparison text default 'previous',
   p_time_basis text default 'local',
   p_expected_watermark bigint default null,
-  p_contract_version text default 'traffic-report-v2'
+  p_contract_version text default 'traffic-report-v2',
+  p_payload_scope text default 'full'
 ) returns jsonb
 language plpgsql
 stable
@@ -44,6 +49,9 @@ declare
 begin
   if p_contract_version <> 'traffic-report-v2' then
     raise exception 'unsupported contract_version' using errcode = '22023';
+  end if;
+  if p_payload_scope not in ('full', 'timeline', 'dimensions') then
+    raise exception 'invalid payload_scope' using errcode = '22023';
   end if;
   if v_type not in ('ALL', 'A', 'D') then
     raise exception 'invalid type' using errcode = '22023';
@@ -241,6 +249,7 @@ begin
         case when grouped.flights > 0 then 'partial' else 'missing' end) as coverage_status
     from generate_series(v_from_date, v_to_date, interval '1 day') spine(ops_date)
     left join timeline_grouped grouped on grouped.ops_date = spine.ops_date::date
+    where p_payload_scope in ('full', 'timeline')
   ), current_coverage as (
     select bool_or(coverage_status in ('missing', 'partial')) as incomplete from timeline
   ), dimension_grouped as (
@@ -261,6 +270,7 @@ begin
       ('country'::text, rows.country),
       ('aircraft_group'::text, rows.aircraft_group)
     ) dimensions(dimension, label)
+    where p_payload_scope in ('full', 'dimensions')
     group by dimensions.dimension, dimensions.label
   ), dimension_totals as (
     select dimension, sum(flights)::numeric as flights,
@@ -281,10 +291,12 @@ begin
       (coalesce(array_agg(distinct country order by country)
         filter (where country <> ''), array[]::text[]))[1:250] as countries
     from canonical_rows
-    where ops_date between v_from_date and v_to_date
+    where p_payload_scope = 'full'
+      and ops_date between v_from_date and v_to_date
   ), peak_day as (
     select ops_date, flights
     from timeline_grouped
+    where p_payload_scope = 'full'
     order by flights desc, ops_date
     limit 1
   ), quality_metric as (
@@ -292,10 +304,12 @@ begin
       count(*) filter (where country = 'Unknown')::integer as unknown_country_legs,
       count(*) filter (where is_due and pax is null)::integer as pax_due_missing_legs
     from current_rows
+    where p_payload_scope = 'full'
   ), quarantine_metric as (
     select coalesce(sum(candidate_count), 0)::integer as quarantined_candidates
     from ranked_slice
-    where candidate_rank = 1
+    where p_payload_scope = 'full'
+      and candidate_rank = 1
       and candidate_count > 1
       and (missing_recency_count > 0 or max_recency_count > 1)
       and ops_date between v_from_date and v_to_date
@@ -307,6 +321,7 @@ begin
       coalesce(grouped.departures, 0)::integer as departures
     from generate_series(v_from_date, v_to_date, interval '1 day') spine(ops_date)
     left join timeline_grouped grouped on grouped.ops_date = spine.ops_date::date
+    where p_payload_scope = 'full'
   ), day_of_week_grouped as (
     select day_index,
       count(*)::integer as calendar_days,
@@ -334,7 +349,8 @@ begin
       count(*) filter (where type = 'A')::integer as arrivals,
       count(*) filter (where type = 'D')::integer as departures
     from current_rows
-    where case when p_time_basis = 'utc' then utc_minutes else local_minutes end is not null
+    where p_payload_scope = 'full'
+      and case when p_time_basis = 'utc' then utc_minutes else local_minutes end is not null
     group by case when p_time_basis = 'utc' then utc_minutes / 60 else local_minutes / 60 end
   ), flight_occurrences as (
     select
@@ -343,7 +359,8 @@ begin
       type, airline, flight_number, route, ops_date,
       extract(isodow from ops_date)::integer as day_index
     from current_rows
-    where flight_number <> ''
+    where p_payload_scope = 'full'
+      and flight_number <> ''
       and case when p_time_basis = 'utc' then utc_minutes else local_minutes end is not null
   ), flight_weekday_stats as (
     select bucket_index, type, airline, flight_number, route, day_index,
@@ -406,7 +423,8 @@ begin
       case when p_time_basis = 'utc' then utc_minutes / 60 else local_minutes / 60 end as hour_index,
       count(*)::integer as flights
     from current_rows
-    where type in ('A', 'D')
+    where p_payload_scope = 'full'
+      and type in ('A', 'D')
       and case when p_time_basis = 'utc' then utc_minutes else local_minutes end is not null
     group by date_trunc('month', ops_date)::date, type,
       case when p_time_basis = 'utc' then utc_minutes / 60 else local_minutes / 60 end
@@ -425,6 +443,7 @@ begin
       case when count(*) filter (where is_due and pax is not null) > 0
         then sum(pax) filter (where is_due and pax is not null)::bigint end as reported_pax
     from current_rows
+    where p_payload_scope = 'full'
     group by aircraft_group, aircraft_type
   ), aircraft_type_totals as (
     select sum(flights)::numeric as flights,
@@ -436,6 +455,7 @@ begin
       count(*) filter (where coverage_status = 'partial')::integer as partial_day_count,
       count(*) filter (where coverage_status = 'missing')::integer as missing_day_count
     from timeline
+    where p_payload_scope = 'full'
   )
   select jsonb_build_object(
     'contract_version', 'traffic-report-v2',
@@ -616,13 +636,13 @@ end;
 $$;
 
 alter function public.get_public_traffic_report_v2(
-  date,date,text,text[],text[],text[],text,text,bigint,text
+  date,date,text,text[],text[],text[],text,text,bigint,text,text
 ) owner to postgres;
 revoke execute on function public.get_public_traffic_report_v2(
-  date,date,text,text[],text[],text[],text,text,bigint,text
+  date,date,text,text[],text[],text[],text,text,bigint,text,text
 ) from public, anon, authenticated, service_role;
 grant execute on function public.get_public_traffic_report_v2(
-  date,date,text,text[],text[],text[],text,text,bigint,text
+  date,date,text,text[],text[],text[],text,text,bigint,text,text
 ) to service_role;
 
 revoke all on reporting.public_traffic_ranked_candidates from public, anon, authenticated, service_role;
@@ -630,5 +650,5 @@ revoke all on reporting.public_traffic_duplicate_quarantine from public, anon, a
 revoke all on reporting.public_traffic_candidates from public, anon, authenticated, service_role;
 
 comment on function public.get_public_traffic_report_v2(
-  date,date,text,text[],text[],text[],text,text,bigint,text
+  date,date,text,text[],text[],text[],text,text,bigint,text,text
 ) is 'Live canonical aggregate bundle for Report and Dashboard; NULL Pax remains missing and true zero remains reported.';
