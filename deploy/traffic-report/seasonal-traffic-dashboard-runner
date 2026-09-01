@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mode="${1:-run}"
+database_container="${TRAFFIC_REPORT_DB_CONTAINER:-opsdata-supabase-db}"
+database_name="${TRAFFIC_REPORT_DB_NAME:-postgres}"
+runner_service="${DASHBOARD_RUNNER_SERVICE:-seasonal-traffic-dashboard-runner.service}"
+public_base_url="${DASHBOARD_PUBLIC_BASE_URL:-https://report.ahtops.xyz}"
+lock_file="${DASHBOARD_RUNNER_LOCK_FILE:-/run/lock/seasonal-traffic-dashboard-runner.lock}"
+alert_adapter="${DASHBOARD_ALERT_ADAPTER:-/usr/local/sbin/seasonal-traffic-dashboard-alert}"
+psql=(/usr/bin/docker exec -i "$database_container" psql -X -q -t -A -v ON_ERROR_STOP=1 -U supabase_admin -d "$database_name")
+
+log() {
+  local level="$1" code="$2" message="$3"
+  printf 'level=%s code=%s %s\n' "$level" "$code" "$message"
+  /usr/bin/logger -t seasonal-traffic-dashboard-runner -p "daemon.$level" -- "code=$code $message" || true
+}
+
+emit_alert() {
+  local level="$1" code="$2" message="$3"
+  log "$level" "$code" "$message"
+  if [[ -x "$alert_adapter" ]]; then
+    "$alert_adapter" "$level" "$code" "$message" || log err alert_adapter_failed "adapter=$alert_adapter code=$code"
+  fi
+}
+
+json_field() {
+  local payload="$1" field="$2"
+  /usr/bin/python3 -c 'import json,sys
+value=json.loads(sys.argv[1]).get(sys.argv[2])
+if value is True: print("true")
+elif value is False: print("false")
+elif value is not None: print(value)' "$payload" "$field"
+}
+
+schedule_retries() {
+  local stamp delay unit
+  stamp="$(/usr/bin/date +%s%N)"
+  for delay in 5m 15m; do
+    unit="seasonal-traffic-dashboard-retry-${delay%m}-${stamp}"
+    if ! /usr/bin/systemd-run --quiet --unit="$unit" --on-active="$delay" \
+      /usr/bin/systemctl start "$runner_service"; then
+      emit_alert warning retry_schedule_failed "service=$runner_service delay=$delay"
+    fi
+  done
+}
+
+wake_runner() {
+  log info daily_import_wake "transactional notification received"
+  if ! /usr/bin/systemctl start --no-block "$runner_service"; then
+    emit_alert err runner_wake_failed "service=$runner_service"
+    return
+  fi
+  schedule_retries
+}
+
+listen_forever() {
+  log info listener_started "channel=public_dashboard_daily_wake"
+  while true; do
+    set +e
+    {
+      printf 'listen public_dashboard_daily_wake;\n'
+      while /usr/bin/sleep 2; do printf 'select 1 where false;\n'; done
+    } | "${psql[@]}" 2>&1 | while IFS= read -r line; do
+      if [[ "$line" == *'Asynchronous notification "public_dashboard_daily_wake"'* ]]; then
+        wake_runner
+      elif [[ -n "$line" && "$line" != 'LISTEN' ]]; then
+        log warning listener_output "message=${line//$'\n'/ }"
+      fi
+    done
+    local listener_status=${PIPESTATUS[1]}
+    set -e
+    emit_alert warning listener_reconnecting "psql_status=$listener_status"
+    /usr/bin/sleep 5
+  done
+}
+
+verify_public_cache() {
+  local publication_id="$1" business_date="$2" source_watermark="$3"
+  local publication_url version_url publication_payload version_payload attempt
+  publication_url="$public_base_url/api/report/v1/dashboard-publication?year=${business_date%%-*}"
+  version_url="$public_base_url/api/report/v1/dashboard-publication-version?year=${business_date%%-*}"
+  for attempt in $(/usr/bin/seq 0 12); do
+    publication_payload="$(/usr/bin/curl --fail --silent --show-error --max-time 10 \
+      -H 'Accept: application/json' "$publication_url" 2>/dev/null || true)"
+    version_payload="$(/usr/bin/curl --fail --silent --show-error --max-time 10 \
+      -H 'Accept: application/json' "$version_url" 2>/dev/null || true)"
+    if /usr/bin/python3 - "$publication_id" "$business_date" "$source_watermark" \
+      "$publication_payload" "$version_payload" <<'PY'
+import json,sys
+try:
+    publication_id=int(sys.argv[1]); business_date=sys.argv[2]; watermark=int(sys.argv[3])
+    publication=json.loads(sys.argv[4]); version=json.loads(sys.argv[5])
+    metadata=publication.get('publication') or {}
+    valid=(metadata.get('publication_id')==publication_id
+           and metadata.get('business_date')==business_date
+           and metadata.get('source_watermark')==watermark
+           and version.get('publication_id')==publication_id
+           and version.get('business_date')==business_date
+           and version.get('source_watermark')==watermark
+           and version.get('freshness')=='fresh')
+except Exception:
+    valid=False
+raise SystemExit(0 if valid else 1)
+PY
+    then
+      log info public_cache_fresh "publication_id=$publication_id attempt=$attempt"
+      return 0
+    fi
+    if (( attempt < 12 )); then /usr/bin/sleep 5; fi
+  done
+  emit_alert err public_cache_stale "publication_id=$publication_id cache_sla_seconds=60"
+  return 1
+}
+
+run_once() {
+  /usr/bin/mkdir -p "$(/usr/bin/dirname "$lock_file")"
+  exec 9>"$lock_file"
+  if ! /usr/bin/flock -n 9; then
+    log info single_flight_skip "another runner owns lock=$lock_file"
+    return 0
+  fi
+
+  local candidate eligible candidate_status candidate_reason business_date source_watermark
+  local data_version idempotency_key publisher_output publisher_status receipt_json publication_id
+  candidate="$("${psql[@]}" -Atc 'select reporting.select_public_dashboard_candidate_v1(clock_timestamp())')"
+  eligible="$(json_field "$candidate" eligible)"
+  candidate_status="$(json_field "$candidate" status)"
+  candidate_reason="$(json_field "$candidate" reason)"
+  business_date="$(json_field "$candidate" business_date)"
+  source_watermark="$(json_field "$candidate" source_watermark)"
+  data_version="$(json_field "$candidate" data_version)"
+  idempotency_key="$(json_field "$candidate" idempotency_key)"
+  log info candidate_selected "status=$candidate_status business_date=${business_date:-none} watermark=$source_watermark reason=${candidate_reason// /_}"
+
+  if [[ "$eligible" != "true" ]]; then
+    case "$candidate_status" in
+      already_current|head_ahead) return 0 ;;
+      projection_stale|coverage_gap|maturity_incomplete|empty)
+        emit_alert warning "candidate_${candidate_status}" "business_date=${business_date:-none} watermark=$source_watermark reason=$candidate_reason"
+        return 0
+        ;;
+      *) emit_alert err candidate_invalid "payload=$candidate"; return 1 ;;
+    esac
+  fi
+
+  [[ "$business_date" =~ ^20[0-9]{2}-[0-9]{2}-[0-9]{2}$ ]] || { emit_alert err candidate_date_invalid "value=$business_date"; return 1; }
+  [[ "$source_watermark" =~ ^[0-9]+$ ]] || { emit_alert err candidate_watermark_invalid "value=$source_watermark"; return 1; }
+  [[ "$data_version" =~ ^[0-9]+$ ]] || { emit_alert err candidate_data_version_invalid "value=$data_version"; return 1; }
+  [[ ${#idempotency_key} -ge 8 ]] || { emit_alert err candidate_key_invalid "value=$idempotency_key"; return 1; }
+
+  set +e
+  publisher_output="$(/usr/local/sbin/seasonal-traffic-dashboard-publish \
+    "$business_date" "$source_watermark" daily_acceptance \
+    'Hybrid runner accepted canonical Daily coverage' "$idempotency_key" 2>&1)"
+  local publisher_exit=$?
+  set -e
+  printf '%s\n' "$publisher_output"
+  receipt_json="$(printf '%s\n' "$publisher_output" | /usr/bin/sed -n '/^{.*"publication_id"/p' | /usr/bin/head -1)"
+  if [[ -z "$receipt_json" ]]; then
+    emit_alert err publisher_receipt_invalid "exit=$publisher_exit business_date=$business_date watermark=$source_watermark"
+    return 1
+  fi
+  publisher_status="$(json_field "$receipt_json" status)"
+  publication_id="$(json_field "$receipt_json" publication_id)"
+
+  case "$publisher_status" in
+    ready) ;;
+    incomplete|empty)
+      emit_alert warning "publisher_${publisher_status}" "publication_id=$publication_id business_date=$business_date watermark=$source_watermark"
+      return 0
+      ;;
+    rejected_version)
+      log warning publisher_rejected_version "publication_id=$publication_id expected_watermark=$source_watermark"
+      return 0
+      ;;
+    failed)
+      emit_alert err publisher_failed "publication_id=$publication_id business_date=$business_date watermark=$source_watermark"
+      return 1
+      ;;
+    *)
+      emit_alert err publisher_status_invalid "status=$publisher_status exit=$publisher_exit publication_id=$publication_id"
+      return 1
+      ;;
+  esac
+
+  local verification verification_valid
+  verification="$("${psql[@]}" -Atc "select reporting.verify_public_dashboard_publication_v1(
+    ${publication_id},date '${business_date}',${source_watermark},${data_version})")"
+  verification_valid="$(json_field "$verification" valid)"
+  if [[ "$verification_valid" != "true" ]]; then
+    emit_alert err publication_verification_failed "receipt=$verification"
+    return 1
+  fi
+  log info publication_verified "publication_id=$publication_id business_date=$business_date watermark=$source_watermark"
+  verify_public_cache "$publication_id" "$business_date" "$source_watermark"
+}
+
+case "$mode" in
+  run) run_once ;;
+  listen) listen_forever ;;
+  *) echo "usage: $0 [run|listen]" >&2; exit 64 ;;
+esac

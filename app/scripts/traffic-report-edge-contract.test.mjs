@@ -19,6 +19,7 @@ const liveAggregateV2Migration = read('supabase/migrations/20260831210000_public
 const dashboardDailyPublicationMigration = read('supabase/migrations/20260901090000_public_dashboard_daily_publication.sql');
 const dashboardTimelineQualityMigration = read('supabase/migrations/20260901113000_public_dashboard_publication_timeline_quality.sql');
 const dailyAcceptanceMigration = read('supabase/migrations/20260901114500_public_traffic_daily_acceptance.sql');
+const dashboardHybridRunnerMigration = read('supabase/migrations/20260901123000_public_dashboard_hybrid_runner.sql');
 const nginx = read('../deploy/traffic-report/nginx.conf');
 const stagingNginx = read('../deploy/traffic-report/nginx-staging.conf');
 const stagingTunnel = read('../deploy/traffic-report/seasonal-traffic-report-staging-tunnel.service');
@@ -29,6 +30,10 @@ const refreshRunner = read('../deploy/traffic-report/seasonal-traffic-report-ref
 const manualRefresh = read('../deploy/traffic-report/seasonal-traffic-report-refresh-manual');
 const dashboardPublisher = read('../deploy/traffic-report/seasonal-traffic-dashboard-publish');
 const dashboardAcceptance = read('../deploy/traffic-report/seasonal-traffic-dashboard-accept');
+const dashboardRunner = read('../deploy/traffic-report/seasonal-traffic-dashboard-runner');
+const dashboardRunnerService = read('../deploy/traffic-report/seasonal-traffic-dashboard-runner.service');
+const dashboardRunnerTimer = read('../deploy/traffic-report/seasonal-traffic-dashboard-runner.timer');
+const dashboardWakeListener = read('../deploy/traffic-report/seasonal-traffic-dashboard-wake-listener.service');
 const deployRunbook = read('../docs/runbooks/public-traffic-report-deploy.md');
 const reportOnlyBuild = read('scripts/build-traffic-report-only.mjs');
 const packageJson = read('package.json');
@@ -165,6 +170,15 @@ assert.match(dailyAcceptanceMigration, /affectedDates must exactly cover rangeSt
 assert.match(dailyAcceptanceMigration, /capture_public_traffic_daily_acceptance/);
 assert.match(dailyAcceptanceMigration, /grant execute[\s\S]+to service_role/);
 assert.match(dailyAcceptanceMigration, /revoke execute[\s\S]+from public,anon,authenticated/);
+assert.match(dashboardHybridRunnerMigration, /select_public_dashboard_candidate_v1/);
+assert.match(dashboardHybridRunnerMigration, /verify_public_dashboard_publication_v1/);
+assert.match(dashboardHybridRunnerMigration, /pg_notify\('public_dashboard_daily_wake','daily-import-committed'\)/);
+assert.match(dashboardHybridRunnerMigration, /time zone 'Asia\/Ho_Chi_Minh'\) - interval '5 hours'/);
+assert.match(dashboardHybridRunnerMigration, /projection_watermark is distinct from v_source_watermark/);
+assert.match(dashboardHybridRunnerMigration, /v_publication\.payload->>'missing_due_legs'/);
+assert.match(dashboardHybridRunnerMigration, /revoke execute on function reporting\.select_public_dashboard_candidate_v1/);
+const hybridCapture = dashboardHybridRunnerMigration.slice(dashboardHybridRunnerMigration.indexOf('create or replace function reporting.capture_public_traffic_daily_acceptance_v1'));
+assert.doesNotMatch(hybridCapture, /publish_public_dashboard_daily_v1/);
 
 for (const signature of [
   'reporting.get_traffic_report_kpis',
@@ -291,6 +305,7 @@ assert.match(dashboardPublisher, /EXPECTED_WATERMARK/);
 assert.match(dashboardPublisher, /set local role service_role/);
 assert.match(dashboardPublisher, /publish_public_dashboard_daily_v1/);
 assert.match(dashboardPublisher, /get_public_dashboard_publication_version_v1/);
+assert.match(dashboardPublisher, /TRAFFIC_REPORT_DB_NAME:-postgres/);
 assert.match(dashboardPublisher, /status.*ready/);
 assert.match(dashboardPublisher, /idempotency_key/);
 assert.match(dashboardPublisher, /docker exec -i/);
@@ -301,6 +316,23 @@ assert.match(dashboardAcceptance, /accept_public_traffic_coverage_event_v1/);
 assert.match(dashboardAcceptance, /status.*accepted/);
 assert.match(dashboardAcceptance, /docker exec -i/);
 assert.doesNotMatch(dashboardAcceptance, /insert into reporting\.public_traffic_coverage/i);
+assert.match(dashboardRunner, /flock -n/);
+assert.match(dashboardRunner, /select_public_dashboard_candidate_v1/);
+assert.match(dashboardRunner, /seasonal-traffic-dashboard-publish/);
+assert.match(dashboardRunner, /TRAFFIC_REPORT_DB_NAME:-postgres/);
+assert.match(dashboardRunner, /psql -X -q -t -A/);
+assert.match(dashboardRunner, /verify_public_dashboard_publication_v1/);
+assert.match(dashboardRunner, /dashboard-publication-version/);
+assert.match(dashboardRunner, /for delay in 5m 15m/);
+assert.match(dashboardRunner, /systemd-run[\s\S]+--on-active="\$delay"/);
+assert.match(dashboardRunner, /Asynchronous notification.*public_dashboard_daily_wake/);
+assert.doesNotMatch(dashboardRunner, /insert into reporting\./i);
+assert.match(dashboardRunnerService, /Type=oneshot/);
+assert.match(dashboardRunnerService, /seasonal-traffic-dashboard-runner run/);
+assert.match(dashboardRunnerTimer, /OnCalendar=\*:0\/15/);
+assert.match(dashboardRunnerTimer, /Persistent=true/);
+assert.match(dashboardWakeListener, /seasonal-traffic-dashboard-runner listen/);
+assert.match(dashboardWakeListener, /Restart=always/);
 assert.match(deployRunbook, /systemctl disable --now seasonal-traffic-report-refresh\.timer/);
 assert.match(deployRunbook, /allow the command to finish, then allow another 60 seconds/);
 

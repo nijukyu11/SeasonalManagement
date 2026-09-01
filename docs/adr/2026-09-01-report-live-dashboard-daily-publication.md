@@ -2,7 +2,7 @@
 
 **Ngày:** 2026-09-01
 
-**Trạng thái:** Đã chấp nhận về kiến trúc; chưa implement, chưa migration/deploy production
+**Trạng thái:** Đã implement và cutover production; hybrid runner là orchestration chính thức
 
 ## Bối cảnh
 
@@ -69,6 +69,18 @@ pending | ready | incomplete | empty | rejected_version | failed
 Chỉ `ready` được advance current pointer. Certified zero-flight Business Date có thể `ready`; unexpected absence of usable aggregate data là `empty`.
 
 Dashboard Read Adapter trả latest ready publication và current-pointer version nhỏ. Dashboard giữ last-known-good khi publisher hoặc version check lỗi, đồng thời hiển thị Business Date/publication freshness trung thực.
+
+### 3.1. Hybrid runner ngoài transaction import
+
+Daily Import không gọi Publisher trong transaction. Coverage trigger phát transactional `NOTIFY` sau khi ghi acceptance; notification chỉ được giao khi commit thành công. Một Listener Adapter đánh thức runner oneshot và lên lịch retry sau năm và mười lăm phút. Timer persistent 15 phút tiếp tục bắt lại notification bị lỡ hoặc server restart.
+
+Runner là một Deep Module có Interface `run|listen`; Implementation giữ ba seam nội bộ:
+
+- Candidate Selector chọn Business Date theo Ops Date 05:00–04:59, coverage liên tục, projection freshness, watermark, data version và maturity/Pax;
+- Publisher Adapter tạo immutable attempt bằng idempotency key `annual-kpi:year:BusinessDate:watermark`;
+- Verifier kiểm tra head, checksum, freshness, A+D, missing Pax và public cache SLA.
+
+Runner dùng single-flight lock. `ready` mới advance head; `incomplete`, `empty`, `rejected_version` hoặc `failed` không sửa/xóa attempt và không thay last-known-good.
 
 ### 4. Pax presence là invariant chung
 
@@ -140,4 +152,4 @@ Không chọn vì không tái lập được wallboard đã công bố, không c
 
 ## Cổng triển khai
 
-Không production migration, refresh, timer/cache change hoặc UI cutover được thực hiện chỉ từ ADR này. Mỗi phase cần evidence, clone/staging rehearsal tương ứng và phê duyệt production riêng.
+Gate production của quyết định này đã đạt ngày 01/09/2026 bằng production-derived clone, backup, migration transaction, systemd verification, wake smoke và kiểm tra last-known-good. Mọi thay đổi schema/SQL/timer/cache tiếp theo vẫn cần evidence, clone/staging rehearsal tương ứng và phê duyệt production riêng.

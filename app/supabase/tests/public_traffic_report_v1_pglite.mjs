@@ -19,6 +19,7 @@ const liveAggregateV2Sql = await readFile(new URL('../migrations/20260831210000_
 const dashboardDailyPublicationSql = await readFile(new URL('../migrations/20260901090000_public_dashboard_daily_publication.sql', import.meta.url), 'utf8');
 const dashboardTimelineQualitySql = await readFile(new URL('../migrations/20260901113000_public_dashboard_publication_timeline_quality.sql', import.meta.url), 'utf8');
 const dailyAcceptanceSql = await readFile(new URL('../migrations/20260901114500_public_traffic_daily_acceptance.sql', import.meta.url), 'utf8');
+const dashboardHybridRunnerSql = await readFile(new URL('../migrations/20260901123000_public_dashboard_hybrid_runner.sql', import.meta.url), 'utf8');
 const db = await createSupabasePGlite();
 
 async function addSeason(id, code) {
@@ -102,6 +103,8 @@ try {
   )`);
   await db.exec(dailyAcceptanceSql);
   await db.exec(dailyAcceptanceSql);
+  await db.exec(dashboardHybridRunnerSql);
+  await db.exec(dashboardHybridRunnerSql);
 
   await addSeason('old-season', 'W25');
   await addSeason('new-season', 'S26');
@@ -264,6 +267,36 @@ try {
   assert.equal(dashboardPublication.reported_pax, 80, 'a deleted newer lineage must suppress its older predecessor in the live canonical metrics');
   assert.equal(dashboardPublication.true_zero_reported_legs, 0);
   assert.ok(correctionPublication.publication_id > firstPublication.publication_id, 'an accepted correction must create a new immutable version');
+  const beforeCutoffCandidate = (await db.query(`select reporting.select_public_dashboard_candidate_v1(
+    timestamptz '2026-03-04 03:00:00+07'
+  ) as result`)).rows[0].result;
+  const afterCutoffCandidate = (await db.query(`select reporting.select_public_dashboard_candidate_v1(
+    timestamptz '2026-03-04 06:00:00+07'
+  ) as result`)).rows[0].result;
+  assert.equal(beforeCutoffCandidate.latest_completed_ops_date, '2026-03-02', '03:00 local must not treat the active 05:00 Ops Date as completed');
+  assert.equal(afterCutoffCandidate.latest_completed_ops_date, '2026-03-03', '06:00 local may select the Ops Date that ended at 04:59');
+  assert.equal(afterCutoffCandidate.business_date, '2026-03-02', 'a coverage gap must preserve the latest contiguous accepted Business Date');
+  assert.equal(afterCutoffCandidate.status, 'already_current');
+  await db.exec('begin');
+  try {
+    await db.query(`insert into public.season_change_events(
+      season_id,client_id,op_id,target_type,target_id
+    ) values ('new-season','runner-test','runner-correction','modification','new-duplicate')`);
+    await db.exec('refresh materialized view reporting.public_traffic_effective');
+    await db.exec('select reporting.mark_public_traffic_projection_fresh_v1()');
+    const correctionCandidate = (await db.query(`select reporting.select_public_dashboard_candidate_v1(
+      timestamptz '2026-03-04 06:00:00+07'
+    ) as result`)).rows[0].result;
+    assert.equal(correctionCandidate.eligible, true, `a new watermark at a complete mature Business Date must become publishable: ${JSON.stringify(correctionCandidate)}`);
+    assert.equal(correctionCandidate.status, 'ready_candidate');
+    assert.match(correctionCandidate.idempotency_key, /^annual-kpi:2026:2026-03-02:[0-9]+$/);
+  } finally {
+    await db.exec('rollback');
+  }
+  const runnerVerification = (await db.query(`select reporting.verify_public_dashboard_publication_v1(
+    $1,date '2026-03-02',$2,$3
+  ) as result`, [correctionPublication.publication_id, publicationWatermark, correctionPublication.source_data_version])).rows[0].result;
+  assert.equal(runnerVerification.valid, true, `Verifier must prove head, checksum, watermark, A+D and missing Pax invariants: ${JSON.stringify(runnerVerification)}`);
   await assert.rejects(
     db.query(`update reporting.public_dashboard_publications set reason = 'changed' where id = $1`, [firstPublication.publication_id]),
     /immutable/,
@@ -285,6 +318,16 @@ try {
       db.query(`select count(*) from reporting.public_dashboard_publications`),
       /permission denied/,
       'the Edge service role must not read the private publication ledger directly',
+    );
+    await assert.rejects(
+      db.query(`select reporting.select_public_dashboard_candidate_v1(now())`),
+      /permission denied/,
+      'the Candidate Selector must remain an internal runner Interface',
+    );
+    await assert.rejects(
+      db.query(`select reporting.verify_public_dashboard_publication_v1(1,date '2026-03-02',0,0)`),
+      /permission denied/,
+      'the Verifier must remain an internal runner Interface',
     );
   } finally {
     await db.exec('reset role');

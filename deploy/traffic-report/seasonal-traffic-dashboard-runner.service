@@ -1,0 +1,15 @@
+[Unit]
+Description=Select, publish and verify the public Daily Dashboard publication
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/seasonal-traffic-dashboard-runner run
+TimeoutStartSec=180
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full

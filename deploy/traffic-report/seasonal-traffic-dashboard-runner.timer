@@ -1,0 +1,12 @@
+[Unit]
+Description=Recover missed Daily Dashboard publication wakes every 15 minutes
+
+[Timer]
+OnBootSec=2m
+OnCalendar=*:0/15
+AccuracySec=5s
+Persistent=true
+Unit=seasonal-traffic-dashboard-runner.service
+
+[Install]
+WantedBy=timers.target

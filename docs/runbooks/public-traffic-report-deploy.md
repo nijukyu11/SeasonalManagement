@@ -183,6 +183,43 @@ sudo /usr/local/sbin/seasonal-traffic-dashboard-accept \
 
 Future canonical Daily commits are captured automatically by the database trigger. The command remains the idempotent recovery/backfill Interface for already committed events.
 
+Install hybrid orchestration after its migration and clone rehearsal are accepted:
+
+```bash
+sudo install -o root -g root -m 0755 \
+  deploy/traffic-report/seasonal-traffic-dashboard-runner \
+  /usr/local/sbin/seasonal-traffic-dashboard-runner
+sudo install -o root -g root -m 0644 \
+  deploy/traffic-report/seasonal-traffic-dashboard-runner.service \
+  /etc/systemd/system/seasonal-traffic-dashboard-runner.service
+sudo install -o root -g root -m 0644 \
+  deploy/traffic-report/seasonal-traffic-dashboard-runner.timer \
+  /etc/systemd/system/seasonal-traffic-dashboard-runner.timer
+sudo install -o root -g root -m 0644 \
+  deploy/traffic-report/seasonal-traffic-dashboard-wake-listener.service \
+  /etc/systemd/system/seasonal-traffic-dashboard-wake-listener.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now seasonal-traffic-dashboard-wake-listener.service
+sudo systemctl enable --now seasonal-traffic-dashboard-runner.timer
+sudo systemctl start seasonal-traffic-dashboard-runner.service
+```
+
+The database trigger emits `public_dashboard_daily_wake` through transactional `NOTIFY`; PostgreSQL delivers it only after the Daily Import transaction commits. The Listener Adapter starts the oneshot immediately and schedules retries after five and fifteen minutes. The persistent 15-minute timer then remains the missed-event/restart recovery path. Publisher work never runs inside the import transaction.
+
+The runner owns the orchestration Interface:
+
+- single-flight `flock`;
+- 05:00–04:59 completed Ops Date selection;
+- continuous canonical `complete` coverage;
+- `fresh` projection with matching watermark and data version;
+- maturity/Pax/A+D validation before creating an attempt;
+- stable key `annual-kpi:year:BusinessDate:watermark`;
+- immutable Publisher invocation;
+- database head/checksum/freshness/missing-Pax verification;
+- public current/version cache polling for the 60-second SLA.
+
+Warnings and failures go to stdout, journald and syslog. If an executable `/usr/local/sbin/seasonal-traffic-dashboard-alert` exists, it is called as `LEVEL CODE MESSAGE`; this is the alert Adapter seam and must not mutate publication state.
+
 The helper fails closed if the watermark changed, the receipt is not `ready`, or the current pointer does not equal the returned publication id. `incomplete`, `empty`, `rejected_version` and `failed` attempts remain audit evidence and never replace last-known-good. A correction uses `manual_correction`, a reason and an explicit new idempotency key; it creates a new immutable row rather than editing the old one.
 
 Smoke the two small read contracts without direct ledger access:
@@ -203,6 +240,14 @@ Verify publication id, Business Date, checksum, metrics version, source watermar
 5. Purge only the exact `traffic_report` Nginx cache zone/path owned by this deployment. Preserve unrelated caches and tunnel routes.
 
 To roll back only the staging manual-refresh policy, restore the backed-up timer/service units, run `systemctl daemon-reload`, then enable and start the restored timer. Record the restored unit hashes and next trigger time.
+
+To stop only hybrid publication orchestration while preserving the latest ready head and immutable ledger:
+
+```bash
+sudo systemctl disable --now seasonal-traffic-dashboard-runner.timer
+sudo systemctl disable --now seasonal-traffic-dashboard-wake-listener.service
+sudo systemctl stop seasonal-traffic-dashboard-runner.service
+```
 
 After rollback, verify the previous report or a controlled maintenance response, existing Supabase health, and unchanged desktop routes.
 

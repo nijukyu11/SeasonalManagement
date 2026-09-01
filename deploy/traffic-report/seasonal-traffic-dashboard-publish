@@ -2,6 +2,7 @@
 set -euo pipefail
 
 database_container="${TRAFFIC_REPORT_DB_CONTAINER:-opsdata-supabase-db}"
+database_name="${TRAFFIC_REPORT_DB_NAME:-postgres}"
 business_date="${1:-}"
 expected_watermark="${2:-}"
 trigger_kind="${3:-daily_acceptance}"
@@ -29,7 +30,7 @@ if (( ${#idempotency_key} < 8 || ${#idempotency_key} > 200 )); then
   exit 64
 fi
 
-psql=(/usr/bin/docker exec -i "$database_container" psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d postgres)
+psql=(/usr/bin/docker exec -i "$database_container" psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d "$database_name")
 actual_watermark="$("${psql[@]}" -At -c "select coalesce(max(server_seq), 0)::bigint from public.season_change_events")"
 if [[ "$actual_watermark" != "$expected_watermark" ]]; then
   echo "ERROR: source watermark changed before publication expected=$expected_watermark actual=$actual_watermark" >&2
