@@ -64,6 +64,7 @@ function report(): TrafficV2ApiEnvelope['report'] {
 function payload(): TrafficV2ApiEnvelope {
   return {
     contract_version: 'traffic-report-v2',
+    read_version_token: 'rv1.dGVzdA.c2ln',
     data_as_of: '2026-08-31T04:00:00.000Z',
     source_watermark: 50_000,
     data_version: 42,
@@ -153,6 +154,7 @@ test('traffic-report-v2 exposes one immutable version envelope to every consumer
   const decoded = decodeTrafficV2ApiEnvelope(payload());
   assert.deepEqual(decoded.version, {
     contractVersion: 'traffic-report-v2',
+    readVersionToken: 'rv1.dGVzdA.c2ln',
     dataAsOf: '2026-08-31T04:00:00.000Z',
     sourceWatermark: 50_000,
     dataVersion: 42,

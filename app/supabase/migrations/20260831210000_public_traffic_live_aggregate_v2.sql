@@ -6,6 +6,14 @@ drop function if exists public.get_public_traffic_report_v2(
   date,date,text,text[],text[],text[],text,text,bigint,text
 );
 
+drop function if exists public.get_public_traffic_report_v2(
+  date,date,text,text[],text[],text[],text,text,bigint,text,text
+);
+
+drop function if exists public.get_public_traffic_report_v2(
+  date,date,text,text[],text[],text[],text,text,bigint,text,text,timestamptz
+);
+
 create or replace function public.get_public_traffic_report_v2(
   p_from_date date default null,
   p_to_date date default null,
@@ -17,16 +25,17 @@ create or replace function public.get_public_traffic_report_v2(
   p_time_basis text default 'local',
   p_expected_watermark bigint default null,
   p_contract_version text default 'traffic-report-v2',
-  p_payload_scope text default 'full'
+  p_payload_scope text default 'full',
+  p_data_as_of timestamptz default null
 ) returns jsonb
 language plpgsql
 stable
 security definer
 set search_path = pg_catalog, reporting, public, extensions, pg_temp
-set statement_timeout = '7s'
+set statement_timeout = '30s'
 as $$
 declare
-  v_data_as_of timestamptz := statement_timestamp();
+  v_data_as_of timestamptz := coalesce(p_data_as_of, statement_timestamp());
   v_source_watermark bigint;
   v_data_version integer;
   v_min_date date;
@@ -636,13 +645,13 @@ end;
 $$;
 
 alter function public.get_public_traffic_report_v2(
-  date,date,text,text[],text[],text[],text,text,bigint,text,text
+  date,date,text,text[],text[],text[],text,text,bigint,text,text,timestamptz
 ) owner to postgres;
 revoke execute on function public.get_public_traffic_report_v2(
-  date,date,text,text[],text[],text[],text,text,bigint,text,text
+  date,date,text,text[],text[],text[],text,text,bigint,text,text,timestamptz
 ) from public, anon, authenticated, service_role;
 grant execute on function public.get_public_traffic_report_v2(
-  date,date,text,text[],text[],text[],text,text,bigint,text,text
+  date,date,text,text[],text[],text[],text,text,bigint,text,text,timestamptz
 ) to service_role;
 
 revoke all on reporting.public_traffic_ranked_candidates from public, anon, authenticated, service_role;
@@ -650,5 +659,5 @@ revoke all on reporting.public_traffic_duplicate_quarantine from public, anon, a
 revoke all on reporting.public_traffic_candidates from public, anon, authenticated, service_role;
 
 comment on function public.get_public_traffic_report_v2(
-  date,date,text,text[],text[],text[],text,text,bigint,text,text
-) is 'Live canonical aggregate bundle for Report and Dashboard; NULL Pax remains missing and true zero remains reported.';
+  date,date,text,text[],text[],text[],text,text,bigint,text,text,timestamptz
+) is 'Live canonical aggregate bundle with fixed semantic data-as-of; NULL Pax remains missing and true zero remains reported.';

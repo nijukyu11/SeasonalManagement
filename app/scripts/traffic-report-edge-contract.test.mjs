@@ -16,6 +16,7 @@ const annualKpiMigration = read('supabase/migrations/20260831150000_public_annua
 const annualKpiOwnerMigration = read('supabase/migrations/20260831190000_annual_passenger_kpi_owner.sql');
 const liveCandidateSliceMigration = read('supabase/migrations/20260831205000_public_traffic_candidate_slice_v1.sql');
 const liveAggregateV2Migration = read('supabase/migrations/20260831210000_public_traffic_live_aggregate_v2.sql');
+const dashboardDailyPublicationMigration = read('supabase/migrations/20260901090000_public_dashboard_daily_publication.sql');
 const nginx = read('../deploy/traffic-report/nginx.conf');
 const stagingNginx = read('../deploy/traffic-report/nginx-staging.conf');
 const stagingTunnel = read('../deploy/traffic-report/seasonal-traffic-report-staging-tunnel.service');
@@ -24,6 +25,7 @@ const productionRefreshTimer = read('../deploy/traffic-report/seasonal-traffic-r
 const refreshService = read('../deploy/traffic-report/seasonal-traffic-report-refresh.service');
 const refreshRunner = read('../deploy/traffic-report/seasonal-traffic-report-refresh');
 const manualRefresh = read('../deploy/traffic-report/seasonal-traffic-report-refresh-manual');
+const dashboardPublisher = read('../deploy/traffic-report/seasonal-traffic-dashboard-publish');
 const deployRunbook = read('../docs/runbooks/public-traffic-report-deploy.md');
 const reportOnlyBuild = read('scripts/build-traffic-report-only.mjs');
 const packageJson = read('package.json');
@@ -40,8 +42,14 @@ assert.doesNotMatch(edge, /request\.headers\.get\(['"]Authorization/);
 assert.match(edge, /get_public_traffic_report_overview_v1/);
 assert.match(edge, /get_public_traffic_report_v2/);
 assert.match(edge, /p_payload_scope: payloadScope/);
+assert.match(edge, /p_data_as_of: readVersion\?\.dataAsOf \?\? null/);
 assert.match(edge, /endpoint === 'timeline'[\s\S]+?'timeline'[\s\S]+?endpoint === 'overview' \? 'full' : 'dimensions'/);
 assert.match(edge, /expected_watermark/);
+assert.match(edge, /TRAFFIC_REPORT_READ_VERSION_SECRET/);
+assert.match(edge, /createReportReadVersion/);
+assert.match(edge, /verifyReportReadVersion/);
+assert.match(edge, /READ_VERSION_CHANGED/);
+assert.match(edge, /read_version_token: readVersionToken/);
 assert.match(edge, /DATA_VERSION_CHANGED/);
 assert.match(edge, /status: 304/);
 assert.match(edge, /X-Report-Source-Mode/);
@@ -63,6 +71,9 @@ assert.doesNotMatch(edge, /'Accept-Profile'/);
 assert.match(edge, /max-age=0, s-maxage=60, stale-while-revalidate=30/);
 assert.match(edge, /get_public_annual_passenger_kpi_v1/);
 assert.match(edge, /get_public_annual_passenger_kpi_version_v1/);
+assert.match(edge, /get_public_dashboard_publication_v1/);
+assert.match(edge, /get_public_dashboard_publication_version_v1/);
+assert.match(edge, /DASHBOARD_PUBLICATION_NOT_READY/);
 assert.match(edge, /ANNUAL_KPI_ADMIN_PIN_HASH/);
 assert.match(edge, /pbkdf2_sha256/);
 assert.match(edge, /HttpOnly; Secure; SameSite=Strict/);
@@ -92,7 +103,10 @@ assert.match(annualKpiMigration, /revoke execute[\s\S]+from public, anon, authen
 assert.match(annualKpiOwnerMigration, /alter table reporting\.annual_passenger_kpis owner to postgres/);
 assert.match(annualKpiOwnerMigration, /revoke all on reporting\.annual_passenger_kpis[\s\S]+service_role/);
 assert.match(liveCandidateSliceMigration, /public\.is_canonical_flight_leg_active_v1\(records\.status, records\.action\)/);
-assert.match(liveCandidateSliceMigration, /coalesce\(modifications\.action, 'modified'\) <> 'deleted'/);
+const boundedCandidateFunction = liveCandidateSliceMigration
+  .split('create or replace function reporting.get_public_traffic_candidate_slice_v1', 2)[1]
+  .split('alter function reporting.get_public_traffic_candidate_slice_v1', 1)[0];
+assert.doesNotMatch(boundedCandidateFunction, /coalesce\(modifications\.action, 'modified'\) <> 'deleted'/);
 assert.match(liveCandidateSliceMigration, /records\.operational_date between p_from_date::text and p_to_date::text/);
 assert.match(liveCandidateSliceMigration, /coalesce\(entity_recency\.server_seq, season_recency\.server_seq\)/);
 assert.match(liveCandidateSliceMigration, /revoke execute[\s\S]+public, anon, authenticated, service_role/);
@@ -105,6 +119,7 @@ assert.match(liveAggregateV2Migration, /effective_action is distinct from 'delet
 assert.match(liveAggregateV2Migration, /candidate_rank = 1/);
 assert.match(liveAggregateV2Migration, /DATA_VERSION_CHANGED/);
 assert.match(liveAggregateV2Migration, /p_payload_scope not in \('full', 'timeline', 'dimensions'\)/);
+assert.match(liveAggregateV2Migration, /v_data_as_of timestamptz := coalesce\(p_data_as_of, statement_timestamp\(\)\)/);
 assert.match(liveAggregateV2Migration, /pax is not null/);
 assert.match(liveAggregateV2Migration, /pax = 0/);
 assert.match(liveAggregateV2Migration, /generate_series\(v_from_date, v_to_date/);
@@ -113,6 +128,21 @@ assert.match(liveAggregateV2Migration, /grant execute[\s\S]+to service_role/);
 assert.doesNotMatch(liveAggregateV2Migration, /from public\.season_flight_records/i);
 assert.doesNotMatch(liveAggregateV2Migration, /from reporting\.public_traffic_effective/i);
 assert.doesNotMatch(liveAggregateV2Migration, /from reporting\.public_traffic_ranked_candidates/i);
+
+assert.match(dashboardDailyPublicationMigration, /create table if not exists reporting\.public_dashboard_publications/);
+assert.match(dashboardDailyPublicationMigration, /'pending','ready','incomplete','empty','rejected_version','failed'/);
+assert.match(dashboardDailyPublicationMigration, /get_public_traffic_report_v2\([\s\S]+?'timeline', v_data_as_of/);
+assert.match(dashboardDailyPublicationMigration, /v_after_watermark is distinct from p_expected_watermark/);
+assert.match(dashboardDailyPublicationMigration, /v_due_legs = v_flights/);
+assert.match(dashboardDailyPublicationMigration, /v_due_legs <> v_flights/);
+assert.match(dashboardDailyPublicationMigration, /if v_publication_status = 'ready' then[\s\S]+public_dashboard_publication_heads/);
+assert.match(dashboardDailyPublicationMigration, /ready\/final dashboard publications are immutable/);
+assert.match(dashboardDailyPublicationMigration, /before update or delete/);
+assert.match(dashboardDailyPublicationMigration, /on conflict \(dashboard_key, year, idempotency_key\) do nothing/);
+assert.match(dashboardDailyPublicationMigration, /public_dashboard_publication_heads\.publication_id < excluded\.publication_id/);
+assert.match(dashboardDailyPublicationMigration, /revoke all on reporting\.public_dashboard_publications from public, anon, authenticated, service_role/);
+assert.doesNotMatch(dashboardDailyPublicationMigration, /coalesce\(v_(?:reported|arrival_reported|departure_reported)_pax,\s*0\)/i);
+assert.match(dashboardDailyPublicationMigration, /'reported_pax', case when v_reported_legs > 0 then v_reported_pax end/);
 
 for (const signature of [
   'reporting.get_traffic_report_kpis',
@@ -235,6 +265,13 @@ assert.match(manualRefresh, /snapshot_source_watermark/);
 assert.match(manualRefresh, /source_changed_after_refresh/);
 assert.match(manualRefresh, /invalid_aircraft_type_snapshot/);
 assert.match(manualRefresh, /invalid_aircraft_type_rows/);
+assert.match(dashboardPublisher, /EXPECTED_WATERMARK/);
+assert.match(dashboardPublisher, /set local role service_role/);
+assert.match(dashboardPublisher, /publish_public_dashboard_daily_v1/);
+assert.match(dashboardPublisher, /get_public_dashboard_publication_version_v1/);
+assert.match(dashboardPublisher, /status.*ready/);
+assert.match(dashboardPublisher, /idempotency_key/);
+assert.doesNotMatch(dashboardPublisher, /refresh materialized view/i);
 assert.match(deployRunbook, /systemctl disable --now seasonal-traffic-report-refresh\.timer/);
 assert.match(deployRunbook, /allow the command to finish, then allow another 60 seconds/);
 

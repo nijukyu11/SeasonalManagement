@@ -16,6 +16,7 @@ export const TRAFFIC_REPORT_V2_API_BASE = '/api/report/v2' as const;
 
 export interface TrafficVersionEnvelope {
   contractVersion: typeof TRAFFIC_REPORT_V2_CONTRACT_VERSION;
+  readVersionToken: string;
   dataAsOf: string;
   sourceWatermark: number;
   dataVersion: number;
@@ -113,6 +114,7 @@ export interface TrafficV2ReportParity {
 
 export interface TrafficV2ApiEnvelope {
   contract_version: typeof TRAFFIC_REPORT_V2_CONTRACT_VERSION;
+  read_version_token: string;
   data_as_of: string;
   source_watermark: number;
   data_version: number;
@@ -302,6 +304,8 @@ function isApiReportParity(value: unknown): value is TrafficV2ApiReportParity {
 export function isTrafficV2ApiEnvelope(value: unknown): value is TrafficV2ApiEnvelope {
   if (!isObject(value)
     || value.contract_version !== TRAFFIC_REPORT_V2_CONTRACT_VERSION
+    || typeof value.read_version_token !== 'string'
+    || !/^rv1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(value.read_version_token)
     || typeof value.data_as_of !== 'string'
     || Number.isNaN(Date.parse(value.data_as_of))
     || !isNonNegativeInteger(value.source_watermark)
@@ -381,6 +385,7 @@ export function decodeTrafficV2ApiEnvelope(value: unknown): TrafficV2Bundle {
   return {
     version: {
       contractVersion: value.contract_version,
+      readVersionToken: value.read_version_token,
       dataAsOf: value.data_as_of,
       sourceWatermark: value.source_watermark,
       dataVersion: value.data_version,

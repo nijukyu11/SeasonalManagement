@@ -252,8 +252,8 @@ export default function TrafficReportClient() {
         let timeline: TrafficTimelinePoint[];
         let next: string | null;
         if (bundle.contract_version === 'traffic-report-v2') {
-          if (typeof bundle.source_watermark !== 'number') throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.');
-          const payload = await fetchTrafficReportV2TimelinePage(bundle.metadata.normalized_filter, 'all', after, bundle.source_watermark, { signal: controller.signal });
+          if (typeof bundle.source_watermark !== 'number' || !bundle.read_version_token) throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.');
+          const payload = await fetchTrafficReportV2TimelinePage(bundle.metadata.normalized_filter, 'all', after, bundle.source_watermark, bundle.read_version_token, { signal: controller.signal });
           timeline = payload.timeline;
           hasMore = payload.hasMore;
           next = payload.nextCursor;
@@ -311,11 +311,12 @@ export default function TrafficReportClient() {
   const visibleError = parsed.error ?? error;
   const readVersion = bundle?.contract_version === 'traffic-report-v2' ? 'v2' as const : 'v1' as const;
   const expectedWatermark = readVersion === 'v2' && typeof bundle?.source_watermark === 'number' ? bundle.source_watermark : undefined;
+  const readVersionToken = readVersion === 'v2' ? bundle?.read_version_token : undefined;
   const reloadVersionedBundle = useCallback(() => {
     if (normalizedFilter) void requestBundle(normalizedFilter);
   }, [normalizedFilter, requestBundle]);
-  const aggregateCsvHref = bundle?.contract_version === 'traffic-report-v2' && typeof bundle.source_watermark === 'number'
-    ? buildTrafficReportV2ExportUrl(bundle.metadata.normalized_filter, bundle.source_watermark)
+  const aggregateCsvHref = bundle?.contract_version === 'traffic-report-v2' && typeof bundle.source_watermark === 'number' && bundle.read_version_token
+    ? buildTrafficReportV2ExportUrl(bundle.metadata.normalized_filter, bundle.source_watermark, bundle.read_version_token)
     : bundle ? `/api/report/v1/export?${toTrafficReportSearchParams(bundle.metadata.normalized_filter).toString()}` : '#';
 
   return (
@@ -396,7 +397,7 @@ export default function TrafficReportClient() {
             <div className="mt-5 grid gap-3 md:grid-cols-2">{insights.map((insight, index) => <p key={insight} className="rounded-xl border-l-4 border-cyan-600 bg-white p-4 text-pretty text-sm leading-6 text-slate-700 shadow-sm"><span className="mr-2 font-bold text-blue-900">{index + 1}.</span>{insight}</p>)}</div>
           </section>
 
-          <TrafficReportTrend filter={normalizedFilter} scope={pageState.trendType} readVersion={readVersion} expectedWatermark={expectedWatermark} onVersionChanged={reloadVersionedBundle} onScopeChange={(trendType) => updateViewState({ trendType })} />
+          <TrafficReportTrend filter={normalizedFilter} scope={pageState.trendType} readVersion={readVersion} expectedWatermark={expectedWatermark} readVersionToken={readVersionToken} onVersionChanged={reloadVersionedBundle} onScopeChange={(trendType) => updateViewState({ trendType })} />
 
           <TrafficReportDimensionSection
             key={`market-${globalQuery}-${pageState.marketDimension}-${pageState.marketType}`}
@@ -406,6 +407,7 @@ export default function TrafficReportClient() {
             marketDimension={pageState.marketDimension}
             readVersion={readVersion}
             expectedWatermark={expectedWatermark}
+            readVersionToken={readVersionToken}
             onVersionChanged={reloadVersionedBundle}
             onScopeChange={(marketType) => updateViewState({ marketType })}
             onMarketDimensionChange={(marketDimension) => updateViewState({ marketDimension })}
@@ -418,6 +420,7 @@ export default function TrafficReportClient() {
             scope={pageState.airlineType}
             readVersion={readVersion}
             expectedWatermark={expectedWatermark}
+            readVersionToken={readVersionToken}
             onVersionChanged={reloadVersionedBundle}
             onScopeChange={(airlineType) => updateViewState({ airlineType })}
           />

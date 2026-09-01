@@ -26,9 +26,22 @@ test('wallboard preserves the approved Sites layout instead of the alternate KPI
 test('wallboard uses the approved fixed scope and refresh strategy', () => {
   assert.match(source, /annualKpiSnapshotUrl/);
   assert.match(source, /annualKpiVersionUrl/);
+  assert.match(source, /DASHBOARD_DAILY_PUBLICATION_ENABLED/);
+  assert.match(source, /annualDashboardPublicationUrl/);
+  assert.match(source, /annualDashboardPublicationVersionUrl/);
+  assert.match(source, /decodeAnnualPassengerDashboardSnapshot/);
   assert.match(source, /ANNUAL_KPI_VERSION_POLL_MS/);
   assert.match(source, /If-None-Match/);
+  assert.match(source, /if \(clear\) setSnapshot\(null\)/);
+  assert.doesNotMatch(source, /trafficReportDataAdapter/);
   assert.doesNotMatch(source, /airline|route|country/);
+});
+
+test('daily publication exposes its Business Date and preserves last-known-good during background failures', () => {
+  assert.match(source, /Ngày số liệu/);
+  assert.match(source, /snapshot\.publication\.business_date/);
+  assert.match(source, /loadSnapshot\(year\)/);
+  assert.doesNotMatch(source, /catch[\s\S]{0,240}setSnapshot\(null\)/);
 });
 
 test('year selector lives inside the hidden editor and can pin or release a year', () => {

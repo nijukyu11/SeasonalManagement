@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+database_container="${TRAFFIC_REPORT_DB_CONTAINER:-opsdata-supabase-db}"
+business_date="${1:-}"
+expected_watermark="${2:-}"
+trigger_kind="${3:-daily_acceptance}"
+reason="${4:-Daily data accepted}"
+idempotency_key="${5:-annual-kpi:${business_date}:${expected_watermark}}"
+
+if [[ ! "$business_date" =~ ^20[0-9]{2}-[0-9]{2}-[0-9]{2}$ ]]; then
+  echo "usage: $0 YYYY-MM-DD EXPECTED_WATERMARK [TRIGGER_KIND] [REASON] [IDEMPOTENCY_KEY]" >&2
+  exit 64
+fi
+if [[ ! "$expected_watermark" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: EXPECTED_WATERMARK must be a non-negative integer." >&2
+  exit 64
+fi
+if [[ ! "$trigger_kind" =~ ^(daily_acceptance|manual_correction|shadow|rehearsal)$ ]]; then
+  echo "ERROR: invalid trigger kind." >&2
+  exit 64
+fi
+if (( ${#reason} < 4 || ${#reason} > 500 )); then
+  echo "ERROR: reason must contain 4..500 characters." >&2
+  exit 64
+fi
+if (( ${#idempotency_key} < 8 || ${#idempotency_key} > 200 )); then
+  echo "ERROR: idempotency key must contain 8..200 characters." >&2
+  exit 64
+fi
+
+psql=(/usr/bin/docker exec "$database_container" psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d postgres)
+actual_watermark="$("${psql[@]}" -At -c "select coalesce(max(server_seq), 0)::bigint from public.season_change_events")"
+if [[ "$actual_watermark" != "$expected_watermark" ]]; then
+  echo "ERROR: source watermark changed before publication expected=$expected_watermark actual=$actual_watermark" >&2
+  exit 75
+fi
+
+receipt="$("${psql[@]}" -At \
+  -v business_date="$business_date" \
+  -v expected_watermark="$expected_watermark" \
+  -v trigger_kind="$trigger_kind" \
+  -v reason="$reason" \
+  -v idempotency_key="$idempotency_key" \
+  -c "begin;
+      set local role service_role;
+      select public.publish_public_dashboard_daily_v1(
+        extract(year from :'business_date'::date)::integer,
+        :'business_date'::date,
+        :'expected_watermark'::bigint,
+        :'idempotency_key',
+        :'trigger_kind',
+        :'reason'
+      );
+      commit;")"
+
+status="$(printf '%s' "$receipt" | /usr/bin/sed -n 's/.*"status": "\([^"]*\)".*/\1/p')"
+publication_id="$(printf '%s' "$receipt" | /usr/bin/sed -n 's/.*"publication_id": \([0-9][0-9]*\).*/\1/p')"
+if [[ -z "$status" || -z "$publication_id" ]]; then
+  echo "ERROR: publisher returned an invalid receipt." >&2
+  exit 70
+fi
+
+printf '%s\n' "$receipt"
+if [[ "$status" != "ready" ]]; then
+  echo "ERROR: publication did not advance the Dashboard head status=$status publication_id=$publication_id" >&2
+  exit 65
+fi
+
+published_head="$("${psql[@]}" -At -v publication_id="$publication_id" -c "
+  begin;
+  set local role service_role;
+  select coalesce((public.get_public_dashboard_publication_version_v1(
+    extract(year from date '$business_date')::integer
+  )->>'publication_id')::bigint, -1);
+  commit;
+")"
+if [[ "$published_head" != *"$publication_id"* ]]; then
+  echo "ERROR: ready receipt was not installed as the current Dashboard head." >&2
+  exit 70
+fi
+
+echo "Dashboard publication ready business_date=$business_date source_watermark=$expected_watermark publication_id=$publication_id"

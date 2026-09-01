@@ -12,15 +12,16 @@ const dimensionSource = readFileSync(join(process.cwd(), dimensionPath), 'utf8')
 const clientSource = readFileSync(join(process.cwd(), clientPath), 'utf8');
 const advancedChartsSource = readFileSync(join(process.cwd(), advancedChartsPath), 'utf8');
 
-test('Report live cutover is flag-gated and pins every secondary read to one watermark', () => {
+test('Report live cutover is flag-gated and pins every secondary read to one Report Read Version', () => {
   assert.match(clientSource, /NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED === '1'/);
   assert.match(clientSource, /fetchTrafficReportV2Bundle/);
   assert.match(clientSource, /toTrafficReportPresentationBundle/);
   assert.match(clientSource, /bundle\.contract_version === 'traffic-report-v2'/);
   assert.match(clientSource, /buildTrafficReportV2ExportUrl/);
-  assert.match(trendSource, /fetchTrafficReportV2TimelinePage\(filter, scope, after, expectedWatermark/);
+  assert.match(trendSource, /fetchTrafficReportV2TimelinePage\(filter, scope, after, expectedWatermark, readVersionToken/);
   assert.match(dimensionSource, /fetchTrafficReportV2DimensionPage\(filter, dimension, scope/);
-  assert.match(dimensionSource, /buildTrafficReportV2DimensionUrl\(filter, dimension, scope, sort, 1, 732, expectedWatermark, true\)/);
+  assert.match(dimensionSource, /buildTrafficReportV2DimensionUrl\(filter, dimension, scope, sort, 1, 732, expectedWatermark, readVersionToken, true\)/);
+  assert.match(clientSource, /readVersionToken={readVersionToken}/);
   assert.match(clientSource, /onVersionChanged=\{reloadVersionedBundle\}/);
 });
 

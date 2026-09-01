@@ -6,6 +6,8 @@
 
 **Implementation receipt:** `docs/superpowers/artifacts/2026-08-31-live-traffic-aggregate-implementation-receipt.md`
 
+> **Supersession note — 2026-09-01:** live shared-adapter work in this plan remains the direction for Public Report and Desktop Dashboard Report Mode. It is not the target read path for the public 24/7 annual KPI Dashboard. The wallboard decision and implementation sequence are superseded by `docs/adr/2026-09-01-report-live-dashboard-daily-publication.md` and `docs/superpowers/plans/2026-09-01-report-live-dashboard-daily-publication.md`.
+
 **Quyết định mục tiêu:** Report và phần Report Mode của Dashboard dùng chung một live aggregate contract đọc từ canonical effective flight legs, có watermark/data version và cache ngắn; Dashboard Operational Mode tiếp tục dùng workspace RPC riêng.
 
 **Phạm vi code:** Git worktree `SeasonalManagement`, Git worktree `SeasonalManagement-web-traffic-report`, canonical reporting SQL, public report Edge API, Dashboard, test/build/deploy/runbook liên quan.

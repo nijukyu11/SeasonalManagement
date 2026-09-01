@@ -16,6 +16,7 @@ const annualPassengerKpiSql = await readFile(new URL('../migrations/202608311500
 const annualPassengerKpiOwnerSql = await readFile(new URL('../migrations/20260831190000_annual_passenger_kpi_owner.sql', import.meta.url), 'utf8');
 const liveCandidateSliceSql = await readFile(new URL('../migrations/20260831205000_public_traffic_candidate_slice_v1.sql', import.meta.url), 'utf8');
 const liveAggregateV2Sql = await readFile(new URL('../migrations/20260831210000_public_traffic_live_aggregate_v2.sql', import.meta.url), 'utf8');
+const dashboardDailyPublicationSql = await readFile(new URL('../migrations/20260901090000_public_dashboard_daily_publication.sql', import.meta.url), 'utf8');
 const db = await createSupabasePGlite();
 
 async function addSeason(id, code) {
@@ -78,6 +79,8 @@ try {
   await db.exec(liveCandidateSliceSql);
   await db.exec(liveAggregateV2Sql);
   await db.exec(liveAggregateV2Sql);
+  await db.exec(dashboardDailyPublicationSql);
+  await db.exec(dashboardDailyPublicationSql);
 
   await addSeason('old-season', 'W25');
   await addSeason('new-season', 'S26');
@@ -161,6 +164,71 @@ try {
   assert.equal(savedAnnualKpi.target_reported_pax, 8000000);
   assert.equal((await db.query(`select count(*)::integer as count from reporting.annual_passenger_kpis where year=2027`)).rows[0].count, 1);
 
+  await db.query(`insert into reporting.public_traffic_coverage (
+    from_date, to_date, status, reason_code, certified_at
+  ) values (date '2026-01-01', date '2026-03-02', 'complete', 'test-daily-publication', now())`);
+  const publicationWatermark = Number((await db.query(`
+    select coalesce(max(server_seq), 0)::bigint as watermark from public.season_change_events
+  `)).rows[0].watermark);
+  await db.exec('set role service_role');
+  let firstPublication;
+  let repeatedPublication;
+  let rejectedPublication;
+  let correctionPublication;
+  let dashboardPublication;
+  try {
+    firstPublication = (await db.query(`select public.publish_public_dashboard_daily_v1(
+      2026, date '2026-03-02', $1, 'test-2026-03-02-first', 'daily_acceptance', 'Daily data accepted'
+    ) as result`, [publicationWatermark])).rows[0].result;
+    repeatedPublication = (await db.query(`select public.publish_public_dashboard_daily_v1(
+      2026, date '2026-03-02', $1, 'test-2026-03-02-first', 'daily_acceptance', 'Daily data accepted'
+    ) as result`, [publicationWatermark])).rows[0].result;
+    rejectedPublication = (await db.query(`select public.publish_public_dashboard_daily_v1(
+      2026, date '2026-03-02', $1, 'test-2026-03-02-stale', 'daily_acceptance', 'Stale source rehearsal'
+    ) as result`, [publicationWatermark - 1])).rows[0].result;
+    dashboardPublication = (await db.query(`
+      select public.get_public_dashboard_publication_v1(2026) as result
+    `)).rows[0].result;
+    correctionPublication = (await db.query(`select public.publish_public_dashboard_daily_v1(
+      2026, date '2026-03-02', $1, 'test-2026-03-02-correction', 'manual_correction', 'Accepted correction publication'
+    ) as result`, [publicationWatermark])).rows[0].result;
+  } finally {
+    await db.exec('reset role');
+  }
+  assert.equal(firstPublication.status, 'ready', 'only a complete fixed-as-of result may advance the Dashboard head');
+  assert.equal(repeatedPublication.publication_id, firstPublication.publication_id, 'publisher retries must be idempotent');
+  assert.equal(rejectedPublication.status, 'rejected_version', 'a stale expected watermark must fail closed');
+  assert.equal(dashboardPublication.publication.publication_id, firstPublication.publication_id, 'a rejected attempt must preserve last-known-good');
+  assert.equal(dashboardPublication.publication.freshness, 'stale', 'a failed newer attempt must make staleness visible');
+  assert.equal(dashboardPublication.reported_pax, 80, 'a deleted newer lineage must suppress its older predecessor in the live canonical metrics');
+  assert.equal(dashboardPublication.true_zero_reported_legs, 0);
+  assert.ok(correctionPublication.publication_id > firstPublication.publication_id, 'an accepted correction must create a new immutable version');
+  await assert.rejects(
+    db.query(`update reporting.public_dashboard_publications set reason = 'changed' where id = $1`, [firstPublication.publication_id]),
+    /immutable/,
+    'a finalized publication must not be editable in place',
+  );
+  await assert.rejects(
+    db.query(`delete from reporting.public_dashboard_publications where id = $1`, [firstPublication.publication_id]),
+    /immutable/,
+    'a finalized publication must not be deleted in place',
+  );
+  await db.exec('set role service_role');
+  try {
+    const correctedDashboard = (await db.query(`
+      select public.get_public_dashboard_publication_v1(2026) as result
+    `)).rows[0].result;
+    assert.equal(correctedDashboard.publication.publication_id, correctionPublication.publication_id);
+    assert.equal(correctedDashboard.publication.freshness, 'fresh');
+    await assert.rejects(
+      db.query(`select count(*) from reporting.public_dashboard_publications`),
+      /permission denied/,
+      'the Edge service role must not read the private publication ledger directly',
+    );
+  } finally {
+    await db.exec('reset role');
+  }
+
   const timelineResult = await db.query(`select reporting.get_traffic_report_timeline_v2(date '2026-03-02', date '2026-03-06', null, null, 'day', null, 366, '{}'::jsonb, timestamptz '2026-03-10 00:00:00+00') as result`);
   const timeline = timelineResult.rows[0].result;
   assert.equal(timeline.series.length, 5, 'inclusive date spine must contain every day');
@@ -220,7 +288,7 @@ try {
     ), actual as materialized (
       select * from reporting.get_public_traffic_candidate_slice_v1(
         date '2026-03-02', date '2026-03-03'
-      )
+      ) where effective_action is distinct from 'deleted'
     )
     select
       (select count(*)::integer from expected) as expected_count,
@@ -236,6 +304,12 @@ try {
     expected_minus_actual: 0,
     actual_minus_expected: 0,
   }, 'the bounded live seam must preserve every canonical candidate field before ranking');
+  const boundedTombstones = (await db.query(`
+    select count(*)::integer as count
+    from reporting.get_public_traffic_candidate_slice_v1(date '2026-03-02', date '2026-03-03')
+    where effective_action = 'deleted'
+  `)).rows[0].count;
+  assert.equal(boundedTombstones, 1, 'the bounded seam must retain tombstones until canonical lineage ranking');
 
   await db.exec('set role service_role');
   try {
@@ -330,6 +404,21 @@ try {
   assert.deepEqual(liveV2DimensionScope.dimensions, liveV2.dimensions, 'dimension scope must preserve the full bundle dimensions');
   assert.equal(liveV2TimelineScope.source_watermark, liveV2.source_watermark);
   assert.equal(liveV2DimensionScope.source_watermark, liveV2.source_watermark);
+  const beforePaxMaturity = (await db.query(`select public.get_public_traffic_report_v2(
+    date '2026-03-03', date '2026-03-03', 'all', array[]::text[], array[]::text[],
+    array[]::text[], 'none', 'local', null, 'traffic-report-v2', 'timeline',
+    timestamptz '2026-03-03 12:00:00+07'
+  ) as result`)).rows[0].result;
+  const afterPaxMaturity = (await db.query(`select public.get_public_traffic_report_v2(
+    date '2026-03-03', date '2026-03-03', 'all', array[]::text[], array[]::text[],
+    array[]::text[], 'none', 'local', null, 'traffic-report-v2', 'timeline',
+    timestamptz '2026-03-05 12:00:00+07'
+  ) as result`)).rows[0].result;
+  assert.equal(beforePaxMaturity.source_watermark, afterPaxMaturity.source_watermark, 'time-based maturity may change without a data mutation');
+  assert.equal(Date.parse(beforePaxMaturity.data_as_of), Date.parse('2026-03-03T05:00:00Z'));
+  assert.equal(Date.parse(afterPaxMaturity.data_as_of), Date.parse('2026-03-05T05:00:00Z'));
+  assert.equal(beforePaxMaturity.current.reported_pax, null, 'fixed pre-maturity as-of must not expose Pax early');
+  assert.equal(afterPaxMaturity.current.reported_pax, liveV2.current.reported_pax, 'fixed mature as-of must reproduce the compatible report value');
   await assert.rejects(
     db.query(`select public.get_public_traffic_report_v2(
       date '2026-03-03', date '2026-03-03', 'all', array[]::text[], array[]::text[],

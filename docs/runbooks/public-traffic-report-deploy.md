@@ -145,6 +145,42 @@ systemctl is-active seasonal-traffic-report-refresh.timer   # expected: inactive
 - screenshots at 360, 768, 1280 and 1440 px plus keyboard/screen-reader/contrast checks;
 - explicit user staging acceptance before production DNS/publication.
 
+## Report live + Dashboard Daily Publication (feature-gated)
+
+The additive A+B path remains disabled unless its build/runtime flags are explicitly set:
+
+- `NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED=1` switches the public Report to the live aggregate adapter.
+- `NEXT_PUBLIC_TRAFFIC_DASHBOARD_DAILY_PUBLICATION=true` switches the 24/7 wallboard to the latest ready immutable publication.
+- `TRAFFIC_REPORT_READ_VERSION_SECRET` is required by the Edge runtime to mint and verify Report Read Version tokens. Keep it out of artifacts and logs.
+
+Do not enable either UI flag before the matching migration, Edge function, clone differential and staging smoke are accepted. The existing materialized-view path and refresh timer remain the rollback implementation during soak.
+
+Install the Dashboard publisher only on an approved clone/staging host first:
+
+```bash
+sudo install -o root -g root -m 0755 \
+  deploy/traffic-report/seasonal-traffic-dashboard-publish \
+  /usr/local/sbin/seasonal-traffic-dashboard-publish
+```
+
+After daily import/reconciliation has been accepted, capture the committed `season_change_events.server_seq` watermark and invoke the publisher with an explicit completed Business Date and that exact watermark:
+
+```bash
+sudo /usr/local/sbin/seasonal-traffic-dashboard-publish \
+  2026-09-01 <EXPECTED_WATERMARK> daily_acceptance "Daily data accepted"
+```
+
+The helper fails closed if the watermark changed, the receipt is not `ready`, or the current pointer does not equal the returned publication id. `incomplete`, `empty`, `rejected_version` and `failed` attempts remain audit evidence and never replace last-known-good. A correction uses `manual_correction`, a reason and an explicit new idempotency key; it creates a new immutable row rather than editing the old one.
+
+Smoke the two small read contracts without direct ledger access:
+
+```text
+GET /api/report/v1/dashboard-publication?year=2026
+GET /api/report/v1/dashboard-publication-version?year=2026
+```
+
+Verify publication id, Business Date, checksum, metrics version, source watermark, `freshness`, ETag and cache headers. A missing ready publication is an explicit `DASHBOARD_PUBLICATION_NOT_READY`; a newer failed attempt keeps the ready payload but reports stale freshness.
+
 ## Rollback
 
 1. Point `/srv/seasonal-traffic-report/current` back to the prior immutable release and reload Nginx.

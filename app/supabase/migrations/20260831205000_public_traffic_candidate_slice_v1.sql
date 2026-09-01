@@ -62,7 +62,6 @@ with base_scope as materialized (
     on modifications.season_id = records.season_id
    and modifications.leg_id = records.record_id
   where public.is_canonical_flight_leg_active_v1(records.status, records.action)
-    and coalesce(modifications.action, 'modified') <> 'deleted'
     and (
       (
         records.operational_date ~ '^20[0-9]{2}-[0-9]{2}-[0-9]{2}$'

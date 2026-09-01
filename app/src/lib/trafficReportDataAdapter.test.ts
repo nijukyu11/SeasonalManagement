@@ -76,6 +76,7 @@ function report(): TrafficV2ApiEnvelope['report'] {
 function payload(watermark = 51): TrafficV2ApiEnvelope {
   return {
     contract_version: 'traffic-report-v2',
+    read_version_token: 'rv1.dGVzdA.c2ln',
     data_as_of: '2026-08-31T05:00:00.000Z',
     source_watermark: watermark,
     data_version: 7,
@@ -119,10 +120,10 @@ test('adapter builds one canonical v2 URL without credentials', () => {
     buildTrafficReportV2OverviewUrl(filter, 50),
     '/api/report/v2/overview?from=2026-08-01&to=2026-08-31&airline=VN&expected_watermark=50',
   );
-  assert.match(buildTrafficReportV2ExportUrl(filter, 51), /\/v2\/export\?.*expected_watermark=51/u);
+  assert.match(buildTrafficReportV2ExportUrl(filter, 51, 'rv1.dGVzdA.c2ln'), /\/v2\/export\?.*expected_watermark=51.*read_version=rv1/u);
   assert.match(
-    buildTrafficReportV2DimensionUrl(filter, 'route', 'A', 'reported_pax', 2, 50, 51, true),
-    /\/v2\/dimension-export\?.*type=A.*dimension=route.*sort=reported_pax.*page=2.*page_size=50.*expected_watermark=51/u,
+    buildTrafficReportV2DimensionUrl(filter, 'route', 'A', 'reported_pax', 2, 50, 51, 'rv1.dGVzdA.c2ln', true),
+    /\/v2\/dimension-export\?.*type=A.*dimension=route.*sort=reported_pax.*page=2.*page_size=50.*expected_watermark=51.*read_version=rv1/u,
   );
 });
 
@@ -133,6 +134,7 @@ test('versioned timeline and dimension reads preserve null Pax and require the p
     seen.push(url);
     if (url.includes('/timeline')) return Response.json({
       source_watermark: 51,
+      read_version_token: 'rv1.dGVzdA.c2ln',
       has_more: false,
       next_cursor: null,
       timeline: [{
@@ -142,7 +144,7 @@ test('versioned timeline and dimension reads preserve null Pax and require the p
       }],
     });
     return Response.json({
-      contract_version: 'traffic-report-v2', data_as_of: '2026-08-31T05:00:00.000Z',
+      contract_version: 'traffic-report-v2', read_version_token: 'rv1.dGVzdA.c2ln', data_as_of: '2026-08-31T05:00:00.000Z',
       source_watermark: 51, filter_hash: 'b'.repeat(64), dimension: 'route', type: 'all',
       page: 1, page_size: 50, total_rows: 1, has_more: false,
       rows: [{
@@ -152,11 +154,11 @@ test('versioned timeline and dimension reads preserve null Pax and require the p
       }],
     });
   }) as typeof fetch;
-  const timeline = await fetchTrafficReportV2TimelinePage(filter, 'all', null, 51, { fetchImpl });
-  const dimension = await fetchTrafficReportV2DimensionPage(filter, 'route', 'all', 'flights', 1, 50, 51, { fetchImpl });
+  const timeline = await fetchTrafficReportV2TimelinePage(filter, 'all', null, 51, 'rv1.dGVzdA.c2ln', { fetchImpl });
+  const dimension = await fetchTrafficReportV2DimensionPage(filter, 'route', 'all', 'flights', 1, 50, 51, 'rv1.dGVzdA.c2ln', { fetchImpl });
   assert.equal(timeline.timeline[0].reported_pax, null);
   assert.equal(dimension.rows[0].reported_pax, null);
-  assert.ok(seen.every((url) => url.includes('expected_watermark=51')));
+  assert.ok(seen.every((url) => url.includes('expected_watermark=51') && url.includes('read_version=rv1')));
 });
 
 test('adapter decodes the aggregate bundle and omits browser credentials', async () => {

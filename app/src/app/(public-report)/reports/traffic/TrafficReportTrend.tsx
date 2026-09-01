@@ -43,11 +43,12 @@ async function readJson(response: Response): Promise<unknown> {
   return response.json().catch(() => null);
 }
 
-export function TrafficReportTrend({ filter, scope, readVersion = 'v1', expectedWatermark, onScopeChange, onVersionChanged }: {
+export function TrafficReportTrend({ filter, scope, readVersion = 'v1', expectedWatermark, readVersionToken, onScopeChange, onVersionChanged }: {
   filter: NormalizedTrafficReportFilter;
   scope: TrafficType;
   readVersion?: 'v1' | 'v2';
   expectedWatermark?: number;
+  readVersionToken?: string;
   onScopeChange: (scope: TrafficType) => void;
   onVersionChanged?: () => void;
 }) {
@@ -80,8 +81,8 @@ export function TrafficReportTrend({ filter, scope, readVersion = 'v1', expected
         let timeline: TrafficTimelinePoint[];
         let nextCursor: string | null;
         if (readVersion === 'v2') {
-          if (expectedWatermark === undefined) throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.');
-          const payload = await fetchTrafficReportV2TimelinePage(filter, scope, after, expectedWatermark, { signal: controller.signal });
+          if (expectedWatermark === undefined || !readVersionToken) throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.');
+          const payload = await fetchTrafficReportV2TimelinePage(filter, scope, after, expectedWatermark, readVersionToken, { signal: controller.signal });
           timeline = payload.timeline;
           hasMore = payload.hasMore;
           nextCursor = payload.nextCursor;
@@ -109,7 +110,7 @@ export function TrafficReportTrend({ filter, scope, readVersion = 'v1', expected
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
-  }, [closeInteractions, expectedWatermark, filter, onVersionChanged, readVersion, scope]);
+  }, [closeInteractions, expectedWatermark, filter, onVersionChanged, readVersion, readVersionToken, scope]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);

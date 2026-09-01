@@ -90,16 +90,25 @@ function appendExpectedWatermark(query: URLSearchParams, expectedWatermark: numb
   query.set('expected_watermark', String(expectedWatermark));
 }
 
+function appendReadVersion(query: URLSearchParams, readVersionToken: string): void {
+  if (!/^rv1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(readVersionToken)) {
+    throw new Error('Report Read Version không hợp lệ.');
+  }
+  query.set('read_version', readVersionToken);
+}
+
 export function buildTrafficReportV2TimelineUrl(
   filter: TrafficReportFilter,
   scope: TrafficType,
   after: string | null,
   expectedWatermark: number,
+  readVersionToken: string,
 ): string {
   const query = toTrafficReportSearchParams({ ...filter, type: scope });
   query.set('page_size', '366');
   if (after) query.set('after', after);
   appendExpectedWatermark(query, expectedWatermark);
+  appendReadVersion(query, readVersionToken);
   return `${TRAFFIC_REPORT_V2_API_BASE}/timeline?${query.toString()}`;
 }
 
@@ -111,6 +120,7 @@ export function buildTrafficReportV2DimensionUrl(
   page: number,
   pageSize: number,
   expectedWatermark: number,
+  readVersionToken: string,
   exportAll = false,
 ): string {
   const query = toTrafficReportSearchParams({ ...filter, type: scope });
@@ -119,15 +129,18 @@ export function buildTrafficReportV2DimensionUrl(
   query.set('page', String(page));
   query.set('page_size', String(pageSize));
   appendExpectedWatermark(query, expectedWatermark);
+  appendReadVersion(query, readVersionToken);
   return `${TRAFFIC_REPORT_V2_API_BASE}/${exportAll ? 'dimension-export' : 'dimension'}?${query.toString()}`;
 }
 
 export function buildTrafficReportV2ExportUrl(
   filter: TrafficReportFilter,
   expectedWatermark: number,
+  readVersionToken: string,
 ): string {
   const query = toTrafficReportSearchParams(filter);
   appendExpectedWatermark(query, expectedWatermark);
+  appendReadVersion(query, readVersionToken);
   return `${TRAFFIC_REPORT_V2_API_BASE}/export?${query.toString()}`;
 }
 
@@ -243,7 +256,11 @@ function apiTimelinePoint(row: TrafficV2ApiTimelinePoint): TrafficTimelinePoint 
   };
 }
 
-async function v2ResourcePayload(response: Response, expectedWatermark: number): Promise<Record<string, unknown>> {
+async function v2ResourcePayload(
+  response: Response,
+  expectedWatermark: number,
+  readVersionToken: string,
+): Promise<Record<string, unknown>> {
   const payload: unknown = await response.json().catch(() => null);
   if (response.status === 409) {
     const details = errorPayload(payload);
@@ -262,7 +279,11 @@ async function v2ResourcePayload(response: Response, expectedWatermark: number):
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new Error('Payload traffic-report-v2 không hợp lệ.');
   }
-  return payload as Record<string, unknown>;
+  const resource = payload as Record<string, unknown>;
+  if (resource.read_version_token !== readVersionToken) {
+    throw new Error('Tài nguyên báo cáo không cùng Report Read Version.');
+  }
+  return resource;
 }
 
 export async function fetchTrafficReportV2TimelinePage(
@@ -270,13 +291,14 @@ export async function fetchTrafficReportV2TimelinePage(
   scope: TrafficType,
   after: string | null,
   expectedWatermark: number,
+  readVersionToken: string,
   options: Pick<TrafficReportFetchOptions, 'signal' | 'fetchImpl'> = {},
 ): Promise<{ timeline: TrafficTimelinePoint[]; hasMore: boolean; nextCursor: string | null }> {
   const response = await (options.fetchImpl ?? fetch)(
-    buildTrafficReportV2TimelineUrl(filter, scope, after, expectedWatermark),
+    buildTrafficReportV2TimelineUrl(filter, scope, after, expectedWatermark, readVersionToken),
     { credentials: 'omit', headers: { Accept: 'application/json' }, signal: options.signal },
   );
-  const payload = await v2ResourcePayload(response, expectedWatermark);
+  const payload = await v2ResourcePayload(response, expectedWatermark, readVersionToken);
   if (payload.source_watermark !== expectedWatermark || !Array.isArray(payload.timeline)) {
     throw new TrafficReportVersionChangedError(expectedWatermark, asSafeWatermark(payload.source_watermark));
   }
@@ -315,13 +337,14 @@ export async function fetchTrafficReportV2DimensionPage(
   page: number,
   pageSize: number,
   expectedWatermark: number,
+  readVersionToken: string,
   options: Pick<TrafficReportFetchOptions, 'signal' | 'fetchImpl'> = {},
 ): Promise<TrafficDimensionResponse> {
   const response = await (options.fetchImpl ?? fetch)(
-    buildTrafficReportV2DimensionUrl(filter, dimension, scope, sort, page, pageSize, expectedWatermark),
+    buildTrafficReportV2DimensionUrl(filter, dimension, scope, sort, page, pageSize, expectedWatermark, readVersionToken),
     { credentials: 'omit', headers: { Accept: 'application/json' }, signal: options.signal },
   );
-  const payload = await v2ResourcePayload(response, expectedWatermark);
+  const payload = await v2ResourcePayload(response, expectedWatermark, readVersionToken);
   if (payload.source_watermark !== expectedWatermark || !Array.isArray(payload.rows)) {
     throw new TrafficReportVersionChangedError(expectedWatermark, asSafeWatermark(payload.source_watermark));
   }
@@ -355,6 +378,7 @@ export function toTrafficReportPresentationBundle(bundle: TrafficV2Bundle): Traf
     request_hash: bundle.version.filterHash,
     data_as_of: bundle.version.dataAsOf,
     source_watermark: bundle.version.sourceWatermark,
+    read_version_token: bundle.version.readVersionToken,
     metadata: {
       min_ops_date: report.minOpsDate,
       max_ops_date: report.maxOpsDate,

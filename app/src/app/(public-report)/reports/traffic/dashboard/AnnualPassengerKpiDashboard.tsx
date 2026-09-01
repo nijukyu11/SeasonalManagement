@@ -29,9 +29,13 @@ import { cn } from '@/lib/cn';
 import {
   ANNUAL_KPI_API_BASE,
   ANNUAL_KPI_VERSION_POLL_MS,
+  DASHBOARD_DAILY_PUBLICATION_ENABLED,
+  annualDashboardPublicationUrl,
+  annualDashboardPublicationVersionUrl,
   annualKpiSnapshotUrl,
   annualKpiVersionUrl,
   currentHcmYear,
+  decodeAnnualPassengerDashboardSnapshot,
   isAnnualPassengerKpiSnapshot,
   parseAnnualKpiYear,
   type AnnualKpiConfig,
@@ -354,11 +358,18 @@ export default function AnnualPassengerKpiDashboard() {
     requestRef.current?.abort(); const controller = new AbortController(); requestRef.current = controller;
     setLoading(true); setError(null); if (clear) setSnapshot(null);
     try {
-      const response = await fetch(annualKpiSnapshotUrl(selected), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+      const snapshotUrl = DASHBOARD_DAILY_PUBLICATION_ENABLED
+        ? annualDashboardPublicationUrl(selected)
+        : annualKpiSnapshotUrl(selected);
+      const versionUrl = DASHBOARD_DAILY_PUBLICATION_ENABLED
+        ? annualDashboardPublicationVersionUrl(selected)
+        : annualKpiVersionUrl(selected);
+      const response = await fetch(snapshotUrl, { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
       const payload: unknown = await response.json().catch(() => null);
-      if (!response.ok || !isAnnualPassengerKpiSnapshot(payload)) { const message = payload && typeof payload === 'object' && 'error' in payload ? String((payload as { error: unknown }).error) : 'Dashboard tạm thời chưa thể cập nhật.'; throw new Error(message); }
-      setSnapshot(payload);
-      const versionResponse = await fetch(annualKpiVersionUrl(selected), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+      const decoded = decodeAnnualPassengerDashboardSnapshot(payload);
+      if (!response.ok || !decoded) { const message = payload && typeof payload === 'object' && 'error' in payload ? String((payload as { error: unknown }).error) : 'Dashboard tạm thời chưa thể cập nhật.'; throw new Error(message); }
+      setSnapshot(decoded);
+      const versionResponse = await fetch(versionUrl, { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
       if (versionResponse.ok) versionEtagRef.current = versionResponse.headers.get('ETag');
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === 'AbortError') return;
@@ -368,7 +379,10 @@ export default function AnnualPassengerKpiDashboard() {
   const checkVersion = useCallback(async () => {
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (versionEtagRef.current) headers['If-None-Match'] = versionEtagRef.current;
-    const response = await fetch(annualKpiVersionUrl(year), { credentials: 'omit', headers }).catch(() => null);
+    const versionUrl = DASHBOARD_DAILY_PUBLICATION_ENABLED
+      ? annualDashboardPublicationVersionUrl(year)
+      : annualKpiVersionUrl(year);
+    const response = await fetch(versionUrl, { credentials: 'omit', headers }).catch(() => null);
     if (!response || response.status === 304 || !response.ok) return;
     const nextEtag = response.headers.get('ETag');
     if (!versionEtagRef.current || nextEtag !== versionEtagRef.current) { versionEtagRef.current = nextEtag; await loadSnapshot(year); }
@@ -396,7 +410,7 @@ export default function AnnualPassengerKpiDashboard() {
         <header className="relative flex min-h-11 items-center justify-between gap-3 border-b border-white/8 py-2">
           <h1 className="min-w-0 truncate text-balance text-base font-semibold text-white sm:text-lg">KPI sản lượng khách năm {year}</h1>
           <div className="flex shrink-0 items-center gap-2">
-            <span className="hidden items-center gap-1.5 text-xs font-medium text-slate-400 lg:flex">Cập nhật lúc {displayUpdated(snapshot?.projection.refreshed_at)}</span>
+            <span className="hidden items-center gap-1.5 text-xs font-medium text-slate-400 lg:flex">{snapshot?.publication ? `Ngày số liệu ${displayDate(snapshot.publication.business_date)} · ` : ''}Cập nhật lúc {displayUpdated(snapshot?.projection.refreshed_at)}</span>
             <span className={cn('hidden items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium sm:flex', snapshot?.projection.projection_status === 'fresh' ? 'border-emerald-400/20 bg-emerald-400/8 text-emerald-200' : 'border-amber-300/25 bg-amber-300/8 text-amber-200')}><span aria-hidden="true" className={cn('size-2 rounded-full', snapshot?.projection.projection_status === 'fresh' ? 'bg-emerald-400' : 'bg-amber-300')} />{loading && snapshot ? 'Đang cập nhật' : snapshot?.projection.projection_status === 'fresh' ? 'Dữ liệu mới nhất' : 'Bản cập nhật gần nhất'}</span>
           </div>
         </header>
@@ -437,7 +451,11 @@ export default function AnnualPassengerKpiDashboard() {
       <KpiAdminDialog
         dialogRef={dialogRef}
         snapshot={snapshot}
-        onSaved={(nextSnapshot) => { versionEtagRef.current = null; setSnapshot(nextSnapshot); }}
+        onSaved={(nextSnapshot) => {
+          versionEtagRef.current = null;
+          if (DASHBOARD_DAILY_PUBLICATION_ENABLED) void loadSnapshot(year);
+          else setSnapshot(nextSnapshot);
+        }}
         automaticYear={automaticYear}
         autoYear={autoYear}
         availableYears={availableYears}

@@ -50,13 +50,14 @@ function ShareMetric({ value, tone }: {
   );
 }
 
-export function TrafficReportDimensionSection({ kind, filter, scope, marketDimension = 'route', readVersion = 'v1', expectedWatermark, onScopeChange, onMarketDimensionChange, onVersionChanged }: {
+export function TrafficReportDimensionSection({ kind, filter, scope, marketDimension = 'route', readVersion = 'v1', expectedWatermark, readVersionToken, onScopeChange, onMarketDimensionChange, onVersionChanged }: {
   kind: 'market' | 'airline';
   filter: NormalizedTrafficReportFilter;
   scope: TrafficType;
   marketDimension?: TrafficMarketDimension;
   readVersion?: 'v1' | 'v2';
   expectedWatermark?: number;
+  readVersionToken?: string;
   onScopeChange: (scope: TrafficType) => void;
   onMarketDimensionChange?: (dimension: TrafficMarketDimension) => void;
   onVersionChanged?: () => void;
@@ -81,9 +82,9 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     setError(null);
     try {
       const payload = readVersion === 'v2'
-        ? expectedWatermark === undefined
+        ? expectedWatermark === undefined || !readVersionToken
           ? (() => { throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.'); })()
-          : await fetchTrafficReportV2DimensionPage(filter, dimension, scope, sort, page, 50, expectedWatermark, { signal: controller.signal })
+          : await fetchTrafficReportV2DimensionPage(filter, dimension, scope, sort, page, 50, expectedWatermark, readVersionToken, { signal: controller.signal })
         : await (async () => {
           const response = await fetch(buildDimensionUrl(filter, dimension, scope, sort, page, 50), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
           const result: unknown = await response.json().catch(() => null);
@@ -100,7 +101,7 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
-  }, [dimension, expectedWatermark, filter, onVersionChanged, page, readVersion, scope, sort]);
+  }, [dimension, expectedWatermark, filter, onVersionChanged, page, readVersion, readVersionToken, scope, sort]);
 
   const loadChart = useCallback(async () => {
     chartControllerRef.current?.abort();
@@ -110,9 +111,9 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     setChartError(null);
     try {
       const payload = readVersion === 'v2'
-        ? expectedWatermark === undefined
+        ? expectedWatermark === undefined || !readVersionToken
           ? (() => { throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.'); })()
-          : await fetchTrafficReportV2DimensionPage(filter, dimension, scope, 'flights', 1, 50, expectedWatermark, { signal: controller.signal })
+          : await fetchTrafficReportV2DimensionPage(filter, dimension, scope, 'flights', 1, 50, expectedWatermark, readVersionToken, { signal: controller.signal })
         : await (async () => {
           const response = await fetch(buildDimensionUrl(filter, dimension, scope, 'flights', 1, 50), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
           const result: unknown = await response.json().catch(() => null);
@@ -129,7 +130,7 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     } finally {
       if (!controller.signal.aborted) setChartLoading(false);
     }
-  }, [dimension, expectedWatermark, filter, onVersionChanged, readVersion, scope]);
+  }, [dimension, expectedWatermark, filter, onVersionChanged, readVersion, readVersionToken, scope]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadTable(), 0);
@@ -148,8 +149,8 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
   const groupLabel = dimension === 'route' ? 'Chặng bay' : dimension === 'country' ? 'Quốc gia' : 'Hãng hàng không';
   const visibleRows = data?.rows ?? [];
   const chartRows = chartData?.rows.slice(0, 10) ?? [];
-  const exportHref = readVersion === 'v2' && expectedWatermark !== undefined
-    ? buildTrafficReportV2DimensionUrl(filter, dimension, scope, sort, 1, 732, expectedWatermark, true)
+  const exportHref = readVersion === 'v2' && expectedWatermark !== undefined && readVersionToken
+    ? buildTrafficReportV2DimensionUrl(filter, dimension, scope, sort, 1, 732, expectedWatermark, readVersionToken, true)
     : buildDimensionUrl(filter, dimension, scope, sort, 1, 732, true);
   const tableScrollHintId = `${kind}-table-scroll-hint`;
 

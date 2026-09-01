@@ -146,6 +146,8 @@ export interface TrafficReportBundle {
   request_hash: string;
   data_as_of: string;
   source_watermark: number | 'unknown';
+  /** Present for live v2 reads; pins semantic data-as-of across secondary reads. */
+  read_version_token?: string;
   metadata: {
     min_ops_date: string;
     max_ops_date: string;
@@ -461,6 +463,8 @@ export function isTrafficReportBundle(value: unknown): value is TrafficReportBun
   return [TRAFFIC_REPORT_CONTRACT_VERSION, 'traffic-report-v2'].includes(String(root.contract_version))
     && typeof root.request_hash === 'string'
     && typeof root.data_as_of === 'string'
+    && (root.contract_version !== 'traffic-report-v2'
+      || (typeof root.read_version_token === 'string' && root.read_version_token.length > 0))
     && !!metadata
     && projectionIsValid
     && !!root.kpis

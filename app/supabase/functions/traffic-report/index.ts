@@ -2,7 +2,7 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 
 const CONTRACT_VERSION = 'traffic-report-v1';
 const V2_CONTRACT_VERSION = 'traffic-report-v2';
-const ALLOWED_QUERY_KEYS = new Set(['from', 'to', 'type', 'airline', 'route', 'country', 'aircraft_group', 'comp', 'tz', 'after', 'dimension', 'sort', 'page', 'page_size', 'expected_watermark']);
+const ALLOWED_QUERY_KEYS = new Set(['from', 'to', 'type', 'airline', 'route', 'country', 'aircraft_group', 'comp', 'tz', 'after', 'dimension', 'sort', 'page', 'page_size', 'expected_watermark', 'read_version']);
 const LIST_KEYS = new Set(['airline', 'route', 'country', 'aircraft_group']);
 const SCALAR_KEYS = [...ALLOWED_QUERY_KEYS].filter((key) => !LIST_KEYS.has(key));
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -29,7 +29,16 @@ type NormalizedRequest = {
   sort: 'flights' | 'reported_pax' | 'flight_share' | 'pax_share' | 'label';
   page: number;
   expectedWatermark: number | null;
+  readVersion: string | null;
   canonicalQuery: string;
+};
+
+type ReportReadVersionClaims = {
+  version: 1;
+  expiresAt: number;
+  sourceWatermark: number;
+  dataAsOf: string;
+  filterHash: string;
 };
 
 function json(body: unknown, status = 200, headers: HeadersInit = {}): Response {
@@ -94,6 +103,10 @@ function normalizeRequest(url: URL, endpoint: string, contractVersion: 'v1' | 'v
   if (rawExpectedWatermark !== null && (!Number.isSafeInteger(expectedWatermark) || expectedWatermark < 0)) {
     throw new Error('expected_watermark must be a non-negative integer');
   }
+  const readVersion = url.searchParams.get('read_version');
+  if (readVersion !== null && (!/^rv1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(readVersion) || readVersion.length > 2048)) {
+    throw new Error('invalid read_version');
+  }
 
   const airlines = canonicalList(url.searchParams.getAll('airline'), true);
   const routes = canonicalList(url.searchParams.getAll('route'), true);
@@ -116,6 +129,7 @@ function normalizeRequest(url: URL, endpoint: string, contractVersion: 'v1' | 'v
   if (dimensionEndpoint && page !== 1) canonical.set('page', String(page));
   if (rawPageSize) canonical.set('page_size', String(pageSize));
   if (expectedWatermark !== null) canonical.set('expected_watermark', String(expectedWatermark));
+  if (readVersion !== null) canonical.set('read_version', readVersion);
 
   return {
     from,
@@ -133,6 +147,7 @@ function normalizeRequest(url: URL, endpoint: string, contractVersion: 'v1' | 'v
     sort: rawSort as NormalizedRequest['sort'],
     page,
     expectedWatermark,
+    readVersion,
     canonicalQuery: canonical.toString(),
   };
 }
@@ -374,7 +389,64 @@ function overviewArgs(request: NormalizedRequest): Record<string, unknown> {
   };
 }
 
-function v2Args(request: NormalizedRequest, payloadScope: 'full' | 'timeline' | 'dimensions'): Record<string, unknown> {
+async function reportReadHmac(value: string): Promise<string> {
+  const secret = Deno.env.get('TRAFFIC_REPORT_READ_VERSION_SECRET');
+  if (!secret || secret.length < 32) throw new Error('traffic report read version is not configured');
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value));
+  return base64Url(new Uint8Array(signature));
+}
+
+async function createReportReadVersion(claims: Omit<ReportReadVersionClaims, 'version' | 'expiresAt'>): Promise<string> {
+  const payload: ReportReadVersionClaims = {
+    version: 1,
+    expiresAt: Math.floor(Date.now() / 1000) + 30 * 60,
+    ...claims,
+  };
+  const encoded = base64Url(new TextEncoder().encode(JSON.stringify(payload)));
+  const unsigned = `rv1.${encoded}`;
+  return `${unsigned}.${await reportReadHmac(unsigned)}`;
+}
+
+async function verifyReportReadVersion(token: string): Promise<ReportReadVersionClaims> {
+  const [prefix, encoded, signature, ...rest] = token.split('.');
+  if (rest.length > 0 || prefix !== 'rv1' || !encoded || !signature) throw new Error('READ_VERSION_INVALID');
+  const unsigned = `${prefix}.${encoded}`;
+  const expected = await reportReadHmac(unsigned);
+  if (!constantTimeEqual(new TextEncoder().encode(signature), new TextEncoder().encode(expected))) {
+    throw new Error('READ_VERSION_INVALID');
+  }
+  let claims: unknown;
+  try {
+    claims = JSON.parse(new TextDecoder().decode(decodeBase64(encoded)));
+  } catch {
+    throw new Error('READ_VERSION_INVALID');
+  }
+  if (!claims || typeof claims !== 'object' || Array.isArray(claims)) throw new Error('READ_VERSION_INVALID');
+  const item = claims as Partial<ReportReadVersionClaims>;
+  if (item.version !== 1
+    || !Number.isSafeInteger(item.expiresAt)
+    || Number(item.expiresAt) <= Math.floor(Date.now() / 1000)
+    || !Number.isSafeInteger(item.sourceWatermark)
+    || Number(item.sourceWatermark) < 0
+    || typeof item.dataAsOf !== 'string'
+    || Number.isNaN(Date.parse(item.dataAsOf))
+    || typeof item.filterHash !== 'string'
+    || !/^[a-f0-9]{64}$/u.test(item.filterHash)) throw new Error('READ_VERSION_INVALID');
+  return item as ReportReadVersionClaims;
+}
+
+function v2Args(
+  request: NormalizedRequest,
+  payloadScope: 'full' | 'timeline' | 'dimensions',
+  readVersion: ReportReadVersionClaims | null,
+): Record<string, unknown> {
   const type = request.types.length === 2 ? 'all' : request.types[0];
   return {
     p_from_date: request.from,
@@ -387,9 +459,10 @@ function v2Args(request: NormalizedRequest, payloadScope: 'full' | 'timeline' | 
       ? 'previous'
       : request.comparison === 'previous_year' ? 'year_ago' : 'none',
     p_time_basis: request.timeBasis,
-    p_expected_watermark: request.expectedWatermark,
+    p_expected_watermark: readVersion?.sourceWatermark ?? request.expectedWatermark,
     p_contract_version: V2_CONTRACT_VERSION,
     p_payload_scope: payloadScope,
+    p_data_as_of: readVersion?.dataAsOf ?? null,
   };
 }
 
@@ -470,7 +543,13 @@ Deno.serve(async (request: Request) => {
     if (url.pathname.includes('/kpi-admin/')) return await handleAnnualKpiAdmin(request, url);
     if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405, { Allow: 'GET' });
 
-    if (endpoint === 'annual-kpi' || endpoint === 'dashboard-version' || endpoint === 'kpi-config') {
+    if (
+      endpoint === 'annual-kpi'
+      || endpoint === 'dashboard-version'
+      || endpoint === 'dashboard-publication'
+      || endpoint === 'dashboard-publication-version'
+      || endpoint === 'kpi-config'
+    ) {
       if (endpoint === 'kpi-config' && !url.searchParams.has('year') && [...url.searchParams.keys()].length > 0) {
         throw new Error('unsupported query parameter');
       }
@@ -479,17 +558,27 @@ Deno.serve(async (request: Request) => {
         ? 'get_public_annual_passenger_kpi_v1'
         : endpoint === 'dashboard-version'
           ? 'get_public_annual_passenger_kpi_version_v1'
+          : endpoint === 'dashboard-publication'
+            ? 'get_public_dashboard_publication_v1'
+            : endpoint === 'dashboard-publication-version'
+              ? 'get_public_dashboard_publication_version_v1'
           : 'get_public_annual_passenger_kpi_config_v1';
       const payload = await postgrestRpc(functionName, endpoint === 'annual-kpi'
         ? { p_year: year, p_today: null }
         : { p_year: year });
+      if (endpoint === 'dashboard-publication' && payload == null) {
+        return json({
+          error: 'Dashboard chưa có Daily Publication đạt điều kiện cho năm đã chọn.',
+          error_code: 'DASHBOARD_PUBLICATION_NOT_READY',
+        }, 503, { 'Cache-Control': 'no-store' });
+      }
       const etag = await sha256Etag(payload);
       if (request.headers.get('If-None-Match') === etag) {
         return new Response(null, {
           status: 304,
           headers: {
             ETag: etag,
-            'Cache-Control': endpoint === 'dashboard-version'
+            'Cache-Control': endpoint === 'dashboard-version' || endpoint === 'dashboard-publication-version'
               ? 'public, max-age=0, s-maxage=300'
               : endpoint === 'kpi-config'
                 ? 'no-store'
@@ -499,7 +588,7 @@ Deno.serve(async (request: Request) => {
       }
       return json(payload, 200, {
         ETag: etag,
-        'Cache-Control': endpoint === 'dashboard-version'
+        'Cache-Control': endpoint === 'dashboard-version' || endpoint === 'dashboard-publication-version'
           ? 'public, max-age=0, s-maxage=300'
           : endpoint === 'kpi-config'
             ? 'no-store'
@@ -521,16 +610,33 @@ Deno.serve(async (request: Request) => {
 
     const startedAt = performance.now();
     if (isV2) {
+      const readVersion = normalized.readVersion
+        ? await verifyReportReadVersion(normalized.readVersion)
+        : null;
+      if (endpoint !== 'overview' && !readVersion) throw new Error('READ_VERSION_REQUIRED');
+      if (readVersion && normalized.expectedWatermark !== null
+        && normalized.expectedWatermark !== readVersion.sourceWatermark) {
+        throw new Error('READ_VERSION_INVALID');
+      }
       const payloadScope = endpoint === 'timeline'
         ? 'timeline'
         : endpoint === 'overview' ? 'full' : 'dimensions';
-      const payload = await postgrestRpc('get_public_traffic_report_v2', v2Args(normalized, payloadScope));
+      const payload = await postgrestRpc('get_public_traffic_report_v2', v2Args(normalized, payloadScope, readVersion));
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('invalid traffic-report-v2 payload');
       const bundle = payload as Record<string, unknown>;
       const sourceWatermark = bundle.source_watermark;
       const filterHash = bundle.filter_hash;
-      if (!Number.isSafeInteger(sourceWatermark) || typeof filterHash !== 'string') throw new Error('invalid traffic-report-v2 version envelope');
-      const etag = await sha256Etag({ endpoint, sourceWatermark, filterHash, query: normalized.canonicalQuery });
+      const dataAsOf = bundle.data_as_of;
+      if (!Number.isSafeInteger(sourceWatermark) || typeof filterHash !== 'string' || typeof dataAsOf !== 'string') throw new Error('invalid traffic-report-v2 version envelope');
+      if (readVersion && (sourceWatermark !== readVersion.sourceWatermark
+        || filterHash !== readVersion.filterHash
+        || dataAsOf !== readVersion.dataAsOf)) throw new Error('READ_VERSION_INVALID');
+      const readVersionToken = normalized.readVersion ?? await createReportReadVersion({
+        sourceWatermark: Number(sourceWatermark),
+        dataAsOf,
+        filterHash,
+      });
+      const etag = await sha256Etag({ endpoint, sourceWatermark, filterHash, dataAsOf, query: normalized.canonicalQuery });
       if (request.headers.get('If-None-Match') === etag) {
         return new Response(null, { status: 304, headers: { ETag: etag, 'Cache-Control': 'public, max-age=0, s-maxage=30' } });
       }
@@ -542,6 +648,7 @@ Deno.serve(async (request: Request) => {
         filter_hash: bundle.filter_hash,
         source_mode: bundle.source_mode,
         normalized_filter: bundle.normalized_filter,
+        read_version_token: readVersionToken,
       };
       if (endpoint === 'export') {
         return new Response(buildV2AggregateCsv(bundle), {
@@ -554,7 +661,7 @@ Deno.serve(async (request: Request) => {
           },
         });
       }
-      let responsePayload: Record<string, unknown> = bundle;
+      let responsePayload: Record<string, unknown> = { ...bundle, read_version_token: readVersionToken };
       if (endpoint === 'timeline') {
         const allRows = Array.isArray(bundle.timeline) ? bundle.timeline as Array<Record<string, unknown>> : [];
         const firstIndex = normalized.after
@@ -725,6 +832,14 @@ Deno.serve(async (request: Request) => {
         error: 'Dữ liệu báo cáo đã thay đổi. Vui lòng tải lại toàn bộ báo cáo.',
         expected_watermark: expected === null ? null : Number(expected),
         actual_watermark: actual === null ? null : Number(actual),
+      }, 409, { 'Cache-Control': 'no-store' });
+    }
+    if (/READ_VERSION_(INVALID|REQUIRED)/i.test(message)) {
+      return json({
+        error_code: 'READ_VERSION_CHANGED',
+        error: 'Phiên bản đọc báo cáo đã hết hạn hoặc không còn phù hợp. Vui lòng tải lại toàn bộ báo cáo.',
+        expected_watermark: null,
+        actual_watermark: null,
       }, 409, { 'Cache-Control': 'no-store' });
     }
     const clientError = /invalid|unsupported|must|required|cardinality|outside|provided|exceed/i.test(message);
