@@ -48,7 +48,15 @@ for (const configFile of [
 copy(join(appRoot, 'public'), join(buildRoot, 'public'));
 copy(join(appRoot, 'src', 'app', 'globals.css'), join(buildRoot, 'src', 'app', 'globals.css'));
 copy(join(appRoot, 'src', 'app', '(public-report)'), join(buildRoot, 'src', 'app', '(public-report)'));
-for (const reportLibrary of ['annualPassengerKpiContract.ts', 'cn.ts', 'trafficReportContract.ts', 'trafficReportExcelExport.ts', 'trafficReportOperationalHours.ts']) {
+for (const reportLibrary of [
+  'annualPassengerKpiContract.ts',
+  'cn.ts',
+  'trafficReportContract.ts',
+  'trafficReportDataAdapter.ts',
+  'trafficReportExcelExport.ts',
+  'trafficReportOperationalHours.ts',
+  'trafficReportV2Contract.ts',
+]) {
   copy(join(appRoot, 'src', 'lib', reportLibrary), join(buildRoot, 'src', 'lib', reportLibrary));
 }
 

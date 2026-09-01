@@ -508,7 +508,7 @@ Deno.serve(async (request: Request) => {
     }
 
     const supportedEndpoints = isV2
-      ? ['overview', 'timeline', 'dimension', 'export']
+      ? ['overview', 'timeline', 'dimension', 'dimension-export', 'export']
       : ['overview', 'timeline', 'breakdowns', 'dimension', 'dimension-export', 'export'];
     if (!supportedEndpoints.includes(endpoint)) return json({ error: 'not found' }, 404);
     const normalized = normalizeRequest(url, endpoint, isV2 ? 'v2' : 'v1');
@@ -568,23 +568,47 @@ Deno.serve(async (request: Request) => {
           timeline: rows,
         };
       }
-      if (endpoint === 'dimension') {
+      if (endpoint === 'dimension' || endpoint === 'dimension-export') {
         const dimensions = bundle.dimensions && typeof bundle.dimensions === 'object'
           ? bundle.dimensions as Record<string, unknown>
           : {};
         const allRows = normalized.dimension && Array.isArray(dimensions[normalized.dimension])
-          ? dimensions[normalized.dimension] as unknown[]
+          ? [...dimensions[normalized.dimension] as Array<Record<string, unknown>>]
           : [];
+        allRows.sort((left, right) => {
+          if (normalized.sort === 'label') {
+            return String(left.label ?? '').localeCompare(String(right.label ?? ''), 'vi');
+          }
+          const leftValue = typeof left[normalized.sort] === 'number' ? left[normalized.sort] as number : null;
+          const rightValue = typeof right[normalized.sort] === 'number' ? right[normalized.sort] as number : null;
+          if (leftValue === null && rightValue !== null) return 1;
+          if (leftValue !== null && rightValue === null) return -1;
+          if (leftValue !== rightValue) return (rightValue ?? 0) - (leftValue ?? 0);
+          return String(left.label ?? '').localeCompare(String(right.label ?? ''), 'vi');
+        });
         const offset = (normalized.page - 1) * normalized.pageSize;
         responsePayload = {
           ...version,
           dimension: normalized.dimension,
+          type: normalized.types.length === 1 ? normalized.types[0] : 'all',
           page: normalized.page,
           page_size: normalized.pageSize,
           total_rows: allRows.length,
           has_more: offset + normalized.pageSize < allRows.length,
           rows: allRows.slice(offset, offset + normalized.pageSize),
         };
+        if (endpoint === 'dimension-export') {
+          return new Response(buildDimensionCsv(responsePayload), {
+            headers: {
+              'Content-Type': 'text/csv; charset=utf-8',
+              'Content-Disposition': `attachment; filename="traffic-report-${normalized.dimension}-${normalized.types.join('').toLowerCase()}.csv"`,
+              'Cache-Control': 'no-store',
+              'X-Report-Origin-Ms': String(Math.round(performance.now() - startedAt)),
+              'X-Report-Source-Mode': String(bundle.source_mode ?? 'live'),
+              'X-Content-Type-Options': 'nosniff',
+            },
+          });
+        }
       }
       return json(responsePayload, 200, {
         ETag: etag,

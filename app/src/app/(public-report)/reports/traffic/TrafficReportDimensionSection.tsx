@@ -12,6 +12,11 @@ import {
   type TrafficMarketDimension,
   type TrafficType,
 } from '@/lib/trafficReportContract';
+import {
+  buildTrafficReportV2DimensionUrl,
+  fetchTrafficReportV2DimensionPage,
+  TrafficReportVersionChangedError,
+} from '@/lib/trafficReportDataAdapter';
 import { ScopeSelector } from './TrafficReportTrend';
 
 const numberFormat = new Intl.NumberFormat('vi-VN');
@@ -45,13 +50,16 @@ function ShareMetric({ value, tone }: {
   );
 }
 
-export function TrafficReportDimensionSection({ kind, filter, scope, marketDimension = 'route', onScopeChange, onMarketDimensionChange }: {
+export function TrafficReportDimensionSection({ kind, filter, scope, marketDimension = 'route', readVersion = 'v1', expectedWatermark, onScopeChange, onMarketDimensionChange, onVersionChanged }: {
   kind: 'market' | 'airline';
   filter: NormalizedTrafficReportFilter;
   scope: TrafficType;
   marketDimension?: TrafficMarketDimension;
+  readVersion?: 'v1' | 'v2';
+  expectedWatermark?: number;
   onScopeChange: (scope: TrafficType) => void;
   onMarketDimensionChange?: (dimension: TrafficMarketDimension) => void;
+  onVersionChanged?: () => void;
 }) {
   const dimension: TrafficDimension = kind === 'airline' ? 'airline' : marketDimension;
   const [sort, setSort] = useState<TrafficDimensionSort>('flights');
@@ -72,19 +80,27 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(buildDimensionUrl(filter, dimension, scope, sort, page, 50), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
-      const payload: unknown = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error('Không thể tải bảng dữ liệu. Vui lòng thử lại.');
-      }
-      if (!isTrafficDimensionResponse(payload)) throw new Error('Bảng dữ liệu chưa sẵn sàng.');
+      const payload = readVersion === 'v2'
+        ? expectedWatermark === undefined
+          ? (() => { throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.'); })()
+          : await fetchTrafficReportV2DimensionPage(filter, dimension, scope, sort, page, 50, expectedWatermark, { signal: controller.signal })
+        : await (async () => {
+          const response = await fetch(buildDimensionUrl(filter, dimension, scope, sort, page, 50), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+          const result: unknown = await response.json().catch(() => null);
+          if (!response.ok) throw new Error('Không thể tải bảng dữ liệu. Vui lòng thử lại.');
+          if (!isTrafficDimensionResponse(result)) throw new Error('Bảng dữ liệu chưa sẵn sàng.');
+          return result;
+        })();
       if (!controller.signal.aborted) setData(payload);
     } catch (reason) {
-      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Không thể tải bảng dữ liệu.');
+      if (!controller.signal.aborted) {
+        if (reason instanceof TrafficReportVersionChangedError) onVersionChanged?.();
+        setError(reason instanceof Error ? reason.message : 'Không thể tải bảng dữ liệu.');
+      }
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
-  }, [dimension, filter, page, scope, sort]);
+  }, [dimension, expectedWatermark, filter, onVersionChanged, page, readVersion, scope, sort]);
 
   const loadChart = useCallback(async () => {
     chartControllerRef.current?.abort();
@@ -93,17 +109,27 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     setChartLoading(true);
     setChartError(null);
     try {
-      const response = await fetch(buildDimensionUrl(filter, dimension, scope, 'flights', 1, 50), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
-      const payload: unknown = await response.json().catch(() => null);
-      if (!response.ok) throw new Error('Không thể tải xếp hạng. Vui lòng thử lại.');
-      if (!isTrafficDimensionResponse(payload)) throw new Error('Xếp hạng chưa sẵn sàng.');
+      const payload = readVersion === 'v2'
+        ? expectedWatermark === undefined
+          ? (() => { throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.'); })()
+          : await fetchTrafficReportV2DimensionPage(filter, dimension, scope, 'flights', 1, 50, expectedWatermark, { signal: controller.signal })
+        : await (async () => {
+          const response = await fetch(buildDimensionUrl(filter, dimension, scope, 'flights', 1, 50), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+          const result: unknown = await response.json().catch(() => null);
+          if (!response.ok) throw new Error('Không thể tải xếp hạng. Vui lòng thử lại.');
+          if (!isTrafficDimensionResponse(result)) throw new Error('Xếp hạng chưa sẵn sàng.');
+          return result;
+        })();
       if (!controller.signal.aborted) setChartData(payload);
     } catch (reason) {
-      if (!controller.signal.aborted) setChartError(reason instanceof Error ? reason.message : 'Không thể tải xếp hạng.');
+      if (!controller.signal.aborted) {
+        if (reason instanceof TrafficReportVersionChangedError) onVersionChanged?.();
+        setChartError(reason instanceof Error ? reason.message : 'Không thể tải xếp hạng.');
+      }
     } finally {
       if (!controller.signal.aborted) setChartLoading(false);
     }
-  }, [dimension, filter, scope]);
+  }, [dimension, expectedWatermark, filter, onVersionChanged, readVersion, scope]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadTable(), 0);
@@ -122,7 +148,9 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
   const groupLabel = dimension === 'route' ? 'Chặng bay' : dimension === 'country' ? 'Quốc gia' : 'Hãng hàng không';
   const visibleRows = data?.rows ?? [];
   const chartRows = chartData?.rows.slice(0, 10) ?? [];
-  const exportHref = buildDimensionUrl(filter, dimension, scope, sort, 1, 732, true);
+  const exportHref = readVersion === 'v2' && expectedWatermark !== undefined
+    ? buildTrafficReportV2DimensionUrl(filter, dimension, scope, sort, 1, 732, expectedWatermark, true)
+    : buildDimensionUrl(filter, dimension, scope, sort, 1, 732, true);
   const tableScrollHintId = `${kind}-table-scroll-hint`;
 
   return (

@@ -245,6 +245,10 @@ try {
       )`),
       /permission denied/,
     );
+    await assert.rejects(
+      db.query('select * from reporting.get_public_traffic_canonical_bounds_v1()'),
+      /permission denied/,
+    );
   } finally {
     await db.exec('reset role');
   }
@@ -263,6 +267,30 @@ try {
   assert.equal(liveV2.current.true_zero_reported_legs, 1);
   assert.equal(liveV2.current.missing_due_legs, 3);
   assert.equal(liveV2.timeline[0].reported_pax, 150);
+  assert.equal(liveV2.report.min_ops_date, overview.metadata.min_ops_date);
+  assert.equal(liveV2.report.max_ops_date, overview.metadata.max_ops_date);
+  assert.equal(liveV2.report.breakdowns.peak_hour.length, 24);
+  assert.equal(liveV2.report.breakdowns.day_of_week.length, 7);
+  assert.deepEqual(
+    liveV2.report.breakdowns.peak_hour.map((row) => [row.hour_bucket, row.arrivals, row.departures]),
+    overview.breakdowns.peak_hour.map((row) => [row.hour_bucket, row.arrivals, row.departures]),
+    'v2 feature-parity peak-hour totals must match the snapshot contract',
+  );
+  assert.deepEqual(
+    liveV2.report.breakdowns.day_of_week.map((row) => [row.day_index, row.total_flights, row.arrivals, row.departures]),
+    overview.breakdowns.day_of_week.map((row) => [row.day_index, row.total_flights, row.arrivals, row.departures]),
+    'v2 feature-parity weekday totals must match the snapshot contract',
+  );
+  assert.deepEqual(
+    liveV2.report.breakdowns.aircraft_group.map((row) => [row.label, row.flights, row.reported_pax]),
+    overview.breakdowns.aircraft_group.map((row) => [row.label, row.flights, row.reported_pax]),
+    'v2 feature-parity aircraft groups must match the snapshot contract',
+  );
+  assert.deepEqual(
+    liveV2.report.breakdowns.aircraft_type.map((row) => [row.label, row.aircraft_group, row.flights, row.reported_pax]),
+    overview.breakdowns.aircraft_type.map((row) => [row.label, row.aircraft_group, row.flights, row.reported_pax]),
+    'v2 feature-parity aircraft types must match the snapshot contract',
+  );
   assert.ok(!JSON.stringify(liveV2).includes('record_id'), 'the live public contract must remain aggregate-only');
   assert.equal(liveV2.source_watermark, overview.source_watermark, 'v1/v2 differential comparison requires one source watermark');
   assert.deepEqual(

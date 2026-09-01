@@ -180,3 +180,45 @@ revoke execute on function reporting.get_public_traffic_candidate_slice_v1(date,
 
 comment on function reporting.get_public_traffic_candidate_slice_v1(date, date)
 is 'Internal bounded canonical effective candidate seam for public traffic live aggregates.';
+
+create or replace function reporting.get_public_traffic_canonical_bounds_v1()
+returns table(min_ops_date date, max_ops_date date)
+language sql
+stable
+security definer
+set search_path = pg_catalog, public, reporting, extensions, pg_temp
+as $$
+  select
+    min(public.canonical_flight_leg_ops_date_v1(
+      records.operational_date,
+      records.scheduled_date,
+      records.date,
+      case when 'schedule' = any(coalesce(modifications.changed_fields, array[]::text[]))
+        then modifications.schedule else records.scheduled_time end,
+      case when 'schedule' = any(coalesce(modifications.changed_fields, array[]::text[]))
+        then modifications.schedule else records.schedule end
+    )),
+    max(public.canonical_flight_leg_ops_date_v1(
+      records.operational_date,
+      records.scheduled_date,
+      records.date,
+      case when 'schedule' = any(coalesce(modifications.changed_fields, array[]::text[]))
+        then modifications.schedule else records.scheduled_time end,
+      case when 'schedule' = any(coalesce(modifications.changed_fields, array[]::text[]))
+        then modifications.schedule else records.schedule end
+    ))
+  from public.season_flight_records records
+  join public.seasons seasons on seasons.id = records.season_id
+  left join public.season_modifications modifications
+    on modifications.season_id = records.season_id
+   and modifications.leg_id = records.record_id
+  where public.is_canonical_flight_leg_active_v1(records.status, records.action)
+    and coalesce(modifications.action, 'modified') <> 'deleted'
+$$;
+
+alter function reporting.get_public_traffic_canonical_bounds_v1() owner to postgres;
+revoke execute on function reporting.get_public_traffic_canonical_bounds_v1()
+  from public, anon, authenticated, service_role;
+
+comment on function reporting.get_public_traffic_canonical_bounds_v1()
+is 'Internal canonical active Ops Date bounds for public traffic live aggregates.';

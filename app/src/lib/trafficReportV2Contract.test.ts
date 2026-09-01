@@ -22,6 +22,45 @@ function metric(overrides: Partial<TrafficV2ApiMetricSet> = {}): TrafficV2ApiMet
   };
 }
 
+function report(): TrafficV2ApiEnvelope['report'] {
+  return {
+    min_ops_date: '2025-10-25',
+    max_ops_date: '2027-03-28',
+    latest_completed_ops_date: '2026-08-30',
+    day_count: 3,
+    filter_options: { airline: ['VN'], route: ['HAN'], country: ['Vietnam'] },
+    coverage: { selected_day_count: 3, covered_day_count: 1, partial_day_count: 1, missing_day_count: 1 },
+    peak_day: { ops_date: '2026-08-30', flights: 1, status: 'available' },
+    pax_coverage: { reported_legs: 2, due_legs: 3, percent: 66.7, status: 'available' },
+    quality: { unknown_country_legs: 0, pax_due_missing_legs: 1, quarantined_duplicate_candidates: 0 },
+    breakdowns: {
+      aircraft_group: [],
+      aircraft_type: [],
+      peak_hour: Array.from({ length: 24 }, (_, hour) => ({
+        hour_bucket: `${String(hour).padStart(2, '0')}:00`,
+        bucket_minutes: 60 as const,
+        time_basis: 'local' as const,
+        arrivals: 0,
+        departures: 0,
+        regular_flights: { arrivals: [], departures: [] },
+        suppressed: false,
+      })),
+      peak_hour_monthly: [],
+      day_of_week: Array.from({ length: 7 }, (_, index) => ({
+        day_index: (index + 1) as 1 | 2 | 3 | 4 | 5 | 6 | 7,
+        calendar_days: 0,
+        total_flights: 0,
+        average_flights: 0,
+        min_flights: 0,
+        max_flights: 0,
+        arrivals: 0,
+        departures: 0,
+        suppressed: false,
+      })),
+    },
+  };
+}
+
 function payload(): TrafficV2ApiEnvelope {
   return {
     contract_version: 'traffic-report-v2',
@@ -62,6 +101,7 @@ function payload(): TrafficV2ApiEnvelope {
       { ...metric({ status: 'future' }), ops_date: '2026-08-31' },
     ],
     dimensions: {},
+    report: report(),
   };
 }
 

@@ -12,6 +12,18 @@ const dimensionSource = readFileSync(join(process.cwd(), dimensionPath), 'utf8')
 const clientSource = readFileSync(join(process.cwd(), clientPath), 'utf8');
 const advancedChartsSource = readFileSync(join(process.cwd(), advancedChartsPath), 'utf8');
 
+test('Report live cutover is flag-gated and pins every secondary read to one watermark', () => {
+  assert.match(clientSource, /NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED === '1'/);
+  assert.match(clientSource, /fetchTrafficReportV2Bundle/);
+  assert.match(clientSource, /toTrafficReportPresentationBundle/);
+  assert.match(clientSource, /bundle\.contract_version === 'traffic-report-v2'/);
+  assert.match(clientSource, /buildTrafficReportV2ExportUrl/);
+  assert.match(trendSource, /fetchTrafficReportV2TimelinePage\(filter, scope, after, expectedWatermark/);
+  assert.match(dimensionSource, /fetchTrafficReportV2DimensionPage\(filter, dimension, scope/);
+  assert.match(dimensionSource, /buildTrafficReportV2DimensionUrl\(filter, dimension, scope, sort, 1, 732, expectedWatermark, true\)/);
+  assert.match(clientSource, /onVersionChanged=\{reloadVersionedBundle\}/);
+});
+
 test('public trend and dimension views omit technical Pax coverage fields', () => {
   for (const [path, source] of [[trendPath, trendSource], [dimensionPath, dimensionSource]] as const) {
     assert.doesNotMatch(source, /Tỷ lệ chuyến có số khách|Chuyến có khách|chuyến đến hạn|Trạng thái dữ liệu|pax_coverage_pct|reported_legs|due_legs/, path);

@@ -2,7 +2,7 @@
 
 **Ngày lập:** 2026-08-31
 
-**Trạng thái:** Đang thực hiện trên `codex/live-traffic-aggregate-integration` — đã merge local, implement additive và rehearsal clone; chưa deploy/migration production, UI v2 mặc định tắt
+**Trạng thái:** Đang thực hiện trên `codex/live-traffic-aggregate-integration` — đã merge local, hoàn tất feature parity/shared cutover dưới flag và rehearsal clone; chưa deploy/migration production, UI v2 mặc định tắt; YTD/full-range performance còn No-Go
 
 **Implementation receipt:** `docs/superpowers/artifacts/2026-08-31-live-traffic-aggregate-implementation-receipt.md`
 
@@ -301,11 +301,11 @@ Adapter chịu trách nhiệm:
 
 ### Task 3.2 — Chuyển Report sang v2 sau feature flag
 
-- [ ] Report UI dùng shared adapter.
-- [ ] Giữ loading/error/empty/version-changed states.
-- [ ] Hiển thị `dataAsOf`, watermark/data version và trạng thái live/cached.
-- [ ] CSV/Excel dùng cùng contract/filter/version.
-- [ ] Không đổi nhãn nghiệp vụ tiếng Việt ngoài phạm vi đã duyệt.
+- [x] Report UI dùng shared adapter khi flag bật và giữ v1 khi flag tắt.
+- [x] Giữ loading/error/empty/version-changed states.
+- [x] Hiển thị `dataAsOf`, watermark và trạng thái live/snapshot.
+- [x] CSV/Excel dùng cùng contract/filter/version.
+- [x] Không đổi nhãn nghiệp vụ tiếng Việt ngoài phạm vi đã duyệt.
 
 ### Task 3.3 — Thêm Dashboard Report Mode
 

@@ -9,25 +9,26 @@
 ## 1. Kết luận cổng hiện tại
 
 - Hai nhánh Daily/canonical và Report đã được commit riêng rồi merge bằng merge commit vào một integration worktree sạch.
-- `traffic-report-v2` đã có contract, live aggregate RPC, Edge API v2, shared adapter và Dashboard Report Mode.
-- Dashboard Report Mode mặc định bị khóa bằng `NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED`; không có giá trị `1` thì Dashboard tiếp tục chỉ hiện các mode hiện hành.
+- `traffic-report-v2` đã có contract, live aggregate RPC, Edge API v2, shared adapter, Report và Dashboard Report Mode.
+- Cả Report và Dashboard Report Mode cùng bị khóa bằng `NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED`; không có giá trị `1` thì Report tiếp tục dùng v1 và Dashboard tiếp tục chỉ hiện các mode hiện hành.
 - V2 đọc qua internal Interface `reporting.get_public_traffic_candidate_slice_v1(from,to)`. Interface này chỉ chọn canonical active rows, áp `season_modifications`, Ops Date và authoritative recency; không đọc Daily staging hoặc raw deleted/history rows.
 - Candidate slice đã khớp `reporting.public_traffic_candidates` trên đủ 67.172 row/20 cột của clone, chia theo 18 tháng, sai khác hai chiều bằng 0.
 - PGlite đã chứng minh v1 snapshot và v2 live khớp KPI, daily và route tại cùng watermark cho fixture canonical; Pax NULL, true zero, future và missing day được phân biệt.
-- Cổng SQL performance và rehearsal concurrency đã đạt cho scope clone hiện tại. Report v2 feature parity, staging/browser UAT và production dual-run vẫn chưa đạt; vì vậy chưa bật UI v2 và chưa decommission snapshot v1.
+- Feature parity và differential clone đã đạt. Concurrency 8-way đạt, nhưng payload đầy đủ YTD/full-range còn chậm; staging latency budget, browser UAT và production dual-run chưa đạt. Vì vậy chưa bật UI v2 và chưa decommission snapshot v1.
 
 ## 2. Cấu trúc đích đã triển khai
 
 ```mermaid
 flowchart LR
   I[Seasonal / Daily / Manual commit] --> C[Canonical active records]
+  C --> B[get_public_traffic_canonical_bounds_v1<br/>internal bounds]
   C --> Q[get_public_traffic_candidate_slice_v1<br/>active + overlay + Ops Date + recency]
   E[canonical_effective_flight_legs] --> P[public_traffic_candidates<br/>equivalence oracle / snapshot source]
   C --> E
   Q --> L[get_public_traffic_report_v2<br/>dedupe + quarantine + one statement]
   L --> A[/api/report/v2<br/>ETag + watermark + 409]
   A --> S[Shared trafficReportDataAdapter]
-  S --> R[Report v2<br/>chưa cutover]
+  S --> R[Report v2<br/>feature-gated]
   S --> D[Dashboard Report Mode<br/>feature-gated]
 
   P --> M[public_traffic_effective MV]
@@ -60,13 +61,13 @@ Request phụ pin `expected_watermark`. Nếu dữ liệu đổi, API trả `409
 | Git | Merge Daily/canonical trước, Report sau vào integration branch | Hoàn tất |
 | Contract | `trafficReportV2Contract.ts` với version envelope và strict decoder | Hoàn tất local |
 | SQL | Internal bounded canonical candidate Interface + `get_public_traffic_report_v2(...)` aggregate-only | Hoàn tất local + clone |
-| API | `/api/report/v2/{overview,timeline,dimension,export}` | Hoàn tất local |
+| API | `/api/report/v2/{overview,timeline,dimension,dimension-export,export}` | Hoàn tất local |
 | Version | ETag theo watermark/filter; 409 khi expected watermark lệch | Hoàn tất local |
 | Pax | NULL khác 0; future/not-due không nhập vào reported Pax | Đã test |
 | Empty day | Uncovered missing day trả `null/—`; certified zero day trả `0` | Đã test |
 | Shared client | Adapter dùng chung, bỏ credentials, validate payload, full reload khi 409 | Hoàn tất local |
 | Dashboard | Report Mode dùng shared adapter, không gọi `buildDashboardOverview` | Hoàn tất, mặc định tắt |
-| Report | V1 vẫn là UI mặc định; chưa chuyển vì v2 chưa đủ performance/feature parity | Chưa cutover |
+| Report | Dùng shared adapter cho overview/timeline/dimension/CSV/Excel khi bật flag; mọi request phụ pin watermark | Hoàn tất local, mặc định v1 |
 | Snapshot v1 | MV/timer giữ nguyên làm rollback | Không thay đổi |
 
 ## 4. Bằng chứng dữ liệu và quyền truy cập
@@ -77,6 +78,7 @@ Kiểm tra read-only production trước rehearsal:
 - 67.172 candidate rows, Ops Date từ 2025-10-25 đến 2027-03-28.
 - Watermark tại thời điểm clone: 49.954.
 - `get_public_traffic_report_v2` chưa tồn tại ở production.
+- Kiểm tra lại sau rehearsal: production vẫn không có RPC v2 và watermark vẫn 49.954; không migration/refresh production nào được thực hiện.
 
 Rehearsal clone:
 
@@ -122,24 +124,47 @@ Equivalence và tải:
 - 8 request 30 ngày song song trong lúc transaction cập nhật 100 canonical rows và giữ write locks 8 giây: 8/8 đúng 3.817 chuyến, 0 lỗi, median 611 ms, max 750 ms; writer rollback thành công.
 - Không có index mới. Tối ưu dùng index `operational_date` hiện hữu cho canonical rows có ngày hợp lệ và giữ fallback cho legacy row thiếu ngày.
 
-Đánh giá: SQL gate đạt trên clone hiện tại. Cần staging p95/p99 ở concurrency 10/50 và gateway timeout trước production; clone test 8-way chưa thay thế load test production-like đầy đủ.
+Sau khi bổ sung toàn bộ Report feature parity, benchmark end-to-end qua SSH trên clone:
+
+| Range | Full v2 payload | Payload | Recurring rows |
+|---|---:|---:|---:|
+| 7 ngày | 1.348 ms | 39.269 byte | 0 |
+| 30 ngày | 2.288 ms | 76.794 byte | 160 |
+| YTD | 7.782 ms | 151.771 byte | 257 |
+| Full range | 17.116 ms | 227.681 byte | 324 |
+
+Concurrency sau feature parity, trong lúc transaction clone update 100 canonical rows, giữ lock 8 giây rồi rollback: 8/8 response đúng 3.817 chuyến, 0 lỗi, median 1.845 ms, max 2.246 ms.
+
+Đánh giá: correctness/concurrency gate đạt ở mức rehearsal 8-way, nhưng latency gate **chưa đạt** cho YTD/full-range payload. Trước staging cutover cần profile/tách hoặc lazy-load phần detail nặng, rồi đo p50/p95/p99 ở concurrency 10/50 và qua gateway timeout. Clone test 8-way chưa thay thế load test production-like đầy đủ.
+
+## 5.1 Phát hiện as-of quan trọng
+
+Trước khi refresh clone, v1 và v2 cùng watermark 49.954 nhưng Pax lệch 5.588 ở ngày 30/08/2026. Nguyên nhân không phải canonical row drift:
+
+- v1 khóa `data_as_of` tại lần refresh snapshot 31/08;
+- v2 đánh giá live tại 01/09;
+- các Pax ngày 30/08 chỉ được tính sau ngưỡng `scheduled_local_at + 1 day`.
+
+Watermark chỉ phản ánh data mutation, không phản ánh time-based maturity. Sau khi refresh **clone-only** và cập nhật projection state ở cùng semantic as-of, KPI/Pax/timeline khớp. Vì vậy shadow comparator phải yêu cầu cả watermark lẫn compatible `data_as_of`, không được kết luận mismatch chỉ từ watermark.
 
 ## 6. Validation đã đạt
 
 - Contract unit tests: URL normalize, strict decoder, version envelope, NULL/0/future/missing.
 - Adapter unit tests: không gửi credentials, decode aggregate, 409 full reload, retryability.
-- PGlite: candidate migration/v2 apply hai lần; exact candidate diff; A/D/all; Pax NULL và true zero; expected watermark mismatch; aggregate-only ACL.
+- PGlite: candidate migration/v2 apply hai lần; exact candidate diff; A/D/all; Pax NULL và true zero; feature-parity peak hour/day-of-week/aircraft; expected watermark mismatch; aggregate-only ACL.
 - Clone ACL: `service_role` gọi được public v2 wrapper nhưng không có EXECUTE/USAGE trực tiếp trên row-level candidate Interface.
 - Clone concurrency: report read không chờ transaction write và transaction rehearsal rollback sạch.
-- Differential PGlite tại cùng watermark: KPI current, daily timeline và route dimensions của v1/v2 khớp.
+- Differential clone sau khi đồng bộ semantic as-of: KPI tổng/A/D và Pax khớp; timeline, peak-hour, monthly peak, day-of-week, aircraft group/type đều diff 0; 9 tổ hợp airline/route/country × all/A/D đều diff 0.
+- Clone actual-data null handling: 2 due legs có Pax NULL, 3 due legs có Pax 0 và 3.815 reported due legs; không ép NULL thành 0.
 - Dashboard source gate: Report Mode chỉ dùng shared adapter, không dùng row-level `FlightRecord` hoặc `buildDashboardOverview`.
-- TypeScript và targeted lint đạt sau thay đổi.
+- Report source gate: flag mặc định tắt; overview/timeline/dimension/export cùng shared adapter và expected watermark; 409 buộc full reload.
+- TypeScript, targeted lint, rule regression và report-only production build 52 file đều đạt.
 
 ## 7. Cổng còn lại trước production
 
-1. Chạy benchmark cold/warm và concurrency 10/50 trên staging, có import đồng thời; chốt budget p50/p95/p99 và gateway timeout.
-2. Bổ sung v2 feature parity cho Report hiện hành: peak hour, day-of-week, aircraft group/type, recurring flights và Excel/CSV cùng watermark.
-3. Deploy API v2 vào staging, giữ UI v1; chạy real v1/v2 differential matrix trên cùng watermark.
+1. Profile/tối ưu hoặc lazy-load phần detail nặng để YTD/full-range đạt budget; không frontend-aggregate.
+2. Chạy benchmark cold/warm và concurrency 10/50 trên staging, có import đồng thời; chốt p50/p95/p99 và gateway timeout.
+3. Deploy API v2 vào staging, giữ UI v1; chạy real v1/v2 differential matrix khi watermark và semantic as-of tương thích.
 4. Browser UAT Report và Dashboard Report Mode trên desktop/mobile, xác nhận `—` và `0` đúng.
 5. Chỉ sau các gate trên mới xin duyệt production dual-run/cutover.
 6. Decommission snapshot/MV/timer là release riêng sau soak window; không nằm trong cutover đầu.

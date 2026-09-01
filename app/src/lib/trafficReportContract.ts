@@ -1,5 +1,6 @@
 export const TRAFFIC_REPORT_CONTRACT_VERSION = 'traffic-report-v1' as const;
 export const TRAFFIC_REPORT_API_BASE = '/api/report/v1' as const;
+export type TrafficReportContractVersion = typeof TRAFFIC_REPORT_CONTRACT_VERSION | 'traffic-report-v2';
 
 export type TrafficType = 'all' | 'A' | 'D';
 export type TrafficComparison = 'previous' | 'year_ago' | 'none';
@@ -81,7 +82,7 @@ export interface TrafficDimensionRow extends TrafficMetricSet {
 }
 
 export interface TrafficDimensionResponse {
-  contract_version: typeof TRAFFIC_REPORT_CONTRACT_VERSION;
+  contract_version: TrafficReportContractVersion;
   request_hash: string;
   data_as_of: string;
   dimension: TrafficDimension;
@@ -141,7 +142,7 @@ export interface TrafficDayOfWeekRow {
 }
 
 export interface TrafficReportBundle {
-  contract_version: typeof TRAFFIC_REPORT_CONTRACT_VERSION;
+  contract_version: TrafficReportContractVersion;
   request_hash: string;
   data_as_of: string;
   source_watermark: number | 'unknown';
@@ -457,7 +458,7 @@ export function isTrafficReportBundle(value: unknown): value is TrafficReportBun
     && !Array.isArray(projection)
     && ['fresh', 'stale', 'failed', 'empty'].includes(String((projection as Record<string, unknown>).status))
   );
-  return root.contract_version === TRAFFIC_REPORT_CONTRACT_VERSION
+  return [TRAFFIC_REPORT_CONTRACT_VERSION, 'traffic-report-v2'].includes(String(root.contract_version))
     && typeof root.request_hash === 'string'
     && typeof root.data_as_of === 'string'
     && !!metadata
@@ -476,7 +477,7 @@ export function isTrafficReportBundle(value: unknown): value is TrafficReportBun
 export function isTrafficDimensionResponse(value: unknown): value is TrafficDimensionResponse {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const root = value as Record<string, unknown>;
-  return root.contract_version === TRAFFIC_REPORT_CONTRACT_VERSION
+  return [TRAFFIC_REPORT_CONTRACT_VERSION, 'traffic-report-v2'].includes(String(root.contract_version))
     && ['route', 'country', 'airline'].includes(String(root.dimension))
     && ['all', 'A', 'D'].includes(String(root.type))
     && typeof root.page === 'number'

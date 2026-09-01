@@ -21,6 +21,13 @@ import {
 } from '@/lib/trafficReportContract';
 import { downloadTrafficReportWorkbook } from '@/lib/trafficReportExcelExport';
 import { getAverageFlightsPerSelectedDay } from '@/lib/trafficReportOperationalHours';
+import {
+  buildTrafficReportV2ExportUrl,
+  fetchTrafficReportV2Bundle,
+  fetchTrafficReportV2TimelinePage,
+  toTrafficReportPresentationBundle,
+  TrafficReportVersionChangedError,
+} from '@/lib/trafficReportDataAdapter';
 import { DayOfWeekChart, FleetMixChart, PeakHourChart } from './TrafficReportAdvancedCharts';
 import { TrafficReportDimensionSection } from './TrafficReportDimensionSection';
 import { TrafficReportFilters } from './TrafficReportFilters';
@@ -29,6 +36,7 @@ import { TrafficReportTrend } from './TrafficReportTrend';
 const numberFormat = new Intl.NumberFormat('vi-VN');
 const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
 const dateFormat = new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+const TRAFFIC_REPORT_V2_ENABLED = process.env.NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED === '1';
 
 function formatNumber(value: number | null | undefined): string {
   return value == null ? '—' : numberFormat.format(value);
@@ -151,13 +159,18 @@ export default function TrafficReportClient() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(buildOverviewUrl(filter), { method: 'GET', credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
-      const payload: unknown = await response.json().catch(() => null);
-      if (!response.ok) {
-        const message = payload && typeof payload === 'object' && 'error' in payload ? String((payload as { error: unknown }).error) : 'Báo cáo tạm thời chưa thể cập nhật.';
-        throw new Error(message);
-      }
-      if (!isTrafficReportBundle(payload)) throw new Error('Dữ liệu báo cáo chưa sẵn sàng.');
+      const payload = TRAFFIC_REPORT_V2_ENABLED
+        ? toTrafficReportPresentationBundle(await fetchTrafficReportV2Bundle(filter, { signal: controller.signal }))
+        : await (async () => {
+          const response = await fetch(buildOverviewUrl(filter), { method: 'GET', credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+          const result: unknown = await response.json().catch(() => null);
+          if (!response.ok) {
+            const message = result && typeof result === 'object' && 'error' in result ? String((result as { error: unknown }).error) : 'Báo cáo tạm thời chưa thể cập nhật.';
+            throw new Error(message);
+          }
+          if (!isTrafficReportBundle(result)) throw new Error('Dữ liệu báo cáo chưa sẵn sàng.');
+          return result;
+        })();
       setBundle(payload);
       lastSuccessfulQueryRef.current = toTrafficReportSearchParams(payload.metadata.normalized_filter).toString();
       return payload;
@@ -236,12 +249,23 @@ export default function TrafficReportClient() {
       let hasMore = true;
       let requests = 0;
       while (hasMore && requests < 50) {
-        const response = await fetch(buildTimelineUrl(bundle.metadata.normalized_filter, 'all', after), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
-        const payload = await response.json().catch(() => null) as { error?: unknown; timeline?: TrafficTimelinePoint[]; metadata?: { timeline_has_more?: boolean; timeline_next_cursor?: string | null } } | null;
-        if (!response.ok || !payload || !Array.isArray(payload.timeline) || !payload.metadata) throw new Error(payload?.error ? String(payload.error) : 'Không thể tải đủ dãy ngày cho Excel.');
-        for (const row of payload.timeline) rows.set(row.ops_date, row);
-        hasMore = Boolean(payload.metadata.timeline_has_more);
-        const next = payload.metadata.timeline_next_cursor ?? null;
+        let timeline: TrafficTimelinePoint[];
+        let next: string | null;
+        if (bundle.contract_version === 'traffic-report-v2') {
+          if (typeof bundle.source_watermark !== 'number') throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.');
+          const payload = await fetchTrafficReportV2TimelinePage(bundle.metadata.normalized_filter, 'all', after, bundle.source_watermark, { signal: controller.signal });
+          timeline = payload.timeline;
+          hasMore = payload.hasMore;
+          next = payload.nextCursor;
+        } else {
+          const response = await fetch(buildTimelineUrl(bundle.metadata.normalized_filter, 'all', after), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+          const payload = await response.json().catch(() => null) as { error?: unknown; timeline?: TrafficTimelinePoint[]; metadata?: { timeline_has_more?: boolean; timeline_next_cursor?: string | null } } | null;
+          if (!response.ok || !payload || !Array.isArray(payload.timeline) || !payload.metadata) throw new Error(payload?.error ? String(payload.error) : 'Không thể tải đủ dãy ngày cho Excel.');
+          timeline = payload.timeline;
+          hasMore = Boolean(payload.metadata.timeline_has_more);
+          next = payload.metadata.timeline_next_cursor ?? null;
+        }
+        for (const row of timeline) rows.set(row.ops_date, row);
         if (hasMore && (!next || next === after)) throw new Error('Không thể hoàn tất dãy ngày cho Excel.');
         after = next;
         requests += 1;
@@ -249,7 +273,10 @@ export default function TrafficReportClient() {
       if (hasMore) throw new Error('Phạm vi quá lớn để xuất trong một lần.');
       await downloadTrafficReportWorkbook(bundle, [...rows.values()].sort((left, right) => left.ops_date.localeCompare(right.ops_date)));
     } catch (reason) {
-      if (!controller.signal.aborted) setExportError(reason instanceof Error ? reason.message : 'Không thể tạo file Excel.');
+      if (!controller.signal.aborted) {
+        if (reason instanceof TrafficReportVersionChangedError) await requestBundle(bundle.metadata.normalized_filter);
+        setExportError(reason instanceof Error ? reason.message : 'Không thể tạo file Excel.');
+      }
     } finally {
       if (!controller.signal.aborted) setExportingExcel(false);
     }
@@ -282,6 +309,14 @@ export default function TrafficReportClient() {
         ? { title: 'Chưa có dữ liệu cho báo cáo trong phạm vi này.', tone: 'rose' as const }
         : null;
   const visibleError = parsed.error ?? error;
+  const readVersion = bundle?.contract_version === 'traffic-report-v2' ? 'v2' as const : 'v1' as const;
+  const expectedWatermark = readVersion === 'v2' && typeof bundle?.source_watermark === 'number' ? bundle.source_watermark : undefined;
+  const reloadVersionedBundle = useCallback(() => {
+    if (normalizedFilter) void requestBundle(normalizedFilter);
+  }, [normalizedFilter, requestBundle]);
+  const aggregateCsvHref = bundle?.contract_version === 'traffic-report-v2' && typeof bundle.source_watermark === 'number'
+    ? buildTrafficReportV2ExportUrl(bundle.metadata.normalized_filter, bundle.source_watermark)
+    : bundle ? `/api/report/v1/export?${toTrafficReportSearchParams(bundle.metadata.normalized_filter).toString()}` : '#';
 
   return (
     <>
@@ -327,6 +362,7 @@ export default function TrafficReportClient() {
               <div><p className="text-sm font-bold text-blue-900">Sản lượng Tổng quan</p><h2 id="overview-title" className="mt-1 text-balance text-3xl font-bold text-slate-950">Các chỉ số nổi bật</h2></div>
               <div className="text-right text-xs text-slate-600">
                 <p>{reportUpdatedAt ? `Cập nhật ${new Date(reportUpdatedAt).toLocaleString('vi-VN')}` : 'Chưa có thời điểm cập nhật'}</p>
+                {typeof bundle.source_watermark === 'number' ? <p>Nguồn {readVersion === 'v2' ? 'live' : 'snapshot'} · watermark {numberFormat.format(bundle.source_watermark)}</p> : null}
               </div>
             </div>
             <div className="mt-6 grid gap-4 lg:grid-cols-3">
@@ -360,7 +396,7 @@ export default function TrafficReportClient() {
             <div className="mt-5 grid gap-3 md:grid-cols-2">{insights.map((insight, index) => <p key={insight} className="rounded-xl border-l-4 border-cyan-600 bg-white p-4 text-pretty text-sm leading-6 text-slate-700 shadow-sm"><span className="mr-2 font-bold text-blue-900">{index + 1}.</span>{insight}</p>)}</div>
           </section>
 
-          <TrafficReportTrend filter={normalizedFilter} scope={pageState.trendType} onScopeChange={(trendType) => updateViewState({ trendType })} />
+          <TrafficReportTrend filter={normalizedFilter} scope={pageState.trendType} readVersion={readVersion} expectedWatermark={expectedWatermark} onVersionChanged={reloadVersionedBundle} onScopeChange={(trendType) => updateViewState({ trendType })} />
 
           <TrafficReportDimensionSection
             key={`market-${globalQuery}-${pageState.marketDimension}-${pageState.marketType}`}
@@ -368,6 +404,9 @@ export default function TrafficReportClient() {
             filter={normalizedFilter}
             scope={pageState.marketType}
             marketDimension={pageState.marketDimension}
+            readVersion={readVersion}
+            expectedWatermark={expectedWatermark}
+            onVersionChanged={reloadVersionedBundle}
             onScopeChange={(marketType) => updateViewState({ marketType })}
             onMarketDimensionChange={(marketDimension) => updateViewState({ marketDimension })}
           />
@@ -377,6 +416,9 @@ export default function TrafficReportClient() {
             kind="airline"
             filter={normalizedFilter}
             scope={pageState.airlineType}
+            readVersion={readVersion}
+            expectedWatermark={expectedWatermark}
+            onVersionChanged={reloadVersionedBundle}
             onScopeChange={(airlineType) => updateViewState({ airlineType })}
           />
 
@@ -405,7 +447,7 @@ export default function TrafficReportClient() {
               <p className="mt-3 text-pretty text-sm leading-6 text-slate-600">File tải xuống chỉ chứa dữ liệu tổng hợp theo bộ lọc đang áp dụng, không chứa thông tin từng chuyến bay.</p>
               <div className="mt-5 flex flex-wrap gap-3">
                 <button className="report-focus min-h-11 rounded-lg bg-blue-900 px-4 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={exportingExcel} onClick={() => void exportExcel()}>{exportingExcel ? 'Đang tạo Excel…' : 'Tải Excel toàn báo cáo'}</button>
-                <a className="report-focus inline-flex min-h-11 items-center rounded-lg border border-blue-900 px-4 text-sm font-bold text-blue-900 hover:bg-blue-50" href={`/api/report/v1/export?${toTrafficReportSearchParams(bundle.metadata.normalized_filter).toString()}`}>Tải CSV tổng hợp</a>
+                <a className="report-focus inline-flex min-h-11 items-center rounded-lg border border-blue-900 px-4 text-sm font-bold text-blue-900 hover:bg-blue-50" href={aggregateCsvHref}>Tải CSV tổng hợp</a>
               </div>
               {exportError ? <p className="mt-3 text-sm font-semibold text-rose-800" role="alert">{exportError}</p> : null}
               <details className="mt-5 rounded-xl bg-slate-50 p-4"><summary className="report-focus cursor-pointer rounded-sm font-semibold text-blue-900">Ghi chú dữ liệu</summary><ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600"><li>• Sản lượng khách chỉ tính số khách đã báo cáo; dấu — nghĩa là chưa có số liệu.</li><li>• Quốc gia chưa xác định được hiển thị là Unknown.</li><li>• File tải xuống sử dụng cùng phạm vi và bộ lọc với trang báo cáo.</li></ul></details>

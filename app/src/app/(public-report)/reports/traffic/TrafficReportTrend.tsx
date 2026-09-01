@@ -16,6 +16,10 @@ import {
   type TrafficTimelinePoint,
   type TrafficType,
 } from '@/lib/trafficReportContract';
+import {
+  fetchTrafficReportV2TimelinePage,
+  TrafficReportVersionChangedError,
+} from '@/lib/trafficReportDataAdapter';
 
 const numberFormat = new Intl.NumberFormat('vi-VN');
 const dateFormat = new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -39,10 +43,13 @@ async function readJson(response: Response): Promise<unknown> {
   return response.json().catch(() => null);
 }
 
-export function TrafficReportTrend({ filter, scope, onScopeChange }: {
+export function TrafficReportTrend({ filter, scope, readVersion = 'v1', expectedWatermark, onScopeChange, onVersionChanged }: {
   filter: NormalizedTrafficReportFilter;
   scope: TrafficType;
+  readVersion?: 'v1' | 'v2';
+  expectedWatermark?: number;
   onScopeChange: (scope: TrafficType) => void;
+  onVersionChanged?: () => void;
 }) {
   const [rows, setRows] = useState<TrafficTimelinePoint[]>([]);
   const [loading, setLoading] = useState(true);
@@ -70,13 +77,24 @@ export function TrafficReportTrend({ filter, scope, onScopeChange }: {
       let hasMore = true;
       let requestCount = 0;
       while (hasMore && requestCount < 50) {
-        const response = await fetch(buildTimelineUrl(filter, scope, after), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
-        const payload = await readJson(response) as { error?: unknown; timeline?: TrafficTimelinePoint[]; metadata?: { timeline_has_more?: boolean; timeline_next_cursor?: string | null } } | null;
-        if (!response.ok) throw new Error('Không thể tải xu hướng. Vui lòng thử lại.');
-        if (!payload || !Array.isArray(payload.timeline) || !payload.metadata) throw new Error('Dữ liệu xu hướng chưa sẵn sàng.');
-        for (const row of payload.timeline) collected.set(row.ops_date, row);
-        hasMore = Boolean(payload.metadata.timeline_has_more);
-        const nextCursor = payload.metadata.timeline_next_cursor ?? null;
+        let timeline: TrafficTimelinePoint[];
+        let nextCursor: string | null;
+        if (readVersion === 'v2') {
+          if (expectedWatermark === undefined) throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.');
+          const payload = await fetchTrafficReportV2TimelinePage(filter, scope, after, expectedWatermark, { signal: controller.signal });
+          timeline = payload.timeline;
+          hasMore = payload.hasMore;
+          nextCursor = payload.nextCursor;
+        } else {
+          const response = await fetch(buildTimelineUrl(filter, scope, after), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+          const payload = await readJson(response) as { error?: unknown; timeline?: TrafficTimelinePoint[]; metadata?: { timeline_has_more?: boolean; timeline_next_cursor?: string | null } } | null;
+          if (!response.ok) throw new Error('Không thể tải xu hướng. Vui lòng thử lại.');
+          if (!payload || !Array.isArray(payload.timeline) || !payload.metadata) throw new Error('Dữ liệu xu hướng chưa sẵn sàng.');
+          timeline = payload.timeline;
+          hasMore = Boolean(payload.metadata.timeline_has_more);
+          nextCursor = payload.metadata.timeline_next_cursor ?? null;
+        }
+        for (const row of timeline) collected.set(row.ops_date, row);
         if (hasMore && (!nextCursor || nextCursor === after)) throw new Error('Không thể hoàn tất dãy ngày đã chọn.');
         after = nextCursor;
         requestCount += 1;
@@ -84,11 +102,14 @@ export function TrafficReportTrend({ filter, scope, onScopeChange }: {
       if (hasMore) throw new Error('Dãy ngày quá lớn để tải trong một lần. Hãy dùng chức năng thu phóng hoặc bảng dữ liệu.');
       if (!controller.signal.aborted) setRows([...collected.values()].sort((left, right) => left.ops_date.localeCompare(right.ops_date)));
     } catch (reason) {
-      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Không thể tải xu hướng.');
+      if (!controller.signal.aborted) {
+        if (reason instanceof TrafficReportVersionChangedError) onVersionChanged?.();
+        setError(reason instanceof Error ? reason.message : 'Không thể tải xu hướng.');
+      }
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
-  }, [closeInteractions, filter, scope]);
+  }, [closeInteractions, expectedWatermark, filter, onVersionChanged, readVersion, scope]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);

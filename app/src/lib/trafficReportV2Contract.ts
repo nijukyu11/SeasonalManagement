@@ -1,7 +1,12 @@
 import type {
   NormalizedTrafficReportFilter,
+  TrafficAircraftTypeBreakdownRow,
+  TrafficBreakdownRow,
   TrafficComparison,
+  TrafficDayOfWeekRow,
   TrafficDimension,
+  TrafficMonthlyPeakRow,
+  TrafficPeakHourRow,
   TrafficTimeBasis,
   TrafficType,
 } from './trafficReportContract';
@@ -32,6 +37,8 @@ export interface TrafficV2MetricSet extends TrafficPaxMetrics {
   flights: number;
   arrivals: number;
   departures: number;
+  arrivalReportedPax?: number | null;
+  departureReportedPax?: number | null;
   status: 'complete' | 'partial' | 'missing' | 'future' | 'zero';
 }
 
@@ -68,6 +75,40 @@ export interface TrafficV2Bundle {
   };
   timeline: TrafficV2TimelinePoint[];
   dimensions: Partial<Record<TrafficDimension, TrafficV2DimensionRow[]>>;
+  report: TrafficV2ReportParity;
+}
+
+export interface TrafficV2ReportParity {
+  minOpsDate: string;
+  maxOpsDate: string;
+  latestCompletedOpsDate: string;
+  dayCount: number;
+  filterOptions: { airline: string[]; route: string[]; country: string[] };
+  coverage: {
+    selectedDayCount: number;
+    coveredDayCount: number;
+    partialDayCount: number;
+    missingDayCount: number;
+  };
+  peakDay: { ops_date: string | null; flights: number | null; status: string };
+  paxCoverage: {
+    reported_legs: number;
+    due_legs: number;
+    percent: number | null;
+    status: 'available' | 'unavailable';
+  };
+  quality: {
+    unknown_country_legs: number;
+    pax_due_missing_legs: number;
+    quarantined_duplicate_candidates: number;
+  };
+  breakdowns: {
+    aircraft_group: TrafficBreakdownRow[];
+    aircraft_type: TrafficAircraftTypeBreakdownRow[];
+    peak_hour: TrafficPeakHourRow[];
+    peak_hour_monthly: TrafficMonthlyPeakRow[];
+    day_of_week: TrafficDayOfWeekRow[];
+  };
 }
 
 export interface TrafficV2ApiEnvelope {
@@ -94,6 +135,25 @@ export interface TrafficV2ApiEnvelope {
   };
   timeline: TrafficV2ApiTimelinePoint[];
   dimensions: Partial<Record<TrafficDimension, TrafficV2ApiDimensionRow[]>>;
+  report: TrafficV2ApiReportParity;
+}
+
+export interface TrafficV2ApiReportParity {
+  min_ops_date: string;
+  max_ops_date: string;
+  latest_completed_ops_date: string;
+  day_count: number;
+  filter_options: { airline: string[]; route: string[]; country: string[] };
+  coverage: {
+    selected_day_count: number;
+    covered_day_count: number;
+    partial_day_count: number;
+    missing_day_count: number;
+  };
+  peak_day: TrafficV2ReportParity['peakDay'];
+  pax_coverage: TrafficV2ReportParity['paxCoverage'];
+  quality: TrafficV2ReportParity['quality'];
+  breakdowns: TrafficV2ReportParity['breakdowns'];
 }
 
 export interface TrafficV2ApiMetricSet {
@@ -101,6 +161,8 @@ export interface TrafficV2ApiMetricSet {
   arrivals: number;
   departures: number;
   reported_pax: number | null;
+  arrival_reported_pax?: number | null;
+  departure_reported_pax?: number | null;
   reported_legs: number;
   due_legs: number;
   missing_due_legs: number;
@@ -160,6 +222,8 @@ function isApiMetric(value: unknown): value is TrafficV2ApiMetricSet {
     || !isNonNegativeInteger(value.arrivals)
     || !isNonNegativeInteger(value.departures)
     || !isNullableFiniteNumber(value.reported_pax)
+    || (value.arrival_reported_pax !== undefined && !isNullableFiniteNumber(value.arrival_reported_pax))
+    || (value.departure_reported_pax !== undefined && !isNullableFiniteNumber(value.departure_reported_pax))
     || !isNonNegativeInteger(value.reported_legs)
     || !isNonNegativeInteger(value.due_legs)
     || !isNonNegativeInteger(value.missing_due_legs)
@@ -206,6 +270,35 @@ function isNormalizedFilter(value: unknown): value is TrafficV2ApiEnvelope['norm
     && ['local', 'utc'].includes(String(value.tz));
 }
 
+function isApiReportParity(value: unknown): value is TrafficV2ApiReportParity {
+  if (!isObject(value)
+    || !ISO_DATE.test(String(value.min_ops_date))
+    || !ISO_DATE.test(String(value.max_ops_date))
+    || !ISO_DATE.test(String(value.latest_completed_ops_date))
+    || String(value.min_ops_date) > String(value.max_ops_date)
+    || !isNonNegativeInteger(value.day_count)
+    || !isObject(value.filter_options)
+    || !isStringArray(value.filter_options.airline)
+    || !isStringArray(value.filter_options.route)
+    || !isStringArray(value.filter_options.country)
+    || !isObject(value.coverage)
+    || !isNonNegativeInteger(value.coverage.selected_day_count)
+    || !isNonNegativeInteger(value.coverage.covered_day_count)
+    || !isNonNegativeInteger(value.coverage.partial_day_count)
+    || !isNonNegativeInteger(value.coverage.missing_day_count)
+    || !isObject(value.peak_day)
+    || !isObject(value.pax_coverage)
+    || !isObject(value.quality)
+    || !isObject(value.breakdowns)) return false;
+  return Array.isArray(value.breakdowns.aircraft_group)
+    && Array.isArray(value.breakdowns.aircraft_type)
+    && Array.isArray(value.breakdowns.peak_hour)
+    && value.breakdowns.peak_hour.length === 24
+    && Array.isArray(value.breakdowns.peak_hour_monthly)
+    && Array.isArray(value.breakdowns.day_of_week)
+    && value.breakdowns.day_of_week.length === 7;
+}
+
 export function isTrafficV2ApiEnvelope(value: unknown): value is TrafficV2ApiEnvelope {
   if (!isObject(value)
     || value.contract_version !== TRAFFIC_REPORT_V2_CONTRACT_VERSION
@@ -221,7 +314,8 @@ export function isTrafficV2ApiEnvelope(value: unknown): value is TrafficV2ApiEnv
     || !isApiMetric(value.comparison)
     || !Array.isArray(value.timeline)
     || !value.timeline.every(isApiTimelinePoint)
-    || !isObject(value.dimensions)) return false;
+    || !isObject(value.dimensions)
+    || !isApiReportParity(value.report)) return false;
 
   const dayCount = Math.round((Date.parse(`${value.normalized_filter.to}T00:00:00Z`)
     - Date.parse(`${value.normalized_filter.from}T00:00:00Z`)) / 86_400_000) + 1;
@@ -246,6 +340,8 @@ function mapMetric(metric: TrafficV2ApiMetricSet): TrafficV2MetricSet {
     arrivals: metric.arrivals,
     departures: metric.departures,
     reportedPax: metric.reported_pax,
+    arrivalReportedPax: metric.arrival_reported_pax,
+    departureReportedPax: metric.departure_reported_pax,
     reportedLegs: metric.reported_legs,
     dueLegs: metric.due_legs,
     missingDueLegs: metric.missing_due_legs,
@@ -302,5 +398,22 @@ export function decodeTrafficV2ApiEnvelope(value: unknown): TrafficV2Bundle {
     },
     timeline: value.timeline.map(mapTimelinePoint),
     dimensions,
+    report: {
+      minOpsDate: value.report.min_ops_date,
+      maxOpsDate: value.report.max_ops_date,
+      latestCompletedOpsDate: value.report.latest_completed_ops_date,
+      dayCount: value.report.day_count,
+      filterOptions: value.report.filter_options,
+      coverage: {
+        selectedDayCount: value.report.coverage.selected_day_count,
+        coveredDayCount: value.report.coverage.covered_day_count,
+        partialDayCount: value.report.coverage.partial_day_count,
+        missingDayCount: value.report.coverage.missing_day_count,
+      },
+      peakDay: value.report.peak_day,
+      paxCoverage: value.report.pax_coverage,
+      quality: value.report.quality,
+      breakdowns: value.report.breakdowns,
+    },
   };
 }
