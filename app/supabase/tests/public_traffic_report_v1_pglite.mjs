@@ -14,6 +14,7 @@ const removeSuppressionSql = await readFile(new URL('../migrations/2026083021300
 const regularFlightsSql = await readFile(new URL('../migrations/20260831120000_public_traffic_report_regular_flights.sql', import.meta.url), 'utf8');
 const annualPassengerKpiSql = await readFile(new URL('../migrations/20260831150000_public_annual_passenger_kpi.sql', import.meta.url), 'utf8');
 const annualPassengerKpiOwnerSql = await readFile(new URL('../migrations/20260831190000_annual_passenger_kpi_owner.sql', import.meta.url), 'utf8');
+const liveCandidateSliceSql = await readFile(new URL('../migrations/20260831205000_public_traffic_candidate_slice_v1.sql', import.meta.url), 'utf8');
 const liveAggregateV2Sql = await readFile(new URL('../migrations/20260831210000_public_traffic_live_aggregate_v2.sql', import.meta.url), 'utf8');
 const db = await createSupabasePGlite();
 
@@ -44,6 +45,11 @@ try {
   await db.exec(operationalV2Sql);
   await db.exec(aircraftSnapshotFixtureSql);
   await db.exec(`
+    create or replace function public.is_canonical_flight_leg_active_v1(
+      p_status text,p_action text
+    ) returns boolean language sql immutable as $$
+      select p_status = 'active' and p_action is distinct from 'deleted'
+    $$;
     create or replace function public.canonical_flight_leg_ops_date_v1(
       p_operational_date text,p_scheduled_date text,p_date text,p_scheduled_time text,p_schedule text
     ) returns date language sql immutable as $$
@@ -68,6 +74,8 @@ try {
   await db.exec(annualPassengerKpiSql);
   await db.exec(annualPassengerKpiOwnerSql);
   await db.exec(annualPassengerKpiOwnerSql);
+  await db.exec(liveCandidateSliceSql);
+  await db.exec(liveCandidateSliceSql);
   await db.exec(liveAggregateV2Sql);
   await db.exec(liveAggregateV2Sql);
 
@@ -203,6 +211,43 @@ try {
   assert.equal(noPaxOverview.kpis.current.departure_reported_pax, null, 'an all-NULL departure scope must stay unknown instead of becoming zero');
   assert.equal(noPaxOverview.breakdowns.route.find((row) => row.label === 'SGN').reported_pax, null, 'an all-NULL breakdown bucket must remain unknown');
   assert.equal(noPaxOverview.breakdowns.aircraft_type.find((row) => row.label === 'A321').reported_pax, null, 'an all-NULL aircraft type must remain unknown');
+
+  const candidateSliceDiff = (await db.query(`
+    with expected as materialized (
+      select * from reporting.public_traffic_candidates
+      where ops_date between date '2026-03-02' and date '2026-03-03'
+        and effective_action is distinct from 'deleted'
+    ), actual as materialized (
+      select * from reporting.get_public_traffic_candidate_slice_v1(
+        date '2026-03-02', date '2026-03-03'
+      )
+    )
+    select
+      (select count(*)::integer from expected) as expected_count,
+      (select count(*)::integer from actual) as actual_count,
+      (select count(*)::integer from (select * from expected except all select * from actual) diff)
+        as expected_minus_actual,
+      (select count(*)::integer from (select * from actual except all select * from expected) diff)
+        as actual_minus_expected
+  `)).rows[0];
+  assert.deepEqual(candidateSliceDiff, {
+    expected_count: 9,
+    actual_count: 9,
+    expected_minus_actual: 0,
+    actual_minus_expected: 0,
+  }, 'the bounded live seam must preserve every canonical candidate field before ranking');
+
+  await db.exec('set role service_role');
+  try {
+    await assert.rejects(
+      db.query(`select * from reporting.get_public_traffic_candidate_slice_v1(
+        date '2026-03-02', date '2026-03-03'
+      )`),
+      /permission denied/,
+    );
+  } finally {
+    await db.exec('reset role');
+  }
 
   const liveV2 = (await db.query(`select public.get_public_traffic_report_v2(
     date '2026-03-03', date '2026-03-03', 'all', array[]::text[], array[]::text[],

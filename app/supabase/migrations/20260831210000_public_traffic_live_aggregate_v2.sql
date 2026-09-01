@@ -128,8 +128,10 @@ begin
   with candidate_slice as materialized (
     select candidates.*,
       max(candidates.authoritative_server_seq) over (partition by candidates.business_leg_key) as max_authoritative_server_seq
-    from reporting.public_traffic_candidates candidates
-    where candidates.ops_date between v_scan_from - 1 and v_scan_to + 1
+    from reporting.get_public_traffic_candidate_slice_v1(
+      v_scan_from - 1,
+      v_scan_to + 1
+    ) candidates
   ), ranked_slice as (
     select candidates.*,
       count(*) over (partition by candidates.business_leg_key) as candidate_count,
