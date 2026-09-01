@@ -2,7 +2,7 @@
 
 **Ngày:** 2026-09-01
 
-**Trạng thái:** Đã implement local qua Phase 4; production chưa thay đổi, clone/staging gate còn mở
+**Trạng thái:** Release A production hoàn tất; Release B shadow publication và mọi UI cutover còn chờ duyệt
 
 **ADR:** `docs/adr/2026-09-01-report-live-dashboard-daily-publication.md`
 

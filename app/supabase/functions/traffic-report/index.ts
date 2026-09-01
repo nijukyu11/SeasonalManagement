@@ -537,7 +537,7 @@ function buildV2AggregateCsv(bundle: Record<string, unknown>): string {
 Deno.serve(async (request: Request) => {
   const url = new URL(request.url);
   const endpoint = url.pathname.split('/').filter(Boolean).at(-1) ?? 'overview';
-  const isV2 = /\/api\/report\/v2(?:\/|$)/u.test(url.pathname);
+  const isV2 = /\/(?:api\/report\/)?v2(?:\/|$)/u.test(url.pathname);
 
   try {
     if (url.pathname.includes('/kpi-admin/')) return await handleAnnualKpiAdmin(request, url);

@@ -32,6 +32,7 @@ const packageJson = read('package.json');
 
 assert.match(config, /\[functions\.traffic-report\]\s*verify_jwt = false/);
 assert.match(edge, /request\.method !== 'GET'/);
+assert.match(edge, /const isV2 = [^\n]+api\\\/report\\\/[^\n]+v2/);
 assert.match(edge, /SUPABASE_REST_URL/);
 assert.match(edge, /unsupported query parameter/);
 assert.match(edge, /duplicate scalar parameter/);
