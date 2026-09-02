@@ -20,6 +20,7 @@ const dashboardDailyPublicationSql = await readFile(new URL('../migrations/20260
 const dashboardTimelineQualitySql = await readFile(new URL('../migrations/20260901113000_public_dashboard_publication_timeline_quality.sql', import.meta.url), 'utf8');
 const dailyAcceptanceSql = await readFile(new URL('../migrations/20260901114500_public_traffic_daily_acceptance.sql', import.meta.url), 'utf8');
 const dashboardHybridRunnerSql = await readFile(new URL('../migrations/20260901123000_public_dashboard_hybrid_runner.sql', import.meta.url), 'utf8');
+const dashboardPaxCorrectionSql = await readFile(new URL('../migrations/20260902150000_public_dashboard_pax_correction.sql', import.meta.url), 'utf8');
 const db = await createSupabasePGlite();
 
 async function addSeason(id, code) {
@@ -105,6 +106,8 @@ try {
   await db.exec(dailyAcceptanceSql);
   await db.exec(dashboardHybridRunnerSql);
   await db.exec(dashboardHybridRunnerSql);
+  await db.exec(dashboardPaxCorrectionSql);
+  await db.exec(dashboardPaxCorrectionSql);
 
   await addSeason('old-season', 'W25');
   await addSeason('new-season', 'S26');
@@ -297,6 +300,109 @@ try {
     $1,date '2026-03-02',$2,$3
   ) as result`, [correctionPublication.publication_id, publicationWatermark, correctionPublication.source_data_version])).rows[0].result;
   assert.equal(runnerVerification.valid, true, `Verifier must prove head, checksum, watermark, A+D and missing Pax invariants: ${JSON.stringify(runnerVerification)}`);
+
+  await db.exec('begin');
+  try {
+    await addSeason('maturity-season', 'M26');
+    await addRecord({ seasonId: 'maturity-season', id: 'maturity-arrival', date: '2026-03-06', time: '10:00', type: 'A', flight: 'VN701', pax: 100 });
+    await addRecord({ seasonId: 'maturity-season', id: 'maturity-departure', date: '2026-03-06', time: '11:00', type: 'D', flight: 'VN702', pax: 120 });
+    await db.query(`insert into public.season_change_events(
+      season_id,client_id,op_id,target_type,target_id
+    ) values ('maturity-season','maturity-fixture','maturity-import','seasonImport','maturity-season')`);
+    await db.query(`insert into reporting.public_traffic_coverage(
+      from_date,to_date,status,reason_code,certified_at
+    ) values (date '2026-03-06',date '2026-03-06','complete','maturity-fixture',now())`);
+    const maturityWatermark = Number((await db.query(`select max(server_seq)::bigint as watermark from public.season_change_events`)).rows[0].watermark);
+    const justCompletedMetrics = (await db.query(`select public.get_public_traffic_report_v2(
+      date '2026-03-06',date '2026-03-06','all',array[]::text[],array[]::text[],array[]::text[],
+      'none','local',$1,'traffic-report-v2','timeline',timestamptz '2026-03-07 05:01:00+07'
+    ) as result`, [maturityWatermark])).rows[0].result;
+    assert.equal(justCompletedMetrics.current.flights, 2);
+    assert.equal(justCompletedMetrics.current.due_legs, 2, 'known Pax on an accepted completed Ops Date must be immediately accountable');
+    assert.equal(justCompletedMetrics.current.reported_legs, 2);
+    assert.equal(justCompletedMetrics.current.reported_pax, 220);
+    assert.equal(justCompletedMetrics.current.missing_due_legs, 0);
+  } finally {
+    await db.exec('rollback');
+  }
+
+  const markerCountBeforeRollback = Number((await db.query(`select count(*)::integer as count from reporting.public_dashboard_dirty_markers`)).rows[0].count);
+  await db.exec('begin');
+  await db.query(`insert into public.season_modifications(season_id,leg_id,action,changed_fields,pax)
+    values ('new-season','before-five','modified',array['pax'],81)
+    on conflict(leg_id) do update set action='modified',changed_fields=array['pax'],pax=81`);
+  await db.query(`insert into public.season_change_events(
+    season_id,client_id,op_id,target_type,target_id,changed_fields,op_payload
+  ) values (
+    'new-season','daily-cell','rolled-back-pax','modification','before-five',array['pax'],
+    jsonb_build_object('kind','apply_season_server_mutation_v1','source','daily','operation',
+      jsonb_build_object('type','modification','mod',jsonb_build_object('legId','before-five','pax',81)))
+  )`);
+  await db.exec('rollback');
+  assert.equal(Number((await db.query(`select count(*)::integer as count from reporting.public_dashboard_dirty_markers`)).rows[0].count), markerCountBeforeRollback, 'rolled-back Pax transaction must not leave a dirty marker');
+
+  await db.exec('begin');
+  try {
+    await db.query(`insert into public.season_modifications(season_id,leg_id,action,changed_fields,pax)
+      values ('new-season','before-five','modified',array['pax'],81)
+      on conflict(leg_id) do update set action='modified',changed_fields=array['pax'],pax=81`);
+    const correctionEventSeq = Number((await db.query(`insert into public.season_change_events(
+      season_id,client_id,op_id,target_type,target_id,changed_fields,op_payload
+    ) values (
+      'new-season','daily-cell','committed-pax-1','modification','before-five',array['pax'],
+      jsonb_build_object('kind','apply_season_server_mutation_v1','source','daily','operation',
+        jsonb_build_object('type','modification','mod',jsonb_build_object('legId','before-five','pax',81)))
+    ) returning server_seq`)).rows[0].server_seq);
+    const dirtyMarker = (await db.query(`select * from reporting.public_dashboard_dirty_markers where year=2026`)).rows[0];
+    assert.equal(dirtyMarker.status, 'dirty');
+    assert.equal(Number(dirtyMarker.latest_event_seq), correctionEventSeq);
+    assert.equal(new Date(dirtyMarker.affected_from_date).toISOString().slice(0, 10), '2026-03-02');
+    assert.equal(new Date(dirtyMarker.affected_to_date).toISOString().slice(0, 10), '2026-03-02');
+
+    await db.exec('refresh materialized view reporting.public_traffic_effective');
+    await db.exec('select reporting.mark_public_traffic_projection_fresh_v1()');
+    const correctionCandidate = (await db.query(`select reporting.select_public_dashboard_correction_candidate_v1(
+      clock_timestamp() + interval '3 minutes'
+    ) as result`)).rows[0].result;
+    assert.equal(correctionCandidate.status, 'correction_ready', `historical correction must bypass a newer Daily maturity gap: ${JSON.stringify(correctionCandidate)}`);
+    assert.equal(correctionCandidate.business_date, '2026-03-02');
+    assert.equal(correctionCandidate.trigger_kind, 'manual_correction');
+    assert.match(correctionCandidate.idempotency_key, /^annual-kpi:2026:2026-03-02:[0-9]+$/);
+
+    await db.exec('set role service_role');
+    let readyCorrection;
+    try {
+      readyCorrection = (await db.query(`select public.publish_public_dashboard_daily_v1(
+        2026,date '2026-03-02',$1,$2,'manual_correction','Pax cell correction'
+      ) as result`, [correctionCandidate.source_watermark, correctionCandidate.idempotency_key])).rows[0].result;
+    } finally {
+      await db.exec('reset role');
+    }
+    assert.equal(readyCorrection.status, 'ready');
+    const acknowledgement = (await db.query(`select reporting.acknowledge_public_dashboard_corrections_v1(
+      2026,$1,$2
+    ) as result`, [readyCorrection.publication_id, correctionCandidate.source_watermark])).rows[0].result;
+    assert.equal(acknowledgement.acknowledged, 1);
+    assert.equal(acknowledgement.remaining, 0);
+
+    await db.query(`update public.season_modifications set pax=82 where season_id='new-season' and leg_id='before-five'`);
+    const racingEventSeq = Number((await db.query(`insert into public.season_change_events(
+      season_id,client_id,op_id,target_type,target_id,changed_fields,op_payload
+    ) values (
+      'new-season','daily-cell','committed-pax-2','modification','before-five',array['pax'],
+      jsonb_build_object('kind','apply_season_server_mutation_v1','source','daily','operation',
+        jsonb_build_object('type','modification','mod',jsonb_build_object('legId','before-five','pax',82)))
+    ) returning server_seq`)).rows[0].server_seq);
+    assert.ok(racingEventSeq > correctionCandidate.source_watermark);
+    const staleAcknowledgement = (await db.query(`select reporting.acknowledge_public_dashboard_corrections_v1(
+      2026,$1,$2
+    ) as result`, [readyCorrection.publication_id, correctionCandidate.source_watermark])).rows[0].result;
+    assert.equal(staleAcknowledgement.acknowledged, 0, 'a newer cell edit must not be cleared by an older publication');
+    assert.equal(staleAcknowledgement.remaining, 1);
+  } finally {
+    await db.exec('rollback');
+  }
+
   await assert.rejects(
     db.query(`update reporting.public_dashboard_publications set reason = 'changed' where id = $1`, [firstPublication.publication_id]),
     /immutable/,

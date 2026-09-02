@@ -6,6 +6,7 @@ import { applySeasonServerMutationV1 } from './remoteStore';
 import { getOrCreateSeasonClientId } from './seasonChangeEvents';
 import { SERVER_AUTHORITATIVE_MODE } from './serverAuthoritativeMode';
 import {
+  flightModificationChangedFields,
   serializeFlightModificationForPersistence,
   serializeFlightRecordForPersistence,
   serializeSourceRowForPersistence,
@@ -72,12 +73,21 @@ function historyOperation(
   if (!history) return [];
   return [{
     type: 'modHistory',
+    changedFields: ['entry'],
     entry: {
       ...history,
       changes: [],
       recordChanges: [],
     },
   }];
+}
+
+function operationChangedFields(
+  value: Record<string, unknown>,
+  ignoredFields: readonly string[]
+): string[] {
+  const ignored = new Set(ignoredFields);
+  return Object.keys(value).filter((field) => !ignored.has(field)).sort((left, right) => left.localeCompare(right));
 }
 
 async function applyServerAuthoritativeOperations(
@@ -114,10 +124,14 @@ export async function runNativeLocalModificationBatchDeltaResult(
 ): Promise<NativeLocalModificationBatchDeltaResult | null> {
   if (SERVER_AUTHORITATIVE_MODE) {
     const operations = [
-      ...mods.map((mod) => ({
-        type: 'modification',
-        mod: serializeFlightModificationForPersistence(mod),
-      })),
+      ...mods.map((mod) => {
+        const persistedMod = serializeFlightModificationForPersistence(mod);
+        return {
+          type: 'modification',
+          changedFields: flightModificationChangedFields(persistedMod),
+          mod: persistedMod,
+        };
+      }),
       ...historyOperation(history),
     ];
     const result = await applyServerAuthoritativeOperations(seasonId, source, operations);
@@ -160,19 +174,35 @@ export async function runNativeScheduleMutation(
 ): Promise<LocalSyncMeta | null> {
   if (SERVER_AUTHORITATIVE_MODE) {
     const operations = [
-      ...records.map((record) => ({
+      ...records.map((record) => {
+        const persistedRecord = serializeFlightRecordForPersistence(record) as unknown as Record<string, unknown>;
+        return {
+          type: 'flightRecord',
+          changedFields: operationChangedFields(persistedRecord, ['id']),
+          record: persistedRecord,
+        };
+      }),
+      ...deletedIds.map((id) => ({
         type: 'flightRecord',
-        record: serializeFlightRecordForPersistence(record),
+        changedFields: ['status'],
+        record: { id, status: 'deleted' },
       })),
-      ...deletedIds.map((id) => ({ type: 'flightRecord', record: { id, status: 'deleted' } })),
-      ...sourceRows.map((row) => ({
-        type: 'sourceRow',
-        row: serializeSourceRowForPersistence(row),
-      })),
-      ...mods.map((mod) => ({
-        type: 'modification',
-        mod: serializeFlightModificationForPersistence(mod),
-      })),
+      ...sourceRows.map((row) => {
+        const persistedRow = serializeSourceRowForPersistence(row) as unknown as Record<string, unknown>;
+        return {
+          type: 'sourceRow',
+          changedFields: operationChangedFields(persistedRow, ['rowIndex']),
+          row: persistedRow,
+        };
+      }),
+      ...mods.map((mod) => {
+        const persistedMod = serializeFlightModificationForPersistence(mod);
+        return {
+          type: 'modification',
+          changedFields: flightModificationChangedFields(persistedMod),
+          mod: persistedMod,
+        };
+      }),
       ...historyOperation(history),
     ];
     return (await applyServerAuthoritativeOperations(seasonId, source, operations)).syncMeta;

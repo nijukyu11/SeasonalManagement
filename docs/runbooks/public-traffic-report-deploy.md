@@ -204,7 +204,7 @@ sudo systemctl enable --now seasonal-traffic-dashboard-runner.timer
 sudo systemctl start seasonal-traffic-dashboard-runner.service
 ```
 
-The database trigger emits `public_dashboard_daily_wake` through transactional `NOTIFY`; PostgreSQL delivers it only after the Daily Import transaction commits. The Listener Adapter starts the oneshot immediately and schedules retries after five and fifteen minutes. The persistent 15-minute timer then remains the missed-event/restart recovery path. Publisher work never runs inside the import transaction.
+The database trigger emits `public_dashboard_daily_wake` through transactional `NOTIFY`; PostgreSQL delivers it only after the Daily Import or Daily Pax auto-save transaction commits. The Listener Adapter starts the oneshot immediately and schedules retries after two, five and fifteen minutes. The two-minute wake closes the Pax correction quiet window; the persistent 15-minute timer remains the missed-event/restart recovery path. Publisher work never runs inside either write transaction.
 
 The runner owns the orchestration Interface:
 
@@ -216,7 +216,11 @@ The runner owns the orchestration Interface:
 - stable key `annual-kpi:year:BusinessDate:watermark`;
 - immutable Publisher invocation;
 - database head/checksum/freshness/missing-Pax verification;
-- public current/version cache polling for the 60-second SLA.
+- public current/version cache polling for the combined 120-second Edge/Nginx SLA.
+
+For a Daily Pax correction, the runner first reads the durable private marker. It returns without publishing while the two-minute quiet window is open. A historical correction republishes the cumulative payload through the current head Business Date; a correction later than the head defers to normal Daily eligibility. After the database verifier succeeds, the runner conditionally acknowledges only markers whose latest event sequence is covered by the publication watermark. Public cache verification allows up to 120 seconds for the Edge/Nginx layers before declaring the publication stale.
+
+`DASHBOARD_VERIFY_PUBLIC_CACHE=false` is allowed only for an isolated clone whose publication is not connected to a public read Adapter. Production systemd units must omit this override so the default remains `true`.
 
 Warnings and failures go to stdout, journald and syslog. If an executable `/usr/local/sbin/seasonal-traffic-dashboard-alert` exists, it is called as `LEVEL CODE MESSAGE`; this is the alert Adapter seam and must not mutate publication state.
 

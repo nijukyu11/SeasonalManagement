@@ -82,6 +82,16 @@ Runner là một Deep Module có Interface `run|listen`; Implementation giữ ba
 
 Runner dùng single-flight lock. `ready` mới advance head; `incomplete`, `empty`, `rejected_version` hoặc `failed` không sửa/xóa attempt và không thay last-known-good.
 
+### 3.2. Daily Pax correction và maturity
+
+Mỗi auto-save ô Pax trong Daily Schedule vẫn là một RPC. Cùng transaction đó phải ghi overlay `season_modifications`, event có `changed_fields` chứa `pax`, và một Dashboard Dirty Marker private. Transactional `NOTIFY` chỉ đánh thức Listener Adapter sau commit; durable marker mới là source of truth cho recovery.
+
+Dashboard Dirty Marker coalesce mọi edit trong cùng Dashboard/year theo quiet window hai phút tính từ edit cuối. Correction của Ops Date không vượt current head sẽ tạo publication bất biến mới cho chính current head Business Date ở watermark mới nhất. Correction vượt current head quay lại Daily eligibility thông thường.
+
+Verifier chỉ acknowledge marker nếu ready publication đang là head và `marker.latest_event_seq <= publication.source_watermark`. Edit mới xuất hiện trong lúc publish vì vậy không bị clear nhầm. Timer 15 phút tiếp tục bắt lost wake/restart; single-flight lock tiếp tục ngăn hai publisher race.
+
+Known Pax của Ops Date đã kết thúc và có canonical Daily coverage `complete` được tính ngay. T+24 chỉ phân loại `Pax NULL` thành overdue missing; `NULL` trước hay sau deadline đều không được đổi thành `0`.
+
 ### 4. Pax presence là invariant chung
 
 - `Pax NULL` là chưa báo cáo/missing.
@@ -126,6 +136,7 @@ Canonical Traffic Metrics Module là Deep Module phía sau ba Interface. SQL hel
 - Read token không tự cung cấp historical replay; export phải có execution/receipt riêng.
 - Daily acceptance cần cung cấp Business Date và expected watermark đáng tin cậy.
 - Cần phân biệt public Dashboard với Desktop Dashboard Report Mode trong code, test và tài liệu.
+- Dashboard Dirty Marker tạo thêm mutable operational state, nên phải tách khỏi immutable Publication Ledger và có conditional acknowledgement chống race.
 
 ## Phương án không chọn
 

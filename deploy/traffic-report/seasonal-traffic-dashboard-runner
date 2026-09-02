@@ -8,6 +8,7 @@ runner_service="${DASHBOARD_RUNNER_SERVICE:-seasonal-traffic-dashboard-runner.se
 public_base_url="${DASHBOARD_PUBLIC_BASE_URL:-https://report.ahtops.xyz}"
 lock_file="${DASHBOARD_RUNNER_LOCK_FILE:-/run/lock/seasonal-traffic-dashboard-runner.lock}"
 alert_adapter="${DASHBOARD_ALERT_ADAPTER:-/usr/local/sbin/seasonal-traffic-dashboard-alert}"
+verify_public_cache_enabled="${DASHBOARD_VERIFY_PUBLIC_CACHE:-true}"
 psql=(/usr/bin/docker exec -i "$database_container" psql -X -q -t -A -v ON_ERROR_STOP=1 -U supabase_admin -d "$database_name")
 
 log() {
@@ -36,7 +37,7 @@ elif value is not None: print(value)' "$payload" "$field"
 schedule_retries() {
   local stamp delay unit
   stamp="$(/usr/bin/date +%s%N)"
-  for delay in 5m 15m; do
+  for delay in 2m 5m 15m; do
     unit="seasonal-traffic-dashboard-retry-${delay%m}-${stamp}"
     if ! /usr/bin/systemd-run --quiet --unit="$unit" --on-active="$delay" \
       /usr/bin/systemctl start "$runner_service"; then
@@ -46,7 +47,7 @@ schedule_retries() {
 }
 
 wake_runner() {
-  log info daily_import_wake "transactional notification received"
+  log info dashboard_data_wake "transactional Daily Import or Pax correction notification received"
   if ! /usr/bin/systemctl start --no-block "$runner_service"; then
     emit_alert err runner_wake_failed "service=$runner_service"
     return
@@ -80,7 +81,7 @@ verify_public_cache() {
   local publication_url version_url publication_payload version_payload attempt
   publication_url="$public_base_url/api/report/v1/dashboard-publication?year=${business_date%%-*}"
   version_url="$public_base_url/api/report/v1/dashboard-publication-version?year=${business_date%%-*}"
-  for attempt in $(/usr/bin/seq 0 12); do
+  for attempt in $(/usr/bin/seq 0 24); do
     publication_payload="$(/usr/bin/curl --fail --silent --show-error --max-time 10 \
       -H 'Accept: application/json' "$publication_url" 2>/dev/null || true)"
     version_payload="$(/usr/bin/curl --fail --silent --show-error --max-time 10 \
@@ -107,10 +108,29 @@ PY
       log info public_cache_fresh "publication_id=$publication_id attempt=$attempt"
       return 0
     fi
-    if (( attempt < 12 )); then /usr/bin/sleep 5; fi
+    if (( attempt < 24 )); then /usr/bin/sleep 5; fi
   done
-  emit_alert err public_cache_stale "publication_id=$publication_id cache_sla_seconds=60"
+  emit_alert err public_cache_stale "publication_id=$publication_id cache_sla_seconds=120"
   return 1
+}
+
+defer_correction_marker() {
+  local marker_id="$1" error_code="$2"
+  if [[ -z "$marker_id" ]]; then return 0; fi
+  if [[ ! "$marker_id" =~ ^[0-9]+$ ]]; then
+    emit_alert err correction_marker_invalid "marker_id=$marker_id"
+    return 1
+  fi
+  "${psql[@]}" -Atc "select reporting.defer_public_dashboard_correction_v1(
+    ${marker_id},'${error_code}',interval '15 minutes')" >/dev/null
+}
+
+acknowledge_corrections() {
+  local year="$1" publication_id="$2" source_watermark="$3"
+  local acknowledgement
+  acknowledgement="$("${psql[@]}" -Atc "select reporting.acknowledge_public_dashboard_corrections_v1(
+    ${year},${publication_id},${source_watermark})")"
+  log info correction_acknowledged "receipt=${acknowledgement// /_}"
 }
 
 run_once() {
@@ -123,21 +143,50 @@ run_once() {
 
   local candidate eligible candidate_status candidate_reason business_date source_watermark
   local data_version idempotency_key publisher_output publisher_status receipt_json publication_id
-  candidate="$("${psql[@]}" -Atc 'select reporting.select_public_dashboard_candidate_v1(clock_timestamp())')"
-  eligible="$(json_field "$candidate" eligible)"
+  local trigger_kind marker_id candidate_year publish_reason
+  candidate="$("${psql[@]}" -Atc 'select reporting.select_public_dashboard_correction_candidate_v1(clock_timestamp())')"
   candidate_status="$(json_field "$candidate" status)"
+  marker_id="$(json_field "$candidate" marker_id)"
+  if [[ "$candidate_status" == "no_correction" || "$candidate_status" == "defer_to_daily" ]]; then
+    candidate="$("${psql[@]}" -Atc 'select reporting.select_public_dashboard_candidate_v1(clock_timestamp())')"
+    candidate_status="$(json_field "$candidate" status)"
+  elif [[ "$candidate_status" == "debouncing" ]]; then
+    log info correction_debouncing "marker_id=$marker_id retry_at=$(json_field "$candidate" retry_at)"
+    return 0
+  fi
+  eligible="$(json_field "$candidate" eligible)"
   candidate_reason="$(json_field "$candidate" reason)"
   business_date="$(json_field "$candidate" business_date)"
   source_watermark="$(json_field "$candidate" source_watermark)"
   data_version="$(json_field "$candidate" data_version)"
   idempotency_key="$(json_field "$candidate" idempotency_key)"
-  log info candidate_selected "status=$candidate_status business_date=${business_date:-none} watermark=$source_watermark reason=${candidate_reason// /_}"
+  trigger_kind="$(json_field "$candidate" trigger_kind)"
+  marker_id="${marker_id:-$(json_field "$candidate" marker_id)}"
+  candidate_year="$(json_field "$candidate" year)"
+  trigger_kind="${trigger_kind:-daily_acceptance}"
+  publish_reason="Hybrid runner accepted canonical Daily coverage"
+  if [[ "$trigger_kind" == "manual_correction" ]]; then
+    publish_reason="Daily Pax auto-save correction after two-minute quiet window"
+  fi
+  log info candidate_selected "status=$candidate_status trigger=$trigger_kind marker_id=${marker_id:-none} business_date=${business_date:-none} watermark=$source_watermark reason=${candidate_reason// /_}"
 
   if [[ "$eligible" != "true" ]]; then
     case "$candidate_status" in
-      already_current|head_ahead) return 0 ;;
+      already_current)
+        if [[ -n "$marker_id" ]]; then
+          local head_publication_id head_watermark
+          head_publication_id="$(json_field "$candidate" head_publication_id)"
+          head_watermark="$(json_field "$candidate" head_source_watermark)"
+          [[ "$candidate_year" =~ ^[0-9]{4}$ && "$head_publication_id" =~ ^[0-9]+$ && "$head_watermark" =~ ^[0-9]+$ ]] \
+            || { emit_alert err correction_ack_input_invalid "payload=$candidate"; return 1; }
+          acknowledge_corrections "$candidate_year" "$head_publication_id" "$head_watermark"
+        fi
+        return 0
+        ;;
+      head_ahead) return 0 ;;
       projection_stale|coverage_gap|maturity_incomplete|empty)
         emit_alert warning "candidate_${candidate_status}" "business_date=${business_date:-none} watermark=$source_watermark reason=$candidate_reason"
+        defer_correction_marker "$marker_id" "candidate_${candidate_status}"
         return 0
         ;;
       *) emit_alert err candidate_invalid "payload=$candidate"; return 1 ;;
@@ -148,17 +197,20 @@ run_once() {
   [[ "$source_watermark" =~ ^[0-9]+$ ]] || { emit_alert err candidate_watermark_invalid "value=$source_watermark"; return 1; }
   [[ "$data_version" =~ ^[0-9]+$ ]] || { emit_alert err candidate_data_version_invalid "value=$data_version"; return 1; }
   [[ ${#idempotency_key} -ge 8 ]] || { emit_alert err candidate_key_invalid "value=$idempotency_key"; return 1; }
+  candidate_year="${candidate_year:-${business_date%%-*}}"
+  [[ "$candidate_year" =~ ^[0-9]{4}$ ]] || { emit_alert err candidate_year_invalid "value=$candidate_year"; return 1; }
 
   set +e
   publisher_output="$(/usr/local/sbin/seasonal-traffic-dashboard-publish \
-    "$business_date" "$source_watermark" daily_acceptance \
-    'Hybrid runner accepted canonical Daily coverage' "$idempotency_key" 2>&1)"
+    "$business_date" "$source_watermark" "$trigger_kind" \
+    "$publish_reason" "$idempotency_key" 2>&1)"
   local publisher_exit=$?
   set -e
   printf '%s\n' "$publisher_output"
   receipt_json="$(printf '%s\n' "$publisher_output" | /usr/bin/sed -n '/^{.*"publication_id"/p' | /usr/bin/head -1)"
   if [[ -z "$receipt_json" ]]; then
     emit_alert err publisher_receipt_invalid "exit=$publisher_exit business_date=$business_date watermark=$source_watermark"
+    defer_correction_marker "$marker_id" publisher_receipt_invalid
     return 1
   fi
   publisher_status="$(json_field "$receipt_json" status)"
@@ -168,14 +220,17 @@ run_once() {
     ready) ;;
     incomplete|empty)
       emit_alert warning "publisher_${publisher_status}" "publication_id=$publication_id business_date=$business_date watermark=$source_watermark"
+      defer_correction_marker "$marker_id" "publisher_${publisher_status}"
       return 0
       ;;
     rejected_version)
       log warning publisher_rejected_version "publication_id=$publication_id expected_watermark=$source_watermark"
+      defer_correction_marker "$marker_id" publisher_rejected_version
       return 0
       ;;
     failed)
       emit_alert err publisher_failed "publication_id=$publication_id business_date=$business_date watermark=$source_watermark"
+      defer_correction_marker "$marker_id" publisher_failed
       return 1
       ;;
     *)
@@ -190,10 +245,16 @@ run_once() {
   verification_valid="$(json_field "$verification" valid)"
   if [[ "$verification_valid" != "true" ]]; then
     emit_alert err publication_verification_failed "receipt=$verification"
+    defer_correction_marker "$marker_id" publication_verification_failed
     return 1
   fi
   log info publication_verified "publication_id=$publication_id business_date=$business_date watermark=$source_watermark"
-  verify_public_cache "$publication_id" "$business_date" "$source_watermark"
+  acknowledge_corrections "$candidate_year" "$publication_id" "$source_watermark"
+  if [[ "$verify_public_cache_enabled" == "true" ]]; then
+    verify_public_cache "$publication_id" "$business_date" "$source_watermark"
+  else
+    log info public_cache_verification_skipped "publication_id=$publication_id"
+  fi
 }
 
 case "$mode" in

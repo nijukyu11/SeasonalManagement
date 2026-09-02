@@ -22,6 +22,7 @@ import type {
 } from './types.ts';
 import { normalizeStandValue } from './operationalResourceValues.ts';
 import {
+  flightModificationChangedFields,
   hydrateFlightModificationFromPersistence,
   hydrateFlightRecordFromPersistence,
   hydrateModHistoryEntryFromPersistence,
@@ -547,15 +548,11 @@ export function fromFlightRecordRows(
 
 export function toModificationRow(seasonId: string, mod: FlightModification): ModificationRelationalRow {
   const persisted = serializeFlightModificationForPersistence(mod);
-  const changedFields = Object.keys(persisted).filter((field) => !['legId', 'action', 'addedLeg', 'counter', 'checkInCounterWindows'].includes(field));
-  if ('counter' in persisted) changedFields.push('counter');
-  if ('checkInCounterWindows' in persisted) changedFields.push('checkInCounterWindows');
-  if ('addedLeg' in persisted) changedFields.push('addedLeg');
   return {
     season_id: seasonId,
     leg_id: persisted.legId,
     action: persisted.action,
-    changed_fields: [...new Set(changedFields)],
+    changed_fields: flightModificationChangedFields(persisted),
     schedule: persisted.schedule ?? null,
     aircraft: persisted.aircraft ?? null,
     route: persisted.route ?? null,

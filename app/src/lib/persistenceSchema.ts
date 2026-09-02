@@ -232,6 +232,14 @@ export function serializeFlightModificationForPersistence(mod: FlightModificatio
   return stripUndefinedFields(normalizedMod as PersistedFlightModification);
 }
 
+export function flightModificationChangedFields(
+  mod: FlightModification | PersistedFlightModification
+): string[] {
+  const persisted = serializeFlightModificationForPersistence(mod as FlightModification);
+  const ignored = new Set(['legId', 'action']);
+  return [...new Set(Object.keys(persisted).filter((field) => !ignored.has(field)))].sort((left, right) => left.localeCompare(right));
+}
+
 export function hydrateFlightModificationFromPersistence(mod: PersistedFlightModification | FlightModification): FlightModification {
   const normalizedMod = mod.schedule == null
     ? mod

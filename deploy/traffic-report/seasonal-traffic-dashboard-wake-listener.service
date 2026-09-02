@@ -1,5 +1,5 @@
 [Unit]
-Description=Wake the Daily Dashboard runner after canonical Daily Import commit
+Description=Wake the Daily Dashboard runner after Daily Import or Pax correction commit
 After=docker.service
 Requires=docker.service
 
