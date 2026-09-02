@@ -46,7 +46,11 @@ import {
   confirmDailyImportZeroFlightDatesV1,
   type DailyImportStagePayloadV1,
 } from '@/lib/dailyImportV1Contract';
-import { stageDailyImportWithTerminalRetryV1, type DailyImportStageResultV1 } from '@/lib/dailyImportRpcContract';
+import {
+  isDailyImportStaleVersionConflictV1,
+  stageDailyImportWithTerminalRetryV1,
+  type DailyImportStageResultV1,
+} from '@/lib/dailyImportRpcContract';
 import { buildDailyScheduleExportFileName, buildDailyScheduleSummaryWorkbook } from '@/lib/dailyScheduleExport';
 import { saveWorkbookAsXlsx } from '@/lib/exportSave';
 import { buildDailyStandGateModifications } from '@/lib/gateAllocation';
@@ -905,28 +909,46 @@ function DailyScheduleContent() {
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
       const analysis = analyzeDailyScheduleWorkbook(workbook);
       if (!analysis.selected) throw new Error(analysis.diagnostics.map((item) => item.message).join(' '));
-      const payload = await buildDailyImportStagePayloadV1({
-        fileName: file.name,
-        rawBuffer: buffer,
-        sheet: analysis.selected,
-        seasons,
-      });
-      const pendingTarget = payload.seasons.find((target) => (
-        (useSeasonWorkspaceStore.getState().workspaces[target.seasonId]?.syncMeta?.pendingCount ?? 0) > 0
-      ));
-      if (pendingTarget) {
-        throw new Error(`Season ${pendingTarget.seasonCode} đang có draft/pending changes; hãy Save hoặc xử lý draft trước khi stage Daily import.`);
+      const selectedSheet = analysis.selected;
+      const stageWithSeasonMetadata = async (seasonMetadata: Season[]) => {
+        const payload = await buildDailyImportStagePayloadV1({
+          fileName: file.name,
+          rawBuffer: buffer,
+          sheet: selectedSheet,
+          seasons: seasonMetadata,
+        });
+        const pendingTarget = payload.seasons.find((target) => (
+          (useSeasonWorkspaceStore.getState().workspaces[target.seasonId]?.syncMeta?.pendingCount ?? 0) > 0
+        ));
+        if (pendingTarget) {
+          throw new Error(`Season ${pendingTarget.seasonCode} đang có draft/pending changes; hãy Save hoặc xử lý draft trước khi stage Daily import.`);
+        }
+        return stageDailyImportWithTerminalRetryV1(payload, stageDailyScheduleImportV1, {
+          getStatus: getDailyScheduleImportV1Status,
+        });
+      };
+
+      try {
+        setDailyImportPreview(await stageWithSeasonMetadata(seasons));
+      } catch (stageError) {
+        if (!isDailyImportStaleVersionConflictV1(stageError)) throw stageError;
+        const refreshedSeasons = await getSeasons();
+        setCachedSeasons(refreshedSeasons);
+        setSeasons(refreshedSeasons);
+        useSeasonWorkspaceStore.getState().setSeasons(refreshedSeasons);
+        const refreshedSeason = season
+          ? refreshedSeasons.find((item) => item.id === season.id) ?? null
+          : null;
+        if (refreshedSeason) setSeason(refreshedSeason);
+        setDailyImportPreview(await stageWithSeasonMetadata(refreshedSeasons));
       }
-      setDailyImportPreview(await stageDailyImportWithTerminalRetryV1(payload, stageDailyScheduleImportV1, {
-        getStatus: getDailyScheduleImportV1Status,
-      }));
     } catch (err) {
       void showAlert({ title: 'Daily Import Failed', message: (err as Error).message, tone: 'error' });
     } finally {
       setDailyImporting(false);
       if (dailyImportInputRef.current) dailyImportInputRef.current.value = '';
     }
-  }, [dailyImporting, seasons, showAlert, syncPendingCount, syncWriteInProgress]);
+  }, [dailyImporting, season, seasons, showAlert, syncPendingCount, syncWriteInProgress]);
 
   const closeDailyImportPreview = useCallback(async () => {
     const current = dailyImportPreview;
@@ -954,10 +976,25 @@ function DailyScheduleContent() {
   const applyCommittedDailyImport = useCallback(async (receipt: NonNullable<DailyImportStageResultV1['result']>) => {
     setDailyImportPreview(null);
     setSelectedRowIds(new Set());
-    if (season && receipt.seasons.some((item) => item.seasonId === season.id)) {
+    const committedVersions = new Map(receipt.seasons.map((item) => [item.seasonId, item.dataVersion]));
+    const nextSeasons = seasons.map((item) => {
+      const dataVersion = committedVersions.get(item.id);
+      return dataVersion === undefined ? item : { ...item, dataVersion };
+    });
+    setCachedSeasons(nextSeasons);
+    setSeasons(nextSeasons);
+    useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
+    for (const item of receipt.seasons) {
+      patchCachedSeasonData(item.seasonId, { seasonDataVersion: item.dataVersion });
+    }
+    const committedSeason = season
+      ? nextSeasons.find((item) => item.id === season.id) ?? season
+      : null;
+    if (committedSeason && committedVersions.has(committedSeason.id)) {
+      setSeason(committedSeason);
       const windowKey = buildDailyWindowKey(fromDateTime, toDateTime);
       const serverWindow = await revalidateSeasonWorkspaceWindow({
-        seasonId: season.id,
+        seasonId: committedSeason.id,
         dateFrom: fromDateTime.slice(0, 10),
         dateTo: toDateTime.slice(0, 10),
         resourceType: 'schedule',
@@ -968,15 +1005,15 @@ function DailyScheduleContent() {
       });
       if (serverWindow?.syncMeta) {
         loadedWindowKeyRef.current = windowKey;
-        applyDailyNativeState(season.id, serverWindow.records, serverWindow.modifications, serverWindow.syncMeta, {
+        applyDailyNativeState(committedSeason.id, serverWindow.records, serverWindow.modifications, serverWindow.syncMeta, {
           replaceWindow: true,
-          season,
+          season: committedSeason,
           windowKey,
         });
       }
     }
     router.refresh();
-  }, [applyDailyNativeState, fromDateTime, router, season, toDateTime]);
+  }, [applyDailyNativeState, fromDateTime, router, season, seasons, toDateTime]);
 
   const commitDailyImportPreview = useCallback(async () => {
     if (!dailyImportPreview || dailyImportCommitting) return;

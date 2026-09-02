@@ -46,6 +46,7 @@ import {
   type SeasonalImportV3StageResult,
 } from './seasonalImportV3Contract';
 import {
+  DailyImportV1RpcRejectedError,
   parseDailyImportCommittedResultV1,
   parseDailyImportStageResultV1,
   type DailyImportCommittedResultV1,
@@ -215,6 +216,15 @@ function stripUndefinedDeep<T>(value: T): T {
 function assertOk<T>(result: SupabaseResult<T>, action: string): T {
   if (result.error) throw new Error(`${action}: ${result.error.message}`);
   return result.data as T;
+}
+
+function assertDailyImportRpcOk<T>(result: SupabaseResult<T>, action: string): T {
+  if (!result.error) return result.data as T;
+  const message = `${action}: ${result.error.message}`;
+  if (typeof result.error.code === 'string' && result.error.code.trim()) {
+    throw new DailyImportV1RpcRejectedError(message, result.error);
+  }
+  throw new Error(message);
 }
 
 function assertSeasonalImportRpcOk<T>(result: SupabaseResult<T>, action: string): T {
@@ -1100,7 +1110,7 @@ export const supabaseStore: RemoteStore = {
     options.assertOperatorSessionCurrent();
     const response = await client().rpc('stage_daily_schedule_import_v1', { p_import: input });
     options.assertOperatorSessionCurrent();
-    return parseDailyImportStageResultV1(assertOk(response, 'stage Daily Schedule import V1'));
+    return parseDailyImportStageResultV1(assertDailyImportRpcOk(response, 'stage Daily Schedule import V1'));
   },
 
   async commitDailyScheduleImportV1(
@@ -1114,7 +1124,7 @@ export const supabaseStore: RemoteStore = {
       p_preview_hash: input.previewHash,
     });
     options.assertOperatorSessionCurrent();
-    return parseDailyImportCommittedResultV1(assertOk(response, 'commit Daily Schedule import V1'));
+    return parseDailyImportCommittedResultV1(assertDailyImportRpcOk(response, 'commit Daily Schedule import V1'));
   },
 
   async getDailyScheduleImportV1Status(
@@ -1124,7 +1134,7 @@ export const supabaseStore: RemoteStore = {
     options.assertOperatorSessionCurrent();
     const response = await client().rpc('get_daily_schedule_import_v1_status', { p_request_id: requestId });
     options.assertOperatorSessionCurrent();
-    return parseDailyImportStageResultV1(assertOk(response, 'get Daily Schedule import V1 status'));
+    return parseDailyImportStageResultV1(assertDailyImportRpcOk(response, 'get Daily Schedule import V1 status'));
   },
 
   async cancelDailyScheduleImportV1(
@@ -1134,7 +1144,7 @@ export const supabaseStore: RemoteStore = {
     options.assertOperatorSessionCurrent();
     const response = await client().rpc('cancel_daily_schedule_import_v1', { p_batch_id: batchId });
     options.assertOperatorSessionCurrent();
-    return parseDailyImportStageResultV1(assertOk(response, 'cancel Daily Schedule import V1'));
+    return parseDailyImportStageResultV1(assertDailyImportRpcOk(response, 'cancel Daily Schedule import V1'));
   },
 
   async applySeasonalImportRemote(

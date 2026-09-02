@@ -13,6 +13,7 @@ const overlayLineageMigration = readFileSync(resolve(root, 'supabase/migrations/
 const conflictHttpMigration = readFileSync(resolve(root, 'supabase/migrations/20260902140000_daily_import_conflict_http_status.sql'), 'utf8');
 const page = readFileSync(resolve(root, 'src/app/(desktop)/daily/page.tsx'), 'utf8');
 const previewDialog = readFileSync(resolve(root, 'src/app/(desktop)/components/DailyImportPreviewDialog.tsx'), 'utf8');
+const supabaseStore = readFileSync(resolve(root, 'src/lib/supabaseStore.ts'), 'utf8');
 
 test('Daily commit atomically supersedes canonical legs without mutating the legacy active pointer', () => {
   const commit = canonicalCommitMigration.slice(canonicalCommitMigration.indexOf('create or replace function public.commit_daily_schedule_import_v1'));
@@ -62,6 +63,10 @@ test('Daily upload stages preview and cannot call the legacy local mutation path
   assert.match(page, /revalidateSeasonWorkspaceWindow/);
   assert.match(page, /getDailyScheduleImportV1Status/);
   assert.match(page, /draft\/pending changes/);
+  assert.match(page, /isDailyImportStaleVersionConflictV1\(stageError\)[\s\S]*getSeasons\(\)[\s\S]*stageWithSeasonMetadata\(refreshedSeasons\)/);
+  assert.match(page, /committedVersions[\s\S]*item\.dataVersion[\s\S]*setCachedSeasons\(nextSeasons\)[\s\S]*setSeasons\(nextSeasons\)/);
+  assert.match(supabaseStore, /assertDailyImportRpcOk[\s\S]*DailyImportV1RpcRejectedError/);
+  assert.match(supabaseStore, /parseDailyImportStageResultV1\(assertDailyImportRpcOk\(response, 'stage Daily Schedule import V1'\)\)/);
 });
 
 test('canonical security-invoker projections can execute their pure helpers', () => {

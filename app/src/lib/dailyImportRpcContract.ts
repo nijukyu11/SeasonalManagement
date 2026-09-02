@@ -1,5 +1,31 @@
 import type { DailyImportStagePayloadV1 } from './dailyImportV1Contract.ts';
 
+export interface DailyImportV1RpcErrorDetail {
+  code?: string | null;
+  details?: string | null;
+  hint?: string | null;
+}
+
+export class DailyImportV1RpcRejectedError extends Error {
+  readonly code: string | null;
+  readonly details: string | null;
+  readonly hint: string | null;
+
+  constructor(message: string, error: DailyImportV1RpcErrorDetail = {}) {
+    super(message);
+    this.name = 'DailyImportV1RpcRejectedError';
+    this.code = typeof error.code === 'string' && error.code.trim() ? error.code.trim() : null;
+    this.details = typeof error.details === 'string' && error.details.trim() ? error.details.trim() : null;
+    this.hint = typeof error.hint === 'string' && error.hint.trim() ? error.hint.trim() : null;
+  }
+}
+
+export function isDailyImportStaleVersionConflictV1(error: unknown): boolean {
+  return error instanceof DailyImportV1RpcRejectedError
+    && error.code === 'PT409'
+    && /Stale Daily import stage/i.test(error.message);
+}
+
 export function createDailyImportRetryPayloadV1(
   payload: DailyImportStagePayloadV1,
   requestId: string = globalThis.crypto.randomUUID(),

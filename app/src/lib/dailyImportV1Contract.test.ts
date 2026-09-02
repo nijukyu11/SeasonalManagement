@@ -3,6 +3,8 @@ import test from 'node:test';
 import { confirmDailyImportZeroFlightDatesV1 } from './dailyImportScope.ts';
 import {
   createDailyImportRetryPayloadV1,
+  DailyImportV1RpcRejectedError,
+  isDailyImportStaleVersionConflictV1,
   stageDailyImportWithTerminalRetryV1,
   type DailyImportStageResultV1,
 } from './dailyImportRpcContract.ts';
@@ -50,6 +52,17 @@ test('terminal Daily import retry gets a new request identity without changing t
   assert.equal(retry.requestId, retryRequestId);
   assert.equal(before.requestId, '00000000-0000-5000-8000-000000000000');
   assert.deepEqual({ ...retry, requestId: before.requestId }, before);
+});
+
+test('only the explicit HTTP conflict for stale Daily stage metadata is auto-refreshable', () => {
+  const stale = new DailyImportV1RpcRejectedError(
+    'stage Daily Schedule import V1: Stale Daily import stage for season season-1: expected 7, current 8',
+    { code: 'PT409', details: 'refresh season metadata' },
+  );
+  assert.equal(isDailyImportStaleVersionConflictV1(stale), true);
+  assert.equal(stale.details, 'refresh season metadata');
+  assert.equal(isDailyImportStaleVersionConflictV1(new DailyImportV1RpcRejectedError(stale.message, { code: 'P0001' })), false);
+  assert.equal(isDailyImportStaleVersionConflictV1(new DailyImportV1RpcRejectedError('preview hash mismatch', { code: 'PT409' })), false);
 });
 
 test('cancelled Daily import batch is staged again once with a fresh request identity', async () => {
