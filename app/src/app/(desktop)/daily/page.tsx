@@ -917,7 +917,9 @@ function DailyScheduleContent() {
       if (pendingTarget) {
         throw new Error(`Season ${pendingTarget.seasonCode} đang có draft/pending changes; hãy Save hoặc xử lý draft trước khi stage Daily import.`);
       }
-      setDailyImportPreview(await stageDailyImportWithTerminalRetryV1(payload, stageDailyScheduleImportV1));
+      setDailyImportPreview(await stageDailyImportWithTerminalRetryV1(payload, stageDailyScheduleImportV1, {
+        getStatus: getDailyScheduleImportV1Status,
+      }));
     } catch (err) {
       void showAlert({ title: 'Daily Import Failed', message: (err as Error).message, tone: 'error' });
     } finally {

@@ -83,6 +83,7 @@ assert.match(edge, /get_public_annual_passenger_kpi_version_v1/);
 assert.match(edge, /get_public_dashboard_publication_v1/);
 assert.match(edge, /get_public_dashboard_publication_version_v1/);
 assert.match(edge, /DASHBOARD_PUBLICATION_NOT_READY/);
+assert.match(edge, /endpoint === 'dashboard-publication-version'[\s\S]+?s-maxage=30/);
 assert.match(edge, /ANNUAL_KPI_ADMIN_PIN_HASH/);
 assert.match(edge, /pbkdf2_sha256/);
 assert.match(edge, /HttpOnly; Secure; SameSite=Strict/);

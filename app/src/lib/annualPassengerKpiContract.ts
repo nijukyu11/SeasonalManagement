@@ -1,5 +1,5 @@
 export const ANNUAL_KPI_API_BASE = '/api/report/v1';
-export const ANNUAL_KPI_VERSION_POLL_MS = 5 * 60 * 1000;
+export const ANNUAL_KPI_VERSION_POLL_MS = 60 * 1000;
 export const DASHBOARD_DAILY_PUBLICATION_ENABLED = process.env.NEXT_PUBLIC_TRAFFIC_DASHBOARD_DAILY_PUBLICATION === 'true';
 
 export type AnnualKpiPeriodState = 'past' | 'current' | 'future';

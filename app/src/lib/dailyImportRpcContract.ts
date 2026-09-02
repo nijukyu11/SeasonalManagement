@@ -10,14 +10,33 @@ export function createDailyImportRetryPayloadV1(
 export async function stageDailyImportWithTerminalRetryV1(
   payload: DailyImportStagePayloadV1,
   stage: (input: DailyImportStagePayloadV1) => Promise<DailyImportStageResultV1>,
-  createRequestId: () => string = () => globalThis.crypto.randomUUID(),
+  options: {
+    getStatus?: (requestId: string) => Promise<DailyImportStageResultV1>;
+    createRequestId?: () => string;
+  } = {},
 ): Promise<{ payload: DailyImportStagePayloadV1; result: DailyImportStageResultV1 }> {
-  const firstResult = await stage(payload);
+  const stageOrRecover = async (input: DailyImportStagePayloadV1): Promise<DailyImportStageResultV1> => {
+    try {
+      return await stage(input);
+    } catch (stageError) {
+      if (!options.getStatus) throw stageError;
+      try {
+        return await options.getStatus(input.requestId);
+      } catch {
+        throw stageError;
+      }
+    }
+  };
+
+  const firstResult = await stageOrRecover(payload);
   if (firstResult.status !== 'cancelled' && firstResult.status !== 'expired') {
     return { payload, result: firstResult };
   }
-  const retryPayload = createDailyImportRetryPayloadV1(payload, createRequestId());
-  return { payload: retryPayload, result: await stage(retryPayload) };
+  const retryPayload = createDailyImportRetryPayloadV1(
+    payload,
+    (options.createRequestId ?? (() => globalThis.crypto.randomUUID()))(),
+  );
+  return { payload: retryPayload, result: await stageOrRecover(retryPayload) };
 }
 
 export interface DailyImportPreviewSeasonV1 {

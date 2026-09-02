@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  ANNUAL_KPI_VERSION_POLL_MS,
   annualDashboardPublicationUrl,
   annualDashboardPublicationVersionUrl,
   annualKpiSnapshotUrl,
@@ -24,6 +25,10 @@ test('current year follows Asia/Ho_Chi_Minh', () => {
 
 test('snapshot guard rejects an incomplete payload', () => {
   assert.equal(isAnnualPassengerKpiSnapshot({ contract_version: 'annual-passenger-kpi-v1', year: 2026 }), false);
+});
+
+test('dashboard checks for a new immutable publication every minute', () => {
+  assert.equal(ANNUAL_KPI_VERSION_POLL_MS, 60_000);
 });
 
 test('daily publication is adapted to the existing wallboard presentation contract', () => {

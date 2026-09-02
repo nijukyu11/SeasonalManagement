@@ -68,10 +68,51 @@ test('cancelled Daily import batch is staged again once with a fresh request ide
   const staged = await stageDailyImportWithTerminalRetryV1(before, async (input) => {
     calls.push(input);
     return resultFor(input, calls.length === 1 ? 'cancelled' : 'validated');
-  }, () => '22222222-2222-4222-8222-222222222222');
+  }, { createRequestId: () => '22222222-2222-4222-8222-222222222222' });
   assert.equal(calls.length, 2);
   assert.equal(calls[0].requestId, before.requestId);
   assert.equal(calls[1].requestId, '22222222-2222-4222-8222-222222222222');
   assert.equal(staged.result.status, 'validated');
   assert.equal(staged.payload.requestId, calls[1].requestId);
+});
+
+test('transport failure recovers the staged batch using the same request identity', async () => {
+  const before = payload();
+  const lookedUp: string[] = [];
+  const recovered: DailyImportStageResultV1 = {
+    batchId: 'batch-recovered',
+    requestId: before.requestId,
+    status: 'validated',
+    previewHash: 'preview-hash',
+    preview: { valid: true, fileName: before.fileName, workbookProfile: before.workbookProfile, sourceRowCount: 2, legCount: 2, seasons: [] },
+    diagnostics: [],
+    expiresAt: '2026-09-02T02:00:00Z',
+    result: null,
+  };
+
+  const staged = await stageDailyImportWithTerminalRetryV1(before, async () => {
+    throw new TypeError('Failed to fetch');
+  }, {
+    getStatus: async (requestId) => {
+      lookedUp.push(requestId);
+      return recovered;
+    },
+  });
+
+  assert.deepEqual(lookedUp, [before.requestId]);
+  assert.equal(staged.payload.requestId, before.requestId);
+  assert.equal(staged.result, recovered);
+});
+
+test('transport failure remains visible when the same request identity was not persisted', async () => {
+  const before = payload();
+  const original = new TypeError('Failed to fetch');
+  await assert.rejects(
+    stageDailyImportWithTerminalRetryV1(before, async () => {
+      throw original;
+    }, {
+      getStatus: async () => { throw new Error('not found'); },
+    }),
+    (error) => error === original,
+  );
 });

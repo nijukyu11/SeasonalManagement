@@ -44,7 +44,7 @@ test('Daily commit atomically supersedes canonical legs without mutating the leg
 test('Daily upload stages preview and cannot call the legacy local mutation path', () => {
   const handler = page.slice(page.indexOf('const handleDailyImportFile'), page.indexOf('const handleAddFlights'));
   assert.match(handler, /analyzeDailyScheduleWorkbook/);
-  assert.match(handler, /stageDailyImportWithTerminalRetryV1\(payload, stageDailyScheduleImportV1\)/);
+  assert.match(handler, /stageDailyImportWithTerminalRetryV1\(payload, stageDailyScheduleImportV1, \{[\s\S]*getStatus: getDailyScheduleImportV1Status/);
   assert.match(handler, /setDailyImportPreview/);
   assert.doesNotMatch(handler, /runNativeScheduleMutation/);
   assert.doesNotMatch(handler, /buildDailyScheduleImportUpdate/);

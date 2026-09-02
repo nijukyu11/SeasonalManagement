@@ -9728,7 +9728,7 @@ async function run() {
   assert(
     dailyPageSource.includes('analyzeDailyScheduleWorkbook(workbook)') &&
       dailyPageSource.includes('buildDailyImportStagePayloadV1({') &&
-      dailyPageSource.includes('stageDailyImportWithTerminalRetryV1(payload, stageDailyScheduleImportV1)') &&
+      dailyPageSource.includes('stageDailyImportWithTerminalRetryV1(payload, stageDailyScheduleImportV1, {') &&
       dailyPageSource.includes('commitDailyScheduleImportV1({') &&
       !dailyPageSource.includes('NEXT_PUBLIC_DAILY_IMPORT_V1_COMMIT_ENABLED') &&
       !dailyImportPreviewDialogSource.includes('daily-import-confirmation') &&

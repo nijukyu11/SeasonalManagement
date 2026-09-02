@@ -578,8 +578,10 @@ Deno.serve(async (request: Request) => {
           status: 304,
           headers: {
             ETag: etag,
-            'Cache-Control': endpoint === 'dashboard-version' || endpoint === 'dashboard-publication-version'
-              ? 'public, max-age=0, s-maxage=300'
+            'Cache-Control': endpoint === 'dashboard-publication-version'
+              ? 'public, max-age=0, s-maxage=30'
+              : endpoint === 'dashboard-version'
+                ? 'public, max-age=0, s-maxage=300'
               : endpoint === 'kpi-config'
                 ? 'no-store'
                 : 'public, max-age=0, s-maxage=60',
@@ -588,8 +590,10 @@ Deno.serve(async (request: Request) => {
       }
       return json(payload, 200, {
         ETag: etag,
-        'Cache-Control': endpoint === 'dashboard-version' || endpoint === 'dashboard-publication-version'
-          ? 'public, max-age=0, s-maxage=300'
+        'Cache-Control': endpoint === 'dashboard-publication-version'
+          ? 'public, max-age=0, s-maxage=30'
+          : endpoint === 'dashboard-version'
+            ? 'public, max-age=0, s-maxage=300'
           : endpoint === 'kpi-config'
             ? 'no-store'
             : 'public, max-age=0, s-maxage=60',
