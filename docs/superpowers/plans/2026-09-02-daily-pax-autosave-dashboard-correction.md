@@ -2,7 +2,7 @@
 
 **Ngày:** 2026-09-02
 
-**Trạng thái:** Đã chốt thiết kế; chưa implement, chưa migration, chưa deploy production
+**Trạng thái:** Đã implement và cutover production ngày 2026-09-02; production Pax canary sẽ dùng lần chỉnh sửa nghiệp vụ thật đầu tiên, không sửa dữ liệu chỉ để test
 
 **Branch thực hiện:** `codex/live-traffic-aggregate-integration`
 
@@ -16,6 +16,10 @@
 - `docs/superpowers/artifacts/2026-09-01-report-dashboard-daily-publication-implementation-receipt.md`
 - `docs/superpowers/artifacts/2026-09-01-dashboard-hybrid-runner-production.md`
 - `docs/superpowers/artifacts/2026-09-01-report-dashboard-ready-cutover-production.md`
+
+**Receipt implementation/cutover:**
+
+- `docs/superpowers/artifacts/2026-09-02-dashboard-pax-correction-production.md`
 
 ## 1. Mục tiêu
 
