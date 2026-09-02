@@ -9334,6 +9334,7 @@ async function run() {
   const seasonalRouteSource = fs.existsSync(seasonalRoutePath) ? fs.readFileSync(seasonalRoutePath, 'utf8') : '';
   const seasonalPageSource = fs.readFileSync(path.join(desktopAppRoot, 'SeasonalSchedulePage.tsx'), 'utf8');
   const dailyPageSource = fs.readFileSync(path.join(desktopAppRoot, 'daily', 'page.tsx'), 'utf8');
+  const dailyImportPreviewDialogSource = fs.readFileSync(path.join(desktopAppRoot, 'components', 'DailyImportPreviewDialog.tsx'), 'utf8');
   const onlineFirstRoutesSource = fs.readFileSync(path.join(root, 'src', 'app', 'onlineFirstRoutes.source.test.ts'), 'utf8');
   assert(
     dailyPageSource.includes('buildCanonicalAddedFlightRecords') &&
@@ -9729,10 +9730,12 @@ async function run() {
       dailyPageSource.includes('buildDailyImportStagePayloadV1({') &&
       dailyPageSource.includes('stageDailyScheduleImportV1(payload)') &&
       dailyPageSource.includes('commitDailyScheduleImportV1({') &&
-      dailyPageSource.includes('NEXT_PUBLIC_DAILY_IMPORT_V1_COMMIT_ENABLED') &&
+      !dailyPageSource.includes('NEXT_PUBLIC_DAILY_IMPORT_V1_COMMIT_ENABLED') &&
+      !dailyImportPreviewDialogSource.includes('daily-import-confirmation') &&
+      dailyImportPreviewDialogSource.includes('disabled={!valid || !commitEnabled || committing || restaging}') &&
       !dailyPageSource.slice(dailyPageSource.indexOf('const handleDailyImportFile'), dailyPageSource.indexOf('const handleAddFlights')).includes('runNativeScheduleMutation(') &&
       !dailyPageSource.includes('Use Save to push changes to the server.'),
-    'Daily import must stage a canonical multi-season preview and commit only through the feature-gated atomic V1 RPC'
+    'Daily import must stage a canonical multi-season preview and commit with one click through the atomic V1 RPC'
   );
   const tsconfigSource = fs.readFileSync(path.join(root, 'tsconfig.json'), 'utf8');
   const packageJsonSource = fs.readFileSync(path.join(root, 'package.json'), 'utf8');

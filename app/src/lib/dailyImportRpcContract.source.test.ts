@@ -11,6 +11,7 @@ const canonicalHelperGrantMigration = readFileSync(resolve(root, 'supabase/migra
 const multiSeasonEventIdentityMigration = readFileSync(resolve(root, 'supabase/migrations/20260831010000_fix_daily_multiseason_event_identity.sql'), 'utf8');
 const overlayLineageMigration = readFileSync(resolve(root, 'supabase/migrations/20260831103000_daily_overlay_lineage_match.sql'), 'utf8');
 const page = readFileSync(resolve(root, 'src/app/(desktop)/daily/page.tsx'), 'utf8');
+const previewDialog = readFileSync(resolve(root, 'src/app/(desktop)/components/DailyImportPreviewDialog.tsx'), 'utf8');
 
 test('Daily commit atomically supersedes canonical legs without mutating the legacy active pointer', () => {
   const commit = canonicalCommitMigration.slice(canonicalCommitMigration.indexOf('create or replace function public.commit_daily_schedule_import_v1'));
@@ -47,8 +48,11 @@ test('Daily upload stages preview and cannot call the legacy local mutation path
   assert.match(handler, /setDailyImportPreview/);
   assert.doesNotMatch(handler, /runNativeScheduleMutation/);
   assert.doesNotMatch(handler, /buildDailyScheduleImportUpdate/);
-  assert.match(page, /NEXT_PUBLIC_DAILY_IMPORT_V1_COMMIT_ENABLED/);
+  assert.doesNotMatch(page, /NEXT_PUBLIC_DAILY_IMPORT_V1_COMMIT_ENABLED/);
   assert.match(page, /NEXT_PUBLIC_DAILY_IMPORT_V1_STAGE_ENABLED/);
+  assert.doesNotMatch(previewDialog, /daily-import-confirmation|confirmation !== requiredText|Nhập <code/);
+  assert.match(previewDialog, /disabled=\{!valid \|\| !commitEnabled \|\| committing \|\| restaging\}/);
+  assert.match(previewDialog, /onClick=\{onCommit\}/);
   assert.match(page, /revalidateSeasonWorkspaceWindow/);
   assert.match(page, /getDailyScheduleImportV1Status/);
   assert.match(page, /draft\/pending changes/);

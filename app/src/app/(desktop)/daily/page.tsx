@@ -105,7 +105,6 @@ const GRID_COLUMNS: Array<{ field: DailyGridField; label: string; numeric?: bool
 
 const NUMERIC_FILTER_FIELDS = new Set<DailyGridField>(['arrPax', 'carousel', 'depPax', 'gate']);
 const DAILY_IMPORT_V1_STAGE_ENABLED = process.env.NEXT_PUBLIC_DAILY_IMPORT_V1_STAGE_ENABLED !== 'false';
-const DAILY_IMPORT_V1_COMMIT_ENABLED = process.env.NEXT_PUBLIC_DAILY_IMPORT_V1_COMMIT_ENABLED === 'true';
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -752,8 +751,7 @@ function DailyScheduleContent() {
   const hasDailyImportTargetDraft = dailyImportPreview?.payload.seasons.some((target) => (
     (useSeasonWorkspaceStore.getState().workspaces[target.seasonId]?.syncMeta?.pendingCount ?? 0) > 0
   )) ?? false;
-  const dailyImportCommitEnabled = DAILY_IMPORT_V1_COMMIT_ENABLED
-    && !syncWriteInProgress
+  const dailyImportCommitEnabled = !syncWriteInProgress
     && syncPendingCount === 0
     && !hasDailyImportTargetDraft;
   const selectedArrCount = selectedRowRecords.filter((record) => record.type === 'A').length;

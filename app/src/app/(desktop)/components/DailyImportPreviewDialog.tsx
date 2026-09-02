@@ -1,15 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { DailyImportStageResultV1 } from '@/lib/dailyImportRpcContract';
-
-export function dailyImportConfirmationText(preview: DailyImportStageResultV1['preview']): string {
-  const base = preview.seasons.length === 1
-    ? `REPLACE ${preview.seasons[0].seasonCode} ${preview.seasons[0].rangeStart}..${preview.seasons[0].rangeEnd}`
-    : 'REPLACE DAILY MULTI-SEASON';
-  const zeroDates = preview.seasons.flatMap((season) => season.confirmedZeroFlightDates ?? []);
-  return zeroDates.length > 0 ? `${base} ZERO[${zeroDates.join(',')}]` : base;
-}
 
 export default function DailyImportPreviewDialog({
   result,
@@ -28,10 +20,8 @@ export default function DailyImportPreviewDialog({
   onCommit: () => void;
   onConfirmZeroFlightDates?: (datesBySeasonId: Record<string, string[]>) => void;
 }) {
-  const [confirmation, setConfirmation] = useState('');
   const [zeroFlightInputs, setZeroFlightInputs] = useState<Record<string, string>>({});
   const cancelRef = useRef<HTMLButtonElement | null>(null);
-  const requiredText = useMemo(() => dailyImportConfirmationText(result.preview), [result.preview]);
   const valid = result.status === 'validated' && result.preview.valid && result.diagnostics.length === 0;
   const needsZeroFlightConfirmation = result.diagnostics.some((diagnostic) => diagnostic.code === 'DAILY_COVERAGE_GAP');
 
@@ -129,25 +119,9 @@ export default function DailyImportPreviewDialog({
           </table>
         </div>
 
-        {valid && (
-          <div className="mt-5">
-            <label htmlFor="daily-import-confirmation" className="block text-sm font-medium">
-              Nhập <code className="rounded bg-surface-container-high px-1.5 py-0.5">{requiredText}</code> để xác nhận phạm vi thay thế
-            </label>
-            <input
-              id="daily-import-confirmation"
-              value={confirmation}
-              onChange={(event) => setConfirmation(event.target.value)}
-              autoComplete="off"
-              className="mt-2 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 font-mono text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
-            />
-            {!commitEnabled && <p className="mt-2 text-sm text-on-surface-variant">Commit V1 đang tắt bằng feature flag; có thể kiểm tra preview nhưng chưa ghi dữ liệu.</p>}
-          </div>
-        )}
-
         <div className="mt-6 flex justify-end gap-3">
           <button ref={cancelRef} type="button" onClick={onCancel} disabled={committing || restaging} className="rounded-lg border border-outline-variant px-4 py-2 text-sm font-medium hover:bg-surface-container-high disabled:opacity-50">Đóng preview</button>
-          <button type="button" onClick={onCommit} disabled={!valid || !commitEnabled || committing || confirmation !== requiredText} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-on-primary hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
+          <button type="button" onClick={onCommit} disabled={!valid || !commitEnabled || committing || restaging} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-on-primary hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
             {committing ? 'Đang commit…' : 'Commit thay thế atomic'}
           </button>
         </div>
