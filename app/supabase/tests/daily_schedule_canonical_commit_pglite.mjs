@@ -13,6 +13,7 @@ const files = [
   '../migrations/20260831103000_daily_overlay_lineage_match.sql',
   '../migrations/20260831124500_daily_overlay_authority_scope_match.sql',
   '../migrations/20260829180000_daily_authority_reset.sql',
+  '../migrations/20260902140000_daily_import_conflict_http_status.sql',
 ];
 const sql = await Promise.all(files.map((file) => readFile(new URL(file, import.meta.url), 'utf8')));
 const db = await createSupabasePGlite();
@@ -99,6 +100,12 @@ try {
   `, [seasonId]);
   await db.query(`insert into public.season_modifications(season_id,leg_id,action,changed_fields,gate) values ($1,'BASE-1','modified',array['gate'],9)`, [seasonId]);
   await db.exec(`select set_config('request.jwt.claim.sub','${userId}',false)`);
+
+  await assert.rejects(
+    stage(payload('10000000-0000-4000-8000-000000000100', 2)),
+    (error) => error?.code === 'PT409',
+    'a stale Daily stage must return an HTTP conflict code that PostgREST will not retry',
+  );
 
   const staged = await stage(payload('10000000-0000-4000-8000-000000000101', 3));
   assert.equal(staged.status, 'validated');

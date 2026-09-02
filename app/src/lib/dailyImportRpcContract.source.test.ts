@@ -10,6 +10,7 @@ const canonicalCommitMigration = readFileSync(resolve(root, 'supabase/migrations
 const canonicalHelperGrantMigration = readFileSync(resolve(root, 'supabase/migrations/20260830053000_grant_canonical_helper_execute.sql'), 'utf8');
 const multiSeasonEventIdentityMigration = readFileSync(resolve(root, 'supabase/migrations/20260831010000_fix_daily_multiseason_event_identity.sql'), 'utf8');
 const overlayLineageMigration = readFileSync(resolve(root, 'supabase/migrations/20260831103000_daily_overlay_lineage_match.sql'), 'utf8');
+const conflictHttpMigration = readFileSync(resolve(root, 'supabase/migrations/20260902140000_daily_import_conflict_http_status.sql'), 'utf8');
 const page = readFileSync(resolve(root, 'src/app/(desktop)/daily/page.tsx'), 'utf8');
 const previewDialog = readFileSync(resolve(root, 'src/app/(desktop)/components/DailyImportPreviewDialog.tsx'), 'utf8');
 
@@ -39,6 +40,10 @@ test('Daily commit atomically supersedes canonical legs without mutating the leg
   assert.match(canonicalCommitMigration, /daily_schedule_effective_records_v1/);
   assert.match(migration, /reporting\.effective_flight_operations/);
   assert.match(seasonalMigration, /preserve_daily_overlay/);
+  assert.match(conflictHttpMigration, /stage_daily_schedule_import_v1\(jsonb\)/);
+  assert.match(conflictHttpMigration, /commit_daily_schedule_import_v1\(uuid,jsonb,text\)/);
+  assert.match(conflictHttpMigration, /replace\(v_definition, '40001', 'PT409'\)/);
+  assert.match(conflictHttpMigration, /pg_get_functiondef/);
 });
 
 test('Daily upload stages preview and cannot call the legacy local mutation path', () => {
