@@ -1,5 +1,25 @@
 import type { DailyImportStagePayloadV1 } from './dailyImportV1Contract.ts';
 
+export function createDailyImportRetryPayloadV1(
+  payload: DailyImportStagePayloadV1,
+  requestId: string = globalThis.crypto.randomUUID(),
+): DailyImportStagePayloadV1 {
+  return { ...payload, requestId };
+}
+
+export async function stageDailyImportWithTerminalRetryV1(
+  payload: DailyImportStagePayloadV1,
+  stage: (input: DailyImportStagePayloadV1) => Promise<DailyImportStageResultV1>,
+  createRequestId: () => string = () => globalThis.crypto.randomUUID(),
+): Promise<{ payload: DailyImportStagePayloadV1; result: DailyImportStageResultV1 }> {
+  const firstResult = await stage(payload);
+  if (firstResult.status !== 'cancelled' && firstResult.status !== 'expired') {
+    return { payload, result: firstResult };
+  }
+  const retryPayload = createDailyImportRetryPayloadV1(payload, createRequestId());
+  return { payload: retryPayload, result: await stage(retryPayload) };
+}
+
 export interface DailyImportPreviewSeasonV1 {
   seasonId: string;
   seasonCode: string;

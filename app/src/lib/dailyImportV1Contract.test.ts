@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { confirmDailyImportZeroFlightDatesV1 } from './dailyImportScope.ts';
+import {
+  createDailyImportRetryPayloadV1,
+  stageDailyImportWithTerminalRetryV1,
+  type DailyImportStageResultV1,
+} from './dailyImportRpcContract.ts';
 import type { DailyImportStagePayloadV1 } from './dailyImportV1Contract.ts';
 
 function payload(): DailyImportStagePayloadV1 {
@@ -36,4 +41,37 @@ test('zero-flight confirmation rejects dates that already contain a leg', async 
     confirmDailyImportZeroFlightDatesV1(payload(), { 'season-1': ['2026-08-23'] }),
     /đã có leg/,
   );
+});
+
+test('terminal Daily import retry gets a new request identity without changing the staged payload', () => {
+  const before = payload();
+  const retryRequestId = '11111111-1111-4111-8111-111111111111';
+  const retry = createDailyImportRetryPayloadV1(before, retryRequestId);
+  assert.equal(retry.requestId, retryRequestId);
+  assert.equal(before.requestId, '00000000-0000-5000-8000-000000000000');
+  assert.deepEqual({ ...retry, requestId: before.requestId }, before);
+});
+
+test('cancelled Daily import batch is staged again once with a fresh request identity', async () => {
+  const before = payload();
+  const calls: DailyImportStagePayloadV1[] = [];
+  const resultFor = (input: DailyImportStagePayloadV1, status: DailyImportStageResultV1['status']): DailyImportStageResultV1 => ({
+    batchId: status === 'cancelled' ? 'batch-cancelled' : 'batch-validated',
+    requestId: input.requestId,
+    status,
+    previewHash: 'preview-hash',
+    preview: { valid: true, fileName: input.fileName, workbookProfile: input.workbookProfile, sourceRowCount: 2, legCount: 2, seasons: [] },
+    diagnostics: [],
+    expiresAt: '2026-09-02T02:00:00Z',
+    result: null,
+  });
+  const staged = await stageDailyImportWithTerminalRetryV1(before, async (input) => {
+    calls.push(input);
+    return resultFor(input, calls.length === 1 ? 'cancelled' : 'validated');
+  }, () => '22222222-2222-4222-8222-222222222222');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].requestId, before.requestId);
+  assert.equal(calls[1].requestId, '22222222-2222-4222-8222-222222222222');
+  assert.equal(staged.result.status, 'validated');
+  assert.equal(staged.payload.requestId, calls[1].requestId);
 });

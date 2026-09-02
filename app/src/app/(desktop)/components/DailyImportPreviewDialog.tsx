@@ -24,6 +24,15 @@ export default function DailyImportPreviewDialog({
   const cancelRef = useRef<HTMLButtonElement | null>(null);
   const valid = result.status === 'validated' && result.preview.valid && result.diagnostics.length === 0;
   const needsZeroFlightConfirmation = result.diagnostics.some((diagnostic) => diagnostic.code === 'DAILY_COVERAGE_GAP');
+  const unavailableMessage = result.diagnostics.length === 0 && result.status !== 'validated'
+    ? result.status === 'cancelled'
+      ? 'Preview này đã bị hủy. Đóng preview và chọn lại file; ứng dụng sẽ tự tạo batch mới.'
+      : result.status === 'expired'
+        ? 'Preview này đã hết hạn. Đóng preview và chọn lại file để stage lại.'
+        : result.status === 'committed'
+          ? 'Batch này đã được commit.'
+          : 'Batch không ở trạng thái có thể commit.'
+    : null;
 
   useEffect(() => {
     cancelRef.current?.focus();
@@ -58,6 +67,12 @@ export default function DailyImportPreviewDialog({
                 <li key={`${String(diagnostic.code)}-${index}`}>{String(diagnostic.message ?? diagnostic.code ?? 'Invalid import data')}</li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {unavailableMessage && (
+          <div className="mt-4 rounded-lg border border-error bg-error-container/40 p-3 text-sm text-on-error-container" role="alert">
+            {unavailableMessage}
           </div>
         )}
 

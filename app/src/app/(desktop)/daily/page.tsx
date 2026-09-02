@@ -46,7 +46,7 @@ import {
   confirmDailyImportZeroFlightDatesV1,
   type DailyImportStagePayloadV1,
 } from '@/lib/dailyImportV1Contract';
-import type { DailyImportStageResultV1 } from '@/lib/dailyImportRpcContract';
+import { stageDailyImportWithTerminalRetryV1, type DailyImportStageResultV1 } from '@/lib/dailyImportRpcContract';
 import { buildDailyScheduleExportFileName, buildDailyScheduleSummaryWorkbook } from '@/lib/dailyScheduleExport';
 import { saveWorkbookAsXlsx } from '@/lib/exportSave';
 import { buildDailyStandGateModifications } from '@/lib/gateAllocation';
@@ -917,8 +917,7 @@ function DailyScheduleContent() {
       if (pendingTarget) {
         throw new Error(`Season ${pendingTarget.seasonCode} đang có draft/pending changes; hãy Save hoặc xử lý draft trước khi stage Daily import.`);
       }
-      const result = await stageDailyScheduleImportV1(payload);
-      setDailyImportPreview({ payload, result });
+      setDailyImportPreview(await stageDailyImportWithTerminalRetryV1(payload, stageDailyScheduleImportV1));
     } catch (err) {
       void showAlert({ title: 'Daily Import Failed', message: (err as Error).message, tone: 'error' });
     } finally {

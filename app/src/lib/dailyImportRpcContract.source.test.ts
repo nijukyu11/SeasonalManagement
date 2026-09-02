@@ -44,7 +44,7 @@ test('Daily commit atomically supersedes canonical legs without mutating the leg
 test('Daily upload stages preview and cannot call the legacy local mutation path', () => {
   const handler = page.slice(page.indexOf('const handleDailyImportFile'), page.indexOf('const handleAddFlights'));
   assert.match(handler, /analyzeDailyScheduleWorkbook/);
-  assert.match(handler, /stageDailyScheduleImportV1/);
+  assert.match(handler, /stageDailyImportWithTerminalRetryV1\(payload, stageDailyScheduleImportV1\)/);
   assert.match(handler, /setDailyImportPreview/);
   assert.doesNotMatch(handler, /runNativeScheduleMutation/);
   assert.doesNotMatch(handler, /buildDailyScheduleImportUpdate/);
@@ -53,6 +53,7 @@ test('Daily upload stages preview and cannot call the legacy local mutation path
   assert.doesNotMatch(previewDialog, /daily-import-confirmation|confirmation !== requiredText|Nhập <code/);
   assert.match(previewDialog, /disabled=\{!valid \|\| !commitEnabled \|\| committing \|\| restaging\}/);
   assert.match(previewDialog, /onClick=\{onCommit\}/);
+  assert.match(previewDialog, /Preview này đã bị hủy/);
   assert.match(page, /revalidateSeasonWorkspaceWindow/);
   assert.match(page, /getDailyScheduleImportV1Status/);
   assert.match(page, /draft\/pending changes/);
