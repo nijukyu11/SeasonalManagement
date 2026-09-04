@@ -14,6 +14,7 @@ const files = [
   '../migrations/20260831124500_daily_overlay_authority_scope_match.sql',
   '../migrations/20260829180000_daily_authority_reset.sql',
   '../migrations/20260902140000_daily_import_conflict_http_status.sql',
+  '../migrations/20260904183000_daily_import_stage_indexed_ops_date.sql',
 ];
 const sql = await Promise.all(files.map((file) => readFile(new URL(file, import.meta.url), 'utf8')));
 const db = await createSupabasePGlite();

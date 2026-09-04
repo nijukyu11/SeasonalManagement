@@ -11,6 +11,7 @@ const canonicalHelperGrantMigration = readFileSync(resolve(root, 'supabase/migra
 const multiSeasonEventIdentityMigration = readFileSync(resolve(root, 'supabase/migrations/20260831010000_fix_daily_multiseason_event_identity.sql'), 'utf8');
 const overlayLineageMigration = readFileSync(resolve(root, 'supabase/migrations/20260831103000_daily_overlay_lineage_match.sql'), 'utf8');
 const conflictHttpMigration = readFileSync(resolve(root, 'supabase/migrations/20260902140000_daily_import_conflict_http_status.sql'), 'utf8');
+const indexedOpsDateMigration = readFileSync(resolve(root, 'supabase/migrations/20260904183000_daily_import_stage_indexed_ops_date.sql'), 'utf8');
 const page = readFileSync(resolve(root, 'src/app/(desktop)/daily/page.tsx'), 'utf8');
 const previewDialog = readFileSync(resolve(root, 'src/app/(desktop)/components/DailyImportPreviewDialog.tsx'), 'utf8');
 const supabaseStore = readFileSync(resolve(root, 'src/lib/supabaseStore.ts'), 'utf8');
@@ -45,6 +46,10 @@ test('Daily commit atomically supersedes canonical legs without mutating the leg
   assert.match(conflictHttpMigration, /commit_daily_schedule_import_v1\(uuid,jsonb,text\)/);
   assert.match(conflictHttpMigration, /replace\(v_definition, '40001', 'PT409'\)/);
   assert.match(conflictHttpMigration, /pg_get_functiondef/);
+  assert.match(indexedOpsDateMigration, /stage_daily_schedule_import_v1\(jsonb\)/);
+  assert.match(indexedOpsDateMigration, /records\.operational_date=v_leg->>'operationalDate'/);
+  assert.match(indexedOpsDateMigration, /canonical_flight_leg_ops_date_v1\(records\.operational_date/);
+  assert.match(indexedOpsDateMigration, /expected preimage/);
 });
 
 test('Daily upload stages preview and cannot call the legacy local mutation path', () => {
