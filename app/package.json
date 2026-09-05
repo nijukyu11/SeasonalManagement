@@ -1,6 +1,6 @@
 {
   "name": "app",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
     "test:dashboard-contract": "node --experimental-strip-types --test src/lib/dashboardReportingContract.source.test.ts \"src/app/(desktop)/dashboard/components/TrafficReportModePanel.source.test.ts\"",
     "test:traffic-report-contract": "node --experimental-strip-types --test src/lib/trafficReportContract.test.ts src/lib/trafficReportV2Contract.test.ts src/lib/trafficReportDataAdapter.test.ts src/lib/annualPassengerKpiContract.test.ts && node --experimental-strip-types --test \"src/app/(public-report)/reports/traffic/TrafficReportPresentation.source.test.ts\" \"src/app/(public-report)/reports/traffic/dashboard/AnnualPassengerKpiDashboard.source.test.ts\" && node --experimental-strip-types --test src/lib/trafficReportOperationalHours.test.ts && node supabase/tests/public_traffic_report_v1_pglite.mjs && node scripts/traffic-report-edge-contract.test.mjs && node scripts/traffic-report-isolation-test.mjs && node --test scripts/dashboard-runner-contract.test.mjs",
     "test:rules": "node scripts/rule-regression-tests.cjs",
-    "test:daily-import": "node --experimental-strip-types --test src/lib/dailyScheduleWorkbook.test.ts src/lib/dailyImportV1Contract.test.ts src/lib/dailyImportRpcContract.source.test.ts src/lib/dailyPaxAutosaveContract.test.ts",
+    "test:daily-import": "node --experimental-strip-types --test src/lib/dailyScheduleWorkbook.test.ts src/lib/dailyImportV1Contract.test.ts src/lib/dailyImportRpcContract.source.test.ts src/lib/dailyPaxAutosaveContract.test.ts src/lib/dailyImportCoverage.test.cjs",
     "test:atomic-flight": "node --experimental-strip-types --test src/lib/effectiveSeasonalLegs.test.ts src/lib/seasonalAtomicFlightContract.source.test.ts",
     "test:daily-import-sql": "node supabase/tests/daily_schedule_import_v1_pglite.mjs",
     "test:canonical-flight-store": "node supabase/tests/canonical_flight_leg_store_pglite.mjs",

@@ -6,7 +6,7 @@
 2. Upload `.xls` hoặc `.xlsx`. Parser map theo vị trí trường, không theo tiêu đề.
 3. Đối chiếu preview: Ops Dates, leg count, Pax trước/sau, nguồn Seasonal/Daily/Manual bị thay, overlay rebase và checksum.
 4. Nếu có coverage gap, nhập rõ từng zero-flight Ops Date rồi stage lại. Không suy ngày leading/trailing từ tên file.
-5. Chỉ commit sau khi typed confirmation khớp chính xác preview.
+5. Kiểm tra phạm vi preview rồi bấm Commit; không cần nhập chuỗi xác nhận. Ngày zero-flight vẫn phải được xác nhận riêng trước khi stage lại.
 
 ## 2. Commit và unknown outcome
 

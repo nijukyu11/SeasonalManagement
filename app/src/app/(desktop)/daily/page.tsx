@@ -48,6 +48,8 @@ import {
 } from '@/lib/dailyImportV1Contract';
 import {
   isDailyImportStaleVersionConflictV1,
+  finishCommittedDailyImportV1,
+  type DailyImportCommittedResultV1,
   stageDailyImportWithTerminalRetryV1,
   type DailyImportStageResultV1,
 } from '@/lib/dailyImportRpcContract';
@@ -392,6 +394,7 @@ function DailyScheduleContent() {
   );
   const [dailyImporting, setDailyImporting] = useState(false);
   const [dailyImportCommitting, setDailyImportCommitting] = useState(false);
+  const [pendingImportRefresh, setPendingImportRefresh] = useSessionState<DailyImportCommittedResultV1 | null>('daily:committed-import-refresh', null);
   const [dailyImportPreview, setDailyImportPreview] = useState<{
     payload: DailyImportStagePayloadV1;
     result: DailyImportStageResultV1;
@@ -979,13 +982,14 @@ function DailyScheduleContent() {
     const committedVersions = new Map(receipt.seasons.map((item) => [item.seasonId, item.dataVersion]));
     const nextSeasons = seasons.map((item) => {
       const dataVersion = committedVersions.get(item.id);
-      return dataVersion === undefined ? item : { ...item, dataVersion };
+      const currentVersion = useSeasonWorkspaceStore.getState().seasons.find((entry) => entry.id === item.id)?.dataVersion ?? 0;
+      return dataVersion === undefined ? item : { ...item, dataVersion: Math.max(item.dataVersion ?? 0, currentVersion, dataVersion) };
     });
     setCachedSeasons(nextSeasons);
     setSeasons(nextSeasons);
     useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
     for (const item of receipt.seasons) {
-      patchCachedSeasonData(item.seasonId, { seasonDataVersion: item.dataVersion });
+      patchCachedSeasonData(item.seasonId, { seasonDataVersion: nextSeasons.find((entry) => entry.id === item.seasonId)?.dataVersion ?? item.dataVersion });
     }
     const committedSeason = season
       ? nextSeasons.find((item) => item.id === season.id) ?? season
@@ -1003,6 +1007,7 @@ function DailyScheduleContent() {
         force: true,
         initiator: 'immediate',
       });
+      if (!serverWindow?.syncMeta) throw new Error('Server chưa trả về workspace window sau commit.');
       if (serverWindow?.syncMeta) {
         loadedWindowKeyRef.current = windowKey;
         applyDailyNativeState(committedSeason.id, serverWindow.records, serverWindow.modifications, serverWindow.syncMeta, {
@@ -1014,6 +1019,30 @@ function DailyScheduleContent() {
     }
     router.refresh();
   }, [applyDailyNativeState, fromDateTime, router, season, seasons, toDateTime]);
+
+  const refreshCommittedDailyImport = useCallback(async (receipt: DailyImportCommittedResultV1) => {
+    const remember = (value: DailyImportCommittedResultV1 | null) => {
+      setPendingImportRefresh(value);
+      // Persist before awaiting the network. Logout clears app session storage.
+      try { sessionStorage.setItem('daily:committed-import-refresh', JSON.stringify(value)); } catch { /* Keep the in-memory receipt if storage is unavailable. */ }
+    };
+    const outcome = await finishCommittedDailyImportV1(receipt, {
+      remember,
+      refresh: applyCommittedDailyImport,
+      clear: () => remember(null),
+    });
+    if (outcome.refreshError) {
+      void showAlert({ title: 'Daily Import Committed — Refresh Pending', message: `Batch ${receipt.batchId} đã commit. Chưa tải lại được lịch: ${outcome.refreshError}. Bấm tải lại dữ liệu; không cần import lại.`, tone: 'warning' });
+    }
+    return outcome;
+  }, [applyCommittedDailyImport, setPendingImportRefresh, showAlert]);
+
+  const retryCommittedDailyRefresh = useCallback(async () => {
+    if (!pendingImportRefresh || dailyImportCommitting) return;
+    setDailyImportCommitting(true);
+    try { await refreshCommittedDailyImport(pendingImportRefresh); }
+    finally { setDailyImportCommitting(false); }
+  }, [dailyImportCommitting, pendingImportRefresh, refreshCommittedDailyImport]);
 
   const commitDailyImportPreview = useCallback(async () => {
     if (!dailyImportPreview || dailyImportCommitting) return;
@@ -1034,14 +1063,14 @@ function DailyScheduleContent() {
         if (recovered?.status !== 'committed' || !recovered.result) throw commitError;
         receipt = recovered.result;
       }
-      await applyCommittedDailyImport(receipt);
-      void showAlert({ title: 'Daily Import Complete', message: `Committed atomic batch ${receipt.batchId} for ${receipt.seasons.length} season(s).`, tone: 'success' });
+      const outcome = await refreshCommittedDailyImport(receipt);
+      if (!outcome.refreshError) void showAlert({ title: 'Daily Import Complete', message: `Committed atomic batch ${receipt.batchId} for ${receipt.seasons.length} season(s).`, tone: 'success' });
     } catch (error) {
       void showAlert({ title: 'Daily Import Commit Failed', message: (error as Error).message, tone: 'error' });
     } finally {
       setDailyImportCommitting(false);
     }
-  }, [applyCommittedDailyImport, dailyImportCommitting, dailyImportPreview, showAlert, syncPendingCount]);
+  }, [refreshCommittedDailyImport, dailyImportCommitting, dailyImportPreview, showAlert, syncPendingCount]);
 
   const handleAddFlights = useCallback(async (mods: FlightModification[]) => {
     if (!season || syncWriteInProgress) return;
@@ -1424,6 +1453,14 @@ function DailyScheduleContent() {
             )}
           </div>
         </header>
+        {pendingImportRefresh && (
+          <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-outline-variant bg-surface-container-high px-6 py-3 text-sm">
+            <p className="text-pretty">Batch {pendingImportRefresh.batchId} đã commit. Dữ liệu hiển thị chưa được tải lại.</p>
+            <button type="button" disabled={dailyImportCommitting || dailyImporting} onClick={() => void retryCommittedDailyRefresh()} className="rounded border border-primary px-3 py-2 font-semibold text-primary disabled:opacity-50">
+              {dailyImportCommitting ? 'Đang tải lại…' : 'Tải lại dữ liệu đã commit'}
+            </button>
+          </div>
+        )}
 
         <main className="flex-1 min-h-0 overflow-hidden p-4 flex flex-col gap-3">
           <section className="flex-none rounded-lg border border-surface-variant bg-surface-container-lowest shadow-sm">

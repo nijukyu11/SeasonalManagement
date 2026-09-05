@@ -68,7 +68,7 @@ function parseDate(raw: string | number | undefined, seasonYear: number): Date |
 
 /**
  * Clean a raw flight number by removing an already-present airline prefix,
- * then padding purely numeric flight parts to 3 digits.
+ * then padding the numeric flight part to 3 digits, preserving any suffix.
  *
  * Examples:
  *   ("TW", "8")    -> { flightNumber: "TW008", rawFlightNumber: "008", requestStatusCode: null }
@@ -80,7 +80,7 @@ export function cleanFlightNumber(airline: string, raw: string | number | undefi
   if (raw == null || raw === '') return null;
 
   const normalizedAirline = airline.trim().toUpperCase();
-  const rawStr = String(raw).trim().toUpperCase();
+  const rawStr = String(raw).trim().toUpperCase().replace(/\s+/g, '');
   if (!rawStr) return null;
 
   const rawWithoutAirline =
@@ -91,8 +91,9 @@ export function cleanFlightNumber(airline: string, raw: string | number | undefi
       : rawStr;
   if (!rawWithoutAirline) return null;
 
-  const normalizedFlight = /^\d+$/.test(rawWithoutAirline)
-    ? rawWithoutAirline.padStart(3, '0')
+  const numericPrefix = /^(\d+)(.*)$/.exec(rawWithoutAirline);
+  const normalizedFlight = numericPrefix
+    ? `${numericPrefix[1].padStart(3, '0')}${numericPrefix[2]}`
     : rawWithoutAirline;
 
   return {

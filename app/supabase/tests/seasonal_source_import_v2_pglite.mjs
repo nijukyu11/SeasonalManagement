@@ -11,7 +11,7 @@ const testUrl = new URL('./seasonal_source_import_v2.sql', import.meta.url);
 const compatibilityTestUrl = new URL('./seasonal_source_import_v2_compatibility.sql', import.meta.url);
 const qualityTestUrl = new URL('./seasonal_source_import_v2_quality.sql', import.meta.url);
 export const bootstrapFixtureSql = `
-create role service_role;
+-- Roles and auth schema are owned by createSupabasePGlite.
 create table public.app_operators (
   user_id uuid primary key references auth.users(id) on delete cascade,
   email text,

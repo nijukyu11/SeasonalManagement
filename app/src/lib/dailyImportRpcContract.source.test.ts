@@ -82,3 +82,15 @@ test('canonical security-invoker projections can execute their pure helpers', ()
   assert.match(canonicalHelperGrantMigration, /service_role/);
   assert.match(canonicalHelperGrantMigration, /seasonal_bi_reader/);
 });
+
+test('committed Daily refresh is read-only, persistent and displays effective preview totals', () => {
+  assert.match(page, /daily:committed-import-refresh/);
+  const retry = page.slice(page.indexOf('const retryCommittedDailyRefresh'), page.indexOf('const commitDailyImportPreview'));
+  assert.match(retry, /refreshCommittedDailyImport\(pendingImportRefresh\)/);
+  assert.doesNotMatch(retry, /commitDailyScheduleImportV1/);
+  assert.match(page, /finishCommittedDailyImportV1/);
+  assert.match(page, /Daily Import Committed — Refresh Pending/);
+  assert.match(previewDialog, /dailyImportPreviewTotalsV1/);
+  assert.match(previewDialog, /Chuyến trong file/);
+  assert.match(previewDialog, /Chuyến sau overlay/);
+});

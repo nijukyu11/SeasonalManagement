@@ -4,8 +4,8 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 const root = resolve(import.meta.dirname, '..', '..');
-const seasonalPage = readFileSync(resolve(root, 'src/app/SeasonalSchedulePage.tsx'), 'utf8');
-const detailedPage = readFileSync(resolve(root, 'src/app/detailed/page.tsx'), 'utf8');
+const seasonalPage = readFileSync(resolve(root, 'src/app/(desktop)/SeasonalSchedulePage.tsx'), 'utf8');
+const detailedPage = readFileSync(resolve(root, 'src/app/(desktop)/detailed/page.tsx'), 'utf8');
 const aggregator = readFileSync(resolve(root, 'src/lib/seasonalDisplayAggregator.ts'), 'utf8');
 const exportPageStart = seasonalPage.indexOf('const handleExportUpdated');
 const exportPage = seasonalPage.slice(exportPageStart, seasonalPage.indexOf('const handleAddToDraft', exportPageStart));

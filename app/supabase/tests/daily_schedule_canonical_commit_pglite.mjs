@@ -9,11 +9,15 @@ const files = [
   '../migrations/20260828100000_preserve_daily_overlays_during_seasonal_replace.sql',
   '../migrations/20260829150000_canonical_flight_leg_store.sql',
   '../migrations/20260829153000_daily_schedule_canonical_commit.sql',
+  '../migrations/20260829160000_canonical_manual_modifications.sql',
   '../migrations/20260831010000_fix_daily_multiseason_event_identity.sql',
   '../migrations/20260831103000_daily_overlay_lineage_match.sql',
   '../migrations/20260831124500_daily_overlay_authority_scope_match.sql',
   '../migrations/20260829180000_daily_authority_reset.sql',
   '../migrations/20260902140000_daily_import_conflict_http_status.sql',
+  '../migrations/20260829170000_seasonal_canonical_authority.sql',
+  '../migrations/20260904183000_daily_import_stage_indexed_ops_date.sql',
+  '../migrations/20260906010000_import_terminal_coverage_and_identity.sql',
 ];
 const sql = await Promise.all(files.map((file) => readFile(new URL(file, import.meta.url), 'utf8')));
 const db = await createSupabasePGlite();
@@ -127,6 +131,14 @@ try {
     overlayRebaseCount: 1,
     seasonalBeforeCount: 1,
   });
+
+  await db.query(`update public.season_modifications set gate=8 where leg_id='BASE-1'`);
+  await assert.rejects(commit(staged, 3), error => error.code === 'PT409', 'overlay changes after stage require a fresh preview');
+  assert.equal((await db.query(`select status from public.season_flight_records where record_id='BASE-1'`)).rows[0].status, 'active');
+  await db.query(`update public.season_modifications set gate=9 where leg_id='BASE-1'`);
+  await db.query(`update public.daily_schedule_import_batches set preview=preview-'importGuardVersion' where batch_id=$1`, [staged.batchId]);
+  await assert.rejects(commit(staged, 3), error => error.code === 'PT409', 'pre-migration previews must be restaged');
+  await db.query(`update public.daily_schedule_import_batches set preview=preview || '{"importGuardVersion":1}'::jsonb where batch_id=$1`, [staged.batchId]);
 
   const receipt = await commit(staged, 3);
   assert.equal(receipt.status, 'committed');
@@ -297,6 +309,44 @@ try {
     select matched_record_id from public.daily_schedule_import_batch_legs where batch_id=$1
   `, [deletedLineageStage.batchId]);
   assert.deepEqual(deletedLineageMatch.rows, [{ matched_record_id: 'DELETED-DAILY-LATEST' }]);
+
+  // A real Seasonal import always has a batch id; the first Daily replacement
+  // must preserve its terminal overlay just like a legacy null-batch row.
+  await db.query(`insert into public.season_flight_records(season_id,record_id,type,flight_number,raw_flight_number,airline,route,schedule,date,scheduled_date,scheduled_time,operational_date,source_kind,source_side,status,action,deletion_reason,source_import_batch_id)
+    values ($1,'SEASONAL-BATCH-TOMBSTONE','D','VN888','888','VN','SGN','06:00','2028-04-02','2028-04-02','06:00','2028-04-02','seasonal','DEP','deleted','deleted','overlay_deleted','30000000-0000-4000-8000-000000000099')`, [deletedLineageSeason]);
+  await db.query(`insert into public.season_modifications(season_id,leg_id,action,changed_fields) values ($1,'SEASONAL-BATCH-TOMBSTONE','deleted','{}')`, [deletedLineageSeason]);
+  const firstDaily = structuredClone(deletedLineagePayload);
+  firstDaily.requestId = '10000000-0000-4000-8000-000000000126';
+  Object.assign(firstDaily.legs[0], { operationalDate: '2028-04-02', scheduledDate: '2028-04-02', occurrenceKey: 'S28|2028-04-02|DEP|VN|VN888|SGN|06:00', looseOccurrenceKey: 'S28|2028-04-02|DEP|VN|VN888' });
+  Object.assign(firstDaily.seasons[0], { rangeStart: '2028-04-02', rangeEnd: '2028-04-02', affectedDates: ['2028-04-02'] });
+  for (let expected = 0; expected < 2; expected++) {
+    firstDaily.requestId = `10000000-0000-4000-8000-00000000012${6 + expected}`;
+    firstDaily.seasons[0].expectedDataVersion = expected;
+    const terminalStage = await stage(firstDaily);
+    assert.equal(terminalStage.status, 'validated', JSON.stringify(terminalStage));
+    assert.equal(terminalStage.preview.seasons[0].counts.matchedCount, 1);
+    assert.equal(terminalStage.preview.seasons[0].counts.effectiveAfterCount, 0);
+    await db.query(`select public.commit_daily_schedule_import_v1($1,$2::jsonb,$3)`, [terminalStage.batchId, JSON.stringify({ [deletedLineageSeason]: expected }), terminalStage.previewHash]);
+    assert.equal((await db.query(`select count(*)::int as n from public.canonical_active_flight_records_v1 where season_id=$1 and operational_date='2028-04-02'`, [deletedLineageSeason])).rows[0].n, 0);
+    await assert.rejects(db.query(`select public.remove_canonical_season_modification_v1($1,'SEASONAL-BATCH-TOMBSTONE')`, [deletedLineageSeason]), error => error.code === 'PT409');
+  }
+
+  const duplicatePayload = payload('10000000-0000-4000-8000-000000000128', 7);
+  duplicatePayload.seasons[0].expectedDataVersion = (await db.query('select data_version from public.seasons where id=$1', [seasonId])).rows[0].data_version;
+  duplicatePayload.legs.push({ ...duplicatePayload.legs[0], sourceRowNumber: 2, scheduledTime: '12:00', route: 'HAN', occurrenceKey: 'different-key' });
+  duplicatePayload.seasons[0].legCount = 2;
+  const duplicateStage = await stage(duplicatePayload);
+  assert.equal(duplicateStage.status, 'failed');
+  assert.ok(duplicateStage.diagnostics.some(d => d.code === 'DAILY_DUPLICATE_FLIGHT_NUMBER'));
+
+  const emptyPayload = payload('10000000-0000-4000-8000-000000000129', duplicatePayload.seasons[0].expectedDataVersion);
+  emptyPayload.legs = [];
+  emptyPayload.seasons[0].legCount = 0;
+  emptyPayload.seasons[0].confirmedZeroFlightDates = ['2026-08-23'];
+  const emptyStage = await stage(emptyPayload);
+  assert.equal(emptyStage.status, 'validated', JSON.stringify(emptyStage));
+  await commit(emptyStage, emptyPayload.seasons[0].expectedDataVersion);
+  assert.equal((await db.query(`select count(*)::int as n from public.canonical_active_flight_records_v1 where season_id=$1 and operational_date='2026-08-23'`, [seasonId])).rows[0].n, 0);
 
   const multiSeasonA = 'season-daily-multi-w26';
   const multiSeasonB = 'season-daily-multi-s27';

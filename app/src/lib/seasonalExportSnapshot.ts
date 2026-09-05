@@ -158,7 +158,11 @@ function validateModification(value: unknown, path: string, seasonId: string): J
     'schedule', 'aircraft', 'route', 'code_shares', 'mct', 'fb', 'lb', 'bhs', 'ghs',
     'check_in_start', 'check_in_end',
   ]) nullableStringField(row, field, path);
-  for (const field of ['pax', 'gate', 'stand', 'carousel']) integerField(row, field, path, true);
+  for (const field of ['pax', 'gate', 'carousel']) integerField(row, field, path, true);
+  if (row.stand !== null && row.stand !== undefined
+    && typeof row.stand !== 'string' && !Number.isInteger(row.stand)) {
+    throw new Error(`${path}.stand must be text, an integer, or null.`);
+  }
   literalField(row, 'check_in_allocation_mode', path, ['grouped', 'broken'], true);
   return row;
 }

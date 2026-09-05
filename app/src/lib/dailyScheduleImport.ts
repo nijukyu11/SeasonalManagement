@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { cleanFlightNumber } from './parser';
 import { assertNoDuplicateFlightNumbers, linkFlightRecordPairs } from './atomicSchedule';
 import { buildOperationalFlightMetadata, getOperationalDate } from './iataSeason';
 import {
@@ -376,14 +377,12 @@ function normalizeFlightIdentity(value: unknown): { flightNumber: string; airlin
   if (!match) return null;
   const airline = match[1];
   const rawFlightNumber = match[2];
-  const suffixMatch = /^(\d+)(.*)$/.exec(rawFlightNumber);
-  const normalizedSuffix = suffixMatch
-    ? `${suffixMatch[1].padStart(3, '0')}${suffixMatch[2] ?? ''}`
-    : rawFlightNumber;
+  const normalized = cleanFlightNumber(airline, rawFlightNumber);
+  if (!normalized) return null;
   return {
     airline,
     rawFlightNumber,
-    flightNumber: `${airline}${normalizedSuffix}`,
+    flightNumber: normalized.flightNumber,
   };
 }
 
@@ -498,16 +497,28 @@ export function parseDailyImportRowsStrict(
 ): {
   legs: ImportedDailyLeg[];
   diagnostics: DailyImportRowDiagnostic[];
+  coverage: Array<{ seasonCode: string; operationalDate: string }>;
 } {
   const legs: ImportedDailyLeg[] = [];
   const diagnostics: DailyImportRowDiagnostic[] = [];
+  const coverage: Array<{ seasonCode: string; operationalDate: string }> = [];
   const occurrenceKeys = new Set<string>();
+  const flightDayKeys = new Set<string>();
   importRows.forEach((row, index) => {
     for (const side of ['ARR', 'DEP'] as const) {
-      if (shouldExcludeDailyImportSide(row, side, options.workbookProfile)) continue;
       if (!sideHasFlightIdentityValue(row, side)) continue;
       const rowNumber = index + 1;
       try {
+        // Cancellation removes the leg, not the source's date coverage. Do not
+        // parse operational resources (often blank/invalid on cancelled rows).
+        if (shouldExcludeDailyImportSide(row, side, options.workbookProfile)) {
+          const scheduled = parseScheduled(readColumn(row, [`${side}-Scheduled`]).value);
+          if (!scheduled) throw new Error(`${side} dòng hủy thiếu scheduled date/time hợp lệ.`);
+          const metadata = buildOperationalFlightMetadata({ scheduledDate: scheduled.date, scheduledTime: scheduled.schedule,
+            type: side === 'ARR' ? 'A' : 'D', airline: '', flightNumber: '', route: '' });
+          coverage.push({ seasonCode: metadata.iataSeasonCode, operationalDate: metadata.operationalDate });
+          continue;
+        }
         const leg = parseImportedLeg(row, side, rowNumber, rowNumber);
         if (!leg) {
           diagnostics.push({ severity: 'blocking', code: 'DAILY_PARTIAL_SIDE', message: `${side} thiếu flight hoặc scheduled date/time.`, rowNumber, side });
@@ -523,13 +534,20 @@ export function parseDailyImportRowsStrict(
           continue;
         }
         occurrenceKeys.add(occurrenceKey);
+        const flightDayKey = [leg.scheduledDate, leg.airline, leg.flightNumber].join('|');
+        if (flightDayKeys.has(flightDayKey)) {
+          diagnostics.push({ severity: 'blocking', code: 'DAILY_DUPLICATE_FLIGHT_NUMBER', message: `Trùng số hiệu ${leg.flightNumber} trong ngày ${leg.scheduledDate}.`, rowNumber, side });
+          continue;
+        }
+        flightDayKeys.add(flightDayKey);
+        coverage.push({ seasonCode: leg.iataSeasonCode, operationalDate: leg.operationalDate });
         legs.push(leg);
       } catch (error) {
         diagnostics.push({ severity: 'blocking', code: 'DAILY_INVALID_VALUE', message: (error as Error).message, rowNumber, side });
       }
     }
   });
-  return { legs, diagnostics };
+  return { legs, diagnostics, coverage };
 }
 
 function isDailyImportSideKey(key: string, side: 'ARR' | 'DEP'): boolean {

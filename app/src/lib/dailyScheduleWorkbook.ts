@@ -45,12 +45,12 @@ const CANONICAL_COLUMNS: Record<number, string> = {
 const DATE_TIME_COLUMNS = new Set(['ARR-Scheduled', 'ARR-MCT', 'ARR-BagFirst', 'ARR-BagLast', 'DEP-Scheduled', 'DEP-MCT']);
 const ANCHORS: Array<{ index: number; aliases: string[] }> = [
   { index: 1, aliases: ['AIRCRAFT_SERIES', 'A/C Type'] },
-  { index: 3, aliases: ['ARR-AIRLINE_FLIGHT_SUFFIX', 'Arr Flight'] },
-  { index: 6, aliases: ['ARR-Scheduled', 'STA'] },
+  { index: 3, aliases: ['ARR-AIRLINE_FLIGHT_SUFFIX', 'Arr Flight', 'Arrival Flight Number'] },
+  { index: 6, aliases: ['ARR-Scheduled', 'STA', 'Arrival Scheduled'] },
   { index: 8, aliases: ['ARR-ORIG_DEST_AIRPORT_CODE', 'From'] },
   { index: 20, aliases: ['ARRStand', 'Arr Stand'] },
-  { index: 23, aliases: ['DEP-AIRLINE_FLIGHT_SUFFIX', 'Dep Flight'] },
-  { index: 26, aliases: ['DEP-Scheduled', 'STD'] },
+  { index: 23, aliases: ['DEP-AIRLINE_FLIGHT_SUFFIX', 'Dep Flight', 'Departure Flight Number'] },
+  { index: 26, aliases: ['DEP-Scheduled', 'STD', 'Departure Scheduled'] },
   { index: 28, aliases: ['DEP-ORIG_DEST_AIRPORT_CODE', 'To'] },
   { index: 37, aliases: ['DEPGate', 'Gate'] },
   { index: 38, aliases: ['CheckInDesk', 'Counters'] },
@@ -69,6 +69,10 @@ function matches(value: unknown, aliases: string[]): boolean {
 function profileForHeader(row: unknown[], firstColumn: number): DailyWorkbookProfile {
   if (matches(row[firstColumn + 3], ['ARR-AIRLINE_FLIGHT_SUFFIX'])) return 'legacy-operationalturns';
   if (matches(row[firstColumn + 3], ['Arr Flight'])) return 'compact-lb';
+  const legacy = ANCHORS.filter(anchor => matches(row[firstColumn + anchor.index], [anchor.aliases[0]])).length;
+  const compact = ANCHORS.filter(anchor => matches(row[firstColumn + anchor.index], [anchor.aliases[1]])).length;
+  if (legacy >= 2 && legacy > compact) return 'legacy-operationalturns';
+  if (compact >= 2 && compact > legacy) return 'compact-lb';
   return 'position-compatible-unknown';
 }
 
@@ -130,14 +134,36 @@ function findSheetCandidate(
     matches(header[best.firstLogicalColumnIndex + 23], ANCHORS[5].aliases) &&
     matches(header[best.firstLogicalColumnIndex + 26], ANCHORS[6].aliases)
   );
-  if (!identityAnchorsValid) return null;
+  if (!identityAnchorsValid) {
+    // Unknown titles may vary. Known titles in the wrong identity slots are
+    // never accepted; otherwise require strong remaining anchors AND data.
+    const identityAnchors = [ANCHORS[1], ANCHORS[2], ANCHORS[5], ANCHORS[6]];
+    const swapped = identityAnchors.some(anchor => identityAnchors.some(other => other.index !== anchor.index
+      && matches(header[best.firstLogicalColumnIndex + anchor.index], other.aliases)));
+    if (swapped || best.score < 6) return null;
+    const sample = matrix.slice(best.headerRowIndex + 1, best.headerRowIndex + 9);
+    let validSides = 0;
+    for (const row of sample) {
+      for (const [flightIndex, timeIndex] of [[3, 6], [23, 26]]) {
+        const flight = String(row[best.firstLogicalColumnIndex + flightIndex] ?? '').trim();
+        const time = row[best.firstLogicalColumnIndex + timeIndex];
+        if (!flight && (time == null || time === '')) continue;
+        if (!/^(?:[A-Z0-9]{2}|[A-Z]{3})\s*\d+[A-Z]?$/i.test(flight)
+          || !(typeof time === 'number' || /^\d{4}-\d{1,2}-\d{1,2}[ T]\d{1,2}:\d{2}|^\d{1,2}\/\d{1,2}\/\d{2,4}\s+\d{1,2}:\d{2}/.test(String(time)))) return null;
+        validSides++;
+      }
+    }
+    if (validSides === 0 || profileForHeader(header, best.firstLogicalColumnIndex) === 'position-compatible-unknown') return null;
+  }
 
+  const profile = profileForHeader(header, best.firstLogicalColumnIndex);
+  if (profile === 'position-compatible-unknown') return null;
   return {
     sheetName,
     headerRowIndex: sheetRange.s.r + best.headerRowIndex,
     firstLogicalColumnIndex: sheetRange.s.c + best.firstLogicalColumnIndex,
     score: best.score,
-    profile: profileForHeader(header, best.firstLogicalColumnIndex),
+    profile,
     rows: parseCandidateRows(matrix, best.headerRowIndex, best.firstLogicalColumnIndex, date1904),
   };
 }

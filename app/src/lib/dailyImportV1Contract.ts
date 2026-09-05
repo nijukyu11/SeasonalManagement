@@ -4,7 +4,7 @@ import type { Season } from './types.ts';
 export { confirmDailyImportZeroFlightDatesV1 } from './dailyImportScope.ts';
 
 export const DAILY_IMPORT_CONTRACT_VERSION = 1;
-export const DAILY_RESOURCE_POLICY_VERSION = 'stand-text_gate-int_counter-token_status-filter_v2';
+export const DAILY_RESOURCE_POLICY_VERSION = 'stand-text_gate-int_counter-token_status-coverage_identity_v3';
 
 export interface CanonicalDailyImportLegV1 {
   sourceRowNumber: number;
@@ -153,17 +153,18 @@ export async function buildDailyImportStagePayloadV1(input: {
   const legs = strict.legs.map((leg) => canonicalLeg(leg, input.sheet, input.sheet.rows));
   const seasonByCode = new Map(input.seasons.map((season) => [season.seasonCode.toUpperCase(), season]));
   const targets: DailyImportSeasonTargetV1[] = [];
-  for (const seasonCode of [...new Set(legs.map((leg) => leg.seasonCode))].sort()) {
+  for (const seasonCode of [...new Set(strict.coverage.map((entry) => entry.seasonCode))].sort()) {
     const season = seasonByCode.get(seasonCode);
     if (!season) {
       diagnostics.push({ severity: 'blocking', code: 'DAILY_SEASON_NOT_FOUND', message: `Season ${seasonCode} chưa tồn tại; Daily import V1 không tự tạo season khi stage.`, sheetName: input.sheet.sheetName, rowNumber: null, cellAddress: null, seasonCode, operationalDate: null });
       continue;
     }
     const seasonLegs = legs.filter((leg) => leg.seasonCode === seasonCode);
-    const affectedDates = [...new Set(seasonLegs.map((leg) => leg.operationalDate))].sort();
+    const affectedDates = [...new Set(strict.coverage.filter((entry) => entry.seasonCode === seasonCode).map((entry) => entry.operationalDate))].sort();
     const rangeStart = affectedDates[0];
     const rangeEnd = affectedDates.at(-1)!;
-    const gaps = allIsoDates(rangeStart, rangeEnd).filter((date) => !affectedDates.includes(date));
+    const legDates = new Set(seasonLegs.map((leg) => leg.operationalDate));
+    const gaps = allIsoDates(rangeStart, rangeEnd).filter((date) => !legDates.has(date));
     if (gaps.length > 0) {
       diagnostics.push({ severity: 'blocking', code: 'DAILY_COVERAGE_GAP', message: `Khoảng ${rangeStart}..${rangeEnd} thiếu ${gaps.length} Ops Date: ${gaps.join(', ')}.`, sheetName: input.sheet.sheetName, rowNumber: null, cellAddress: null, seasonCode, operationalDate: null });
     }

@@ -68,3 +68,20 @@ test('rejects a header whose identity anchors were swapped', () => {
   assert.equal(analysis.selected, null);
   assert.equal(analysis.diagnostics[0]?.code, 'DAILY_WORKBOOK_LAYOUT_NOT_FOUND');
 });
+
+test('renamed identity titles retain fixed positions and the cancellation profile', () => {
+  for (const names of [
+    ['Arrival Flight Number', 'Arrival Scheduled', 'Departure Flight Number', 'Departure Scheduled'],
+    ['Inbound code', 'Arrival time', 'Outbound code', 'Departure time'],
+  ]) {
+    const header = [...legacyHeader];
+    [3, 6, 23, 26].forEach((index, i) => { header[index] = names[i]; });
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([header,
+      row(43, [[3, 'VN100'], [6, '2026-09-02 08:00'], [8, 'HAN'], [10, 'CX']]),
+    ]), 'Daily');
+    const analysis = analyzeDailyScheduleWorkbook(workbook);
+    assert.equal(analysis.selected?.profile, 'legacy-operationalturns');
+    assert.equal(analysis.selected?.rows[0]['ARR-STATUS_CODE'], 'CX');
+  }
+});

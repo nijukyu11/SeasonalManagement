@@ -141,6 +141,14 @@ test('accepts one complete exact export snapshot', () => {
   assert.equal(parsed.truncated, false);
 });
 
+test('stand overlays accept canonical text and legacy integer values', () => {
+  for (const stand of ['20A', '20', 20, null]) {
+    const parsed = parseSeasonalExportSnapshotRows(payload({ modifications: [modification({ stand, changed_fields: ['stand'] })] }), { seasonId: 'season-s26', dataVersion: 7 });
+    assert.equal(parsed.modifications[0].stand, stand);
+  }
+  assert.throws(() => parseSeasonalExportSnapshotRows(payload({ modifications: [modification({ stand: {} })] }), { seasonId: 'season-s26', dataVersion: 7 }), /stand/);
+});
+
 test('rejects every missing relation array and truncated snapshots', () => {
   const arrayNames = [
     'flightRecords',

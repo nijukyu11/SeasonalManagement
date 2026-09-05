@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { DailyImportStageResultV1 } from '@/lib/dailyImportRpcContract';
+import { dailyImportPreviewTotalsV1, type DailyImportStageResultV1 } from '@/lib/dailyImportRpcContract';
 
 export default function DailyImportPreviewDialog({
   result,
@@ -21,7 +21,7 @@ export default function DailyImportPreviewDialog({
   onConfirmZeroFlightDates?: (datesBySeasonId: Record<string, string[]>) => void;
 }) {
   const [zeroFlightInputs, setZeroFlightInputs] = useState<Record<string, string>>({});
-  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const valid = result.status === 'validated' && result.preview.valid && result.diagnostics.length === 0;
   const needsZeroFlightConfirmation = result.diagnostics.some((diagnostic) => diagnostic.code === 'DAILY_COVERAGE_GAP');
   const unavailableMessage = result.diagnostics.length === 0 && result.status !== 'validated'
@@ -35,16 +35,16 @@ export default function DailyImportPreviewDialog({
     : null;
 
   useEffect(() => {
-    cancelRef.current?.focus();
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => dialog?.close();
   }, []);
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-3" role="presentation">
+    <dialog ref={dialogRef} role="alertdialog" aria-labelledby="daily-import-preview-title" aria-describedby="daily-import-preview-summary"
+      onCancel={(event) => { event.preventDefault(); if (!committing && !restaging) onCancel(); }}
+      className="m-auto w-full max-w-5xl bg-transparent p-3 backdrop:bg-black/50">
       <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="daily-import-preview-title"
-        aria-describedby="daily-import-preview-summary"
         className="max-h-[92dvh] w-full max-w-5xl overflow-y-auto rounded-xl border border-outline-variant bg-surface p-5 text-on-surface shadow-2xl"
       >
         <div className="flex items-start justify-between gap-4">
@@ -109,38 +109,43 @@ export default function DailyImportPreviewDialog({
 
         <div className="mt-5 overflow-x-auto rounded-lg border border-outline-variant">
           <table className="w-full min-w-[980px] border-collapse text-left text-sm">
-            <thead className="bg-surface-container-high text-xs uppercase tracking-wide text-on-surface-variant">
+            <thead className="bg-surface-container-high text-xs uppercase text-on-surface-variant">
               <tr>
                 <th className="px-3 py-2">Season</th><th className="px-3 py-2">Ops Date</th><th className="px-3 py-2 text-right">Chuyến trước</th>
-                <th className="px-3 py-2 text-right">Chuyến sau</th><th className="px-3 py-2 text-right">Pax trước</th><th className="px-3 py-2 text-right">Pax sau</th>
+                <th className="px-3 py-2 text-right">Chuyến trong file</th><th className="px-3 py-2 text-right">Chuyến sau overlay</th>
+                <th className="px-3 py-2 text-right">Pax trước</th><th className="px-3 py-2 text-right">Pax trong file</th><th className="px-3 py-2 text-right">Pax sau overlay</th>
                 <th className="px-3 py-2 text-right">Nguồn bị thay</th><th className="px-3 py-2 text-right">Overlay rebase</th><th className="px-3 py-2">Ngày ảnh hưởng</th>
               </tr>
             </thead>
             <tbody>
-              {result.preview.seasons.map((season) => (
+              {result.preview.seasons.map((season) => {
+                const totals = dailyImportPreviewTotalsV1(season.counts);
+                return (
                 <tr key={season.seasonId} className="border-t border-outline-variant">
                   <td className="px-3 py-2 font-semibold">{season.seasonCode}</td>
                   <td className="px-3 py-2 font-mono text-xs">{season.rangeStart}..{season.rangeEnd}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{season.counts.beforeCount}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{season.counts.afterCount}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{season.counts.beforePax ?? '—'}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{season.counts.afterPax ?? '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{totals.effectiveCount ?? '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{totals.beforePax ?? '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{totals.importedPax ?? '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{totals.effectivePax ?? '—'}</td>
                   <td className="px-3 py-2 text-right tabular-nums" title="Seasonal / Daily / Manual">{season.counts.seasonalBeforeCount ?? 0}/{season.counts.dailyBeforeCount ?? 0}/{season.counts.manualBeforeCount ?? 0}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{season.counts.overlayRebaseCount ?? 0}</td>
                   <td className="max-w-[320px] px-3 py-2 text-xs">{season.affectedDates.join(', ')}</td>
                 </tr>
-              ))}
+              ); })}
             </tbody>
           </table>
         </div>
 
         <div className="mt-6 flex justify-end gap-3">
-          <button ref={cancelRef} type="button" onClick={onCancel} disabled={committing || restaging} className="rounded-lg border border-outline-variant px-4 py-2 text-sm font-medium hover:bg-surface-container-high disabled:opacity-50">Đóng preview</button>
+          <button autoFocus type="button" onClick={onCancel} disabled={committing || restaging} className="rounded-lg border border-outline-variant px-4 py-2 text-sm font-medium hover:bg-surface-container-high disabled:opacity-50">Đóng preview</button>
           <button type="button" onClick={onCommit} disabled={!valid || !commitEnabled || committing || restaging} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-on-primary hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
             {committing ? 'Đang commit…' : 'Commit thay thế atomic'}
           </button>
         </div>
       </section>
-    </div>
+    </dialog>
   );
 }

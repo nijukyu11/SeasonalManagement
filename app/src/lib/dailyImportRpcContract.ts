@@ -81,6 +81,9 @@ export interface DailyImportPreviewSeasonV1 {
     afterPax?: number;
     beforePaxKnownCount?: number;
     afterPaxKnownCount?: number;
+    effectiveAfterCount?: number;
+    effectiveAfterPax?: number | null;
+    effectiveAfterPaxKnownCount?: number;
     seasonalBeforeCount?: number;
     dailyBeforeCount?: number;
     manualBeforeCount?: number;
@@ -157,3 +160,33 @@ export function parseDailyImportCommittedResultV1(value: unknown): DailyImportCo
 }
 
 export type { DailyImportStagePayloadV1 };
+
+export function dailyImportPreviewTotalsV1(counts: DailyImportPreviewSeasonV1['counts']) {
+  const pax = (total: number | null | undefined, known: number | undefined, flights: number | undefined) =>
+    flights == null || (flights > 0 && known === 0) ? null : total ?? null;
+  return {
+    beforePax: pax(counts.beforePax, counts.beforePaxKnownCount, counts.beforeCount),
+    importedPax: pax(counts.afterPax, counts.afterPaxKnownCount, counts.afterCount),
+    effectiveCount: counts.effectiveAfterCount ?? null,
+    effectivePax: pax(counts.effectiveAfterPax, counts.effectiveAfterPaxKnownCount, counts.effectiveAfterCount),
+  };
+}
+
+/** Commit is already confirmed. Only read-side refresh may be retried here. */
+export async function finishCommittedDailyImportV1(
+  receipt: DailyImportCommittedResultV1,
+  options: {
+    remember: (receipt: DailyImportCommittedResultV1) => void;
+    refresh: (receipt: DailyImportCommittedResultV1) => Promise<void>;
+    clear: () => void;
+  },
+): Promise<{ receipt: DailyImportCommittedResultV1; refreshError: string | null }> {
+  options.remember(receipt);
+  try {
+    await options.refresh(receipt);
+    options.clear();
+    return { receipt, refreshError: null };
+  } catch (error) {
+    return { receipt, refreshError: error instanceof Error ? error.message : String(error) };
+  }
+}

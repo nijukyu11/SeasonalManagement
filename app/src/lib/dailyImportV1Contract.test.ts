@@ -3,12 +3,40 @@ import test from 'node:test';
 import { confirmDailyImportZeroFlightDatesV1 } from './dailyImportScope.ts';
 import {
   createDailyImportRetryPayloadV1,
+  dailyImportPreviewTotalsV1,
+  finishCommittedDailyImportV1,
   DailyImportV1RpcRejectedError,
   isDailyImportStaleVersionConflictV1,
   stageDailyImportWithTerminalRetryV1,
   type DailyImportStageResultV1,
 } from './dailyImportRpcContract.ts';
 import type { DailyImportStagePayloadV1 } from './dailyImportV1Contract.ts';
+import type { DailyImportCommittedResultV1 } from './dailyImportRpcContract.ts';
+
+test('preview uses effective totals without turning unknown Pax into zero', () => {
+  const counts = { beforeCount: 2, afterCount: 2, insertedCount: 2, beforePax: 0, beforePaxKnownCount: 0, afterPax: 200, afterPaxKnownCount: 2,
+    effectiveAfterCount: 1, effectiveAfterPax: 0, effectiveAfterPaxKnownCount: 1 };
+  assert.deepEqual(dailyImportPreviewTotalsV1(counts), { beforePax: null, importedPax: 200, effectiveCount: 1, effectivePax: 0 });
+  assert.equal(dailyImportPreviewTotalsV1({ ...counts, effectiveAfterPaxKnownCount: 0 }).effectivePax, null);
+  assert.equal(dailyImportPreviewTotalsV1({ ...counts, effectiveAfterCount: undefined }).effectiveCount, null);
+});
+
+test('confirmed commit survives refresh failure; retry clears receipt only after read succeeds', async () => {
+  const receipt = { status: 'committed', batchId: 'committed-batch', seasons: [] } as unknown as DailyImportCommittedResultV1;
+  let remembered: DailyImportCommittedResultV1 | null = null;
+  let refreshes = 0;
+  const options = { remember: (value: DailyImportCommittedResultV1) => { remembered = value; },
+    refresh: async () => { refreshes++; if (refreshes === 1) throw new TypeError('Failed to fetch'); },
+    clear: () => { remembered = null; } };
+  const first = await finishCommittedDailyImportV1(receipt, options);
+  assert.equal(first.receipt.status, 'committed');
+  assert.equal(first.refreshError, 'Failed to fetch');
+  assert.equal(remembered, receipt);
+  const retry = await finishCommittedDailyImportV1(receipt, options);
+  assert.equal(retry.refreshError, null);
+  assert.equal(remembered, null);
+  assert.equal(refreshes, 2);
+});
 
 function payload(): DailyImportStagePayloadV1 {
   return {

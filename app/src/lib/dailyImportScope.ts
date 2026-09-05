@@ -76,15 +76,20 @@ export async function confirmDailyImportZeroFlightDatesV1<T extends DailyImportS
       .map((date) => date.trim())
       .filter(Boolean)
       .sort();
-    if (confirmedZeroFlightDates.some((date) => !isoDate.test(date))) {
+    if (confirmedZeroFlightDates.some((date) => !isoDate.test(date)
+      || !Number.isFinite(Date.parse(`${date}T00:00:00Z`))
+      || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date)) {
       throw new Error(`Ops Date xác nhận cho season ${target.seasonCode} phải có dạng YYYY-MM-DD.`);
     }
     if (confirmedZeroFlightDates.some((date) => legDates.includes(date))) {
       throw new Error(`Không thể xác nhận zero-flight cho ngày đã có leg trong season ${target.seasonCode}.`);
     }
+    if (confirmedZeroFlightDates.some((date) => date < target.rangeStart || date > target.rangeEnd)) {
+      throw new Error(`Ops Date xác nhận nằm ngoài phạm vi preview của season ${target.seasonCode}.`);
+    }
     const affectedDates = [...new Set([...legDates, ...confirmedZeroFlightDates])].sort();
-    const rangeStart = affectedDates[0];
-    const rangeEnd = affectedDates.at(-1)!;
+    // Never let partial confirmation shrink away a cancelled boundary date.
+    const { rangeStart, rangeEnd } = target;
     const missingConfirmations = allIsoDates(rangeStart, rangeEnd)
       .filter((date) => !legDates.includes(date) && !confirmedZeroFlightDates.includes(date));
     if (missingConfirmations.length > 0) {
