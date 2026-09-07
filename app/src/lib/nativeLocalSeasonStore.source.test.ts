@@ -64,3 +64,12 @@ test('server-authoritative writes serialize schedule-bearing payloads before RPC
   assert.match(source, /serializeSourceRowForPersistence\(row\)/);
   assert.match(source, /serializeFlightModificationForPersistence\(mod\)/);
 });
+
+test('server-authoritative added legs persist as canonical manual sourceKind', () => {
+  const functionStart = source.indexOf('export async function runNativeScheduleMutation');
+  assert.notEqual(functionStart, -1, 'runNativeScheduleMutation should exist');
+  const body = source.slice(functionStart);
+  assert.match(body, /record\.sourceKind === 'added'/);
+  assert.match(body, /persistedRecord\.sourceKind = 'manual'/);
+  assert.match(body, /applyServerAuthoritativeOperations\(seasonId, source, operations\)/);
+});

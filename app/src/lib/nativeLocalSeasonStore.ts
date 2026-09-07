@@ -176,6 +176,13 @@ export async function runNativeScheduleMutation(
     const operations = [
       ...records.map((record) => {
         const persistedRecord = serializeFlightRecordForPersistence(record) as unknown as Record<string, unknown>;
+        if (record.sourceKind === 'added') {
+          // Client-side 'added' is the pre-persist marker; the canonical
+          // source_kind check only accepts seasonal/daily/manual, where
+          // manually created legs persist as 'manual'. Translate at the send
+          // boundary so legacy flightRecord ops pass the check.
+          persistedRecord.sourceKind = 'manual';
+        }
         return {
           type: 'flightRecord',
           changedFields: operationChangedFields(persistedRecord, ['id']),
