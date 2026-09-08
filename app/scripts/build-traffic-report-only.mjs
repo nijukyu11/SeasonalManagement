@@ -50,6 +50,7 @@ copy(join(appRoot, 'src', 'app', 'globals.css'), join(buildRoot, 'src', 'app', '
 copy(join(appRoot, 'src', 'app', '(public-report)'), join(buildRoot, 'src', 'app', '(public-report)'));
 for (const reportLibrary of [
   'annualPassengerKpiContract.ts',
+  'annualPassengerKpiMock.ts',
   'cn.ts',
   'trafficReportContract.ts',
   'trafficReportDataAdapter.ts',

@@ -38,6 +38,9 @@ export type AnnualPassengerKpiSnapshot = {
   elapsed_days: number;
   remaining_days: number | null;
   average_reported_pax_per_day: number | null;
+  forecast_method?: string | null;
+  forecast_window_days?: number | null;
+  forecast_average_reported_pax_per_day?: number | null;
   required_reported_pax_today: number | null;
   completion_pct: number | null;
   forecast_reported_pax: number | null;
@@ -64,7 +67,7 @@ export type AnnualDashboardPublicationMetadata = {
 };
 
 type AnnualPassengerDailyPublication = Omit<AnnualPassengerKpiSnapshot, 'contract_version' | 'projection' | 'publication'> & {
-  contract_version: 'annual-passenger-publication-v1';
+  contract_version: 'annual-passenger-publication-v1' | 'annual-passenger-publication-v2';
   publication: AnnualDashboardPublicationMetadata;
 };
 
@@ -118,7 +121,7 @@ export function decodeAnnualPassengerDashboardSnapshot(value: unknown): AnnualPa
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const publication = value as Partial<AnnualPassengerDailyPublication>;
   const metadata = publication.publication;
-  if (publication.contract_version !== 'annual-passenger-publication-v1'
+  if (!['annual-passenger-publication-v1', 'annual-passenger-publication-v2'].includes(String(publication.contract_version))
     || !Number.isInteger(publication.year)
     || !['past', 'current', 'future'].includes(String(publication.period_state))
     || !Array.isArray(publication.monthly)
