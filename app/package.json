@@ -10,6 +10,7 @@
     "generate:kpi-pin-hash": "node scripts/generate-annual-kpi-pin-hash.mjs",
     "test:dashboard-contract": "node --test src/lib/dashboardReportingContract.source.test.ts",
     "test:traffic-report-contract": "node --experimental-strip-types --test src/lib/trafficReportContract.test.ts src/lib/annualPassengerKpiContract.test.ts && node --experimental-strip-types --test \"src/app/(public-report)/reports/traffic/TrafficReportPresentation.source.test.ts\" \"src/app/(public-report)/reports/traffic/dashboard/AnnualPassengerKpiDashboard.source.test.ts\" && node --experimental-strip-types --test src/lib/trafficReportOperationalHours.test.ts && node supabase/tests/public_traffic_report_v1_pglite.mjs && node scripts/traffic-report-edge-contract.test.mjs && node scripts/traffic-report-isolation-test.mjs",
+    "test:traffic-pivot-improvements": "node --experimental-strip-types scripts/test-traffic-pivot-improvements.mjs",
     "test:rules": "node scripts/rule-regression-tests.cjs",
     "test:seasonal-import-sql": "node supabase/tests/seasonal_source_import_v2_pglite.mjs",
     "test:seasonal-import-v3-sql": "node supabase/tests/seasonal_partial_import_v3_pglite.mjs",
