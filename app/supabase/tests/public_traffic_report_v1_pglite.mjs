@@ -21,6 +21,7 @@ const dashboardTimelineQualitySql = await readFile(new URL('../migrations/202609
 const dailyAcceptanceSql = await readFile(new URL('../migrations/20260901114500_public_traffic_daily_acceptance.sql', import.meta.url), 'utf8');
 const dashboardHybridRunnerSql = await readFile(new URL('../migrations/20260901123000_public_dashboard_hybrid_runner.sql', import.meta.url), 'utf8');
 const dashboardPaxCorrectionSql = await readFile(new URL('../migrations/20260902150000_public_dashboard_pax_correction.sql', import.meta.url), 'utf8');
+const coverageCountsSql = await readFile(new URL('../migrations/20260911120000_public_traffic_report_coverage_counts.sql', import.meta.url), 'utf8');
 const db = await createSupabasePGlite();
 
 async function addSeason(id, code) {
@@ -108,6 +109,8 @@ try {
   await db.exec(dashboardHybridRunnerSql);
   await db.exec(dashboardPaxCorrectionSql);
   await db.exec(dashboardPaxCorrectionSql);
+  await db.exec(coverageCountsSql);
+  await db.exec(coverageCountsSql);
 
   await addSeason('old-season', 'W25');
   await addSeason('new-season', 'S26');
@@ -475,6 +478,11 @@ try {
   assert.equal(kpis.current.reported_pax, 150, 'Pax zero is a reported value and must not change the Pax total');
   assert.equal(kpis.pax_coverage.due_legs, 7);
   assert.equal(kpis.pax_coverage.reported_legs, 4, 'only Pax NULL is missing from coverage');
+  assert.deepEqual(
+    kpis.coverage_counts,
+    { routes: 2, airlines: 1, countries: 0 },
+    'network scope counts must come from the filtered canonical rows and drop Unknown countries',
+  );
 
   const overviewResult = await db.query(`select public.get_public_traffic_report_overview_v1(date '2026-03-03', date '2026-03-03', array['A','D'], array[]::text[], array[]::text[], array[]::text[], array[]::text[], 'none', 'local', null, 366, 'traffic-report-v1') as result`);
   const overview = overviewResult.rows[0].result;
@@ -485,6 +493,12 @@ try {
   assert.equal(overview.metadata.projection.snapshot_rows, 8);
   assert.equal(overview.timeline.length, 1);
   assert.equal(overview.kpis.current.flights, overview.timeline[0].flights);
+  assert.deepEqual(
+    overview.kpis.coverage_counts,
+    { routes: 2, airlines: 1, countries: 0 },
+    'overview network scope must equal the KPI source rows',
+  );
+  assert.equal(overview.quality.unknown_country_legs, 7, 'every fixture leg is unmapped, so no country may be counted');
   assert.equal(overview.kpis.current.status, 'partial', 'uncertified observed days must remain partial until coverage is certified');
   assert.equal(overview.metadata.partial_day_count, 1);
   assert.equal(overview.metadata.missing_day_count, 0);
@@ -502,6 +516,11 @@ try {
   const noPaxOverviewResult = await db.query(`select public.get_public_traffic_report_overview_v1(date '2026-03-03', date '2026-03-03', array['D'], array[]::text[], array['SGN'], array[]::text[], array[]::text[], 'none', 'local', null, 366, 'traffic-report-v1') as result`);
   const noPaxOverview = noPaxOverviewResult.rows[0].result;
   assert.equal(noPaxOverview.kpis.current.flights, 3);
+  assert.deepEqual(
+    noPaxOverview.kpis.coverage_counts,
+    { routes: 1, airlines: 1, countries: 0 },
+    'a route filter must narrow the network scope to that route only',
+  );
   assert.equal(noPaxOverview.kpis.current.reported_pax, null, 'a scope with no reported passenger legs must not publish a misleading zero');
   assert.equal(noPaxOverview.kpis.current.arrival_reported_pax, null);
   assert.equal(noPaxOverview.kpis.current.departure_reported_pax, null, 'an all-NULL departure scope must stay unknown instead of becoming zero');
@@ -595,6 +614,17 @@ try {
     'v2 feature-parity aircraft types must match the snapshot contract',
   );
   assert.ok(!JSON.stringify(liveV2).includes('record_id'), 'the live public contract must remain aggregate-only');
+  assert.deepEqual(
+    liveV2.report.coverage_counts,
+    { routes: 2, airlines: 1, countries: 0 },
+    'live v2 must publish filtered network scope counts from canonical rows',
+  );
+  assert.deepEqual(
+    liveV2.report.coverage_counts,
+    overview.kpis.coverage_counts,
+    'v1 snapshot and v2 live network scope must match at the same watermark',
+  );
+  assert.equal(liveV2.report.quality.unknown_country_legs, 7, 'Unknown countries must not be counted as mapped countries');
   assert.equal(liveV2.source_watermark, overview.source_watermark, 'v1/v2 differential comparison requires one source watermark');
   assert.deepEqual(
     {
@@ -675,6 +705,11 @@ try {
     array[]::text[], 'none', 'local', null, 'traffic-report-v2'
   ) as result`)).rows[0].result;
   assert.equal(liveV2NoPax.current.flights, 3);
+  assert.deepEqual(
+    liveV2NoPax.report.coverage_counts,
+    { routes: 1, airlines: 1, countries: 0 },
+    'a live route filter must narrow the network scope to that route only',
+  );
   assert.equal(liveV2NoPax.current.reported_pax, null, 'an all-NULL live scope must remain NULL rather than zero');
   assert.equal(liveV2NoPax.current.reported_legs, 0);
   assert.equal(liveV2NoPax.dimensions.route[0].reported_pax, null);

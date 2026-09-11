@@ -428,6 +428,7 @@ export function toTrafficReportPresentationBundle(bundle: TrafficV2Bundle): Traf
         status: comparison.status,
       },
       peak_day: report.peakDay,
+      coverage_counts: report.coverageCounts,
       pax_coverage: report.paxCoverage,
     },
     timeline: presentationTimeline(bundle),

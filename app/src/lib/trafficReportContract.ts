@@ -47,6 +47,14 @@ export interface TrafficKpiMetricSet extends TrafficMetricSet {
   departure_reported_pax?: number | null;
 }
 
+/** Distinct entities with at least one flight inside the filtered period. */
+export interface TrafficCoverageCounts {
+  routes: number;
+  airlines: number;
+  /** Mapped countries only; unmapped routes are never counted here. */
+  countries: number;
+}
+
 export interface TrafficTimelinePoint extends TrafficMetricSet {
   ops_date: string;
   completeness: 'complete' | 'missing' | 'partial';
@@ -186,6 +194,8 @@ export interface TrafficReportBundle {
       mode: TrafficComparison;
     };
     peak_day: { ops_date: string | null; flights: number | null; status: string };
+    /** Present once the overview RPC publishes network scope counts. */
+    coverage_counts?: TrafficCoverageCounts;
     pax_coverage: {
       reported_legs: number | null;
       due_legs: number | null;
@@ -444,6 +454,14 @@ function isTrafficPeakHourRow(value: unknown): value is TrafficPeakHourRow {
     && typeof row.suppressed === 'boolean';
 }
 
+function isTrafficCoverageCounts(value: unknown): value is TrafficCoverageCounts {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const counts = value as Record<string, unknown>;
+  return Number.isInteger(counts.routes) && Number(counts.routes) >= 0
+    && Number.isInteger(counts.airlines) && Number(counts.airlines) >= 0
+    && Number.isInteger(counts.countries) && Number(counts.countries) >= 0;
+}
+
 export function isTrafficReportBundle(value: unknown): value is TrafficReportBundle {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const root = value as Record<string, unknown>;
@@ -453,6 +471,9 @@ export function isTrafficReportBundle(value: unknown): value is TrafficReportBun
   const projection = metadata?.projection;
   const breakdowns = root.breakdowns && typeof root.breakdowns === 'object' && !Array.isArray(root.breakdowns)
     ? root.breakdowns as Record<string, unknown>
+    : null;
+  const kpis = root.kpis && typeof root.kpis === 'object' && !Array.isArray(root.kpis)
+    ? root.kpis as Record<string, unknown>
     : null;
   const projectionIsValid = projection === undefined || (
     !!projection
@@ -467,7 +488,8 @@ export function isTrafficReportBundle(value: unknown): value is TrafficReportBun
       || (typeof root.read_version_token === 'string' && root.read_version_token.length > 0))
     && !!metadata
     && projectionIsValid
-    && !!root.kpis
+    && !!kpis
+    && (kpis.coverage_counts === undefined || isTrafficCoverageCounts(kpis.coverage_counts))
     && Array.isArray(root.timeline)
     && !!breakdowns
     && Array.isArray(breakdowns.peak_hour)

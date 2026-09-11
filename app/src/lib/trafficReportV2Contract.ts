@@ -91,6 +91,8 @@ export interface TrafficV2ReportParity {
     partialDayCount: number;
     missingDayCount: number;
   };
+  /** Present once the live v2 RPC publishes network scope counts. */
+  coverageCounts?: { routes: number; airlines: number; countries: number };
   peakDay: { ops_date: string | null; flights: number | null; status: string };
   paxCoverage: {
     reported_legs: number;
@@ -152,6 +154,7 @@ export interface TrafficV2ApiReportParity {
     partial_day_count: number;
     missing_day_count: number;
   };
+  coverage_counts?: { routes: number; airlines: number; countries: number };
   peak_day: TrafficV2ReportParity['peakDay'];
   pax_coverage: TrafficV2ReportParity['paxCoverage'];
   quality: TrafficV2ReportParity['quality'];
@@ -288,6 +291,12 @@ function isApiReportParity(value: unknown): value is TrafficV2ApiReportParity {
     || !isNonNegativeInteger(value.coverage.covered_day_count)
     || !isNonNegativeInteger(value.coverage.partial_day_count)
     || !isNonNegativeInteger(value.coverage.missing_day_count)
+    || (value.coverage_counts !== undefined && (
+      !isObject(value.coverage_counts)
+      || !isNonNegativeInteger(value.coverage_counts.routes)
+      || !isNonNegativeInteger(value.coverage_counts.airlines)
+      || !isNonNegativeInteger(value.coverage_counts.countries)
+    ))
     || !isObject(value.peak_day)
     || !isObject(value.pax_coverage)
     || !isObject(value.quality)
@@ -415,6 +424,7 @@ export function decodeTrafficV2ApiEnvelope(value: unknown): TrafficV2Bundle {
         partialDayCount: value.report.coverage.partial_day_count,
         missingDayCount: value.report.coverage.missing_day_count,
       },
+      coverageCounts: value.report.coverage_counts,
       peakDay: value.report.peak_day,
       paxCoverage: value.report.pax_coverage,
       quality: value.report.quality,

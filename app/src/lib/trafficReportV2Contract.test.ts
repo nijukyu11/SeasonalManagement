@@ -30,6 +30,7 @@ function report(): TrafficV2ApiEnvelope['report'] {
     day_count: 3,
     filter_options: { airline: ['VN'], route: ['HAN'], country: ['Vietnam'] },
     coverage: { selected_day_count: 3, covered_day_count: 1, partial_day_count: 1, missing_day_count: 1 },
+    coverage_counts: { routes: 2, airlines: 1, countries: 1 },
     peak_day: { ops_date: '2026-08-30', flights: 1, status: 'available' },
     pax_coverage: { reported_legs: 2, due_legs: 3, percent: 66.7, status: 'available' },
     quality: { unknown_country_legs: 0, pax_due_missing_legs: 1, quarantined_duplicate_candidates: 0 },
@@ -150,8 +151,19 @@ test('traffic-report-v2 rejects a fake zero-flight value for an uncovered missin
   assert.equal(isTrafficV2ApiEnvelope(input), false);
 });
 
+test('traffic-report-v2 rejects malformed network scope counts', () => {
+  const negative = payload();
+  negative.report.coverage_counts = { routes: -1, airlines: 1, countries: 1 };
+  assert.equal(isTrafficV2ApiEnvelope(negative), false);
+
+  const fractional = payload();
+  fractional.report.coverage_counts = { routes: 1.5, airlines: 1, countries: 1 };
+  assert.equal(isTrafficV2ApiEnvelope(fractional), false);
+});
+
 test('traffic-report-v2 exposes one immutable version envelope to every consumer', () => {
   const decoded = decodeTrafficV2ApiEnvelope(payload());
+  assert.deepEqual(decoded.report.coverageCounts, { routes: 2, airlines: 1, countries: 1 });
   assert.deepEqual(decoded.version, {
     contractVersion: 'traffic-report-v2',
     readVersionToken: 'rv1.dGVzdA.c2ln',

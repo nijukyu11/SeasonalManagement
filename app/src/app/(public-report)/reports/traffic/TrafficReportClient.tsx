@@ -14,6 +14,7 @@ import {
   toTrafficReportPageSearchParams,
   toTrafficReportSearchParams,
   type NormalizedTrafficReportFilter,
+  type TrafficCoverageCounts,
   type TrafficDatePreset,
   type TrafficReportBundle,
   type TrafficReportPageState,
@@ -93,6 +94,49 @@ function KpiCard({ label, flights, pax, flightDelta, paxDelta, comparisonLabel }
       </dl>
     </article>
   );
+}
+
+function CoverageScopeStrip({ dayCount, counts, unknownCountryLegs, onJump }: {
+  dayCount: number;
+  counts?: TrafficCoverageCounts;
+  unknownCountryLegs: number | null;
+  onJump: (target: 'route' | 'country' | 'airline') => void;
+}) {
+  if (!counts) return null;
+  const unmappedNote = unknownCountryLegs != null && unknownCountryLegs > 0
+    ? ` Có ${formatNumber(unknownCountryLegs)} chuyến thuộc chặng chưa ánh xạ quốc gia.`
+    : '';
+  const items = [
+    { key: 'route' as const, value: counts.routes, label: 'chặng bay', note: 'Số chặng bay có phát sinh chuyến trong kỳ theo bộ lọc hiện tại.' },
+    { key: 'airline' as const, value: counts.airlines, label: 'hãng khai thác', note: 'Số hãng hàng không có chuyến bay trong kỳ theo bộ lọc hiện tại.' },
+    { key: 'country' as const, value: counts.countries, label: 'quốc gia', note: `Số quốc gia đã định danh có chuyến bay trong kỳ theo bộ lọc hiện tại.${unmappedNote}` },
+  ];
+  return (
+    <div className="mt-5 flex flex-wrap items-center gap-2" aria-label="Quy mô mạng bay trong kỳ">
+      <span className="inline-flex min-h-9 items-center rounded-xl bg-slate-100 px-3 text-sm font-semibold text-slate-700 tabular-nums">{`${formatNumber(dayCount)} ngày`}</span>
+      {items.map((item) => (
+        <button
+          key={item.key}
+          className="report-focus inline-flex min-h-9 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700 hover:border-cyan-700 hover:bg-cyan-50"
+          type="button"
+          title={item.note}
+          aria-label={`${item.label}: ${item.value}. ${item.note}`}
+          onClick={() => onJump(item.key)}
+        >
+          <span className="font-bold text-slate-900 tabular-nums">{formatNumber(item.value)}</span>
+          <span>{item.label}</span>
+          <span aria-hidden="true" className="text-slate-400">↗</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function scrollToSection(id: string) {
+  const target = document.getElementById(id);
+  if (!target) return;
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  target.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
 }
 
 function buildInsights(bundle: TrafficReportBundle): string[] {
@@ -236,6 +280,15 @@ export default function TrafficReportClient() {
     void applyFilter({ ...normalizedFilter, tz });
   };
 
+  const jumpToNetworkSection = (target: 'route' | 'country' | 'airline') => {
+    if (target === 'airline') {
+      scrollToSection('airline-section');
+      return;
+    }
+    updateViewState({ marketDimension: target });
+    scrollToSection('market-section');
+  };
+
   const exportExcel = async () => {
     if (!bundle || exportingExcel) return;
     exportControllerRef.current?.abort();
@@ -366,6 +419,12 @@ export default function TrafficReportClient() {
                 {typeof bundle.source_watermark === 'number' ? <p>Nguồn {readVersion === 'v2' ? 'live' : 'snapshot'} · watermark {numberFormat.format(bundle.source_watermark)}</p> : null}
               </div>
             </div>
+            <CoverageScopeStrip
+              dayCount={bundle.metadata.day_count}
+              counts={bundle.kpis.coverage_counts}
+              unknownCountryLegs={bundle.quality.unknown_country_legs}
+              onJump={jumpToNetworkSection}
+            />
             <div className="mt-6 grid gap-4 lg:grid-cols-3">
               <KpiCard
                 label="Tổng"
@@ -399,31 +458,35 @@ export default function TrafficReportClient() {
 
           <TrafficReportTrend filter={normalizedFilter} scope={pageState.trendType} readVersion={readVersion} expectedWatermark={expectedWatermark} readVersionToken={readVersionToken} onVersionChanged={reloadVersionedBundle} onScopeChange={(trendType) => updateViewState({ trendType })} />
 
-          <TrafficReportDimensionSection
-            key={`market-${globalQuery}-${pageState.marketDimension}-${pageState.marketType}`}
-            kind="market"
-            filter={normalizedFilter}
-            scope={pageState.marketType}
-            marketDimension={pageState.marketDimension}
-            readVersion={readVersion}
-            expectedWatermark={expectedWatermark}
-            readVersionToken={readVersionToken}
-            onVersionChanged={reloadVersionedBundle}
-            onScopeChange={(marketType) => updateViewState({ marketType })}
-            onMarketDimensionChange={(marketDimension) => updateViewState({ marketDimension })}
-          />
+          <div id="market-section" className="scroll-mt-24">
+            <TrafficReportDimensionSection
+              key={`market-${globalQuery}-${pageState.marketDimension}-${pageState.marketType}`}
+              kind="market"
+              filter={normalizedFilter}
+              scope={pageState.marketType}
+              marketDimension={pageState.marketDimension}
+              readVersion={readVersion}
+              expectedWatermark={expectedWatermark}
+              readVersionToken={readVersionToken}
+              onVersionChanged={reloadVersionedBundle}
+              onScopeChange={(marketType) => updateViewState({ marketType })}
+              onMarketDimensionChange={(marketDimension) => updateViewState({ marketDimension })}
+            />
+          </div>
 
-          <TrafficReportDimensionSection
-            key={`airline-${globalQuery}-${pageState.airlineType}`}
-            kind="airline"
-            filter={normalizedFilter}
-            scope={pageState.airlineType}
-            readVersion={readVersion}
-            expectedWatermark={expectedWatermark}
-            readVersionToken={readVersionToken}
-            onVersionChanged={reloadVersionedBundle}
-            onScopeChange={(airlineType) => updateViewState({ airlineType })}
-          />
+          <div id="airline-section" className="scroll-mt-24">
+            <TrafficReportDimensionSection
+              key={`airline-${globalQuery}-${pageState.airlineType}`}
+              kind="airline"
+              filter={normalizedFilter}
+              scope={pageState.airlineType}
+              readVersion={readVersion}
+              expectedWatermark={expectedWatermark}
+              readVersionToken={readVersionToken}
+              onVersionChanged={reloadVersionedBundle}
+              onScopeChange={(airlineType) => updateViewState({ airlineType })}
+            />
+          </div>
 
           <section aria-labelledby="operations-title">
             <div><p className="text-sm font-bold text-blue-900">Thông tin khai thác</p><h2 id="operations-title" className="mt-1 text-balance text-3xl font-bold text-slate-950">Giờ và cơ cấu khai thác</h2><p className="mt-2 text-pretty text-sm leading-6 text-slate-600">Xem giờ cao điểm của chuyến bay đến, chuyến bay đi và cơ cấu tàu bay trong phạm vi đã chọn.</p></div>

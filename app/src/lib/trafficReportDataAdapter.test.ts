@@ -52,6 +52,7 @@ function report(): TrafficV2ApiEnvelope['report'] {
     day_count: 31,
     filter_options: { airline: ['VN'], route: ['HAN'], country: ['Vietnam'] },
     coverage: { selected_day_count: 31, covered_day_count: 31, partial_day_count: 0, missing_day_count: 0 },
+    coverage_counts: { routes: 1, airlines: 1, countries: 1 },
     peak_day: { ops_date: null, flights: null, status: 'unavailable' },
     pax_coverage: { reported_legs: 0, due_legs: 0, percent: null, status: 'unavailable' },
     quality: { unknown_country_legs: 0, pax_due_missing_legs: 0, quarantined_duplicate_candidates: 0 },
@@ -184,6 +185,7 @@ test('adapter maps live v2 to the existing Report presentation without losing tr
   assert.equal(reportBundle.kpis.current.departure_reported_pax, null);
   assert.equal(reportBundle.metadata.projection?.source_watermark, 51);
   assert.equal(reportBundle.breakdowns.peak_hour.length, 24);
+  assert.deepEqual(reportBundle.kpis.coverage_counts, { routes: 1, airlines: 1, countries: 1 });
 });
 
 test('adapter replaces the full bundle once after a pinned watermark changes', async () => {

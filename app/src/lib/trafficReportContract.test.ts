@@ -91,6 +91,9 @@ test('Excel workbook data stays aggregate-only and includes Phase 2 sheets', () 
   assert.equal(reopened.Sheets['Tổng quan']?.A1?.v, 'BÁO CÁO SẢN LƯỢNG KHAI THÁC');
   assert.equal(reopened.Sheets['Theo ngày']?.A2?.v, '2026-08-15');
   assert.equal(isTrafficReportBundle(bundle), true);
+  assert.equal(isTrafficReportBundle({ ...bundle, kpis: { ...bundle.kpis, coverage_counts: { routes: 2, airlines: 1, countries: 1 } } }), true);
+  assert.equal(isTrafficReportBundle({ ...bundle, kpis: { ...bundle.kpis, coverage_counts: { routes: -1, airlines: 1, countries: 1 } } }), false);
+  assert.equal(isTrafficReportBundle({ ...bundle, kpis: { ...bundle.kpis, coverage_counts: { routes: 1.5, airlines: 1, countries: 1 } } }), false);
   const recurringBundle: TrafficReportBundle = {
     ...bundle,
     breakdowns: {
