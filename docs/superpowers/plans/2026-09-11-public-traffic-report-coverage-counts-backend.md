@@ -222,5 +222,6 @@ Headless Chrome không chạy animation `behavior:'smooth'` (giữ `scrollY 0`),
 
 ### Còn lại
 
-- Chưa commit; chưa apply migration/DB; chưa deploy.
-- Merge `main` vào nhánh deploy báo cáo trước khi phát hành (mục 9).
+- Đã commit `a19161c` trên `main`.
+- Đã apply migration `20260911120000_public_traffic_report_coverage_counts.sql` lên **production DB** (transaction + `notify pgrst, 'reload schema'`); verify: v1 `/api/report/v1/overview` → `kpis.coverage_counts`, v2 `/api/report/v2/overview` → `report.coverage_counts`, cùng `{routes: 19, airlines: 32, countries: 11}` cho 2026-09-01; `quality.unknown_country_legs = 2`.
+- **Chưa phát hành static release frontend**: production hiện vẫn dùng bản client cũ nên dải thẻ chưa hiển thị. Cần merge `main` vào nhánh deploy báo cáo rồi build/deploy theo runbook (mục 9).
