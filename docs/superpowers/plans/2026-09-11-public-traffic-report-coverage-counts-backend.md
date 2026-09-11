@@ -220,8 +220,16 @@ Thay đổi **additive** ở cả hai phía nên tương thích ngược: fronte
 
 Headless Chrome không chạy animation `behavior:'smooth'` (giữ `scrollY 0`), nên đã kiểm chứng nhánh `prefers-reduced-motion: reduce` (emulate qua DevTools) → helper dùng `behavior:'auto'` và cuộn đúng anchor; nhánh `smooth` giữ nguyên cho người dùng thường. Không sửa code để lách test.
 
-### Còn lại
+### Phát hành production — 2026-09-11
 
-- Đã commit `a19161c` trên `main`.
+- Đã commit `a19161c` (feature) và `3bf5a76` (receipt DB) trên `main`.
 - Đã apply migration `20260911120000_public_traffic_report_coverage_counts.sql` lên **production DB** (transaction + `notify pgrst, 'reload schema'`); verify: v1 `/api/report/v1/overview` → `kpis.coverage_counts`, v2 `/api/report/v2/overview` → `report.coverage_counts`, cùng `{routes: 19, airlines: 32, countries: 11}` cho 2026-09-01; `quality.unknown_country_legs = 2`.
-- **Chưa phát hành static release frontend**: production hiện vẫn dùng bản client cũ nên dải thẻ chưa hiển thị. Cần merge `main` vào nhánh deploy báo cáo rồi build/deploy theo runbook (mục 9).
+- **Đính chính mục 9 (nguồn artifact):** kiểm tra release production `20260908T075606Z-report-cleanup` cho thấy client chứa marker chỉ có ở `main` (`Tải Excel`, `Nguồn snapshot · watermark`) và **không** có marker của nhánh báo cáo (0/3 marker) → static release production được build từ `main`, không phải `codex/web-traffic-report`. Vì vậy không cần merge sang nhánh báo cáo; deploy trực tiếp từ `main` mới đúng nguồn và không hồi quy chức năng.
+- Build `app/out-report` tại `main@3bf5a76`: 52 file; `reports/traffic.html` sha256 `5d95c43aa354a462b3a217bf408cc0e57b80d8ec3d7c1e2a7fa57ce8c24026d8`.
+- Staging: release `20260911T154845Z-coverage-counts` (carry-forward nội dung `current` + overlay artifact để giữ chunk cũ cho HTML đã cache), `staging-current` trỏ tới đó; nginx `127.0.0.1:8781` + Quick Tunnel `https://mating-mon-and-regards.trycloudflare.com`.
+- Kiểm chứng staging (browser thật 1440px): dải `253 ngày · 46 chặng bay · 45 hãng khai thác · 17 quốc gia`; pill quốc gia đổi `market_dimension=country`; deep-link cuộn anchor `marketTop = airlineTop = 96px` (reduced-motion); `/reports/traffic/dashboard` render bình thường, không lỗi; mobile 375px `overflow = 0`; API v1 2026-09-01 → `{routes:19, airlines:32, countries:11}`.
+- Người dùng chấp nhận staging. Publish: `current → releases/20260911T154845Z-coverage-counts`; `nginx -t` + reload; smoke `127.0.0.1:8780` (`/healthz`, `/reports/traffic`, `/reports/traffic.txt`, `/reports/traffic/dashboard`) = 200; chunk dải `124rhujwo84ir.js` = 200; API v1 `coverage_counts` OK.
+- Public verify `https://report.ahtops.xyz/reports/traffic`: dải hiển thị `46 chặng bay / 45 hãng khai thác / 17 quốc gia`; nút `Tải Excel toàn báo cáo` vẫn còn (không hồi quy export cũ); `cf-cache-status: DYNAMIC`; dashboard public không lỗi.
+- Không ảnh hưởng app gốc: artifact chỉ chứa route báo cáo (`build:traffic-report` fail-closed nếu xuất hiện route/marker desktop), nginx public chỉ phục vụ `/srv/seasonal-traffic-report`; `app/out` (desktop/Tauri) và Supabase API không đổi.
+- Rollback: `ln -sfn releases/20260908T075606Z-report-cleanup current` + `systemctl reload nginx` (release cũ còn nguyên trên server). Migration additive nên không cần revert.
+- Quick Tunnel staging đã dừng; `staging-current` giữ nguyên, không ảnh hưởng production.
