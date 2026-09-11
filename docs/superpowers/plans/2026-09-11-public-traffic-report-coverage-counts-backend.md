@@ -233,3 +233,14 @@ Headless Chrome không chạy animation `behavior:'smooth'` (giữ `scrollY 0`),
 - Không ảnh hưởng app gốc: artifact chỉ chứa route báo cáo (`build:traffic-report` fail-closed nếu xuất hiện route/marker desktop), nginx public chỉ phục vụ `/srv/seasonal-traffic-report`; `app/out` (desktop/Tauri) và Supabase API không đổi.
 - Rollback: `ln -sfn releases/20260908T075606Z-report-cleanup current` + `systemctl reload nginx` (release cũ còn nguyên trên server). Migration additive nên không cần revert.
 - Quick Tunnel staging đã dừng; `staging-current` giữ nguyên, không ảnh hưởng production.
+
+### Rollback và đính chính nguồn artifact — 2026-09-11 (sau phản hồi người dùng)
+
+Người dùng xác nhận bản publish **sai nguồn so với production**. Đã rollback và xác minh lại lineage:
+
+- **Rollback**: `current → releases/20260908T075606Z-report-cleanup`; `nginx -t` + reload. `reports/traffic.html` sha256 `496ceca18e3b6abdcddbeaa02cea7b09506cf4e148259335efc11cb4a88ec932` khớp **nguyên trạng trước publish**. DOM public: không còn `hãng khai thác`, `/reports/traffic` + `/reports/traffic/dashboard` = 200.
+- **Production thật build từ worktree báo cáo `codex/web-traffic-report`, không phải `main`.** Bằng chứng DOM/release: có `Xuất báo cáo`, `Breakdown giờ cao điểm theo ngày`, và các component chỉ có ở worktree báo cáo (`TrafficPeakHourHeatmap.tsx`, `TrafficMonthlyDayOfWeekHeatmap.tsx`, `TrafficDimensionShareDonut.tsx`, `TrafficTrendTable.tsx`, `TrafficWorkbookExportDialog.tsx`); `main` thiếu toàn bộ các file/chuỗi này (`Xuất báo cáo` = 0, `Breakdown giờ cao điểm theo ngày` = 0).
+- **Đối chiếu chunk build lại từ worktree báo cáo** (`npm run build:traffic-report`, 50 file): 8/9 chunk được `reports/traffic.html` tham chiếu trùng hash với release production, cùng `turbopack-0poq0sp4_jait.js`; khác duy nhất một chunk `0~n7df-.p5b20.js` (production) ↔ `00nlqgfimhxxe.js` (worktree), cùng ~142 KB lệch 152 byte, cùng chứa `Xuất báo cáo` + `Breakdown giờ cao điểm theo ngày` → worktree báo cáo là đúng lineage, bản production xấp xỉ trạng thái worktree.
+- **Nguyên nhân sai lầm trước đó**: kết luận "production build từ `main`" dựa trên `grep` marker trong thư mục release — nhưng thư mục release tích luỹ nhiều buildId dir/chunk cũ (4 buildId dir, 29 chunk), nên marker trong chunk **không được tham chiếu** bị tính nhầm. Kiểm tra đúng phải dựa trên DOM render và tập chunk được HTML tham chiếu.
+- **Hệ quả**: mục §9 ban đầu đúng — UI/contract phải port sang worktree báo cáo rồi build/deploy từ đó. Feature `coverage_counts` hiện **chưa** có trên production; SQL vẫn đã apply production DB (additive, frontend cũ bỏ qua key lạ).
+- Trạng thái: production đang chạy `20260908T075606Z-report-cleanup`; `staging-current` trỏ release dải thẻ (không ảnh hưởng production) — sẽ được thay khi build lại từ worktree báo cáo.
