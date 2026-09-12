@@ -257,3 +257,15 @@ Người dùng xác nhận bản publish **sai nguồn so với production**. Đ
 - **Rollback**: `ln -sfn /srv/seasonal-traffic-report/releases/20260908T075606Z-report-cleanup /srv/seasonal-traffic-report/current` + `systemctl reload nginx` (`reports/traffic.html` cũ sha256 `496ceca1…ad042eedc8`).
 - Quick Tunnel staging đã dừng.
 - **Lưu ý bàn giao**: các thay đổi port nằm trong worktree `SeasonalManagement-web-traffic-report` và **chưa commit** (worktree đang có nhiều WIP chart/export chưa commit của người dùng; không tự ý commit gộp). Artifact đã build/deploy khớp đúng trạng thái worktree tại thời điểm phát hành.
+
+### Thanh sticky quy mô mạng bay — 2026-09-12
+
+- Yêu cầu: (1) chuyển 3 card `chặng bay / hãng khai thác / quốc gia` vào thanh sticky; (2) bỏ dòng `Tất cả hãng, chặng bay và quốc gia`, thay bằng số ngày; (3) bỏ dòng hero `Báo cáo vận hành công khai`; (4) bỏ dòng mô tả `Dữ liệu theo dãy ngày khai thác liên tục, không phụ thuộc mùa. Sản lượng khách chỉ tính số khách đã báo cáo.`
+- Thay đổi (worktree báo cáo):
+  - `TrafficReportFilters.tsx`: thêm props `dayCount`, `coverageCounts?`, `unknownCountryLegs`, `onJump`; tách `CoverageScopePills` (3 nút, giữ `title`/`aria-label` + deep-link); sticky bar thêm `data-report-sticky-bar` + hàng pill (`overflow-x-auto`) bên dưới dải ngày; dòng phụ thay bằng `N ngày` (số lựa chọn đang áp dụng vẫn hiện ở badge nút "Bộ lọc").
+  - `TrafficReportClient.tsx`: bỏ 2 dòng hero; bỏ component `CoverageScopeStrip` khỏi khối KPI; truyền coverage xuống filters; `scrollToSection` tính offset động theo `offsetHeight` của `[data-report-sticky-bar]` (+8px) thay vì `scrollIntoView`, nên bỏ `scroll-mt-24` ở `#market-section`/`#airline-section`.
+- Build flags như bản trước (WORKBOOK_EXPORT=true, HTML_EXPORT=true, DAILY_PUBLICATION=true, V2 off); artifact 50 file.
+- Release: `20260912T061518Z-sticky-coverage-bar`; `reports/traffic.html` sha256 `da0c35ed166c66249cbb9b7ca756051c27e5c54a4059c0b6ac6ddd55eda75216`.
+- Kiểm chứng: staging + public browser thật (cache tắt) — sticky bar `01/01/2026–11/09/2026 · 254 ngày · [presets] · Bộ lọc · 46 chặng bay ↗ · 45 hãng khai thác ↗ · 17 quốc gia ↗`; `position: sticky; top: 0`, cao 121px, cuộn 1600px vẫn dính `top = 0`; 3 dòng đã bỏ không còn trong DOM; deep-link `#market-section`/`#airline-section` top = 129px (= bar + 8); mobile 375px `overflow = 0`; biểu đồ + "Xuất báo cáo" nguyên vẹn; dashboard Daily Publication không lỗi; 32 test report pass; `tsc` không lỗi ở file đã sửa.
+- Smoke 8780 (`/healthz`, `/reports/traffic`, `/reports/traffic.txt`, `/reports/traffic/dashboard`) = 200; API v1 `coverage_counts` OK.
+- **Rollback**: `ln -sfn /srv/seasonal-traffic-report/releases/20260911T161256Z-coverage-counts-report-flagged /srv/seasonal-traffic-report/current` + `systemctl reload nginx`. Quick Tunnel staging đã dừng.
