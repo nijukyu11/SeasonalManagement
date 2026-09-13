@@ -60,16 +60,19 @@ test('server-authoritative mutation boundary has no native read or catch-up depe
 });
 
 test('server-authoritative writes serialize schedule-bearing payloads before RPC', () => {
-  assert.match(source, /serializeFlightRecordForPersistence\(record\)/);
+  // Flight records go through normalizeFlightRecordForServerMutation (wiring
+  // pinned below); source rows and modifications serialize inline here.
   assert.match(source, /serializeSourceRowForPersistence\(row\)/);
   assert.match(source, /serializeFlightModificationForPersistence\(mod\)/);
 });
 
-test('server-authoritative added legs persist as canonical manual sourceKind', () => {
+test('server-authoritative schedule writes normalize flight records before RPC', () => {
+  // Wiring-only: the added→manual rule itself is covered behaviorally in
+  // seasonalNewFlightCreation.test.ts. This module stays source-pinned
+  // because its Tauri/remote import chain is not importable under node:test.
   const functionStart = source.indexOf('export async function runNativeScheduleMutation');
   assert.notEqual(functionStart, -1, 'runNativeScheduleMutation should exist');
   const body = source.slice(functionStart);
-  assert.match(body, /record\.sourceKind === 'added'/);
-  assert.match(body, /persistedRecord\.sourceKind = 'manual'/);
+  assert.match(body, /normalizeFlightRecordForServerMutation\(record\)/);
   assert.match(body, /applyServerAuthoritativeOperations\(seasonId, source, operations\)/);
 });

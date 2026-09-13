@@ -7,9 +7,10 @@ import { getOrCreateSeasonClientId } from './seasonChangeEvents';
 import { SERVER_AUTHORITATIVE_MODE } from './serverAuthoritativeMode';
 import {
   flightModificationChangedFields,
+  normalizeFlightRecordForServerMutation,
   serializeFlightModificationForPersistence,
-  serializeFlightRecordForPersistence,
   serializeSourceRowForPersistence,
+  toDeletedFlightRecordForServerMutation,
 } from './persistenceSchema';
 
 export interface NativeLocalModificationBatchDeltaResult {
@@ -166,7 +167,7 @@ export async function runNativeLocalModificationBatchDelta(
 export async function runNativeScheduleMutation(
   seasonId: string,
   records: FlightRecord[],
-  deletedIds: string[] = [],
+  deletedRecords: FlightRecord[] = [],
   mods: FlightModification[] = [],
   history?: Pick<ModHistoryEntry, 'id' | 'timestamp' | 'description' | 'scheduleNotification'>,
   sourceRows: ParsedRow[] = [],
@@ -175,25 +176,21 @@ export async function runNativeScheduleMutation(
   if (SERVER_AUTHORITATIVE_MODE) {
     const operations = [
       ...records.map((record) => {
-        const persistedRecord = serializeFlightRecordForPersistence(record) as unknown as Record<string, unknown>;
-        if (record.sourceKind === 'added') {
-          // Client-side 'added' is the pre-persist marker; the canonical
-          // source_kind check only accepts seasonal/daily/manual, where
-          // manually created legs persist as 'manual'. Translate at the send
-          // boundary so legacy flightRecord ops pass the check.
-          persistedRecord.sourceKind = 'manual';
-        }
+        const persistedRecord = normalizeFlightRecordForServerMutation(record) as unknown as Record<string, unknown>;
         return {
           type: 'flightRecord',
           changedFields: operationChangedFields(persistedRecord, ['id']),
           record: persistedRecord,
         };
       }),
-      ...deletedIds.map((id) => ({
-        type: 'flightRecord',
-        changedFields: ['status'],
-        record: { id, status: 'deleted' },
-      })),
+      ...deletedRecords.map((record) => {
+        const persistedRecord = toDeletedFlightRecordForServerMutation(record) as unknown as Record<string, unknown>;
+        return {
+          type: 'flightRecord',
+          changedFields: operationChangedFields(persistedRecord, ['id']),
+          record: persistedRecord,
+        };
+      }),
       ...sourceRows.map((row) => {
         const persistedRow = serializeSourceRowForPersistence(row) as unknown as Record<string, unknown>;
         return {
@@ -223,7 +220,7 @@ export async function runNativeScheduleMutation(
       records,
       sourceRows,
       mods,
-      deletedIds,
+      deletedIds: deletedRecords.map((record) => record.id),
       history,
     },
   });

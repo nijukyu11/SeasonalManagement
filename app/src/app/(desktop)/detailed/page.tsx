@@ -967,16 +967,19 @@ function DetailedScheduleContent() {
       const currentRecordsById = new Map(flightRecords.map((record) => [record.id, record]));
       const nextRecordsById = new Map(nextRecords.map((record) => [record.id, record]));
       const undoRecords = new Map<string, FlightRecord>();
-      const undoDeletedIds = new Set<string>();
+      const undoDeletedRecords = new Map<string, FlightRecord>();
       const undoMods = new Map<string, FlightModification>();
       for (const entry of entriesToUndo) {
         for (const change of entry.recordChanges ?? []) {
           if (change.previousRecord) {
             undoRecords.set(change.recordId, change.previousRecord);
-            undoDeletedIds.delete(change.recordId);
-          } else if (currentRecordsById.has(change.recordId)) {
-            undoRecords.delete(change.recordId);
-            undoDeletedIds.add(change.recordId);
+            undoDeletedRecords.delete(change.recordId);
+          } else {
+            const currentRecord = currentRecordsById.get(change.recordId);
+            if (currentRecord) {
+              undoRecords.delete(change.recordId);
+              undoDeletedRecords.set(change.recordId, currentRecord);
+            }
           }
         }
         for (const change of entry.changes) {
@@ -1001,7 +1004,7 @@ function DetailedScheduleContent() {
         syncMeta = await runNativeScheduleMutation(
           season.id,
           Array.from(undoRecords.values()),
-          Array.from(undoDeletedIds),
+          Array.from(undoDeletedRecords.values()),
           Array.from(undoMods.values()),
           {
             id: `LOCAL_UNDO_${undoTimestamp}`,

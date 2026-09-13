@@ -213,6 +213,24 @@ export function hydrateFlightLegFromPersistence<T extends Partial<FlightLeg>>(le
 export function serializeFlightRecordForPersistence(record: FlightRecord): PersistedFlightRecord {
   return serializeFlightLegForPersistence(record) as PersistedFlightRecord;
 }
+export function normalizeFlightRecordForServerMutation(record: FlightRecord): PersistedFlightRecord {
+  const persisted = serializeFlightRecordForPersistence(record);
+  if (record.sourceKind === 'added') {
+    // Client-side 'added' is the pre-persist marker; the canonical
+    // source_kind check only accepts seasonal/daily/manual, where
+    // manually created legs persist as 'manual'. Translate at the send
+    // boundary so legacy flightRecord ops pass the check.
+    persisted.sourceKind = 'manual';
+  }
+  return persisted;
+}
+
+export function toDeletedFlightRecordForServerMutation(record: FlightRecord): PersistedFlightRecord {
+  const persisted = normalizeFlightRecordForServerMutation(record);
+  persisted.status = 'deleted';
+  persisted.action = 'deleted';
+  return persisted;
+}
 
 export function hydrateFlightRecordFromPersistence(record: Partial<FlightRecord>): FlightRecord {
   return hydrateFlightLegFromPersistence(record) as FlightRecord;
