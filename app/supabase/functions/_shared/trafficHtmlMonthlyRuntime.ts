@@ -3,7 +3,7 @@ import type { sumHtmlMetrics, compareHtmlMetrics } from './trafficHtmlReportCont
 
 // Embedded verbatim in a self-contained offline file. Keep all runtime dependencies
 // in this function or in the explicit helpers; never fetch additional periods here.
-export function mountTrafficHtmlMonthly(data:HtmlEnvelope,helpers:{sum:typeof sumHtmlMetrics;compare:typeof compareHtmlMetrics}) {
+export function mountTrafficHtmlMonthly(data:HtmlEnvelope,helpers:{sum:typeof sumHtmlMetrics;compare:typeof compareHtmlMetrics;pivot?:(tab?:string,search?:string)=>void;syncState?:{summaryTab?:string;lastTab?:string;lastSearch?:string;fromMode?:string}}) {
   type Metric='flights'|'reported_pax';
   type Row=HtmlRow&{period:string};
   type Group={id:string;label:string;rows:Row[];children:Group[]};
@@ -59,6 +59,20 @@ export function mountTrafficHtmlMonthly(data:HtmlEnvelope,helpers:{sum:typeof su
   ];
   const defaults=():State=>({direction:'all',baseline:baselines[0]??'',search:'',sort:'flights',page:0,filters:{},expanded:new Set()});
   const states=new Map(tabs.map(t=>[t.id,defaults()]));let active=tabs[0];
+  const syncMap: Record<string, string> = {
+    country: 'market', days: 'peaks', airline: 'airline', route: 'route',
+    aircraft: 'aircraft', frequency: 'frequency', hours: 'peaks'
+  };
+  const srcTab = helpers.syncState?.summaryTab || helpers.syncState?.lastTab;
+  const targetTabId = syncMap[srcTab ?? ''] ?? srcTab;
+  if(targetTabId) {
+    const matched = tabs.find(t => t.id === targetTabId);
+    if(matched) active = matched;
+  }
+  if(helpers.syncState?.lastSearch) {
+    const curState = states.get(active.id);
+    if(curState) curState.search = helpers.syncState.lastSearch;
+  }
   const root=document.getElementById('report')!,header=el('header'),nav=el('nav',undefined,'tabs controls'),main=el('main');main.id='main';main.tabIndex=-1;
   document.body.classList.add('monthly-report');
   header.append(el('h1',`Tổng quan khai thác tháng ${Number(current.from.slice(5,7))}/${current.from.slice(0,4)}`),el('p',`${date(current.from)} – ${date(current.to)} · ${data.normalized_request.time_basis==='utc'?'Giờ UTC':'Giờ địa phương'}`));
@@ -66,7 +80,21 @@ export function mountTrafficHtmlMonthly(data:HtmlEnvelope,helpers:{sum:typeof su
   const fixedText=fixed.filter(([,v])=>v.length).map(([k,v])=>`${k}: ${v.join(', ')}`).join(' · ');
   if(fixedText)header.append(el('p',`Phạm vi đã xuất: ${fixedText}`));
   header.append(el('p',`${current.contains_future?'Tháng có lịch bay tương lai; số chuyến không phải toàn bộ đã thực hiện. ':''}Hành khách là số đã ghi nhận. Dấu — là chưa đủ dữ liệu, không phải số 0.`,'notice'));
-  nav.setAttribute('aria-label','Các phần báo cáo tháng');for(const tab of tabs){const b=button(tab.title,()=>{active=tab;render();});b.dataset.tab=tab.id;nav.append(b);}root.replaceChildren(header,nav,main);
+  nav.setAttribute('aria-label','Các phần báo cáo tháng');for(const tab of tabs){const b=button(tab.title,()=>{active=tab;render();});b.dataset.tab=tab.id;nav.append(b);}
+  const showClue=()=>{
+    if(helpers.syncState?.fromMode === 'pivot') {
+      const clueBanner = el('aside', undefined, 'summary-clue-banner controls');
+      clueBanner.setAttribute('role', 'status');clueBanner.setAttribute('aria-live', 'polite');
+      const icon = el('span', '📊', 'clue-icon');
+      const msg = el('span', undefined, 'clue-text');
+      msg.innerHTML = `Chế độ <strong>Báo cáo tổng quan chuẩn</strong>: Đang xem góc nhìn <strong>[${active.title}]</strong>.`;
+      const closeBtn = el('button', '✕', 'clue-close');closeBtn.type = 'button';closeBtn.title = 'Đóng thông báo';
+      closeBtn.onclick = () => { if(helpers.syncState) helpers.syncState.fromMode = ''; clueBanner.remove(); };
+      clueBanner.append(icon, msg, closeBtn);
+      main.prepend(clueBanner);
+    }
+  };
+  root.replaceChildren(header,nav,main);
 
   function metricCells(tr:HTMLTableRowElement,get:(p:string)=>HtmlMetric,key:Metric,averages=false){
     for(const id of ordered){const m=get(id),td=el('td',fmt(m[key]),`number ${id==='current'?'monthly-current':''}`);
@@ -74,7 +102,14 @@ export function mountTrafficHtmlMonthly(data:HtmlEnvelope,helpers:{sum:typeof su
       if(key==='reported_pax'&&m.pax_status==='partial')td.append(el('small','Chưa đủ khách'));
       tr.append(td);
     }
-    for(const id of baselines){const c=helpers.compare(get('current'),get(id),key),td=el('td',signed(c.delta),'number');td.append(el('small',pct(c.percent)));tr.append(td);}
+    for(const id of baselines){
+      const c=helpers.compare(get('current'),get(id),key);
+      const diffCls=c.delta===null?'':c.delta>0?'diff-pos':c.delta<0?'diff-neg':'diff-zero';
+      const pctCls=c.percent===null?'':c.percent>0?'diff-pos':c.percent<0?'diff-neg':'diff-zero';
+      const td=el('td',signed(c.delta),`number ${diffCls}`);
+      td.append(el('small',pct(c.percent),pctCls));
+      tr.append(td);
+    }
   }
   const headers=(grouped=false)=>[grouped?'Nhóm':'Chỉ tiêu',...(grouped?['Sản lượng']:[]),...ordered.map(month),...baselines.map(id=>`So ${month(id)} · Δ / %`)];
   const narrative=(get:(p:string)=>HtmlMetric,key:Metric)=>{
@@ -224,7 +259,7 @@ export function mountTrafficHtmlMonthly(data:HtmlEnvelope,helpers:{sum:typeof su
       if(saved)main.querySelectorAll<HTMLButtonElement>('button[data-group]').forEach(b=>{if(b.dataset.group===saved)b.focus();});
       else if(savedLabel)main.querySelectorAll<HTMLElement>('[aria-label]').forEach(n=>{if(n.getAttribute('aria-label')===savedLabel)n.focus({preventScroll:true});});
     };
-    const s=states.get(active.id)!;main.replaceChildren(el('h2',active.title));nav.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.tab===active.id)));
+    const s=states.get(active.id)!;main.replaceChildren(el('h2',active.title));showClue();nav.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.tab===active.id)));
     const tools=el('div',undefined,'monthly-tools controls');tools.append(button('In phần đang xem',()=>window.print()));
     if(active.id!=='overview')tools.append(select('Chiều',[['all','Tổng Đến + Đi'],['A','Đến'],['D','Đi']],s.direction,v=>{s.direction=v as Direction;render();}));
     if(active.levels.length||active.id==='overview')if(baselines.length)tools.append(select('Phân tích ảnh hưởng so với',baselines.map(id=>[id,month(id)]),s.baseline,v=>{s.baseline=v;render();}));

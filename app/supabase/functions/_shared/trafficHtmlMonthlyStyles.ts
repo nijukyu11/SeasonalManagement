@@ -43,4 +43,6 @@ export const trafficHtmlMonthlyStyles=`
 .monthly-report .charts{grid-template-columns:repeat(2,minmax(0,1fr))}
 @media(max-width:700px){.monthly-impact,.monthly-highlights,.monthly-report .charts{grid-template-columns:1fr}.monthly-report .name{min-width:145px;max-width:180px}.monthly-tools label{max-width:100%}.monthly-tools input{min-width:0}.monthly-report .pagination{gap:8px;flex-wrap:wrap}}
 @media print{.monthly-report .monthly-matrix table{min-width:0}.monthly-report th,.monthly-report td{padding:4px}.monthly-report thead th,.monthly-report .monthly-metric{font-size:9px;min-width:0}.monthly-report .number small{font-size:8px;white-space:normal}.monthly-report .name{min-width:0}.monthly-disclosure:not([open]){display:none}.monthly-impact{grid-template-columns:1fr 1fr}.monthly-reading p,.monthly-impact p,.monthly-impact li{font-size:10px}.monthly-footnote,.monthly-trend p{font-size:9px}.monthly-disclosure textarea,.monthly-disclosure>button{display:none}}
+.diff-pos{color:#15803d!important;font-weight:600}.diff-neg{color:#b91c1c!important;font-weight:600}.diff-zero{color:#64748b!important}
+.number small.diff-pos{color:#15803d!important}.number small.diff-neg{color:#b91c1c!important}.number small.diff-zero{color:#64748b!important}
 `;
