@@ -18,6 +18,7 @@ const files = [
   '../migrations/20260829170000_seasonal_canonical_authority.sql',
   '../migrations/20260904183000_daily_import_stage_indexed_ops_date.sql',
   '../migrations/20260906010000_import_terminal_coverage_and_identity.sql',
+  '../migrations/20260914090000_daily_loose_identity_live_row_precedence.sql',
 ];
 const sql = await Promise.all(files.map((file) => readFile(new URL(file, import.meta.url), 'utf8')));
 const db = await createSupabasePGlite();
@@ -330,6 +331,134 @@ try {
     assert.equal((await db.query(`select count(*)::int as n from public.canonical_active_flight_records_v1 where season_id=$1 and operational_date='2028-04-02'`, [deletedLineageSeason])).rows[0].n, 0);
     await assert.rejects(db.query(`select public.remove_canonical_season_modification_v1($1,'SEASONAL-BATCH-TOMBSTONE')`, [deletedLineageSeason]), error => error.code === 'PT409');
   }
+
+  // A live canonical row is the authority for a loose identity that an operator
+  // re-created after deleting the imported flight: the replacement must take
+  // the live row as its overlay source, not a stale terminal generation.
+  const liveSeason = 'season-daily-live-precedence';
+  await db.query(`
+    insert into public.seasons(
+      id,season_code,name,file_name,uploaded_at,effective_start,effective_end,
+      total_legs,total_source_rows,data_version
+    ) values ($1,'S29','S29','',0,'2029-04-01','2029-04-30',0,0,0)
+  `, [liveSeason]);
+  await db.query(`
+    insert into public.season_flight_records(
+      season_id,record_id,type,flight_number,raw_flight_number,airline,route,schedule,
+      date,scheduled_date,scheduled_time,operational_date,source_kind,source_side,
+      status,action,deletion_reason,lifecycle_changed_at
+    ) values
+      ($1,'LIVE-ACTIVE','D','KE2094','2094','KE','PUS','15:20','2029-04-02',
+        '2029-04-02','15:20','2029-04-02','manual','DEP','active',null,null,null),
+      ($1,'STALE-TERMINAL','D','KE2094','2094','KE','PUS','14:50','2029-04-02',
+        '2029-04-02','14:50','2029-04-02','manual','DEP','deleted','deleted',
+        'overlay_deleted','2029-04-02T00:00:00Z'),
+      ($1,'LIVE-ACTIVE-SAME-TIME','D','KE2094','2094','KE','PUS','14:50','2029-04-03',
+        '2029-04-03','14:50','2029-04-03','manual','DEP','active',null,null,null),
+      ($1,'STALE-TERMINAL-SAME-TIME','D','KE2094','2094','KE','PUS','14:50','2029-04-03',
+        '2029-04-03','14:50','2029-04-03','seasonal','DEP','deleted','deleted',
+        'overlay_deleted','2029-04-03T00:00:00Z'),
+      ($1,'DOUBLE-LIVE-A','D','KE2095','2095','KE','PUS','15:20','2029-04-04',
+        '2029-04-04','15:20','2029-04-04','manual','DEP','active',null,null,null),
+      ($1,'DOUBLE-LIVE-B','D','KE2095','2095','KE','PUS','16:20','2029-04-04',
+        '2029-04-04','16:20','2029-04-04','manual','DEP','active',null,null,null)
+  `, [liveSeason]);
+  await db.query(`
+    insert into public.season_modifications(season_id,leg_id,action,changed_fields)
+    values ($1,'STALE-TERMINAL','deleted','{}'),($1,'STALE-TERMINAL-SAME-TIME','deleted','{}')
+  `, [liveSeason]);
+  const livePayload = (requestId, operationalDate, scheduledTime, flightNumber) => {
+    const base = payload(requestId, 0);
+    return {
+      ...base,
+      legs: [{
+        ...base.legs[0],
+        seasonCode: 'S29',
+        operationalDate,
+        scheduledDate: operationalDate,
+        scheduledTime,
+        airline: 'KE',
+        flightNumber,
+        rawFlightNumber: flightNumber.slice(-4),
+        route: 'PUS',
+        occurrenceKey: `S29|${operationalDate}|DEP|KE|${flightNumber}|PUS|${scheduledTime}`,
+        looseOccurrenceKey: `S29|${operationalDate}|DEP|KE|${flightNumber}`,
+      }],
+      seasons: [{
+        seasonId: liveSeason,
+        seasonCode: 'S29',
+        expectedDataVersion: 0,
+        rangeStart: operationalDate,
+        rangeEnd: operationalDate,
+        affectedDates: [operationalDate],
+        confirmedZeroFlightDates: [],
+        legCount: 1,
+      }],
+    };
+  };
+  const stageLive = async (input, expectedDataVersion) => {
+    input.seasons[0].expectedDataVersion = expectedDataVersion;
+    const result = await db.query(`select public.stage_daily_schedule_import_v1($1::jsonb) as result`, [JSON.stringify(input)]);
+    return result.rows[0].result;
+  };
+  const commitLive = async (staged, expectedDataVersion) => {
+    const result = await db.query(
+      `select public.commit_daily_schedule_import_v1($1,$2::jsonb,$3) as result`,
+      [staged.batchId, JSON.stringify({ [liveSeason]: expectedDataVersion }), staged.previewHash],
+    );
+    return result.rows[0].result;
+  };
+  const liveMatch = async (staged) => (await db.query(
+    `select matched_record_id, overlay_rebase_plan from public.daily_schedule_import_batch_legs where batch_id=$1`,
+    [staged.batchId],
+  )).rows;
+
+  const distinctTimes = await stageLive(livePayload('10000000-0000-4000-8000-000000000140', '2029-04-02', '15:20', 'KE2094'), 0);
+  assert.equal(distinctTimes.status, 'validated', JSON.stringify(distinctTimes));
+  assert.equal(distinctTimes.preview.seasons[0].counts.matchedCount, 1);
+  assert.equal(
+    distinctTimes.preview.seasons[0].counts.effectiveAfterCount,
+    1,
+    'a live re-created flight must stay active instead of blocking on its stale terminal lineage',
+  );
+  assert.deepEqual(
+    (await liveMatch(distinctTimes))[0].matched_record_id,
+    'LIVE-ACTIVE',
+    'live identity must outrank the stale terminal generation at a different time',
+  );
+  await commitLive(distinctTimes, 0);
+  assert.deepEqual(
+    (await db.query(`select source_kind,supersedes_record_id from public.canonical_active_flight_records_v1 where season_id=$1 and operational_date='2029-04-02'`, [liveSeason])).rows,
+    [{ source_kind: 'daily', supersedes_record_id: 'LIVE-ACTIVE' }],
+    'the replacement must supersede the live row it matched',
+  );
+  assert.deepEqual(
+    (await db.query(`select status,deletion_reason from public.season_flight_records where season_id=$1 and record_id='STALE-TERMINAL'`, [liveSeason])).rows,
+    [{ status: 'deleted', deletion_reason: 'overlay_deleted' }],
+    'the stale terminal row must stay untouched history',
+  );
+
+  const sameTime = await stageLive(livePayload('10000000-0000-4000-8000-000000000141', '2029-04-03', '14:50', 'KE2094'), 1);
+  assert.equal(sameTime.status, 'validated', JSON.stringify(sameTime));
+  assert.equal(
+    (await liveMatch(sameTime))[0].matched_record_id,
+    'LIVE-ACTIVE-SAME-TIME',
+    'an equal-time stale terminal must not carry its deletion onto a live re-created flight',
+  );
+  assert.equal(sameTime.preview.seasons[0].counts.effectiveAfterCount, 1);
+  await commitLive(sameTime, 1);
+  assert.deepEqual(
+    (await db.query(`select operational_date,source_kind from public.canonical_active_flight_records_v1 where season_id=$1 and operational_date='2029-04-03'`, [liveSeason])).rows,
+    [{ operational_date: '2029-04-03', source_kind: 'daily' }],
+    'a re-created flight must not be inserted already cancelled',
+  );
+
+  const doubleLive = await stageLive(livePayload('10000000-0000-4000-8000-000000000142', '2029-04-04', '15:20', 'KE2095'), 2);
+  assert.equal(doubleLive.status, 'failed');
+  assert.ok(
+    doubleLive.diagnostics.some(d => d.code === 'DAILY_LOOSE_IDENTITY_COLLISION'),
+    'two live rows for one loose identity must stay blocked',
+  );
 
   const duplicatePayload = payload('10000000-0000-4000-8000-000000000128', 7);
   duplicatePayload.seasons[0].expectedDataVersion = (await db.query('select data_version from public.seasons where id=$1', [seasonId])).rows[0].data_version;

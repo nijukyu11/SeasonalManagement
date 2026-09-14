@@ -14,6 +14,13 @@
 - Nếu client mất kết nối sau khi gửi commit, gọi status bằng request ID. `committed` kèm receipt là kết quả cuối; không upload lại file để đoán trạng thái.
 - Receipt cần lưu: batch, affected dates, before/deleted/inserted/active counts, Pax, overlay rebase, data version, checksum và server high-water.
 
+## 2.1 Diễn giải loose identity khi operator đã tạo lại chuyến
+
+- Leg trong file khớp canonical row theo loose identity: season, Ops Date, side, hãng và số hiệu đã chuẩn hoá (bỏ space/leading zero/hậu tố chữ).
+- Row canonical đang active luôn thắng terminal row cũ: overlay (gate/stand/counter/Pax) của row active được rebase lên generation mới, còn terminal row chỉ là lineage lịch sử của chuyến đã xoá nên không được dùng lại làm nguồn overlay.
+- `DAILY_LOOSE_IDENTITY_COLLISION` chỉ còn khi có từ hai row active trở lên cùng loose identity, hoặc khi không có row active nào mà tồn tại nhiều terminal generation khác occurrence key.
+- Vì vậy preview hợp lệ vẫn có thể có `effectiveAfterCount` nhỏ hơn `afterCount`: đó là các leg bị giữ cancelled theo deletion overlay (`reason = overlay_deleted`) mà operator đã xoá trước đó, không phải mất dữ liệu. Muốn cho chuyến bay trở lại, xoá modification deleted của row đó bằng flow canonical (không sửa row trực tiếp) rồi stage lại.
+
 ## 3. Reconcile sau commit
 
 Chạy các truy vấn read-only trong artifact `2026-08-29-canonical-flight-leg-store-reconciliation.sql` tại cùng source version. So sánh:
