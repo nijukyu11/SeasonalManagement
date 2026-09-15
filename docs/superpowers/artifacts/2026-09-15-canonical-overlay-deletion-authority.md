@@ -57,4 +57,4 @@ Cùng sự cố JX704 còn một nửa phía client: `handleDeleteGroup` (`Seaso
 - Hệ quả đúng: thêm rồi xoá trong cùng draft ⇒ draft net-zero, Save không gửi gì; và có thể tạo lại đúng số hiệu chuyến đó ngay trong draft (record đã bị gỡ nên không còn cảnh báo trùng).
 - Trang `detailed` đã có sẵn bộ lọc tương đương (`currentMods.get(record.id)?.action !== 'deleted'`) nên không đổi.
 - Regression: `app/src/lib/seasonalNewFlightCreation.test.ts` (3 test mới: net-zero payload, phân tách target, wiring `handleDeleteGroup`/`commitDraftBeforeSave`); chạy `npm run test:seasonal-new-flight-creation` trong `app/`.
-- Phát hành: bump `0.1.30` (`package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `Cargo.lock`, `tauri.conf.json`); cần build lại app native để operator nhận fix.
+- Phát hành: bump `0.1.30` (`package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `Cargo.lock`, `tauri.conf.json`) + tag `app-v0.1.30` ⇒ workflow "Release desktop app" run `34944911658` success (2026-09-15T08:16Z), release `app-v0.1.30` có `SeasonalManagement_0.1.30_x64-setup.exe` + `.sig` + `latest.json` (version 0.1.30) nên app operator tự cập nhật.
