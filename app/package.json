@@ -1,6 +1,6 @@
 {
   "name": "app",
-  "version": "0.1.29",
+  "version": "0.1.30",
   "private": true,
   "type": "module",
   "scripts": {
@@ -18,6 +18,7 @@
     "test:public-traffic-aircraft-snapshot": "node supabase/tests/public_traffic_aircraft_type_snapshot_pglite.mjs",
     "test:daily-canonical-commit": "node supabase/tests/daily_schedule_canonical_commit_pglite.mjs",
     "test:canonical-manual": "node supabase/tests/canonical_manual_modifications_pglite.mjs",
+    "test:canonical-overlay-deletion": "node supabase/tests/canonical_overlay_deletion_pglite.mjs",
     "test:seasonal-canonical-authority": "node supabase/tests/seasonal_rebuild_daily_authority_pglite.mjs",
     "shadow:daily-import-v1": "node scripts/daily-import-v1-shadow.cjs",
     "test:seasonal-import-sql": "node supabase/tests/seasonal_source_import_v2_pglite.mjs",
@@ -45,7 +46,8 @@
     "lint": "eslint",
     "tauri": "tauri",
     "native:dev": "tauri dev",
-    "native:build": "tauri build --ci"
+    "native:build": "tauri build --ci",
+    "test:seasonal-new-flight-creation": "node --experimental-strip-types --test src/lib/seasonalNewFlightCreation.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.4",

@@ -25,6 +25,8 @@ import {
   buildFlightRecordHistoryEntry,
   compactDraftModifications,
   countHistoryEntryLegs,
+  draftAddedRecordsForCommit,
+  partitionDraftDeleteTargets,
   revertFlightRecordHistoryList,
   revertModificationHistoryMap,
 } from '@/lib/detailedScheduleState';
@@ -1258,7 +1260,7 @@ export default function HomePage() {
   const commitDraftBeforeSave = useCallback(async () => {
     if (!activeSeason || !draftState) return;
     const baseRecordIds = new Set(draftState.baseRecords.map((record) => record.id));
-    const addedRecords = flightRecords.filter((record) => !baseRecordIds.has(record.id));
+    const addedRecords = draftAddedRecordsForCommit(flightRecords, baseRecordIds, draftState.modifications);
     const regularMods = compactDraftModifications(draftState.modifications, baseRecordIds);
     const targetRecordIds = [...addedRecords.map((record) => record.id), ...regularMods.map((mod) => mod.legId)];
 
@@ -1407,9 +1409,20 @@ export default function HomePage() {
         if (!shouldDelete) return;
       }
 
-      const deleteMods = targetIds.map((id) => ({ legId: id, action: 'deleted' as const }));
+      const baseRecordIds = new Set((draftState?.baseRecords ?? flightRecords).map((record) => record.id));
+      // A leg created inside this draft has no server row yet: deleting it is a
+      // local removal. Writing a 'deleted' draft mod for it would be dropped by
+      // compactDraftModifications at commit, leaving the record as an active
+      // insert that survives reload.
+      const { draftAddedIds, persistedIds } = partitionDraftDeleteTargets(targetIds, baseRecordIds);
+      const localDeleteIds = new Set(draftAddedIds);
+      const deleteMods = persistedIds.map((id) => ({ legId: id, action: 'deleted' as const }));
+      const nextRecords = localDeleteIds.size === 0
+        ? flightRecords
+        : flightRecords.filter((record) => !localDeleteIds.has(record.id));
       const nextMods = new Map(modifications);
       deleteMods.forEach((mod) => nextMods.set(mod.legId, mod));
+      localDeleteIds.forEach((id) => nextMods.delete(id));
       const baseDraft = draftState ?? {
         baseRows: displayRows as unknown as ParsedRow[],
         baseRecords: flightRecords,
@@ -1417,24 +1430,25 @@ export default function HomePage() {
         records: [],
         modifications: [],
       };
-      const nextRows = buildPatternRowsFromRecords(flightRecords, nextMods);
-      setModifications(nextMods);
-      setDisplayRows(enrichRows(nextRows));
+      const nextRows = buildPatternRowsFromRecords(nextRecords, nextMods);
+      applySeasonData(nextRows, nextRecords, nextMods);
       setCachedSeasonData(activeSeason.id, {
         rows: nextRows,
-        records: flightRecords,
+        records: nextRecords,
         modifications: nextMods,
         seasonDataVersion: activeSeason.dataVersion,
       });
       useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
         seasonId: activeSeason.id,
-        affectedIds: getAffectedIdsFromSeasonalModifications(deleteMods),
+        affectedIds: [...getAffectedIdsFromSeasonalModifications(deleteMods), ...draftAddedIds],
+        deletedIds: draftAddedIds,
         rows: nextRows,
-        records: flightRecords,
+        records: nextRecords,
         modifications: nextMods,
       });
       setDraftState({
         ...baseDraft,
+        records: baseDraft.records.filter((record) => !localDeleteIds.has(record.id)),
         modifications: [...baseDraft.modifications, ...deleteMods],
       });
       setSelectedRecordIds((prev) => {
@@ -1447,7 +1461,7 @@ export default function HomePage() {
     } finally {
       finishSeasonalMutation(mutation);
     }
-  }, [activeDisplayLegs, activeSeason, beginSeasonalMutation, displayRows, draftState, finishSeasonalMutation, flightRecords, modifications, setDraftState, showAlert, showChoice, showConfirm, syncInProgress]);
+  }, [activeDisplayLegs, activeSeason, applySeasonData, beginSeasonalMutation, displayRows, draftState, finishSeasonalMutation, flightRecords, modifications, setDraftState, showAlert, showChoice, showConfirm, syncInProgress]);
 
   const handleUnlinkGroup = useCallback(async (group: DisplayGroup) => {
     if (!activeSeason || syncInProgress) return;

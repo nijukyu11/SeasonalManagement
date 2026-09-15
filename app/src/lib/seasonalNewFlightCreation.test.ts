@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { flattenRowsToFlightRecords } from './atomicSchedule.ts';
-import { buildCanonicalAddedFlightRecords } from './detailedScheduleState.ts';
+import { buildCanonicalAddedFlightRecords, draftAddedRecordsForCommit, partitionDraftDeleteTargets } from './detailedScheduleState.ts';
 import { normalizeFlightRecordForServerMutation, toDeletedFlightRecordForServerMutation } from './persistenceSchema.ts';
 import type { FlightLeg, FlightModification, ParsedRow } from './types.ts';
 
@@ -126,4 +126,78 @@ test('undo passes full records for deletion on seasonal and detailed pages', () 
     );
     assert.doesNotMatch(page, /undoDeletedIds/, `${relativePath} must not send id-only undo deletes`);
   }
+});
+
+test('a flight added and deleted inside one draft commits no record', () => {
+  const draftRecord = buildCanonicalAddedFlightRecords([addedMod()])[0];
+  const baseRecord = flattenRowsToFlightRecords([modalRow()])[0];
+  const records = [baseRecord, draftRecord];
+  const baseRecordIds = new Set([baseRecord.id]);
+
+  assert.deepEqual(
+    draftAddedRecordsForCommit(records, baseRecordIds, [{ legId: draftRecord.id, action: 'deleted' }]).map(
+      (record) => record.id,
+    ),
+    [],
+    'the record never reached the server, so a delete overlay for it must not be echoed as an insert',
+  );
+  assert.deepEqual(
+    draftAddedRecordsForCommit(records, baseRecordIds, []).map((record) => record.id),
+    [draftRecord.id],
+    'a live draft-added flight still commits',
+  );
+  assert.deepEqual(
+    draftAddedRecordsForCommit(records, baseRecordIds, [
+      { legId: draftRecord.id, action: 'modified' },
+      { legId: draftRecord.id, action: 'deleted' },
+    ]).map((record) => record.id),
+    [],
+    'a delete after edits still nets out',
+  );
+  assert.deepEqual(
+    draftAddedRecordsForCommit(records, baseRecordIds, [{ legId: baseRecord.id, action: 'deleted' }]).map(
+      (record) => record.id,
+    ),
+    [draftRecord.id],
+    'deleting a persisted leg must not drop unrelated draft additions',
+  );
+});
+
+test('draft delete targets split into local removal and persisted overlays', () => {
+  const baseRecordIds = new Set(['seasonal-leg-1']);
+  assert.deepEqual(partitionDraftDeleteTargets(['seasonal-leg-1', 'manual-leg-1'], baseRecordIds), {
+    draftAddedIds: ['manual-leg-1'],
+    persistedIds: ['seasonal-leg-1'],
+  });
+  assert.deepEqual(partitionDraftDeleteTargets(['manual-leg-1'], baseRecordIds), {
+    draftAddedIds: ['manual-leg-1'],
+    persistedIds: [],
+  });
+});
+
+test('seasonal delete group drops locally created flights before writing overlays', () => {
+  const page = readFileSync(join(process.cwd(), 'src/app/(desktop)/SeasonalSchedulePage.tsx'), 'utf8');
+  const handlerStart = page.indexOf('const handleDeleteGroup');
+  assert.notEqual(handlerStart, -1, 'handleDeleteGroup should exist');
+  const handler = page.slice(handlerStart, page.indexOf('const handleUnlinkGroup', handlerStart));
+  assert.match(
+    handler,
+    /partitionDraftDeleteTargets\(targetIds, baseRecordIds\)/,
+    'handleDeleteGroup must separate draft-added legs from persisted ones',
+  );
+  assert.match(
+    handler,
+    /deletedIds:\s*draftAddedIds/,
+    'draft-added legs must be removed from the workspace instead of receiving a deleted overlay',
+  );
+  assert.match(
+    handler,
+    /records:\s*baseDraft\.records\.filter/,
+    'the draft must stop tracking the removed record',
+  );
+  assert.match(
+    page,
+    /draftAddedRecordsForCommit\(flightRecords, baseRecordIds, draftState\.modifications\)/,
+    'commitDraftBeforeSave must not re-insert a record the draft deleted',
+  );
 });

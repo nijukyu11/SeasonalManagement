@@ -46,3 +46,15 @@ Không đổi signature, không đổi bảng/cột, không cần release app.
 - Stage lại file Daily đang lỗi: row thêm tay còn active sẽ thắng loose identity (không còn collision), phần seasonal bị xoá giữ nguyên tombstone nên không bị hồi sinh.
 - Muốn cho chuyến đã xoá quay lại: dùng Undo trong app (hoặc `remove_canonical_season_modification_v1`) — không sửa row trực tiếp.
 - Chưa thực hiện: cảnh báo trùng chuyến phía client khi thêm tay, để tránh operator tạo lại tình huống "hai chuyến cùng identity".
+
+## 7. Phía client: xoá chuyến vừa thêm trong cùng draft (app 0.1.30)
+
+Cùng sự cố JX704 còn một nửa phía client: `handleDeleteGroup` (`SeasonalSchedulePage.tsx`) ghi mod `{action:'deleted'}` cho **mọi** target, kể cả chuyến vừa tạo trong draft. Chuyến draft không nằm trong `baseRecords` nên `compactDraftModifications` (lọc theo base) drop mod đó ở `commitDraftBeforeSave`, trong khi `addedRecords = flightRecords − base` vẫn chứa record ⇒ server chỉ nhận `flightRecord` active, không bao giờ nhận lệnh xoá ⇒ reload là chuyến hiện lại.
+
+- `partitionDraftDeleteTargets(targetIds, baseRecordIds)`: tách target thành `draftAddedIds` (không có row server) và `persistedIds`.
+- `handleDeleteGroup`: chuyến draft-added bị **gỡ local** khỏi `flightRecords`/`draftState.records`/workspace (`deletedIds`) và mod `deleted` của nó bị xoá khỏi mod map, thay vì ghi overlay; chuyến persisted vẫn đi đường mod `deleted` (đã canonical hoá ở mục 3).
+- `draftAddedRecordsForCommit(records, baseRecordIds, draftMods)` lọc thêm ở `commitDraftBeforeSave`: record có mod `deleted` hiệu lực (kể cả sau khi sửa) không bao giờ được gửi lên như một insert.
+- Hệ quả đúng: thêm rồi xoá trong cùng draft ⇒ draft net-zero, Save không gửi gì; và có thể tạo lại đúng số hiệu chuyến đó ngay trong draft (record đã bị gỡ nên không còn cảnh báo trùng).
+- Trang `detailed` đã có sẵn bộ lọc tương đương (`currentMods.get(record.id)?.action !== 'deleted'`) nên không đổi.
+- Regression: `app/src/lib/seasonalNewFlightCreation.test.ts` (3 test mới: net-zero payload, phân tách target, wiring `handleDeleteGroup`/`commitDraftBeforeSave`); chạy `npm run test:seasonal-new-flight-creation` trong `app/`.
+- Phát hành: bump `0.1.30` (`package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `Cargo.lock`, `tauri.conf.json`); cần build lại app native để operator nhận fix.

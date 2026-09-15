@@ -332,6 +332,35 @@ export function compactDraftModifications(
   return Array.from(compacted.values());
 }
 
+export function partitionDraftDeleteTargets(
+  targetIds: readonly string[],
+  baseRecordIds: ReadonlySet<string>,
+): { draftAddedIds: string[]; persistedIds: string[] } {
+  const draftAddedIds: string[] = [];
+  const persistedIds: string[] = [];
+  for (const id of targetIds) {
+    if (baseRecordIds.has(id)) persistedIds.push(id);
+    else draftAddedIds.push(id);
+  }
+  return { draftAddedIds, persistedIds };
+}
+
+export function draftAddedRecordsForCommit(
+  records: readonly FlightRecord[],
+  baseRecordIds: ReadonlySet<string>,
+  draftMods: readonly FlightModification[],
+): FlightRecord[] {
+  const added = records.filter((record) => !baseRecordIds.has(record.id));
+  if (added.length === 0) return [];
+  const compacted = compactDraftModifications([...draftMods], new Set(draftMods.map((mod) => mod.legId)));
+  const deletedIds = new Set(
+    compacted.filter((mod) => mod.action === 'deleted').map((mod) => mod.legId),
+  );
+  // A flight created and deleted inside the same draft never reached the server;
+  // sending its record would insert a canonical row nothing ever deletes.
+  return added.filter((record) => !deletedIds.has(record.id));
+}
+
 export function revertModificationHistoryMap(
   currentMods: Map<string, FlightModification>,
   entriesToUndo: ModHistoryEntry[]
