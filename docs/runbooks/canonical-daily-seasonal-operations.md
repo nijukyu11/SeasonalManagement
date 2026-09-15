@@ -61,3 +61,10 @@ Reset là repair có phá authority, không phải thao tác import bình thư�
 - Các view `security_invoker` yêu cầu caller có `EXECUTE` trên `is_canonical_flight_leg_active_v1`, `canonical_flight_leg_ops_date_v1` và `canonical_flight_leg_occurrence_key_v1`.
 - Giữ `PUBLIC` và `anon` bị revoke; cấp cho `authenticated`, `service_role` và `seasonal_bi_reader` nếu role BI tồn tại.
 - Trên self-hosted production, chạy migration ACL bằng object owner `supabase_admin`. Sau đó probe Workspace V2 bằng role `authenticated`; không coi warning `no privileges were granted` là thành công.
+
+## 8. Overlay delete và Undo của operator
+
+- Mọi op workspace đi qua `apply_workspace_op_json(text,jsonb)`; từ migration `20260915100000_canonical_overlay_deletion_authority.sql`, `modification{action:'deleted'}` ghi canonical terminal (`deletion_reason='overlay_deleted'`) và `modification` khác chỉ phục hồi row khi `is_rebasable_terminal_flight_leg_v1`, nên overlay và canonical store không còn lệch nhau.
+- Overlay `deleted` là nguồn của Undo: không xoá overlay bằng tay để "trả chuyến về". Dùng Undo trong app hoặc `remove_canonical_season_modification_v1`; xoá overlay qua `modificationDelete` sẽ chạy đúng semantics canonical (`manual_undo` cho overlay `added`, phục hồi row cho overlay `deleted`).
+- Row bị import xoá (`daily_replacement`, `daily_authority`, `removed_from_source`), row đã supersede hoặc nằm trong replacement scope reset sẽ không được hồi sinh bởi op — muốn cho bay lại phải dùng flow repair/import tương ứng.
+- Kiểm tra sức khoẻ read-only: `select count(*) from public.season_flight_records r join public.season_modifications m on m.season_id=r.season_id and m.leg_id=r.record_id and m.action='deleted' where public.is_canonical_flight_leg_active_v1(r.status,r.action);` phải trả `0`.
