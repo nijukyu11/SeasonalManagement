@@ -116,13 +116,22 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
   const dayStates=new Map(ordinary.map(p=>[p.id,{...defaults(tabs.find(t=>t.id==='days')??tabs[0]),period:p.id}]));
   const root=document.getElementById('report')!;
   document.body.classList.remove('weekly-report','monthly-report'); document.body.classList.add('pivot-report');
-  const header=el('header'); header.append(el('h1',bao?'Báo cáo sản lượng':weekly?'Báo cáo tuần':data.normalized_request.report_type==='MASTER_OPERATIONS'?'Báo cáo tổng hợp khai thác':'Báo cáo khai thác'));
-  header.append(el('p',`${range(current)} · ${data.normalized_request.time_basis==='utc'?'Giờ UTC':'Giờ địa phương'}`));
+  const header=el('header');
+  const topRow=el('div',undefined,'header-main');
+  const titleBox=el('div',undefined,'header-title-box');
+  titleBox.append(el('h1',bao?'Báo cáo sản lượng':weekly?'Báo cáo tuần':data.normalized_request.report_type==='MASTER_OPERATIONS'?'Báo cáo tổng hợp khai thác':'Báo cáo khai thác'));
+  titleBox.append(el('span',`${range(current)} · ${data.normalized_request.time_basis==='utc'?'Giờ UTC':'Giờ địa phương'}`,'header-sub'));
+  topRow.append(titleBox);
+  const printBtn=button('In báo cáo',()=>window.print());printBtn.classList.add('controls','btn-print');
+  topRow.append(printBtn);
+  header.append(topRow);
+  const metaRow=el('div',undefined,'header-meta-row');
   const fixed=[['Hãng',data.normalized_request.airlines],['Thị trường',data.normalized_request.countries],['Chặng',data.normalized_request.routes]] as const;
   const scope=fixed.filter(([,v])=>v.length).map(([k,v])=>`${k}: ${v.join(', ')}`).join(' · ');
-  if(scope)header.append(el('p',`Phạm vi đã xuất: ${scope}`));
-  header.append(el('p','—: chưa có số liệu. *: số khách đã ghi nhận, còn thiếu; không dùng để so sánh. Ngày tương lai là lịch bay, không phải sản lượng đã thực hiện.','pivot-note'));
-  if(completedOpsDate)header.append(el('p',`Mốc chốt dữ liệu hoàn tất: Ops Date ${date(completedOpsDate)} · Sau ngày này là lịch bay dự kiến.`,'pivot-note pivot-as-of-badge'));
+  if(scope){const s=el('span',`Phạm vi: ${scope}`,'meta-item meta-scope');s.title=`Phạm vi: ${scope}`;metaRow.append(s);}
+  if(completedOpsDate)metaRow.append(el('span',`Chốt Ops Date: ${date(completedOpsDate)}`,'meta-item meta-badge'));
+  metaRow.append(el('span','—: chưa có số liệu. *: khách còn thiếu. Ngày tương lai là lịch bay dự kiến.','meta-item meta-note'));
+  header.append(metaRow);
   const nav=el('nav',undefined,'tabs controls');nav.setAttribute('aria-label','Các bảng theo mẫu');
   if(!bao) {
     const sumBtn = button('Tóm tắt và phân tích',()=>{
@@ -149,7 +158,6 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     b.dataset.tab=tab.id;
     nav.append(b);
   }
-  header.append(button('In báo cáo',()=>window.print()));header.lastElementChild!.classList.add('controls');
   const main=el('main');main.id='main';const content=el('div');
   if(helpers.syncState?.fromMode === 'summary') {
     const clueBanner = el('aside', undefined, 'pivot-clue-banner controls');
