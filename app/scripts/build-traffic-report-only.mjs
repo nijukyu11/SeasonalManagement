@@ -64,7 +64,11 @@ for (const reportLibrary of [
 const nextCli = join(appRoot, 'node_modules', 'next', 'dist', 'bin', 'next');
 const build = spawnSync(process.execPath, [nextCli, 'build', buildRoot], {
   cwd: appRoot,
-  env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+  env: {
+    ...process.env,
+    NEXT_TELEMETRY_DISABLED: '1',
+    NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED: process.env.NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED ?? '1',
+  },
   encoding: 'utf8',
   stdio: 'inherit',
 });
