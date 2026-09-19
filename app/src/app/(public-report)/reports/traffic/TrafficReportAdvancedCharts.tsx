@@ -2,12 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/cn';
-import type { TrafficBreakdownRow, TrafficDayOfWeekRow, TrafficMonthlyPeakRow, TrafficPeakHourRow, TrafficRegularFlight, TrafficTimeBasis, TrafficType } from '@/lib/trafficReportContract';
+import type { NormalizedTrafficReportFilter, TrafficBreakdownRow, TrafficDayOfWeekRow, TrafficMonthlyDayOfWeekRow, TrafficMonthlyPeakRow, TrafficPeakHourRow, TrafficRegularFlight, TrafficTimeBasis, TrafficType } from '@/lib/trafficReportContract';
 import {
   getAverageFlightsPerSelectedDay,
   getSelectedDayCountForMonth,
   orderTrafficPeakHours,
 } from '@/lib/trafficReportOperationalHours';
+import { TrafficMonthlyDayOfWeekHeatmap } from './TrafficMonthlyDayOfWeekHeatmap';
+import { TrafficPeakHourHeatmap } from './TrafficPeakHourHeatmap';
 
 const numberFormat = new Intl.NumberFormat('vi-VN');
 const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
@@ -46,9 +48,10 @@ const peakHourScopeLabels: Record<TrafficType, string> = {
   D: 'Chuyến bay đi',
 };
 
-export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, fromDate, toDate, onTimeBasisChange }: {
+export function PeakHourChart({ rows, monthlyRows, filter, timeBasis, selectedDayCount, fromDate, toDate, onTimeBasisChange }: {
   rows: TrafficPeakHourRow[];
   monthlyRows: TrafficMonthlyPeakRow[];
+  filter: NormalizedTrafficReportFilter;
   timeBasis: TrafficTimeBasis;
   selectedDayCount: number;
   fromDate: string;
@@ -56,6 +59,7 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
   onTimeBasisChange: (basis: TrafficTimeBasis) => void;
 }) {
   const [scope, setScope] = useState<TrafficType>('all');
+  const [viewMode, setViewMode] = useState<'chart' | 'heatmap'>('chart');
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const chartRef = useRef<HTMLDivElement>(null);
@@ -115,6 +119,23 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
         </div>
         <div className="flex flex-wrap items-start gap-4">
           <fieldset>
+            <legend className="mb-1 text-xs font-semibold text-slate-600">Kiểu hiển thị</legend>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className={cn('report-focus min-h-11 rounded-lg border px-3 text-sm font-bold', viewMode === 'chart' ? 'border-blue-900 bg-blue-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-blue-700')}
+                aria-pressed={viewMode === 'chart'}
+                onClick={() => setViewMode('chart')}
+              >Biểu đồ 24h</button>
+              <button
+                type="button"
+                className={cn('report-focus min-h-11 rounded-lg border px-3 text-sm font-bold', viewMode === 'heatmap' ? 'border-blue-900 bg-blue-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-blue-700')}
+                aria-pressed={viewMode === 'heatmap'}
+                onClick={() => setViewMode('heatmap')}
+              >Ma trận nhiệt</button>
+            </div>
+          </fieldset>
+          <fieldset>
             <legend className="mb-1 text-xs font-semibold text-slate-600">Phạm vi chuyến bay</legend>
             <div className="flex flex-wrap gap-2">{(['all', 'A', 'D'] as const).map((type) => <button
               key={type}
@@ -137,7 +158,8 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
         </div>
       </div>
 
-      <p id="peak-hour-scroll-cue" className="mt-5 text-pretty text-xs leading-5 text-slate-500 sm:hidden">Vuốt ngang để xem đủ 24 khung giờ của ngày khai thác.</p>
+      {viewMode === 'chart' ? <>
+        <p id="peak-hour-scroll-cue" className="mt-5 text-pretty text-xs leading-5 text-slate-500 sm:hidden">Vuốt ngang để xem đủ 24 khung giờ của ngày khai thác.</p>
       <div ref={chartRef} onPointerLeave={() => setHoveredKey(null)} onKeyDown={(event) => { if (event.key === 'Escape') closeDetails(); }}>
         <div
           className="report-focus mt-2 w-full overflow-x-auto overscroll-x-contain rounded-lg pb-2 sm:mt-6"
@@ -185,8 +207,12 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
           </li>)}</ul> : <p className="mt-2 text-pretty text-sm text-slate-600">Không ghi nhận lịch bay lặp ổn định trong kỳ. Chọn khung giờ khác để xem lịch thường lệ.</p>}
         </section> : null}
       </div>
-      <div className="mt-3 flex flex-wrap gap-4 text-xs font-semibold text-slate-600">{visibleTypes.map((type) => <span key={type} className="inline-flex items-center gap-2"><span className={cn('h-2 w-5 rounded-sm', type === 'A' ? 'bg-blue-900' : 'border-2 border-cyan-700 bg-white')} />{peakHourScopeLabels[type]}</span>)}</div>
-
+        <div className="mt-3 flex flex-wrap gap-4 text-xs font-semibold text-slate-600">{visibleTypes.map((type) => <span key={type} className="inline-flex items-center gap-2"><span className={cn('h-2 w-5 rounded-sm', type === 'A' ? 'bg-blue-900' : 'border-2 border-cyan-700 bg-white')} />{peakHourScopeLabels[type]}</span>)}</div>
+      </> : (
+        <div className="mt-4">
+          <TrafficPeakHourHeatmap filter={filter} scope={scope} timeBasis={timeBasis} />
+        </div>
+      )}
       <details className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
         <summary className="report-focus cursor-pointer rounded-sm font-semibold text-[#234093]">Bảng dữ liệu 24 khung giờ</summary>
         <div className="report-focus mt-4 overflow-x-auto overscroll-x-contain rounded-lg" role="region" tabIndex={0} aria-label="Bảng dữ liệu 24 khung giờ, có thể cuộn ngang"><table className="w-full min-w-[720px] text-left text-sm"><thead><tr className="border-b border-slate-300"><th className="p-2">Giờ</th>{scope !== 'D' ? <><th className="p-2 text-right">TB chuyến bay đến/ngày</th><th className="p-2 text-right">Tổng chuyến bay đến trong kỳ</th></> : null}{scope !== 'A' ? <><th className="p-2 text-right">TB chuyến bay đi/ngày</th><th className="p-2 text-right">Tổng chuyến bay đi trong kỳ</th></> : null}</tr></thead><tbody>{orderedRows.map((row) => <tr key={row.hour_bucket} className="border-b border-slate-200"><td className="p-2 tabular-nums">{row.hour_bucket}</td>{scope !== 'D' ? <><td className="p-2 text-right tabular-nums">{averageOrDash(row.averageArrivals)}</td><td className="p-2 text-right tabular-nums">{valueOrDash(row.arrivals)}</td></> : null}{scope !== 'A' ? <><td className="p-2 text-right tabular-nums">{averageOrDash(row.averageDepartures)}</td><td className="p-2 text-right tabular-nums">{valueOrDash(row.departures)}</td></> : null}</tr>)}</tbody></table></div>
@@ -205,26 +231,82 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
   );
 }
 
-export function DayOfWeekChart({ rows }: { rows: TrafficDayOfWeekRow[] }) {
-  const maxValue = Math.max(1, ...rows.map((row) => row.max_flights ?? 0));
+function weekdayMetric(row: TrafficDayOfWeekRow, scope: TrafficType, kind: 'average' | 'min' | 'max'): number | null {
+  if (scope === 'A') return row[`${kind}_arrivals` as const] ?? null;
+  if (scope === 'D') return row[`${kind}_departures` as const] ?? null;
+  return row[`${kind}_flights` as const] ?? null;
+}
+
+export function DayOfWeekChart({ rows, monthlyRows }: { rows: TrafficDayOfWeekRow[]; monthlyRows: TrafficMonthlyDayOfWeekRow[] }) {
+  const [scope, setScope] = useState<TrafficType>('all');
+  const [viewMode, setViewMode] = useState<'chart' | 'heatmap'>('chart');
+  const normalizedRows = useMemo(() => Array.from({ length: 7 }, (_, offset) => {
+    const dayIndex = (offset + 1) as TrafficDayOfWeekRow['day_index'];
+    return rows.find((row) => row.day_index === dayIndex) ?? {
+      day_index: dayIndex,
+      calendar_days: null,
+      complete_day_count: 0,
+      total_flights: null,
+      average_flights: null,
+      min_flights: null,
+      max_flights: null,
+      arrivals: null,
+      average_arrivals: null,
+      min_arrivals: null,
+      max_arrivals: null,
+      departures: null,
+      average_departures: null,
+      min_departures: null,
+      max_departures: null,
+      status: 'missing' as const,
+      suppressed: false,
+    };
+  }), [rows]);
+  const maxValue = Math.max(1, ...normalizedRows.map((row) => weekdayMetric(row, scope, 'max') ?? 0));
   return (
     <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
-      <p className="text-sm font-bold text-blue-900">Mẫu khai thác theo tuần</p>
-      <h3 className="mt-2 text-balance text-2xl font-bold text-[#102033]">Chu kỳ Thứ trong tuần</h3>
-      <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">Chiều cao cột là số chuyến trung bình; vạch dọc biểu diễn khoảng thấp nhất–cao nhất của từng Thứ trong kỳ.</p>
+      <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-sm font-bold text-blue-900">Mẫu khai thác theo tuần</p>
+        <h3 className="mt-2 text-balance text-2xl font-bold text-[#102033]">Cao điểm theo thứ trong tuần</h3>
+        <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">Chiều cao cột là số chuyến trung bình; vạch dọc biểu diễn khoảng thấp nhất–cao nhất của từng Thứ trong kỳ.</p></div>
+        <div className="flex flex-wrap items-start gap-4">
+          <fieldset>
+            <legend className="mb-1 text-xs font-semibold text-slate-600">Kiểu hiển thị</legend>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                aria-pressed={viewMode === 'chart'}
+                className={cn('report-focus min-h-11 rounded-lg border px-3 text-sm font-bold', viewMode === 'chart' ? 'border-blue-900 bg-blue-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-blue-700')}
+                onClick={() => setViewMode('chart')}
+              >Chu kỳ 7 Thứ</button>
+              <button
+                type="button"
+                aria-pressed={viewMode === 'heatmap'}
+                className={cn('report-focus min-h-11 rounded-lg border px-3 text-sm font-bold', viewMode === 'heatmap' ? 'border-blue-900 bg-blue-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-blue-700')}
+                onClick={() => setViewMode('heatmap')}
+              >Ma trận nhiệt</button>
+            </div>
+          </fieldset>
+          <fieldset><legend className="mb-1 text-xs font-semibold text-slate-600">Phạm vi chuyến bay</legend><div className="flex flex-wrap gap-2">{(['all', 'A', 'D'] as const).map((type) => <button key={type} type="button" aria-pressed={scope === type} className={cn('report-focus min-h-11 rounded-lg border px-3 text-sm font-bold', scope === type ? 'border-blue-900 bg-blue-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-blue-700')} onClick={() => setScope(type)}>{peakHourScopeLabels[type]}</button>)}</div></fieldset>
+        </div>
+      </div>
+      {viewMode === 'chart' ? <>
       <div className="mt-6 grid h-72 grid-cols-7 gap-2 border-b border-slate-300" aria-hidden="true">
-        {rows.map((row) => {
-          const average = row.average_flights ?? 0;
-          const min = row.min_flights ?? 0;
-          const max = row.max_flights ?? 0;
+        {normalizedRows.map((row) => {
+          const average = weekdayMetric(row, scope, 'average');
+          const min = weekdayMetric(row, scope, 'min');
+          const max = weekdayMetric(row, scope, 'max');
+          const available = !row.suppressed && average !== null && min !== null && max !== null;
+          const averageValue = average ?? 0;
+          const minValue = min ?? 0;
+          const maxValueForDay = max ?? 0;
           return <div key={row.day_index} className="flex min-w-0 flex-col justify-end text-center">
             <div className="relative mx-auto h-56 w-full max-w-12">
-              {!row.suppressed ? <>
-                <span className="absolute left-1/2 w-px -translate-x-1/2 bg-slate-500" style={{ bottom: `${(min / maxValue) * 100}%`, height: `${((max - min) / maxValue) * 100}%` }} />
-                <span className="absolute left-1/2 h-px w-4 -translate-x-1/2 bg-slate-500" style={{ bottom: `${(min / maxValue) * 100}%` }} />
-                <span className="absolute left-1/2 h-px w-4 -translate-x-1/2 bg-slate-500" style={{ bottom: `${(max / maxValue) * 100}%` }} />
-                <span className="absolute inset-x-1 bottom-0 rounded-t bg-[#00b4d8]" style={{ height: `${(average / maxValue) * 100}%` }} />
-                <span className="absolute inset-x-0 text-xs font-bold tabular-nums text-[#102033]" style={{ bottom: `${Math.min(96, (average / maxValue) * 100 + 2)}%` }}>{averageOrDash(average)}</span>
+              {available ? <>
+                <span className="absolute left-1/2 w-px -translate-x-1/2 bg-slate-500" style={{ bottom: `${(minValue / maxValue) * 100}%`, height: `${((maxValueForDay - minValue) / maxValue) * 100}%` }} />
+                <span className="absolute left-1/2 h-px w-4 -translate-x-1/2 bg-slate-500" style={{ bottom: `${(minValue / maxValue) * 100}%` }} />
+                <span className="absolute left-1/2 h-px w-4 -translate-x-1/2 bg-slate-500" style={{ bottom: `${(maxValueForDay / maxValue) * 100}%` }} />
+                <span className="absolute inset-x-1 bottom-0 rounded-t bg-[#00b4d8]" style={{ height: `${(averageValue / maxValue) * 100}%` }} />
+                <span className="absolute inset-x-0 text-xs font-bold tabular-nums text-[#102033]" style={{ bottom: `${Math.min(96, (averageValue / maxValue) * 100 + 2)}%` }}>{averageOrDash(average)}</span>
               </> : <span className="absolute inset-x-0 bottom-2 rounded border border-dashed border-slate-400 bg-slate-50 py-2 text-xs font-bold text-slate-500">—</span>}
             </div>
             <span className="mt-2 min-h-9 text-xs font-semibold text-slate-600">{dayLabels[row.day_index - 1]}</span>
@@ -233,8 +315,13 @@ export function DayOfWeekChart({ rows }: { rows: TrafficDayOfWeekRow[] }) {
       </div>
       <details className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
         <summary className="report-focus cursor-pointer rounded-sm font-semibold text-[#234093]">Bảng dữ liệu theo Thứ</summary>
-        <div className="report-focus mt-4 overflow-x-auto overscroll-x-contain rounded-lg" role="region" tabIndex={0} aria-label="Bảng dữ liệu theo Thứ, có thể cuộn ngang"><table className="w-full min-w-[600px] text-left text-sm"><thead><tr className="border-b border-slate-300"><th className="p-2">Thứ</th><th className="p-2 text-right">Số ngày</th><th className="p-2 text-right">Trung bình số chuyến</th><th className="p-2 text-right">Thấp nhất</th><th className="p-2 text-right">Cao nhất</th></tr></thead><tbody>{rows.map((row) => <tr key={row.day_index} className="border-b border-slate-200"><td className="p-2">{dayLabels[row.day_index - 1]}</td><td className="p-2 text-right tabular-nums">{valueOrDash(row.calendar_days)}</td><td className="p-2 text-right tabular-nums">{averageOrDash(row.average_flights)}</td><td className="p-2 text-right tabular-nums">{valueOrDash(row.min_flights)}</td><td className="p-2 text-right tabular-nums">{valueOrDash(row.max_flights)}</td></tr>)}</tbody></table></div>
+        <div className="report-focus mt-4 overflow-x-auto overscroll-x-contain rounded-lg" role="region" tabIndex={0} aria-label="Bảng dữ liệu theo Thứ, có thể cuộn ngang"><table className="w-full min-w-[680px] text-left text-sm"><thead><tr className="border-b border-slate-300"><th className="p-2">Thứ</th><th className="p-2 text-right">Ngày hoàn chỉnh</th><th className="p-2 text-right">Trung bình số chuyến</th><th className="p-2 text-right">Thấp nhất</th><th className="p-2 text-right">Cao nhất</th></tr></thead><tbody>{normalizedRows.map((row) => <tr key={row.day_index} className="border-b border-slate-200"><td className="p-2">{dayLabels[row.day_index - 1]}</td><td className="p-2 text-right tabular-nums">{row.complete_day_count == null ? valueOrDash(row.calendar_days) : `${numberFormat.format(row.complete_day_count)}/${valueOrDash(row.calendar_days)}`}</td><td className="p-2 text-right tabular-nums">{averageOrDash(weekdayMetric(row, scope, 'average'))}</td><td className="p-2 text-right tabular-nums">{valueOrDash(weekdayMetric(row, scope, 'min'))}</td><td className="p-2 text-right tabular-nums">{valueOrDash(weekdayMetric(row, scope, 'max'))}</td></tr>)}</tbody></table></div>
       </details>
+      </> : (
+        <div className="mt-4">
+          <TrafficMonthlyDayOfWeekHeatmap rows={monthlyRows} scope={scope} />
+        </div>
+      )}
     </article>
   );
 }

@@ -40,6 +40,36 @@ The dashboard is served at `/dashboard`. Add these values to the root-only Edge 
 - `ANNUAL_KPI_ADMIN_SESSION_SECRET`: at least 32 random characters, provisioned through the server secret workflow.
 - `ANNUAL_KPI_ADMIN_ALLOWED_ORIGINS`: comma-separated exact origins, including `https://report.ahtops.xyz` and the active staging origin when admin testing is required.
 
+## Các workbook tổng hợp, tuần, phân tích theo kỳ và Báo cáo sản lượng
+
+Hai report type mới được rollout additive và mặc định tắt. Không bật production trong cùng thay đổi code:
+
+- build static artifact với `NEXT_PUBLIC_TRAFFIC_WORKBOOK_EXPORT_ENABLED=true` chỉ cho staging/nhóm nghiệm thu;
+- đặt `TRAFFIC_WORKBOOK_EXPORT_ENABLED=true` trong root-only Edge environment để mở executor tương ứng;
+- rollout theo allowlist đồng bộ: `NEXT_PUBLIC_TRAFFIC_WORKBOOK_ENABLED_REPORT_TYPES` cho UI và `TRAFFIC_WORKBOOK_ENABLED_REPORT_TYPES` cho Edge, giá trị là danh sách report type phân cách bằng dấu phẩy;
+- bật `PERIOD_ANALYSIS` trước; chỉ thêm `BAO_CAO_SAN_LUONG` sau khi workbook mẫu đã qua kiểm tra Excel Desktop;
+- nếu chỉ một trong hai flag được bật, coi cấu hình là chưa hoàn tất: UI có thể không hiện action hoặc Edge trả `WORKBOOK_EXPORT_DISABLED`;
+- giữ action `Tải Excel 6 sheet (cũ)` trong suốt soak window để rollback không phụ thuộc việc sửa canonical data.
+
+Endpoint tạo file là `GET /api/report/v1/workbook-export`; catalog cùng kỳ là `GET /api/report/v1/workbook-period-options`. Chúng chỉ nhận allowlist report/template/period, canonicalize query, pin `data_as_of` và watermark, rồi dựng XLSX ở Edge. Response file bắt buộc có `Cache-Control: no-store`, `X-Artifact-SHA256`, `X-Report-Request-Id`, `X-Report-Request-Hash`, `X-Report-Data-As-Of` và `X-Report-Source-Watermark`. Nếu snapshot đổi giữa các resource, endpoint trả `409 REPORT_VERSION_CHANGED`; không phát hành mixed-version artifact.
+
+Trước nghiệm thu staging, kiểm tra cả `PERIOD_ANALYSIS/period-analysis-v1` và `BAO_CAO_SAN_LUONG/bao-cao-san-luong-v1` bên cạnh ba report type cũ:
+
+1. query season/custom/month normalize đúng inclusive Ops Date; Weekly Detail tự lấy đúng 7 ngày liền trước và 7 ngày liền sau, đồng thời từ chối khi context vượt miền dữ liệu;
+2. số sheet, tên, thứ tự, header, typed date, number/percent format, freeze pane, print area và chart đúng manifest trong `app/report-templates`;
+3. KPI, ARR + DEP, dimension totals, Unknown và Pax coverage reconcile tại đúng `data_as_of`/watermark;
+4. workbook không có `Data`, raw leg/history/deleted row, external link, macro, credential hoặc local path;
+5. Pax NULL là ô trống, true-zero là `0`, tháng chưa hoàn tất là `DRAFT/PARTIAL`;
+6. mở từng sheet bằng Excel/LibreOffice và kiểm tra không có repair prompt, chart trắng hoặc lỗi công thức.
+
+Riêng Phân tích theo kỳ, thử một tháng, nhiều tháng qua năm, mùa, năm và khoảng ngày; thử không so sánh, một năm, nhiều năm và ít nhất 12 năm. Các kỳ so sánh phải được backend tự resolve từ năm được chọn, cùng watermark/data_as_of và không âm thầm cắt bớt khi vượt ngân sách.
+
+Riêng Báo cáo sản lượng, xác nhận file là `.xlsx` macro-free, không có sheet dữ liệu nguồn, VBA, connection, query table, Data Mashup, external link hoặc đường dẫn cá nhân. Mùa hè có `APR`–`OCT`, mùa đông có `NOV`–`MAR`; `WEEKLY` dùng đúng Thứ Sáu–Thứ Năm và tuần biên là partial. Bản `.xlsm` reference chỉ dùng trong luồng nội bộ, không phát hành từ endpoint public.
+
+Riêng Weekly Detail, đối chiếu ba giai đoạn trên các sheet `Tổng quan`, `Theo ngày`, `Theo tuần`, `Chi tiết Airline`, `Chi tiết Country`, `Chi tiết Route`, `AC Group` và `AC Type`. Mọi resource phải dùng cùng `data_as_of`/watermark; entity chỉ xuất hiện ở tuần trước hoặc tuần sau vẫn phải hiện để không che mất hãng/chặng/tàu bay mới hoặc tạm vắng trong kỳ chọn.
+
+Rollback riêng cho workbook export: đặt cả hai flag về false, rebuild static artifact nếu cần ẩn action, redeploy Edge environment/function trước đó và giữ nguyên export CSV/Excel 6 sheet. Không sửa hoặc rollback canonical traffic data để xử lý lỗi renderer.
+
 The admin cookie is HttpOnly, Secure, SameSite=Strict and expires after 10 minutes. Confirm Nginx forwards cookies only for `/api/report/v1/kpi-admin/`, never caches that prefix, and still strips cookies from the remaining public report API.
 
 For production, install `seasonal-traffic-report-refresh-production.timer` as `/etc/systemd/system/seasonal-traffic-report-refresh.timer` and enable it only after staging acceptance. Its five-minute calendar schedule cannot fall into an elapsed state after being enabled. The refresh runner first compares the committed source watermark with the published projection watermark. It exits with `unchanged` without refreshing the materialized view when they match; a full refresh runs only after a committed import/change advances the watermark or when the projection is stale/failed. A failed import transaction does not advance the watermark and therefore cannot publish a new dashboard version. Keep the staging timer disabled and use the manual helper during acceptance.

@@ -12,6 +12,7 @@ const paxPresenceSql = await readFile(new URL('../migrations/20260829210000_publ
 const aircraftTypeSql = await readFile(new URL('../migrations/20260830200000_public_traffic_report_aircraft_type_contract.sql', import.meta.url), 'utf8');
 const removeSuppressionSql = await readFile(new URL('../migrations/20260830213000_public_traffic_report_remove_suppression.sql', import.meta.url), 'utf8');
 const regularFlightsSql = await readFile(new URL('../migrations/20260831120000_public_traffic_report_regular_flights.sql', import.meta.url), 'utf8');
+const peakHeatmapsSql = await readFile(new URL('../migrations/20260904120000_public_traffic_peak_heatmaps.sql', import.meta.url), 'utf8');
 const annualPassengerKpiSql = await readFile(new URL('../migrations/20260831150000_public_annual_passenger_kpi.sql', import.meta.url), 'utf8');
 const annualPassengerKpiOwnerSql = await readFile(new URL('../migrations/20260831190000_annual_passenger_kpi_owner.sql', import.meta.url), 'utf8');
 const db = await createSupabasePGlite();
@@ -63,6 +64,8 @@ try {
   await db.exec(removeSuppressionSql);
   await db.exec(regularFlightsSql);
   await db.exec(regularFlightsSql);
+  await db.exec(peakHeatmapsSql);
+  await db.exec(peakHeatmapsSql);
   await db.exec(annualPassengerKpiSql);
   await db.exec(annualPassengerKpiSql);
   await db.exec(annualPassengerKpiOwnerSql);
@@ -457,12 +460,33 @@ try {
     'cursor pages must join without gaps or duplicate dates',
   );
 
+  await db.query(`insert into reporting.public_traffic_coverage (from_date, to_date, status, reason_code, certified_at) values (date '2026-03-03', date '2026-03-03', 'complete', 'heatmap-contract', now())`);
+  const heatmap = (await db.query(`select public.get_public_traffic_report_peak_hour_heatmap_v1(date '2026-03-03', date '2026-03-03', array['A'], array[]::text[], array[]::text[], array[]::text[], array[]::text[], 'local', 'traffic-report-v1') as result`)).rows[0].result;
+  assert.equal(heatmap.type, 'A');
+  assert.equal(heatmap.monthly_average.length, 24, 'the monthly heatmap must expose every operational hour');
+  assert.equal(heatmap.monthly_average.find((row) => row.hour_bucket === '08:00').flights, 2, 'a monthly hour cell must be the rounded daily average, not a period total');
+  assert.equal(heatmap.days[0].total_flights, 3);
+  assert.equal(heatmap.days[0].is_month_peak, true);
+  const heatmapOverview = (await db.query(`select public.get_public_traffic_report_overview_v1(date '2026-03-03', date '2026-03-03', array['A','D'], array[]::text[], array[]::text[], array[]::text[], array[]::text[], 'none', 'local', null, 366, 'traffic-report-v1') as result`)).rows[0].result;
+  const tuesday = heatmapOverview.breakdowns.day_of_week.find((row) => row.day_index === 2);
+  assert.equal(tuesday.average_flights, 7, 'the weekday chart must use the same certified-day denominator as the monthly matrix');
+  assert.equal(tuesday.average_arrivals, 3);
+  assert.equal(tuesday.average_departures, 4);
+  const monthlyTuesday = heatmapOverview.breakdowns.day_of_week_monthly.find((row) => row.month === '2026-03' && row.day_index === 2);
+  assert.equal(monthlyTuesday.average_flights, 7);
+  assert.equal(monthlyTuesday.is_peak_all, true);
+
   try {
     await db.exec('set role anon');
     await assert.rejects(
       db.query(`select public.get_public_traffic_report_overview_v1()`),
       /permission denied/,
       'anonymous database roles must not bypass the aggregate Edge boundary',
+    );
+    await assert.rejects(
+      db.query(`select public.get_public_traffic_report_peak_hour_heatmap_v1(date '2026-03-03', date '2026-03-03')`),
+      /permission denied/,
+      'anonymous database roles must not execute the aggregate heatmap wrapper',
     );
   } finally {
     await db.exec('reset role');
@@ -501,6 +525,11 @@ try {
       'the Edge service role must not execute internal breakdowns directly',
     );
     await assert.rejects(
+      db.query(`select reporting.get_traffic_report_peak_hour_heatmap_v1(date '2026-03-03', date '2026-03-03')`),
+      /permission denied/,
+      'the Edge service role must not execute the internal heatmap helper directly',
+    );
+    await assert.rejects(
       db.query(`select count(*) from reporting.public_traffic_effective`),
       /permission denied/,
       'the Edge service role must not read the row-level materialized snapshot',
@@ -512,6 +541,8 @@ try {
     );
     const serviceOverview = await db.query(`select public.get_public_traffic_report_overview_v1(date '2026-03-02', date '2026-03-03') as result`);
     assert.equal(serviceOverview.rows[0].result.timeline.length, 2, 'the Edge service role must execute the aggregate-only public wrapper');
+    const serviceHeatmap = await db.query(`select public.get_public_traffic_report_peak_hour_heatmap_v1(date '2026-03-03', date '2026-03-03') as result`);
+    assert.equal(serviceHeatmap.rows[0].result.days.length, 1, 'the Edge service role must execute the aggregate-only heatmap wrapper');
     const serviceDimension = await db.query(`select public.get_public_traffic_report_dimension_v2(date '2026-03-03', date '2026-03-03', 'airline') as result`);
     assert.equal(serviceDimension.rows[0].result.rows[0].label, 'VN', 'the Edge service role must execute the aggregate-only dimension wrapper');
   } finally {

@@ -58,11 +58,9 @@ body:has(.kpi-admin-dialog[open]) {
 
 .kpi-dashboard {
   min-width: 320px;
-  background:
-    radial-gradient(circle at 72% -10%, rgb(14 165 233 / 12%), transparent 32rem),
-    linear-gradient(145deg, #071424 0%, #06101f 54%, #07101d 100%);
-  color: #eaf5ff;
-  color-scheme: dark;
+  background: #f1f5f9;
+  color: #0f172a;
+  color-scheme: light;
   font-family: Inter, "Segoe UI", Arial, sans-serif;
 }
 
@@ -100,9 +98,9 @@ body:has(.kpi-admin-dialog[open]) {
 .kpi-dashboard .status-panel,
 .kpi-dashboard .chart-panel,
 .kpi-dashboard .metric-card {
-  border: 1px solid rgb(148 163 184 / 12%);
-  background: linear-gradient(145deg, rgb(14 30 51 / 94%), rgb(8 22 39 / 92%));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 2.5%), 0 18px 48px rgb(0 0 0 / 12%);
+  border: 1px solid #d7e0e8;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 6%);
 }
 
 .kpi-dashboard .hero-panel,
@@ -137,7 +135,7 @@ body:has(.kpi-admin-dialog[open]) {
 }
 
 .kpi-dashboard .metric-label {
-  color: #8da1b9;
+  color: #526274;
   font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.11em;
@@ -146,9 +144,9 @@ body:has(.kpi-admin-dialog[open]) {
 }
 
 .kpi-dashboard .soft-stat {
-  border: 1px solid rgb(148 163 184 / 10%);
+  border: 1px solid #dbe4ec;
   border-radius: 0.9rem;
-  background: rgb(2 10 22 / 32%);
+  background: #f8fafc;
   padding: 0.85rem;
 }
 
@@ -161,12 +159,12 @@ body:has(.kpi-admin-dialog[open]) {
   flex: none;
   place-items: center;
   border-radius: 999px;
-  background: conic-gradient(#43d9ff var(--progress), rgb(148 163 184 / 13%) 0);
-  box-shadow: 0 0 36px rgb(67 217 255 / 9%);
+  background: conic-gradient(#0284c7 var(--progress), #dbe4ec 0);
+  box-shadow: none;
 }
 
 .kpi-dashboard .completion-ring-missing {
-  background: conic-gradient(rgb(148 163 184 / 13%) 360deg, rgb(148 163 184 / 13%) 0);
+  background: conic-gradient(#dbe4ec 360deg, #dbe4ec 0);
   box-shadow: none;
 }
 
@@ -174,9 +172,9 @@ body:has(.kpi-admin-dialog[open]) {
   position: absolute;
   width: calc(clamp(9rem, 11vw, 11.75rem) - 0.95rem);
   aspect-ratio: 1;
-  border: 1px solid rgb(148 163 184 / 10%);
+  border: 1px solid #dbe4ec;
   border-radius: 999px;
-  background: #0a1728;
+  background: #ffffff;
   content: "";
 }
 
@@ -187,7 +185,7 @@ body:has(.kpi-admin-dialog[open]) {
 }
 
 .kpi-dashboard .completion-ring span {
-  color: white;
+  color: #0f172a;
   font-size: clamp(1.9rem, 2.7vw, 2.8rem);
   font-weight: 750;
   letter-spacing: -0.05em;
@@ -196,7 +194,7 @@ body:has(.kpi-admin-dialog[open]) {
 
 .kpi-dashboard .completion-ring small {
   margin-top: 0.3rem;
-  color: #8da1b9;
+  color: #526274;
   font-size: 0.58rem;
   font-weight: 600;
   letter-spacing: 0.1em;
@@ -208,7 +206,7 @@ body:has(.kpi-admin-dialog[open]) {
   height: 0.625rem;
   overflow: hidden;
   border-radius: 999px;
-  background: #1e293b;
+  background: #dbe4ec;
 }
 
 .kpi-dashboard .kpi-progress-value,
@@ -219,11 +217,11 @@ body:has(.kpi-admin-dialog[open]) {
 }
 
 .kpi-dashboard .kpi-progress-value {
-  background: linear-gradient(90deg, #06b6d4, #7dd3fc);
+  background: #0284c7;
 }
 
 .kpi-dashboard .kpi-progress-missing {
-  background: repeating-linear-gradient(135deg, transparent 0 8px, rgb(148 163 184 / 10%) 8px 16px);
+  background: #cbd5e1;
 }
 
 .kpi-dashboard .kpi-admin-year-control select {
@@ -249,6 +247,10 @@ body:has(.kpi-admin-dialog[open]) {
 .kpi-dashboard .kpi-trend-chart {
   width: 100%;
   height: clamp(190px, 28vh, 290px);
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.85rem;
+  background: #f8fafc;
 }
 
 .kpi-dashboard .recharts-default-legend {
@@ -256,6 +258,173 @@ body:has(.kpi-admin-dialog[open]) {
   flex-wrap: wrap;
   justify-content: center;
   gap: 0.75rem;
+}
+
+.kpi-dashboard .dashboard-footer {
+  border-color: #d7e0e8;
+  color: #64748b;
+}
+
+@media (min-width: 1280px) and (min-height: 720px) {
+  .kpi-dashboard.kpi-wallboard .dashboard-shell {
+    width: 100%;
+    height: 100dvh;
+    min-height: 0;
+    padding-inline: clamp(1.5rem, 2.2vw, 4rem);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    gap: clamp(0.55rem, 0.9vh, 0.8rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .dashboard-header {
+    min-height: 2.25rem;
+    padding-block: 0;
+  }
+
+  .kpi-dashboard.kpi-wallboard .hero-grid {
+    min-height: 0;
+  }
+
+  .kpi-dashboard.kpi-wallboard .hero-panel,
+  .kpi-dashboard.kpi-wallboard .status-panel {
+    padding: clamp(1rem, 1.15vw, 1.25rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .dashboard-title {
+    font-size: clamp(1.35rem, 1.35vw, 1.75rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .snapshot-meta,
+  .kpi-dashboard.kpi-wallboard .freshness-badge {
+    font-size: clamp(0.85rem, 0.8vw, 1rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .hero-panel {
+    min-height: clamp(17rem, 29vh, 19rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .hero-content {
+    gap: 1rem;
+  }
+
+  .kpi-dashboard.kpi-wallboard .hero-context {
+    font-size: clamp(0.85rem, 0.8vw, 1rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .hero-message {
+    max-width: 25ch;
+    font-size: clamp(2.6rem, 3.3vw, 3.75rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .hero-note {
+    color: #475569;
+    font-size: clamp(1rem, 1vw, 1.25rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .hero-progress-value {
+    font-size: clamp(1.75rem, 1.75vw, 2.25rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .hero-progress-percent {
+    font-size: clamp(1.8rem, 1.75vw, 2.25rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .metric-label {
+    color: #475569;
+    font-size: clamp(0.82rem, 0.75vw, 0.95rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .metric-card {
+    align-items: center;
+    gap: 1rem;
+    padding: clamp(1rem, 1.15vw, 1.4rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .metric-icon {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .kpi-dashboard.kpi-wallboard .metric-icon svg {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  .kpi-dashboard.kpi-wallboard .metric-value {
+    font-size: clamp(2rem, 2vw, 2.65rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .metric-note {
+    color: #526274;
+    font-size: clamp(0.82rem, 0.75vw, 0.95rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .status-heading,
+  .kpi-dashboard.kpi-wallboard .soft-stat-label {
+    font-size: clamp(0.9rem, 0.85vw, 1.05rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .status-value > p {
+    font-size: clamp(1.65rem, 1.75vw, 2.25rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .status-value > svg {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+
+  .kpi-dashboard.kpi-wallboard .soft-stat {
+    padding: clamp(0.7rem, 0.75vw, 0.9rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .soft-stat-value {
+    font-size: clamp(1.8rem, 1.65vw, 2.25rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .completion-ring {
+    width: clamp(8.5rem, 9vw, 10rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .completion-ring::before {
+    width: calc(clamp(8.5rem, 9vw, 10rem) - 0.85rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .completion-ring span {
+    font-size: clamp(2.1rem, 2.5vw, 2.85rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .completion-ring small {
+    color: #475569;
+    font-size: 0.75rem;
+  }
+
+  .kpi-dashboard.kpi-wallboard .chart-panel {
+    display: grid;
+    height: 100%;
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .kpi-dashboard.kpi-wallboard .bottom-grid {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .kpi-dashboard.kpi-wallboard .trend-title {
+    font-size: clamp(1.15rem, 1.15vw, 1.45rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .trend-forecast {
+    font-size: clamp(0.85rem, 0.8vw, 1rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .kpi-trend-chart {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .kpi-dashboard.kpi-wallboard .dashboard-footer {
+    display: none;
+  }
 }
 
 .kpi-dashboard .recharts-legend-item {

@@ -4,11 +4,13 @@ import * as XLSX from 'xlsx';
 import {
   buildOverviewUrl,
   buildDimensionUrl,
+  buildPeakHourHeatmapUrl,
   buildTimelineUrl,
   detectTrafficReportDatePreset,
   getLatestCompletedOpsDate,
   getTrafficReportPresetRange,
   isTrafficReportBundle,
+  isTrafficPeakHourHeatmapResponse,
   parseTrafficReportSearchParams,
   parseTrafficReportPageState,
   toTrafficReportSearchParams,
@@ -49,6 +51,20 @@ test('focused URLs preserve global filters and apply a local scope', () => {
   const filter = parseTrafficReportSearchParams(new URLSearchParams('from=2026-01-01&to=2026-01-31&airline=VN&route=HAN'));
   assert.equal(buildTimelineUrl(filter, 'A'), '/api/report/v1/timeline?from=2026-01-01&to=2026-01-31&type=A&airline=VN&route=HAN&page_size=732');
   assert.equal(buildDimensionUrl(filter, 'route', 'D', 'pax_share', 2, 50), '/api/report/v1/dimension?from=2026-01-01&to=2026-01-31&type=D&airline=VN&route=HAN&dimension=route&sort=pax_share&page=2&page_size=50');
+  assert.equal(buildPeakHourHeatmapUrl({ ...filter, from: '2026-01-01', to: '2026-01-31', tz: 'utc' }, 'A', '2026-01-01', '2026-01-31'), '/api/report/v1/peak-hour-heatmap?from=2026-01-01&to=2026-01-31&type=A&airline=VN&route=HAN&comp=none&tz=utc');
+});
+
+test('peak-hour heatmap contract keeps 24 aggregate buckets and truthful missing values', () => {
+  const buckets = Array.from({ length: 24 }, (_, hour) => ({ hour_bucket: `${String(hour).padStart(2, '0')}:00`, flights: hour === 4 ? null : hour }));
+  const response = {
+    contract_version: 'traffic-report-v1', request_hash: 'hash', data_as_of: '2026-09-04T00:00:00Z', source_watermark: 1,
+    month: '2026-08', type: 'A', time_basis: 'local', selected_day_count: 1, complete_day_count: 0, partial_day_count: 1, missing_day_count: 0,
+    monthly_average: buckets,
+    days: [{ ops_date: '2026-08-01', status: 'partial', total_flights: 12, is_month_peak: true, buckets }],
+  };
+  assert.equal(isTrafficPeakHourHeatmapResponse(response), true);
+  assert.equal(isTrafficPeakHourHeatmapResponse({ ...response, monthly_average: buckets.slice(1) }), false);
+  assert.equal(isTrafficPeakHourHeatmapResponse({ ...response, days: [{ ...response.days[0], buckets: [{ hour_bucket: '00:00', flights: 1, record_id: 'forbidden' }] }] }), false);
 });
 
 test('date presets anchor to the latest Ops Date and stay inside the available domain', () => {

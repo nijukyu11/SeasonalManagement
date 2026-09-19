@@ -7,14 +7,26 @@ const trendPath = 'src/app/(public-report)/reports/traffic/TrafficReportTrend.ts
 const dimensionPath = 'src/app/(public-report)/reports/traffic/TrafficReportDimensionSection.tsx';
 const clientPath = 'src/app/(public-report)/reports/traffic/TrafficReportClient.tsx';
 const advancedChartsPath = 'src/app/(public-report)/reports/traffic/TrafficReportAdvancedCharts.tsx';
+const workbookDialogPath = 'src/app/(public-report)/reports/traffic/TrafficWorkbookExportDialog.tsx';
+const peakHourHeatmapPath = 'src/app/(public-report)/reports/traffic/TrafficPeakHourHeatmap.tsx';
+const weekdayHeatmapPath = 'src/app/(public-report)/reports/traffic/TrafficMonthlyDayOfWeekHeatmap.tsx';
+const trendTablePath = 'src/app/(public-report)/reports/traffic/TrafficTrendTable.tsx';
+const donutPath = 'src/app/(public-report)/reports/traffic/TrafficDimensionShareDonut.tsx';
+const trendGranularityPath = 'src/lib/trafficReportTrendGranularity.ts';
 const trendSource = readFileSync(join(process.cwd(), trendPath), 'utf8');
 const dimensionSource = readFileSync(join(process.cwd(), dimensionPath), 'utf8');
 const clientSource = readFileSync(join(process.cwd(), clientPath), 'utf8');
 const advancedChartsSource = readFileSync(join(process.cwd(), advancedChartsPath), 'utf8');
+const workbookDialogSource = readFileSync(join(process.cwd(), workbookDialogPath), 'utf8');
+const peakHourHeatmapSource = readFileSync(join(process.cwd(), peakHourHeatmapPath), 'utf8');
+const weekdayHeatmapSource = readFileSync(join(process.cwd(), weekdayHeatmapPath), 'utf8');
+const trendTableSource = readFileSync(join(process.cwd(), trendTablePath), 'utf8');
+const donutSource = readFileSync(join(process.cwd(), donutPath), 'utf8');
+const trendGranularitySource = readFileSync(join(process.cwd(), trendGranularityPath), 'utf8');
 
 test('public trend and dimension views omit technical Pax coverage fields', () => {
   for (const [path, source] of [[trendPath, trendSource], [dimensionPath, dimensionSource]] as const) {
-    assert.doesNotMatch(source, /Tỷ lệ chuyến có số khách|Chuyến có khách|chuyến đến hạn|Trạng thái dữ liệu|pax_coverage_pct|reported_legs|due_legs/, path);
+    assert.doesNotMatch(source, /Tỷ lệ chuyến có số khách|Chuyến có khách|chuyến đến hạn|Trạng thái dữ liệu/, path);
   }
 });
 
@@ -44,7 +56,7 @@ test('trend renders singleton and zero Pax points with readable axes and dates',
   assert.match(trendSource, />Chuyến bay<\/text>/);
   assert.match(trendSource, /Sản lượng khách/);
   assert.match(trendSource, /chart\.xTickIndexes\.map/);
-  assert.match(trendSource, /formatDate\(rows\[index\]\.ops_date\)/);
+  assert.match(trendSource, /label: formatDate\(row\.ops_date\)/);
 });
 
 test('trend uses flight columns and a solid passenger line', () => {
@@ -53,6 +65,31 @@ test('trend uses flight columns and a solid passenger line', () => {
   assert.match(trendSource, /chart\.paxSeries\.segments\.map/);
   assert.doesNotMatch(trendSource, /strokeDasharray="8 6"/);
   assert.doesNotMatch(trendSource, /chart\.flightSeries\.segments/);
+});
+
+test('trend renders comparison reference line with amber dash and scales to monthly mode', () => {
+  assert.match(trendSource, /refFlight/);
+  assert.match(trendSource, /strokeDasharray="4 4"/);
+  assert.match(trendSource, /paintOrder="stroke"/);
+  assert.match(trendSource, /countCalendarMonths\(comparison\.from, comparison\.to\)/);
+  assert.match(clientSource, /comparison=\{comparison\}/);
+});
+
+test('trend switches after three calendar months and exposes monthly drill-down', () => {
+  assert.match(trendSource, /shouldUseMonthlyTrend\(filter\.from, filter\.to\)/);
+  assert.match(trendGranularitySource, /return countCalendarMonths\(from, to\) > 3/);
+  assert.match(trendSource, /fetchTrafficReportV2MonthlyTimeline/);
+  assert.match(trendSource, /<TrafficTrendTable monthlyRows=\{monthlyRows\}/);
+  assert.match(trendTableSource, /<details/);
+  assert.match(trendTableSource, /fetchTrafficReportV2MonthDetail/);
+  assert.match(trendTableSource, /Chi tiết ngày của/);
+});
+
+test('monthly labels use calendar coverage instead of partial Pax days', () => {
+  assert.match(trendTableSource, /row\.period_status/);
+  assert.match(trendTableSource, /periodStatus\(row\) === 'partial'/);
+  assert.doesNotMatch(trendTableSource, /row\.partial_day_count > 0/);
+  assert.match(trendSource, /period_status: periodStatus\(month, monthRows\)/);
 });
 
 test('dimension table keeps only the four business measures', () => {
@@ -82,35 +119,36 @@ test('public report consistently uses the business label for passenger volume', 
   }
 });
 
-test('dimension ranking uses its own fixed first-page flights request', () => {
-  assert.match(dimensionSource, /const \[chartData, setChartData\] = useState/);
-  assert.match(dimensionSource, /const loadChart = useCallback/);
-  assert.match(dimensionSource, /buildDimensionUrl\(filter, dimension, scope, 'flights', 1, 50\)/);
-  assert.match(dimensionSource, /const chartRows = chartData\?\.rows/);
-  assert.doesNotMatch(dimensionSource, /const chartRows = visibleRows/);
+test('route, country, and airline use independent flight and passenger donut rankings', () => {
+  assert.match(dimensionSource, /fetchTrafficReportV2DimensionShare\(filter, dimension, scope, metric/);
+  assert.match(dimensionSource, /Promise\.allSettled\(\[loadMetric\('flights'\), loadMetric\('reported_pax'\)\]\)/);
+  assert.match(dimensionSource, /'Top 10 chặng bay'/);
+  assert.match(dimensionSource, /'Top 10 Quốc gia'/);
+  assert.match(dimensionSource, /'Top 10 hãng hàng không'/);
+  assert.doesNotMatch(dimensionSource, /Top 10 hãng hàng không theo số chuyến/);
+  assert.match(dimensionSource, /title="Tỷ trọng số chuyến"/);
+  assert.match(dimensionSource, /title="Tỷ trọng sản lượng khách"/);
+  assert.match(donutSource, /data\.other/);
+  assert.match(donutSource, /Khác/);
 });
 
-test('dimension ranking uses one shared legend above compact flight and passenger share rows', () => {
-  assert.match(dimensionSource, /aria-label="Chú thích tỷ trọng"/);
-  assert.match(dimensionSource, />Tỷ trọng chuyến bay<\/span>/);
-  assert.match(dimensionSource, />Tỷ trọng sản lượng khách<\/span>/);
-  assert.match(dimensionSource, /<ShareMetric value=\{row\.flight_share\} tone="flights"/);
-  assert.match(dimensionSource, /<ShareMetric value=\{row\.pax_share\} tone="pax"/);
-  assert.match(dimensionSource, /aria-label=\{`\$\{row\.label\}: tỷ trọng chuyến bay/);
-  assert.doesNotMatch(dimensionSource, /<ShareMetric label=/);
-  assert.match(dimensionSource, /aria-hidden="true"/);
-  assert.doesNotMatch(dimensionSource, /formatShare\(row\.flight_share\)\} · \{formatShare\(row\.pax_share\)/);
+test('all dimension tables are limited to 20 rows per page while full export remains available', () => {
+  assert.match(dimensionSource, /scope, sort, page, 20, expectedWatermark/);
+  assert.match(dimensionSource, /scope, sort, page, 20\)/);
+  assert.doesNotMatch(dimensionSource, /page, 50/);
+  assert.match(dimensionSource, /buildTrafficReportV2DimensionUrl\(filter, dimension, scope, sort, 1, 732/);
+  assert.match(dimensionSource, /buildDimensionUrl\(filter, dimension, scope, sort, 1, 732, true\)/);
 });
 
 test('dimension views do not hide aggregate rows in the client', () => {
   assert.match(dimensionSource, /const visibleRows = data\?\.rows \?\? \[\]/);
-  assert.match(dimensionSource, /const chartRows = chartData\?\.rows\.slice\(0, 10\) \?\? \[\]/);
+  assert.doesNotMatch(dimensionSource, /const chartRows =/);
   assert.doesNotMatch(dimensionSource, /filter\(\(row\) => !row\.suppressed\)/);
 });
 
 test('dimension does not draw a missing share as zero and exposes its mobile table scroll region', () => {
-  assert.match(dimensionSource, /value == null \? <span/);
-  assert.match(dimensionSource, /Chưa có số liệu/);
+  assert.match(donutSource, /data\.total_value == null/);
+  assert.match(donutSource, /Chưa có dữ liệu để thể hiện tỷ trọng/);
   assert.match(dimensionSource, /Vuốt ngang để xem đầy đủ các cột/);
   assert.match(dimensionSource, /role="region"/);
   assert.match(dimensionSource, /tabIndex=\{0\}/);
@@ -135,9 +173,78 @@ test('peak-hour chart exposes all hours, local direction controls and recurring 
   assert.doesNotMatch(advancedChartsSource, /maximumFractionDigits: 1[^\n]+average/);
 });
 
+test('peak-hour breakdown is a lazy monthly 24-hour matrix with rounded averages and peak-day labels', () => {
+  assert.match(advancedChartsSource, /<TrafficPeakHourHeatmap filter=\{filter\} scope=\{scope\} timeBasis=\{timeBasis\}/);
+  assert.match(peakHourHeatmapSource, /buildPeakHourHeatmapUrl\(filter, scope, range\.from, range\.to\)/);
+  assert.match(peakHourHeatmapSource, /onToggle=/);
+  assert.match(peakHourHeatmapSource, /monthly_average/);
+  assert.match(peakHourHeatmapSource, />TB tháng</);
+  assert.match(peakHourHeatmapSource, />Cao nhất</);
+  assert.match(peakHourHeatmapSource, /role="region"/);
+  assert.match(peakHourHeatmapSource, /tabIndex=\{0\}/);
+  assert.match(peakHourHeatmapSource, /bucket\.flights == null \? '—'/);
+});
+
+test('weekday chart and monthly heatmap share the all, arrival and departure scope', () => {
+  assert.match(advancedChartsSource, /DayOfWeekChart\(\{ rows, monthlyRows \}/);
+  assert.match(advancedChartsSource, /const \[scope, setScope\] = useState<TrafficType>\('all'\)/);
+  assert.match(advancedChartsSource, /<TrafficMonthlyDayOfWeekHeatmap rows=\{monthlyRows\} scope=\{scope\}/);
+  assert.match(weekdayHeatmapSource, /average_arrivals/);
+  assert.match(weekdayHeatmapSource, /average_departures/);
+  assert.match(weekdayHeatmapSource, /is_peak_all/);
+  assert.match(weekdayHeatmapSource, />Cao nhất</);
+  assert.match(weekdayHeatmapSource, /role="region"/);
+});
+
+test('weekly operations uses a complete seven-day view and occupies a full report row', () => {
+  assert.match(advancedChartsSource, /Array\.from\(\{ length: 7 \}/);
+  assert.match(advancedChartsSource, /average_arrivals/);
+  assert.match(advancedChartsSource, /average_departures/);
+  assert.match(clientSource, /<div className="mt-5">\s*<DayOfWeekChart/);
+  assert.doesNotMatch(clientSource, />Nguồn (?:live|snapshot)|>Watermark/iu);
+});
+
 test('interactive report controls use a high-contrast focus ring and long labels retain their full text', () => {
   assert.match(trendSource, /focus-visible:ring-2 focus-visible:ring-blue-900/);
   assert.match(dimensionSource, /focus-visible:ring-2 focus-visible:ring-blue-900/);
   assert.match(dimensionSource, /title=\{row\.label\}/);
   assert.match(trendSource, /title="Xu hướng chuyến bay và sản lượng khách"/);
+});
+
+test('workbook export is feature flagged, server-rendered and drops the legacy Excel/CSV buttons', () => {
+  assert.match(clientSource, /NEXT_PUBLIC_TRAFFIC_WORKBOOK_EXPORT_ENABLED/);
+  assert.match(clientSource, /<TrafficWorkbookExportDialog/);
+  assert.doesNotMatch(clientSource, /Tải Excel 6 sheet \(cũ\)|Tải CSV tổng hợp/);
+  assert.match(workbookDialogSource, /buildTrafficWorkbookExportUrl/);
+  assert.match(workbookDialogSource, /cache: 'no-store'/);
+  assert.match(workbookDialogSource, /response\.blob\(\)/);
+  assert.doesNotMatch(workbookDialogSource, /buildTrafficWorkbookData|XLSX|sheet_to_json/);
+});
+
+test('workbook dialog exposes all report families and accessible period/comparison states', () => {
+  assert.match(workbookDialogSource, /Workbook tổng hợp khai thác/);
+  assert.match(workbookDialogSource, /Tổng quan khai thác tháng - Mức 2/);
+  assert.match(workbookDialogSource, /Báo cáo tuần chi tiết/);
+  assert.match(workbookDialogSource, /Phân tích theo kỳ/);
+  assert.match(workbookDialogSource, /Báo cáo sản lượng theo mẫu/);
+  assert.match(workbookDialogSource, /So sánh với cùng kỳ trong quá khứ/);
+  assert.match(workbookDialogSource, /Chọn tất cả/);
+  assert.match(workbookDialogSource, /Đủ dữ liệu/);
+  assert.match(workbookDialogSource, /workbook-period-options/);
+  assert.match(workbookDialogSource, /7 ngày liền trước và 7 ngày liền sau/);
+  assert.match(workbookDialogSource, /getTrafficWeeklyContextRange/);
+  assert.match(workbookDialogSource, /Cả mùa/);
+  assert.match(workbookDialogSource, /Khoảng ngày tùy chỉnh/);
+  assert.match(workbookDialogSource, /type="month"/);
+  assert.match(workbookDialogSource, /12 sheet tổng hợp/);
+  assert.match(workbookDialogSource, /9 sheet phục vụ/);
+  assert.match(workbookDialogSource, /8 sheet; tự động/);
+  assert.match(workbookDialogSource, /7 sheet; chọn tháng/);
+  assert.match(workbookDialogSource, /11 sheet theo bố cục BaoCaoSanLuong/);
+  assert.match(workbookDialogSource, /Đang chuẩn bị báo cáo/);
+  assert.match(workbookDialogSource, /Đang tổng hợp dữ liệu/);
+  assert.doesNotMatch(workbookDialogSource, /kiểm soát dữ liệu|phiên bản nguồn cố định|không chứa macro|dữ liệu thô/iu);
+  assert.match(workbookDialogSource, /role="alert"/);
+  assert.match(workbookDialogSource, /aria-labelledby="traffic-workbook-export-title"/);
+  assert.match(workbookDialogSource, /safe-area-inset-bottom/);
 });

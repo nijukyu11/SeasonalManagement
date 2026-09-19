@@ -5,11 +5,46 @@ import { cn } from '@/lib/cn';
 import {
   getTrafficReportPresetRange,
   type NormalizedTrafficReportFilter,
+  type TrafficCoverageCounts,
   type TrafficDatePreset,
 } from '@/lib/trafficReportContract';
 import { TrafficReportMultiSelect } from './TrafficReportMultiSelect';
 
 const dateFormat = new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+const numberFormat = new Intl.NumberFormat('vi-VN');
+
+function CoverageScopePills({ counts, unknownCountryLegs, onJump }: {
+  counts: TrafficCoverageCounts;
+  unknownCountryLegs: number | null;
+  onJump: (target: 'route' | 'country' | 'airline') => void;
+}) {
+  const unmappedNote = unknownCountryLegs != null && unknownCountryLegs > 0
+    ? ` Có ${numberFormat.format(unknownCountryLegs)} chuyến thuộc chặng chưa ánh xạ quốc gia.`
+    : '';
+  const items = [
+    { key: 'route' as const, value: counts.routes, label: 'chặng bay', note: 'Số chặng bay có phát sinh chuyến trong kỳ theo bộ lọc hiện tại.' },
+    { key: 'airline' as const, value: counts.airlines, label: 'hãng khai thác', note: 'Số hãng hàng không có chuyến bay trong kỳ theo bộ lọc hiện tại.' },
+    { key: 'country' as const, value: counts.countries, label: 'quốc gia', note: `Số quốc gia đã định danh có chuyến bay trong kỳ theo bộ lọc hiện tại.${unmappedNote}` },
+  ];
+  return (
+    <div className="flex items-center gap-1.5" aria-label="Quy mô mạng bay trong kỳ">
+      {items.map((item) => (
+        <button
+          key={item.key}
+          className="report-focus inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-700 hover:border-cyan-700 hover:bg-cyan-50"
+          type="button"
+          title={item.note}
+          aria-label={`${item.label}: ${item.value}. ${item.note}`}
+          onClick={() => onJump(item.key)}
+        >
+          <span className="font-bold text-slate-900 tabular-nums">{numberFormat.format(item.value)}</span>
+          <span className="whitespace-nowrap">{item.label}</span>
+          <span aria-hidden="true" className="text-slate-400">↗</span>
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function formatDate(value: string): string {
   return dateFormat.format(new Date(`${value}T12:00:00+07:00`));
@@ -23,7 +58,7 @@ function CloseIcon() {
   return <svg aria-hidden="true" className="size-5" viewBox="0 0 24 24" fill="none"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>;
 }
 
-export function TrafficReportFilters({ filter, minOpsDate, maxOpsDate, latestCompletedOpsDate, filterOptions, activePreset, loading, onApply, onPreset }: {
+export function TrafficReportFilters({ filter, minOpsDate, maxOpsDate, latestCompletedOpsDate, filterOptions, activePreset, loading, onApply, onPreset, dayCount, coverageCounts, unknownCountryLegs, onJump }: {
   filter: NormalizedTrafficReportFilter;
   minOpsDate: string;
   maxOpsDate: string;
@@ -33,6 +68,10 @@ export function TrafficReportFilters({ filter, minOpsDate, maxOpsDate, latestCom
   loading: boolean;
   onApply: (filter: NormalizedTrafficReportFilter) => Promise<boolean>;
   onPreset: (preset: TrafficDatePreset) => void;
+  dayCount: number;
+  coverageCounts?: TrafficCoverageCounts;
+  unknownCountryLegs: number | null;
+  onJump: (target: 'route' | 'country' | 'airline') => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [draft, setDraft] = useState<NormalizedTrafficReportFilter>(filter);
@@ -76,15 +115,13 @@ export function TrafficReportFilters({ filter, minOpsDate, maxOpsDate, latestCom
   };
 
   return (
-    <div className="sticky top-0 z-30 border-b border-slate-200 bg-white shadow-sm">
-      <div className="mx-auto flex min-h-[72px] max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-8">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-bold text-slate-900">{formatDate(filter.from)}–{formatDate(filter.to)}</p>
-          <p className="mt-1 truncate text-xs text-slate-600">
-            {activeDimensionCount > 0 ? `${activeDimensionCount} lựa chọn đang áp dụng` : 'Tất cả hãng, chặng bay và quốc gia'}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
+    <div className="sticky top-0 z-30 border-b border-slate-200 bg-white shadow-sm" data-report-sticky-bar>
+      <div className="mx-auto flex min-h-12 max-w-[1400px] flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 sm:px-8">
+        <p className="order-1 shrink-0 text-sm font-bold text-slate-900 tabular-nums">
+          {formatDate(filter.from)}–{formatDate(filter.to)}
+          <span className="ml-2 text-xs font-normal text-slate-600">{`${numberFormat.format(dayCount)} ngày`}</span>
+        </p>
+        <div className="order-2 ml-auto flex shrink-0 items-center gap-2 lg:order-3">
           <fieldset className="hidden gap-2 lg:flex">
             <legend className="sr-only">Khoảng ngày nhanh</legend>
             {([['7d', '7 ngày'], ['30d', '30 ngày'], ['ytd', 'Đầu năm đến nay']] as const).map(([preset, label]) => <button
@@ -102,6 +139,11 @@ export function TrafficReportFilters({ filter, minOpsDate, maxOpsDate, latestCom
             {activeDimensionCount > 0 ? <span className="inline-flex size-6 items-center justify-center rounded-full bg-white text-xs text-blue-900" aria-label={`${activeDimensionCount} lựa chọn đang áp dụng`}>{activeDimensionCount}</span> : null}
           </button>
         </div>
+        {coverageCounts ? (
+          <div className="order-3 -mx-1 w-full overflow-x-auto px-1 lg:order-2 lg:mx-0 lg:w-auto lg:overflow-visible lg:px-0">
+            <CoverageScopePills counts={coverageCounts} unknownCountryLegs={unknownCountryLegs} onJump={onJump} />
+          </div>
+        ) : null}
       </div>
 
       <dialog

@@ -1,0 +1,23 @@
+{
+  "report_type": "MONTHLY_OVERVIEW_L2",
+  "template_version": "monthly-l2-v1",
+  "renderer_compatibility": "traffic-workbook-renderer-v1",
+  "data_classification": "public-aggregate-only",
+  "sheets": [
+    "Tóm tắt tháng",
+    "Sản lượng chuyến bay",
+    "Ngày cao điểm",
+    "Giờ cao điểm",
+    "Chuyến bay sớm",
+    "Hãng hàng không",
+    "Thị trường",
+    "Chặng bay",
+    "Ghi chú nghiệp vụ"
+  ],
+  "charts": [
+    "So sánh sản lượng chuyến bay theo kỳ",
+    "Thị phần chuyến bay hiện tại và cùng kỳ năm trước"
+  ],
+  "required_features": ["previous", "year-ago", "typed-date", "number-format", "percent-format", "freeze-pane", "dynamic-table", "print-area"],
+  "manual_or_pending_contract_sections": ["early-flight-cutoff", "event-lifecycle", "business-cause", "terminal-capacity"]
+}

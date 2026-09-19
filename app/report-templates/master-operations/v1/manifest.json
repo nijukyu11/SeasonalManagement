@@ -1,0 +1,23 @@
+{
+  "report_type": "MASTER_OPERATIONS",
+  "template_version": "master-v1",
+  "renderer_compatibility": "traffic-workbook-renderer-v1",
+  "data_classification": "public-aggregate-only",
+  "source_reference_authority": "SanLuong_S26 - Copy.xlsm",
+  "sheets": [
+    "Hướng dẫn",
+    "Thông tin báo cáo",
+    "Tổng quan",
+    "Theo ngày",
+    "Theo tháng",
+    "Theo tuần",
+    "Hãng hàng không",
+    "Thị trường",
+    "Chặng bay",
+    "Giờ khai thác",
+    "Tần suất",
+    "Tàu bay"
+  ],
+  "required_features": ["typed-date", "number-format", "percent-format", "freeze-pane", "dynamic-table", "print-area"],
+  "forbidden_parts": ["raw-leg", "history", "deleted-row", "hidden-data-sheet", "external-link", "macro", "credential", "local-path"]
+}

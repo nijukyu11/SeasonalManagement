@@ -1,5 +1,6 @@
 export const TRAFFIC_REPORT_CONTRACT_VERSION = 'traffic-report-v1' as const;
 export const TRAFFIC_REPORT_API_BASE = '/api/report/v1' as const;
+export type TrafficReportContractVersion = typeof TRAFFIC_REPORT_CONTRACT_VERSION | 'traffic-report-v2';
 
 export type TrafficType = 'all' | 'A' | 'D';
 export type TrafficComparison = 'previous' | 'year_ago' | 'none';
@@ -46,6 +47,14 @@ export interface TrafficKpiMetricSet extends TrafficMetricSet {
   departure_reported_pax?: number | null;
 }
 
+/** Distinct entities with at least one flight inside the filtered period. */
+export interface TrafficCoverageCounts {
+  routes: number;
+  airlines: number;
+  /** Mapped countries only; unmapped routes are never counted here. */
+  countries: number;
+}
+
 export interface TrafficTimelinePoint extends TrafficMetricSet {
   ops_date: string;
   completeness: 'complete' | 'missing' | 'partial';
@@ -81,7 +90,7 @@ export interface TrafficDimensionRow extends TrafficMetricSet {
 }
 
 export interface TrafficDimensionResponse {
-  contract_version: typeof TRAFFIC_REPORT_CONTRACT_VERSION;
+  contract_version: TrafficReportContractVersion;
   request_hash: string;
   data_as_of: string;
   dimension: TrafficDimension;
@@ -136,15 +145,68 @@ export interface TrafficDayOfWeekRow {
   min_flights: number | null;
   max_flights: number | null;
   arrivals: number | null;
+  average_arrivals?: number | null;
+  min_arrivals?: number | null;
+  max_arrivals?: number | null;
   departures: number | null;
+  average_departures?: number | null;
+  min_departures?: number | null;
+  max_departures?: number | null;
+  complete_day_count?: number;
+  status?: 'complete' | 'partial' | 'missing';
   suppressed: boolean;
 }
 
-export interface TrafficReportBundle {
+export interface TrafficMonthlyDayOfWeekRow {
+  month: string;
+  day_index: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  selected_day_count: number;
+  complete_day_count: number;
+  average_flights: number | null;
+  average_arrivals: number | null;
+  average_departures: number | null;
+  status: 'complete' | 'partial' | 'missing';
+  is_peak_all: boolean;
+  is_peak_arrivals: boolean;
+  is_peak_departures: boolean;
+}
+
+export interface TrafficPeakHourHeatmapBucket {
+  hour_bucket: string;
+  flights: number | null;
+}
+
+export interface TrafficPeakHourHeatmapDay {
+  ops_date: string;
+  status: 'complete' | 'partial' | 'missing';
+  total_flights: number | null;
+  is_month_peak: boolean;
+  buckets: TrafficPeakHourHeatmapBucket[];
+}
+
+export interface TrafficPeakHourHeatmapResponse {
   contract_version: typeof TRAFFIC_REPORT_CONTRACT_VERSION;
   request_hash: string;
   data_as_of: string;
   source_watermark: number | 'unknown';
+  month: string;
+  type: TrafficType;
+  time_basis: TrafficTimeBasis;
+  selected_day_count: number;
+  complete_day_count: number;
+  partial_day_count: number;
+  missing_day_count: number;
+  monthly_average: TrafficPeakHourHeatmapBucket[];
+  days: TrafficPeakHourHeatmapDay[];
+}
+
+export interface TrafficReportBundle {
+  contract_version: TrafficReportContractVersion;
+  request_hash: string;
+  data_as_of: string;
+  source_watermark: number | 'unknown';
+  /** Present for live v2 reads; pins semantic data-as-of across secondary reads. */
+  read_version_token?: string;
   metadata: {
     min_ops_date: string;
     max_ops_date: string;
@@ -183,6 +245,8 @@ export interface TrafficReportBundle {
       mode: TrafficComparison;
     };
     peak_day: { ops_date: string | null; flights: number | null; status: string };
+    /** Present once the overview RPC publishes network scope counts. */
+    coverage_counts?: TrafficCoverageCounts;
     pax_coverage: {
       reported_legs: number | null;
       due_legs: number | null;
@@ -200,6 +264,7 @@ export interface TrafficReportBundle {
     peak_hour: TrafficPeakHourRow[];
     peak_hour_monthly?: TrafficMonthlyPeakRow[];
     day_of_week: TrafficDayOfWeekRow[];
+    day_of_week_monthly?: TrafficMonthlyDayOfWeekRow[];
   };
   quality: {
     unknown_country_legs: number | null;
@@ -386,6 +451,16 @@ export function buildDimensionUrl(
   return `${TRAFFIC_REPORT_API_BASE}/${exportCsv ? 'dimension-export' : 'dimension'}?${query.toString()}`;
 }
 
+export function buildPeakHourHeatmapUrl(
+  filter: NormalizedTrafficReportFilter,
+  type: TrafficType,
+  from: string,
+  to: string,
+): string {
+  const query = toTrafficReportSearchParams({ ...filter, from, to, type, comp: 'none' });
+  return `${TRAFFIC_REPORT_API_BASE}/peak-hour-heatmap?${query.toString()}`;
+}
+
 function isNullableNumber(value: unknown): value is number | null {
   return value === null || typeof value === 'number';
 }
@@ -441,6 +516,50 @@ function isTrafficPeakHourRow(value: unknown): value is TrafficPeakHourRow {
     && typeof row.suppressed === 'boolean';
 }
 
+function isTrafficPeakHourHeatmapBucket(value: unknown): value is TrafficPeakHourHeatmapBucket {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return /^\d{2}:00$/.test(String(row.hour_bucket)) && isNullableNumber(row.flights);
+}
+
+export function isTrafficPeakHourHeatmapResponse(value: unknown): value is TrafficPeakHourHeatmapResponse {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const root = value as Record<string, unknown>;
+  return root.contract_version === TRAFFIC_REPORT_CONTRACT_VERSION
+    && typeof root.request_hash === 'string'
+    && typeof root.data_as_of === 'string'
+    && /^\d{4}-\d{2}$/.test(String(root.month))
+    && ['all', 'A', 'D'].includes(String(root.type))
+    && ['local', 'utc'].includes(String(root.time_basis))
+    && typeof root.selected_day_count === 'number'
+    && typeof root.complete_day_count === 'number'
+    && typeof root.partial_day_count === 'number'
+    && typeof root.missing_day_count === 'number'
+    && Array.isArray(root.monthly_average)
+    && root.monthly_average.length === 24
+    && root.monthly_average.every(isTrafficPeakHourHeatmapBucket)
+    && Array.isArray(root.days)
+    && root.days.every((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      const row = value as Record<string, unknown>;
+      return ISO_DATE.test(String(row.ops_date))
+        && ['complete', 'partial', 'missing'].includes(String(row.status))
+        && isNullableNumber(row.total_flights)
+        && typeof row.is_month_peak === 'boolean'
+        && Array.isArray(row.buckets)
+        && row.buckets.length === 24
+        && row.buckets.every(isTrafficPeakHourHeatmapBucket);
+    });
+}
+
+function isTrafficCoverageCounts(value: unknown): value is TrafficCoverageCounts {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const counts = value as Record<string, unknown>;
+  return Number.isInteger(counts.routes) && Number(counts.routes) >= 0
+    && Number.isInteger(counts.airlines) && Number(counts.airlines) >= 0
+    && Number.isInteger(counts.countries) && Number(counts.countries) >= 0;
+}
+
 export function isTrafficReportBundle(value: unknown): value is TrafficReportBundle {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const root = value as Record<string, unknown>;
@@ -451,18 +570,24 @@ export function isTrafficReportBundle(value: unknown): value is TrafficReportBun
   const breakdowns = root.breakdowns && typeof root.breakdowns === 'object' && !Array.isArray(root.breakdowns)
     ? root.breakdowns as Record<string, unknown>
     : null;
+  const kpis = root.kpis && typeof root.kpis === 'object' && !Array.isArray(root.kpis)
+    ? root.kpis as Record<string, unknown>
+    : null;
   const projectionIsValid = projection === undefined || (
     !!projection
     && typeof projection === 'object'
     && !Array.isArray(projection)
     && ['fresh', 'stale', 'failed', 'empty'].includes(String((projection as Record<string, unknown>).status))
   );
-  return root.contract_version === TRAFFIC_REPORT_CONTRACT_VERSION
+  return [TRAFFIC_REPORT_CONTRACT_VERSION, 'traffic-report-v2'].includes(String(root.contract_version))
     && typeof root.request_hash === 'string'
     && typeof root.data_as_of === 'string'
+    && (root.contract_version !== 'traffic-report-v2'
+      || (typeof root.read_version_token === 'string' && root.read_version_token.length > 0))
     && !!metadata
     && projectionIsValid
-    && !!root.kpis
+    && !!kpis
+    && (kpis.coverage_counts === undefined || isTrafficCoverageCounts(kpis.coverage_counts))
     && Array.isArray(root.timeline)
     && !!breakdowns
     && Array.isArray(breakdowns.peak_hour)
@@ -476,7 +601,7 @@ export function isTrafficReportBundle(value: unknown): value is TrafficReportBun
 export function isTrafficDimensionResponse(value: unknown): value is TrafficDimensionResponse {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const root = value as Record<string, unknown>;
-  return root.contract_version === TRAFFIC_REPORT_CONTRACT_VERSION
+  return [TRAFFIC_REPORT_CONTRACT_VERSION, 'traffic-report-v2'].includes(String(root.contract_version))
     && ['route', 'country', 'airline'].includes(String(root.dimension))
     && ['all', 'A', 'D'].includes(String(root.type))
     && typeof root.page === 'number'

@@ -1,7 +1,26 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
+import { zipSync } from 'npm:fflate@0.8.2';
+import {
+  buildWorkbookReportModel,
+  normalizeWorkbookRequest,
+  workbookComparisonRanges,
+  workbookComparisonYearRanges,
+  workbookWeeklyContextRanges,
+  type NormalizedWorkbookRequest,
+} from '../_shared/trafficWorkbookCore.ts';
+import { buildTrafficWorkbookPackage, trafficWorkbookFilename } from '../_shared/trafficWorkbookRenderer.ts';
+import { normalizeHtmlRequest } from '../_shared/trafficHtmlReportContract.ts';
+import { validateHtmlEnvelope } from '../_shared/trafficHtmlReportModel.ts';
+import { renderTrafficHtmlReport, trafficHtmlFilename } from '../_shared/trafficHtmlReportRenderer.ts';
+import {
+  buildV2DimensionShare,
+  buildV2MonthlyTimeline,
+  enrichV2OverviewBreakdowns,
+} from '../_shared/trafficReportPresentationAggregates.ts';
 
 const CONTRACT_VERSION = 'traffic-report-v1';
-const ALLOWED_QUERY_KEYS = new Set(['from', 'to', 'type', 'airline', 'route', 'country', 'aircraft_group', 'comp', 'tz', 'after', 'dimension', 'sort', 'page', 'page_size']);
+const V2_CONTRACT_VERSION = 'traffic-report-v2';
+const ALLOWED_QUERY_KEYS = new Set(['from', 'to', 'type', 'airline', 'route', 'country', 'aircraft_group', 'comp', 'tz', 'after', 'dimension', 'sort', 'page', 'page_size', 'expected_watermark', 'read_version', 'granularity', 'month', 'metric', 'limit']);
 const LIST_KEYS = new Set(['airline', 'route', 'country', 'aircraft_group']);
 const SCALAR_KEYS = [...ALLOWED_QUERY_KEYS].filter((key) => !LIST_KEYS.has(key));
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -27,7 +46,21 @@ type NormalizedRequest = {
   dimension: 'route' | 'country' | 'airline' | null;
   sort: 'flights' | 'reported_pax' | 'flight_share' | 'pax_share' | 'label';
   page: number;
+  expectedWatermark: number | null;
+  readVersion: string | null;
+  granularity: 'day' | 'month';
+  month: string | null;
+  metric: 'flights' | 'reported_pax';
+  limit: number;
   canonicalQuery: string;
+};
+
+type ReportReadVersionClaims = {
+  version: 1;
+  expiresAt: number;
+  sourceWatermark: number;
+  dataAsOf: string;
+  filterHash: string;
 };
 
 function json(body: unknown, status = 200, headers: HeadersInit = {}): Response {
@@ -47,7 +80,7 @@ function canonicalList(values: string[], uppercase: boolean): string[] {
     .sort((left, right) => left.localeCompare(right, 'en'));
 }
 
-function normalizeRequest(url: URL, endpoint: string): NormalizedRequest {
+function normalizeRequest(url: URL, endpoint: string, contractVersion: 'v1' | 'v2' = 'v1'): NormalizedRequest {
   for (const key of url.searchParams.keys()) {
     if (!ALLOWED_QUERY_KEYS.has(key)) throw new Error(`unsupported query parameter: ${key}`);
   }
@@ -70,10 +103,11 @@ function normalizeRequest(url: URL, endpoint: string): NormalizedRequest {
   const after = url.searchParams.get('after');
   if (after && !ISO_DATE.test(after)) throw new Error('after must use YYYY-MM-DD');
   const dimensionEndpoint = endpoint === 'dimension' || endpoint === 'dimension-export';
+  const dimensionShareEndpoint = endpoint === 'dimension-share';
   const rawDimension = url.searchParams.get('dimension');
   const dimension = rawDimension && ['route', 'country', 'airline'].includes(rawDimension) ? rawDimension as NormalizedRequest['dimension'] : null;
-  if (dimensionEndpoint && !dimension) throw new Error('dimension is required');
-  if (!dimensionEndpoint && rawDimension) throw new Error('dimension is not supported for this endpoint');
+  if ((dimensionEndpoint || dimensionShareEndpoint) && !dimension) throw new Error('dimension is required');
+  if (!dimensionEndpoint && !dimensionShareEndpoint && rawDimension) throw new Error('dimension is not supported for this endpoint');
   const rawSort = url.searchParams.get('sort') ?? 'flights';
   if (!['flights', 'reported_pax', 'flight_share', 'pax_share', 'label'].includes(rawSort)) throw new Error('invalid sort');
   if (!dimensionEndpoint && url.searchParams.has('sort')) throw new Error('sort is not supported for this endpoint');
@@ -85,6 +119,33 @@ function normalizeRequest(url: URL, endpoint: string): NormalizedRequest {
   const pageSize = rawPageSize ? Number(rawPageSize) : dimensionEndpoint ? (endpoint === 'dimension-export' ? 732 : 50) : 366;
   if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 732) throw new Error('page_size must be between 1 and 732');
   if (dimensionEndpoint && after) throw new Error('after is not supported for dimension endpoints');
+  const rawGranularity = url.searchParams.get('granularity') ?? 'day';
+  if (!['day', 'month'].includes(rawGranularity)) throw new Error('invalid granularity');
+  if (endpoint !== 'timeline' && url.searchParams.has('granularity')) throw new Error('granularity is only supported for timeline');
+  const month = url.searchParams.get('month');
+  if (month !== null && !/^\d{4}-\d{2}$/u.test(month)) throw new Error('month must use YYYY-MM');
+  if (month !== null && (endpoint !== 'timeline' || rawGranularity !== 'day')) throw new Error('month is only supported for daily timeline');
+  if (month !== null && from && to && (`${month}-31` < from || `${month}-01` > to)) throw new Error('month is outside the selected range');
+  if ((rawGranularity === 'month' || month !== null) && after) throw new Error('after is not supported for grouped timeline');
+  const rawMetric = url.searchParams.get('metric') ?? 'flights';
+  if (!['flights', 'reported_pax'].includes(rawMetric)) throw new Error('invalid metric');
+  if (!dimensionShareEndpoint && url.searchParams.has('metric')) throw new Error('metric is only supported for dimension-share');
+  const rawLimit = url.searchParams.get('limit');
+  const limit = rawLimit === null ? 10 : Number(rawLimit);
+  if (!Number.isInteger(limit) || limit !== 10) throw new Error('dimension-share limit must be 10');
+  if (!dimensionShareEndpoint && rawLimit !== null) throw new Error('limit is only supported for dimension-share');
+  if (contractVersion === 'v1' && url.searchParams.has('expected_watermark')) throw new Error('expected_watermark is not supported for v1');
+  if (contractVersion === 'v1' && (url.searchParams.has('granularity') || month !== null || dimensionShareEndpoint)) throw new Error('resource is not supported for v1');
+  if (contractVersion === 'v2' && url.searchParams.has('aircraft_group')) throw new Error('aircraft_group is not supported for v2');
+  const rawExpectedWatermark = url.searchParams.get('expected_watermark');
+  const expectedWatermark = rawExpectedWatermark === null ? null : Number(rawExpectedWatermark);
+  if (rawExpectedWatermark !== null && (!Number.isSafeInteger(expectedWatermark) || expectedWatermark < 0)) {
+    throw new Error('expected_watermark must be a non-negative integer');
+  }
+  const readVersion = url.searchParams.get('read_version');
+  if (readVersion !== null && (!/^rv1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(readVersion) || readVersion.length > 2048)) {
+    throw new Error('invalid read_version');
+  }
 
   const airlines = canonicalList(url.searchParams.getAll('airline'), true);
   const routes = canonicalList(url.searchParams.getAll('route'), true);
@@ -101,11 +162,17 @@ function normalizeRequest(url: URL, endpoint: string): NormalizedRequest {
   for (const value of aircraftGroups) canonical.append('aircraft_group', value);
   if (comp !== 'previous') canonical.set('comp', comp);
   if (timeBasis !== 'local') canonical.set('tz', timeBasis);
+  if (endpoint === 'timeline' && rawGranularity !== 'day') canonical.set('granularity', rawGranularity);
+  if (month !== null) canonical.set('month', month);
   if (after) canonical.set('after', after);
   if (dimension) canonical.set('dimension', dimension);
+  if (dimensionShareEndpoint) canonical.set('metric', rawMetric);
+  if (dimensionShareEndpoint && rawLimit !== null) canonical.set('limit', String(limit));
   if (dimensionEndpoint && rawSort !== 'flights') canonical.set('sort', rawSort);
   if (dimensionEndpoint && page !== 1) canonical.set('page', String(page));
   if (rawPageSize) canonical.set('page_size', String(pageSize));
+  if (expectedWatermark !== null) canonical.set('expected_watermark', String(expectedWatermark));
+  if (readVersion !== null) canonical.set('read_version', readVersion);
 
   return {
     from,
@@ -122,11 +189,17 @@ function normalizeRequest(url: URL, endpoint: string): NormalizedRequest {
     dimension,
     sort: rawSort as NormalizedRequest['sort'],
     page,
+    expectedWatermark,
+    readVersion,
+    granularity: rawGranularity as 'day' | 'month',
+    month,
+    metric: rawMetric as 'flights' | 'reported_pax',
+    limit,
     canonicalQuery: canonical.toString(),
   };
 }
 
-async function postgrestRpc(functionName: string, args: Record<string, unknown>): Promise<unknown> {
+async function postgrestRpc(functionName: string, args: Record<string, unknown>, timeoutMs = 8_000): Promise<unknown> {
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const configuredRestUrl = Deno.env.get('SUPABASE_REST_URL');
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -141,7 +214,7 @@ async function postgrestRpc(functionName: string, args: Record<string, unknown>)
       Authorization: `Bearer ${serviceKey}`,
     },
     body: JSON.stringify(args),
-    signal: AbortSignal.timeout(8_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
@@ -183,6 +256,12 @@ function constantTimeEqual(left: Uint8Array, right: Uint8Array): boolean {
   return difference === 0;
 }
 
+function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 async function sha256Etag(value: unknown): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value)));
   return `"${base64Url(new Uint8Array(digest))}"`;
@@ -200,7 +279,7 @@ async function verifyConfiguredPin(pin: string): Promise<boolean> {
   const derived = new Uint8Array(await crypto.subtle.deriveBits({
     name: 'PBKDF2',
     hash: 'SHA-256',
-    salt: decodeBase64(rawSalt),
+    salt: exactArrayBuffer(decodeBase64(rawSalt)),
     iterations,
   }, key, expected.length * 8));
   return constantTimeEqual(derived, expected);
@@ -346,6 +425,304 @@ async function requestHash(request: NormalizedRequest): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+async function sha256Hex(value: string | Uint8Array): Promise<string> {
+  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+  const digest = await crypto.subtle.digest('SHA-256', exactArrayBuffer(bytes));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function workbookOverviewArgs(
+  request: NormalizedWorkbookRequest,
+  range: { from: string; to: string },
+  after: string | null = null,
+): Record<string, unknown> {
+  return {
+    p_from_date: range.from,
+    p_to_date: range.to,
+    p_types: ['A', 'D'],
+    p_airlines: request.airlines,
+    p_routes: request.routes,
+    p_countries: request.countries,
+    p_aircraft_groups: [],
+    p_comparison: 'none',
+    p_time_basis: request.timeBasis,
+    p_timeline_after: after,
+    p_timeline_page_size: 732,
+    p_contract_version: CONTRACT_VERSION,
+  };
+}
+
+function workbookVersion(payload: Record<string, unknown>): string {
+  return `${String(payload.source_watermark ?? 'unknown')}|${String(payload.data_as_of ?? 'unknown')}`;
+}
+
+async function fetchWorkbookOverview(
+  request: NormalizedWorkbookRequest,
+  range: { from: string; to: string },
+  expectedVersion?: string,
+): Promise<Record<string, unknown>> {
+  const raw = await postgrestRpc('get_public_traffic_report_overview_v1', workbookOverviewArgs(request, range));
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('invalid workbook overview payload');
+  const bundle = raw as Record<string, unknown>;
+  const pinnedVersion = workbookVersion(bundle);
+  if (expectedVersion && pinnedVersion !== expectedVersion) throw new Error('REPORT_VERSION_CHANGED');
+  const metadata = bundle.metadata && typeof bundle.metadata === 'object' && !Array.isArray(bundle.metadata)
+    ? bundle.metadata as Record<string, unknown>
+    : {};
+  const timeline = Array.isArray(bundle.timeline) ? [...bundle.timeline] : [];
+  let hasMore = Boolean(metadata.timeline_has_more);
+  let after = typeof metadata.timeline_next_cursor === 'string' ? metadata.timeline_next_cursor : null;
+  let pageCount = 1;
+  while (hasMore && pageCount < 25) {
+    if (!after) throw new Error('invalid workbook timeline cursor');
+    const nextRaw = await postgrestRpc('get_public_traffic_report_overview_v1', workbookOverviewArgs(request, range, after));
+    if (!nextRaw || typeof nextRaw !== 'object' || Array.isArray(nextRaw)) throw new Error('invalid workbook timeline payload');
+    const next = nextRaw as Record<string, unknown>;
+    if (workbookVersion(next) !== pinnedVersion) throw new Error('REPORT_VERSION_CHANGED');
+    const nextMetadata = next.metadata && typeof next.metadata === 'object' && !Array.isArray(next.metadata)
+      ? next.metadata as Record<string, unknown>
+      : {};
+    if (Array.isArray(next.timeline)) timeline.push(...next.timeline);
+    hasMore = Boolean(nextMetadata.timeline_has_more);
+    const nextCursor = typeof nextMetadata.timeline_next_cursor === 'string' ? nextMetadata.timeline_next_cursor : null;
+    if (hasMore && (!nextCursor || nextCursor === after)) throw new Error('invalid workbook timeline cursor');
+    after = nextCursor;
+    pageCount += 1;
+  }
+  if (hasMore) throw new Error('workbook timeline exceeds resource budget');
+  return { ...bundle, timeline, metadata: { ...metadata, timeline_has_more: false, timeline_next_cursor: null } };
+}
+
+async function fetchWorkbookDimension(
+  request: NormalizedWorkbookRequest,
+  range: { from: string; to: string },
+  dimension: 'airline' | 'country' | 'route',
+  dataAsOf: string,
+): Promise<Record<string, unknown>[]> {
+  const rows: Record<string, unknown>[] = [];
+  let page = 1;
+  let hasMore = true;
+  while (hasMore && page <= 25) {
+    const raw = await postgrestRpc('get_public_traffic_report_dimension_v2', {
+      p_from_date: range.from,
+      p_to_date: range.to,
+      p_dimension: dimension,
+      p_types: ['A', 'D'],
+      p_airlines: request.airlines,
+      p_routes: request.routes,
+      p_countries: request.countries,
+      p_sort: 'flights',
+      p_page: page,
+      p_page_size: 732,
+      p_data_as_of: dataAsOf,
+    });
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('invalid workbook dimension payload');
+    const payload = raw as Record<string, unknown>;
+    if (String(payload.data_as_of ?? dataAsOf) !== dataAsOf) throw new Error('REPORT_VERSION_CHANGED');
+    if (Array.isArray(payload.rows)) rows.push(...payload.rows.filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === 'object' && !Array.isArray(row)));
+    hasMore = Boolean(payload.has_more);
+    page += 1;
+  }
+  if (hasMore) throw new Error('workbook dimension exceeds resource budget');
+  return rows;
+}
+
+async function fetchWorkbookDimensions(
+  request: NormalizedWorkbookRequest,
+  range: { from: string; to: string },
+  dataAsOf: string,
+): Promise<{ airline: Record<string, unknown>[]; country: Record<string, unknown>[]; route: Record<string, unknown>[] }> {
+  const [airline, country, route] = await Promise.all([
+    fetchWorkbookDimension(request, range, 'airline', dataAsOf),
+    fetchWorkbookDimension(request, range, 'country', dataAsOf),
+    fetchWorkbookDimension(request, range, 'route', dataAsOf),
+  ]);
+  return { airline, country, route };
+}
+
+function shiftWorkbookDate(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function workbookBusinessWeekRanges(from: string, to: string): Array<{ id: string; label: string; from: string; to: string; partial: boolean }> {
+  const first = new Date(`${from}T00:00:00Z`);
+  const fridayOffset = (first.getUTCDay() + 2) % 7;
+  let weekFrom = shiftWorkbookDate(from, -fridayOffset);
+  const result = [];
+  while (weekFrom <= to) {
+    const weekTo = shiftWorkbookDate(weekFrom, 6);
+    const selectedFrom = weekFrom < from ? from : weekFrom;
+    const selectedTo = weekTo > to ? to : weekTo;
+    result.push({
+      id: `business-week-${weekFrom}`,
+      label: `${selectedFrom}–${selectedTo}`,
+      from: selectedFrom,
+      to: selectedTo,
+      partial: selectedFrom !== weekFrom || selectedTo !== weekTo,
+    });
+    weekFrom = shiftWorkbookDate(weekFrom, 7);
+  }
+  return result;
+}
+
+async function handleWorkbookPeriodOptions(request: Request, url: URL): Promise<Response> {
+  if (Deno.env.get('TRAFFIC_WORKBOOK_EXPORT_ENABLED') !== 'true') return json({ error_code: 'WORKBOOK_EXPORT_DISABLED', error: 'Tính năng export workbook chưa được bật.' }, 404, { 'Cache-Control': 'no-store' });
+  if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405, { Allow: 'GET', 'Cache-Control': 'no-store' });
+  const normalized = normalizeWorkbookRequest(url);
+  if (normalized.reportType !== 'PERIOD_ANALYSIS') throw new Error('period options require PERIOD_ANALYSIS');
+  const allowedTypes = Deno.env.get('TRAFFIC_WORKBOOK_ENABLED_REPORT_TYPES')?.split(',').map((value) => value.trim()).filter(Boolean) ?? [];
+  if (allowedTypes.length && !allowedTypes.includes(normalized.reportType)) return json({ error_code: 'WORKBOOK_REPORT_TYPE_DISABLED', error: 'Loại workbook này chưa được bật.' }, 404, { 'Cache-Control': 'no-store' });
+  const currentBundle = await fetchWorkbookOverview(normalized, { from: normalized.from, to: normalized.to });
+  const metadata = currentBundle.metadata && typeof currentBundle.metadata === 'object' && !Array.isArray(currentBundle.metadata)
+    ? currentBundle.metadata as Record<string, unknown>
+    : {};
+  const minOpsDate = String(metadata.min_ops_date ?? '');
+  const maxOpsDate = String(metadata.max_ops_date ?? '');
+  if (!ISO_DATE.test(minOpsDate) || !ISO_DATE.test(maxOpsDate)) throw new Error('invalid workbook data availability');
+  const comparisonPeriods = [];
+  for (let year = Number(maxOpsDate.slice(0, 4)); year >= Number(minOpsDate.slice(0, 4)); year -= 1) {
+    const period = workbookComparisonYearRanges({ ...normalized, comparisonYears: [year] })[0];
+    if (!period || (period.from === normalized.from && period.to === normalized.to) || period.to < minOpsDate || period.from > maxOpsDate) continue;
+    comparisonPeriods.push({
+      comparison_year: year,
+      label: period.label,
+      from: period.from,
+      to: period.to,
+      data_status: period.from >= minOpsDate && period.to <= maxOpsDate ? 'complete_range' : 'partial_range',
+      selectable: period.from >= minOpsDate && period.to <= maxOpsDate,
+    });
+  }
+  return json({
+    contract_version: CONTRACT_VERSION,
+    data_as_of: currentBundle.data_as_of ?? null,
+    source_watermark: currentBundle.source_watermark ?? null,
+    min_ops_date: minOpsDate,
+    max_ops_date: maxOpsDate,
+    comparison_periods: comparisonPeriods,
+  }, 200, { 'Cache-Control': 'no-store' });
+}
+
+async function handleWorkbookExport(request: Request, url: URL): Promise<Response> {
+  if (Deno.env.get('TRAFFIC_WORKBOOK_EXPORT_ENABLED') !== 'true') return json({ error_code: 'WORKBOOK_EXPORT_DISABLED', error: 'Tính năng export workbook chưa được bật.' }, 404, { 'Cache-Control': 'no-store' });
+  if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405, { Allow: 'GET', 'Cache-Control': 'no-store' });
+  const normalized = normalizeWorkbookRequest(url);
+  const allowedTypes = Deno.env.get('TRAFFIC_WORKBOOK_ENABLED_REPORT_TYPES')?.split(',').map((value) => value.trim()).filter(Boolean) ?? [];
+  if (allowedTypes.length && !allowedTypes.includes(normalized.reportType)) return json({ error_code: 'WORKBOOK_REPORT_TYPE_DISABLED', error: 'Loại workbook này chưa được bật.' }, 404, { 'Cache-Control': 'no-store' });
+  if (url.searchParams.toString() !== normalized.canonicalQuery) {
+    return new Response(null, { status: 308, headers: { Location: `/api/report/v1/workbook-export?${normalized.canonicalQuery}`, 'Cache-Control': 'no-store' } });
+  }
+  const generatedAt = new Date().toISOString();
+  const requestHashValue = await sha256Hex(`traffic-workbook-v1?${normalized.canonicalQuery}`);
+  const requestId = crypto.randomUUID();
+  const currentBundle = await fetchWorkbookOverview(normalized, { from: normalized.from, to: normalized.to });
+  const expectedVersion = workbookVersion(currentBundle);
+  const dataAsOf = String(currentBundle.data_as_of ?? generatedAt);
+  const currentMetadata = currentBundle.metadata && typeof currentBundle.metadata === 'object' && !Array.isArray(currentBundle.metadata)
+    ? currentBundle.metadata as Record<string, unknown>
+    : {};
+  const dimensions = await fetchWorkbookDimensions(normalized, { from: normalized.from, to: normalized.to }, dataAsOf);
+  const businessWeekDimensionSnapshots: Array<{
+    id: string;
+    label: string;
+    from: string;
+    to: string;
+    partial: boolean;
+    dimensions: { airline: Record<string, unknown>[]; country: Record<string, unknown>[] };
+  }> = [];
+  if (normalized.reportType === 'BAO_CAO_SAN_LUONG') {
+    const latestPaxOpsDate = (Array.isArray(currentBundle.timeline) ? currentBundle.timeline : [])
+      .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === 'object' && !Array.isArray(row) && typeof (row as Record<string, unknown>).reported_pax === 'number')
+      .map((row) => String(row.ops_date ?? ''))
+      .filter((value) => ISO_DATE.test(value))
+      .sort()
+      .at(-1) ?? '';
+    const analysisTo = latestPaxOpsDate >= normalized.from
+      ? (latestPaxOpsDate < normalized.to ? latestPaxOpsDate : normalized.to)
+      : null;
+    const periods = analysisTo ? workbookBusinessWeekRanges(normalized.from, analysisTo).slice(-4) : [];
+    for (let offset = 0; offset < periods.length; offset += 3) {
+      const batch = await Promise.all(periods.slice(offset, offset + 3).map(async (period) => {
+        const [airline, country] = await Promise.all([
+          fetchWorkbookDimension(normalized, period, 'airline', dataAsOf),
+          fetchWorkbookDimension(normalized, period, 'country', dataAsOf),
+        ]);
+        return { ...period, dimensions: { airline, country } };
+      }));
+      businessWeekDimensionSnapshots.push(...batch);
+    }
+  }
+  const comparisonYearRanges = workbookComparisonYearRanges(normalized);
+  const minOpsDate = String(currentMetadata.min_ops_date ?? '');
+  const maxOpsDate = String(currentMetadata.max_ops_date ?? '');
+  if (comparisonYearRanges.some((range) => range.from < minOpsDate || range.to > maxOpsDate)) throw new Error('WORKBOOK_COMPARISON_OUTSIDE_DATA');
+  const comparisonSnapshots: Array<{
+    period: (typeof comparisonYearRanges)[number];
+    bundle: Record<string, unknown>;
+    dimensions: Awaited<ReturnType<typeof fetchWorkbookDimensions>>;
+  }> = [];
+  for (const period of comparisonYearRanges) {
+    const bundle = await fetchWorkbookOverview(normalized, period, expectedVersion);
+    const periodDimensions = await fetchWorkbookDimensions(normalized, period, dataAsOf);
+    comparisonSnapshots.push({ period, bundle, dimensions: periodDimensions });
+  }
+  const ranges = workbookComparisonRanges(normalized);
+  const weeklyContexts = normalized.reportType === 'WEEKLY_DETAIL' ? workbookWeeklyContextRanges(normalized) : [];
+  const previousRange = normalized.reportType === 'WEEKLY_DETAIL'
+    ? weeklyContexts.find((range) => range.mode === 'previous')
+    : ranges.find((range) => range.mode === 'previous');
+  const yearAgoRange = ranges.find((range) => range.mode === 'year_ago');
+  const nextRange = weeklyContexts.find((range) => range.mode === 'next');
+  if (normalized.reportType === 'WEEKLY_DETAIL') {
+    if (!previousRange || !nextRange || previousRange.from < minOpsDate || nextRange.to > maxOpsDate) {
+      throw new Error('WORKBOOK_CONTEXT_OUTSIDE_DATA');
+    }
+  }
+  const [previousBundle, yearAgoBundle, nextBundle, previousDimensions, yearAgoDimensions, nextDimensions] = await Promise.all([
+    previousRange ? fetchWorkbookOverview(normalized, previousRange, expectedVersion) : Promise.resolve(undefined),
+    yearAgoRange ? fetchWorkbookOverview(normalized, yearAgoRange, expectedVersion) : Promise.resolve(undefined),
+    nextRange ? fetchWorkbookOverview(normalized, nextRange, expectedVersion) : Promise.resolve(undefined),
+    previousRange ? fetchWorkbookDimensions(normalized, previousRange, dataAsOf) : Promise.resolve(undefined),
+    yearAgoRange ? fetchWorkbookDimensions(normalized, yearAgoRange, dataAsOf) : Promise.resolve(undefined),
+    nextRange ? fetchWorkbookDimensions(normalized, nextRange, dataAsOf) : Promise.resolve(undefined),
+  ]);
+  const model = buildWorkbookReportModel({
+    request: normalized,
+    requestHash: requestHashValue,
+    requestId,
+    generatedAt,
+    currentBundle,
+    previousBundle,
+    yearAgoBundle,
+    nextBundle,
+    currentDimensions: dimensions,
+    previousDimensions,
+    yearAgoDimensions,
+    nextDimensions,
+    comparisonSnapshots,
+    businessWeekDimensionSnapshots,
+  });
+  const aggregateRows = model.periods.reduce((sum, period) => sum + period.timelineDaily.length + period.airlines.length + period.countries.length + period.routes.length + period.aircraftGroups.length + period.aircraftTypes.length, 0)
+    + model.businessWeekDimensions.reduce((sum, period) => sum + period.airlines.length + period.countries.length, 0);
+  if (aggregateRows > 200_000) throw new Error('WORKBOOK_RESOURCE_BUDGET_EXCEEDED');
+  const bytes = zipSync(buildTrafficWorkbookPackage(model), { level: 6 });
+  const artifactSha256 = await sha256Hex(bytes);
+  return new Response(exactArrayBuffer(bytes), {
+    headers: {
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${trafficWorkbookFilename(model)}"`,
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Artifact-SHA256': artifactSha256,
+      'X-Report-Request-Id': requestId,
+      'X-Report-Request-Hash': requestHashValue,
+      'X-Report-Data-As-Of': dataAsOf,
+      'X-Report-Source-Watermark': String(currentBundle.source_watermark ?? 'unknown'),
+    },
+  });
+}
+
 function overviewArgs(request: NormalizedRequest): Record<string, unknown> {
   return {
     p_from_date: request.from,
@@ -360,6 +737,97 @@ function overviewArgs(request: NormalizedRequest): Record<string, unknown> {
     p_timeline_after: request.after,
     p_timeline_page_size: request.pageSize,
     p_contract_version: CONTRACT_VERSION,
+  };
+}
+
+function peakHourHeatmapArgs(request: NormalizedRequest): Record<string, unknown> {
+  return {
+    p_from_date: request.from,
+    p_to_date: request.to,
+    p_types: request.types,
+    p_airlines: request.airlines,
+    p_routes: request.routes,
+    p_countries: request.countries,
+    p_aircraft_groups: request.aircraftGroups,
+    p_time_basis: request.timeBasis,
+    p_contract_version: CONTRACT_VERSION,
+  };
+}
+
+async function reportReadHmac(value: string): Promise<string> {
+  const secret = Deno.env.get('TRAFFIC_REPORT_READ_VERSION_SECRET');
+  if (!secret || secret.length < 32) throw new Error('traffic report read version is not configured');
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value));
+  return base64Url(new Uint8Array(signature));
+}
+
+async function createReportReadVersion(claims: Omit<ReportReadVersionClaims, 'version' | 'expiresAt'>): Promise<string> {
+  const payload: ReportReadVersionClaims = {
+    version: 1,
+    expiresAt: Math.floor(Date.now() / 1000) + 30 * 60,
+    ...claims,
+  };
+  const encoded = base64Url(new TextEncoder().encode(JSON.stringify(payload)));
+  const unsigned = `rv1.${encoded}`;
+  return `${unsigned}.${await reportReadHmac(unsigned)}`;
+}
+
+async function verifyReportReadVersion(token: string): Promise<ReportReadVersionClaims> {
+  const [prefix, encoded, signature, ...rest] = token.split('.');
+  if (rest.length > 0 || prefix !== 'rv1' || !encoded || !signature) throw new Error('READ_VERSION_INVALID');
+  const unsigned = `${prefix}.${encoded}`;
+  const expected = await reportReadHmac(unsigned);
+  if (!constantTimeEqual(new TextEncoder().encode(signature), new TextEncoder().encode(expected))) {
+    throw new Error('READ_VERSION_INVALID');
+  }
+  let claims: unknown;
+  try {
+    claims = JSON.parse(new TextDecoder().decode(decodeBase64(encoded)));
+  } catch {
+    throw new Error('READ_VERSION_INVALID');
+  }
+  if (!claims || typeof claims !== 'object' || Array.isArray(claims)) throw new Error('READ_VERSION_INVALID');
+  const item = claims as Partial<ReportReadVersionClaims>;
+  if (item.version !== 1
+    || !Number.isSafeInteger(item.expiresAt)
+    || Number(item.expiresAt) <= Math.floor(Date.now() / 1000)
+    || !Number.isSafeInteger(item.sourceWatermark)
+    || Number(item.sourceWatermark) < 0
+    || typeof item.dataAsOf !== 'string'
+    || Number.isNaN(Date.parse(item.dataAsOf))
+    || typeof item.filterHash !== 'string'
+    || !/^[a-f0-9]{64}$/u.test(item.filterHash)) throw new Error('READ_VERSION_INVALID');
+  return item as ReportReadVersionClaims;
+}
+
+function v2Args(
+  request: NormalizedRequest,
+  payloadScope: 'full' | 'timeline' | 'dimensions',
+  readVersion: ReportReadVersionClaims | null,
+): Record<string, unknown> {
+  const type = request.types.length === 2 ? 'all' : request.types[0];
+  return {
+    p_from_date: request.from,
+    p_to_date: request.to,
+    p_type: type,
+    p_airlines: request.airlines,
+    p_routes: request.routes,
+    p_countries: request.countries,
+    p_comparison: request.comparison === 'previous_period'
+      ? 'previous'
+      : request.comparison === 'previous_year' ? 'year_ago' : 'none',
+    p_time_basis: request.timeBasis,
+    p_expected_watermark: readVersion?.sourceWatermark ?? request.expectedWatermark,
+    p_contract_version: V2_CONTRACT_VERSION,
+    p_payload_scope: payloadScope,
+    p_data_as_of: readVersion?.dataAsOf ?? null,
   };
 }
 
@@ -390,7 +858,7 @@ function csvCell(value: unknown): string {
 
 function buildAggregateCsv(bundle: Record<string, unknown>): string {
   const breakdowns = bundle.breakdowns && typeof bundle.breakdowns === 'object' ? bundle.breakdowns as Record<string, unknown> : {};
-  const lines = [['dimension', 'label', 'flights', 'arrivals', 'departures', 'reported_pax', 'suppressed']];
+  const lines: unknown[][] = [['dimension', 'label', 'flights', 'arrivals', 'departures', 'reported_pax', 'suppressed']];
   for (const dimension of ['airline', 'route', 'country', 'aircraft_group']) {
     const rows = Array.isArray(breakdowns[dimension]) ? breakdowns[dimension] as Array<Record<string, unknown>> : [];
     for (const row of rows) lines.push([dimension, row.label, row.flights, row.arrivals, row.departures, row.reported_pax, row.suppressed]);
@@ -400,7 +868,7 @@ function buildAggregateCsv(bundle: Record<string, unknown>): string {
 
 function buildDimensionCsv(payload: Record<string, unknown>): string {
   const rows = Array.isArray(payload.rows) ? payload.rows as Array<Record<string, unknown>> : [];
-  const lines = [[
+  const lines: unknown[][] = [[
     'dimension', 'scope', 'label', 'flights', 'flight_share', 'reported_pax', 'pax_share',
     'reported_legs', 'due_legs', 'pax_coverage_pct', 'suppressed', 'pax_status',
   ]];
@@ -413,15 +881,67 @@ function buildDimensionCsv(payload: Record<string, unknown>): string {
   return `\uFEFF${lines.map((row) => row.map(csvCell).join(',')).join('\r\n')}`;
 }
 
+function buildV2AggregateCsv(bundle: Record<string, unknown>): string {
+  const dimensions = bundle.dimensions && typeof bundle.dimensions === 'object'
+    ? bundle.dimensions as Record<string, unknown>
+    : {};
+  const lines: unknown[][] = [[
+    'dimension', 'label', 'flights', 'arrivals', 'departures', 'reported_pax',
+    'reported_legs', 'due_legs', 'missing_due_legs', 'true_zero_reported_legs',
+  ]];
+  for (const dimension of ['airline', 'route', 'country']) {
+    const rows = Array.isArray(dimensions[dimension]) ? dimensions[dimension] as Array<Record<string, unknown>> : [];
+    for (const row of rows) lines.push([
+      dimension, row.label, row.flights, row.arrivals, row.departures, row.reported_pax,
+      row.reported_legs, row.due_legs, row.missing_due_legs, row.true_zero_reported_legs,
+    ]);
+  }
+  return `\uFEFF${lines.map((row) => row.map(csvCell).join(',')).join('\r\n')}`;
+}
+
+async function handleHtmlExport(request: Request, url: URL): Promise<Response> {
+  const headers = { 'Cache-Control': 'no-store' };
+  if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405, { ...headers, Allow: 'GET' });
+  if (Deno.env.get('TRAFFIC_HTML_EXPORT_ENABLED') !== 'true') return json({ error: 'Báo cáo HTML chưa được bật.' }, 404, headers);
+  let normalized: ReturnType<typeof normalizeHtmlRequest>;
+  try { normalized = normalizeHtmlRequest(url); }
+  catch { return json({ error: 'Phạm vi hoặc lựa chọn báo cáo không hợp lệ. Vui lòng kiểm tra lại.' }, 400, headers); }
+  const allowed = Deno.env.get('TRAFFIC_WORKBOOK_ENABLED_REPORT_TYPES')?.split(',').map(value => value.trim()).filter(Boolean) ?? [];
+  if (allowed.length && !allowed.includes(normalized.report_type)) return json({ error: 'Loại báo cáo chưa được bật.' }, 404, headers);
+  try {
+    const raw = await postgrestRpc('get_public_traffic_html_export_v2', { p_request: normalized, p_expected_watermark: null, p_data_as_of: null }, 35_000);
+    const data = await validateHtmlEnvelope(raw, normalized);
+    const html = renderTrafficHtmlReport(data);
+    return new Response(html, { headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${trafficHtmlFilename(data)}"`, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (/RESOURCE_BUDGET|statement timeout|date range exceeds/u.test(message)) return json({ error: 'Phạm vi báo cáo vượt khả năng xử lý. Vui lòng chọn ít kỳ hơn hoặc thu hẹp khoảng ngày.' }, 413, headers);
+    if (/DATA_VERSION_CHANGED/u.test(message)) return json({ error: 'Dữ liệu vừa thay đổi. Vui lòng tải lại báo cáo.' }, 409, headers);
+    if (/HTML_DATA_INVALID|HTML_PERIOD_UNAVAILABLE/u.test(message)) return json({ error: 'Chưa thể xuất đủ số liệu nhất quán cho phạm vi này. Vui lòng kiểm tra kỳ đã chọn và thử lại.' }, 422, headers);
+    return json({ error: 'Nguồn báo cáo HTML chưa sẵn sàng. Vui lòng thử lại sau.' }, 503, headers);
+  }
+}
+
 Deno.serve(async (request: Request) => {
   const url = new URL(request.url);
   const endpoint = url.pathname.split('/').filter(Boolean).at(-1) ?? 'overview';
+  const isV2 = /\/(?:api\/report\/)?v2(?:\/|$)/u.test(url.pathname);
 
   try {
+    if (endpoint === 'html-export' && isV2) return await handleHtmlExport(request, url);
     if (url.pathname.includes('/kpi-admin/')) return await handleAnnualKpiAdmin(request, url);
+    if (endpoint === 'workbook-export') return await handleWorkbookExport(request, url);
+    if (endpoint === 'workbook-period-options') return await handleWorkbookPeriodOptions(request, url);
     if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405, { Allow: 'GET' });
 
-    if (endpoint === 'annual-kpi' || endpoint === 'dashboard-version' || endpoint === 'kpi-config') {
+    if (
+      endpoint === 'annual-kpi'
+      || endpoint === 'dashboard-version'
+      || endpoint === 'dashboard-publication'
+      || endpoint === 'dashboard-publication-version'
+      || endpoint === 'kpi-config'
+    ) {
       if (endpoint === 'kpi-config' && !url.searchParams.has('year') && [...url.searchParams.keys()].length > 0) {
         throw new Error('unsupported query parameter');
       }
@@ -430,18 +950,30 @@ Deno.serve(async (request: Request) => {
         ? 'get_public_annual_passenger_kpi_v1'
         : endpoint === 'dashboard-version'
           ? 'get_public_annual_passenger_kpi_version_v1'
-          : 'get_public_annual_passenger_kpi_config_v1';
+          : endpoint === 'dashboard-publication'
+            ? 'get_public_dashboard_publication_v1'
+            : endpoint === 'dashboard-publication-version'
+              ? 'get_public_dashboard_publication_version_v1'
+              : 'get_public_annual_passenger_kpi_config_v1';
       const payload = await postgrestRpc(functionName, endpoint === 'annual-kpi'
         ? { p_year: year, p_today: null }
         : { p_year: year });
+      if (endpoint === 'dashboard-publication' && payload == null) {
+        return json({
+          error: 'Dashboard chưa có Daily Publication đạt điều kiện cho năm đã chọn.',
+          error_code: 'DASHBOARD_PUBLICATION_NOT_READY',
+        }, 503, { 'Cache-Control': 'no-store' });
+      }
       const etag = await sha256Etag(payload);
       if (request.headers.get('If-None-Match') === etag) {
         return new Response(null, {
           status: 304,
           headers: {
             ETag: etag,
-            'Cache-Control': endpoint === 'dashboard-version'
-              ? 'public, max-age=0, s-maxage=300'
+            'Cache-Control': endpoint === 'dashboard-publication-version'
+              ? 'public, max-age=0, s-maxage=30'
+              : endpoint === 'dashboard-version'
+                ? 'public, max-age=0, s-maxage=300'
               : endpoint === 'kpi-config'
                 ? 'no-store'
                 : 'public, max-age=0, s-maxage=60',
@@ -450,8 +982,10 @@ Deno.serve(async (request: Request) => {
       }
       return json(payload, 200, {
         ETag: etag,
-        'Cache-Control': endpoint === 'dashboard-version'
-          ? 'public, max-age=0, s-maxage=300'
+        'Cache-Control': endpoint === 'dashboard-publication-version'
+          ? 'public, max-age=0, s-maxage=30'
+          : endpoint === 'dashboard-version'
+            ? 'public, max-age=0, s-maxage=300'
           : endpoint === 'kpi-config'
             ? 'no-store'
             : 'public, max-age=0, s-maxage=60',
@@ -459,17 +993,171 @@ Deno.serve(async (request: Request) => {
       });
     }
 
-    if (!['overview', 'timeline', 'breakdowns', 'dimension', 'dimension-export', 'export'].includes(endpoint)) return json({ error: 'not found' }, 404);
-    const normalized = normalizeRequest(url, endpoint);
+    const supportedEndpoints = isV2
+      ? ['overview', 'timeline', 'dimension', 'dimension-share', 'dimension-export', 'export']
+      : ['overview', 'timeline', 'breakdowns', 'peak-hour-heatmap', 'dimension', 'dimension-export', 'export'];
+    if (!supportedEndpoints.includes(endpoint)) return json({ error: 'not found' }, 404);
+    const normalized = normalizeRequest(url, endpoint, isV2 ? 'v2' : 'v1');
     const incomingQuery = url.searchParams.toString();
     if (incomingQuery !== normalized.canonicalQuery) {
-      const location = `/api/report/v1/${endpoint}${normalized.canonicalQuery ? `?${normalized.canonicalQuery}` : ''}`;
+      const location = `/api/report/${isV2 ? 'v2' : 'v1'}/${endpoint}${normalized.canonicalQuery ? `?${normalized.canonicalQuery}` : ''}`;
       return new Response(null, { status: 308, headers: { Location: location, 'Cache-Control': 'no-store' } });
     }
 
     const startedAt = performance.now();
+    if (isV2) {
+      const readVersion = normalized.readVersion
+        ? await verifyReportReadVersion(normalized.readVersion)
+        : null;
+      if (endpoint !== 'overview' && !readVersion) throw new Error('READ_VERSION_REQUIRED');
+      if (readVersion && normalized.expectedWatermark !== null
+        && normalized.expectedWatermark !== readVersion.sourceWatermark) {
+        throw new Error('READ_VERSION_INVALID');
+      }
+      const payloadScope = endpoint === 'timeline'
+        ? 'timeline'
+        : endpoint === 'overview' ? 'full' : 'dimensions';
+      const payload = await postgrestRpc('get_public_traffic_report_v2', v2Args(normalized, payloadScope, readVersion));
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('invalid traffic-report-v2 payload');
+      const rawBundle = payload as Record<string, unknown>;
+      const bundle = endpoint === 'overview' ? enrichV2OverviewBreakdowns(rawBundle) : rawBundle;
+      const sourceWatermark = bundle.source_watermark;
+      const filterHash = bundle.filter_hash;
+      const dataAsOf = bundle.data_as_of;
+      if (!Number.isSafeInteger(sourceWatermark) || typeof filterHash !== 'string' || typeof dataAsOf !== 'string') throw new Error('invalid traffic-report-v2 version envelope');
+      if (readVersion && (sourceWatermark !== readVersion.sourceWatermark
+        || filterHash !== readVersion.filterHash
+        || dataAsOf !== readVersion.dataAsOf)) throw new Error('READ_VERSION_INVALID');
+      const readVersionToken = normalized.readVersion ?? await createReportReadVersion({
+        sourceWatermark: Number(sourceWatermark),
+        dataAsOf,
+        filterHash,
+      });
+      const etag = await sha256Etag({ endpoint, sourceWatermark, filterHash, dataAsOf, query: normalized.canonicalQuery });
+      if (request.headers.get('If-None-Match') === etag) {
+        return new Response(null, { status: 304, headers: { ETag: etag, 'Cache-Control': 'public, max-age=0, s-maxage=30' } });
+      }
+      const version = {
+        contract_version: bundle.contract_version,
+        data_as_of: bundle.data_as_of,
+        source_watermark: bundle.source_watermark,
+        data_version: bundle.data_version,
+        filter_hash: bundle.filter_hash,
+        source_mode: bundle.source_mode,
+        normalized_filter: bundle.normalized_filter,
+        read_version_token: readVersionToken,
+      };
+      if (endpoint === 'export') {
+        return new Response(buildV2AggregateCsv(bundle), {
+          headers: {
+            'Content-Type': 'text/csv; charset=utf-8',
+            'Content-Disposition': 'attachment; filename="traffic-report-v2-aggregate.csv"',
+            'Cache-Control': 'no-store',
+            'X-Report-Source-Mode': String(bundle.source_mode ?? 'live'),
+            'X-Content-Type-Options': 'nosniff',
+          },
+        });
+      }
+      let responsePayload: Record<string, unknown> = { ...bundle, read_version_token: readVersionToken };
+      if (endpoint === 'timeline') {
+        const dailyRows = Array.isArray(bundle.timeline) ? bundle.timeline as Array<Record<string, unknown>> : [];
+        const projectedRows = normalized.granularity === 'month'
+          ? buildV2MonthlyTimeline(dailyRows)
+          : normalized.month
+            ? dailyRows.filter((row) => String(row.ops_date ?? '').startsWith(`${normalized.month}-`))
+            : dailyRows;
+        const firstIndex = normalized.after
+          ? projectedRows.findIndex((row) => String(row.ops_date) > normalized.after!)
+          : 0;
+        const offset = firstIndex < 0 ? projectedRows.length : firstIndex;
+        const rows = projectedRows.slice(offset, offset + normalized.pageSize);
+        const cursorField = normalized.granularity === 'month' ? 'month' : 'ops_date';
+        responsePayload = {
+          ...version,
+          granularity: normalized.granularity,
+          month: normalized.month,
+          page_size: normalized.pageSize,
+          has_more: offset + rows.length < projectedRows.length,
+          next_cursor: offset + rows.length < projectedRows.length && rows.length > 0
+            ? String(rows.at(-1)?.[cursorField] ?? '')
+            : null,
+          timeline: rows,
+        };
+      }
+      if (endpoint === 'dimension-share') {
+        const dimensions = bundle.dimensions && typeof bundle.dimensions === 'object'
+          ? bundle.dimensions as Record<string, unknown>
+          : {};
+        const rows = normalized.dimension && Array.isArray(dimensions[normalized.dimension])
+          ? dimensions[normalized.dimension]
+          : [];
+        responsePayload = {
+          ...version,
+          ...buildV2DimensionShare(rows, normalized.dimension as 'route' | 'country' | 'airline', normalized.metric, normalized.limit),
+          type: normalized.types.length === 1 ? normalized.types[0] : 'all',
+        };
+      }
+      if (endpoint === 'dimension' || endpoint === 'dimension-export') {
+        const dimensions = bundle.dimensions && typeof bundle.dimensions === 'object'
+          ? bundle.dimensions as Record<string, unknown>
+          : {};
+        const allRows = normalized.dimension && Array.isArray(dimensions[normalized.dimension])
+          ? [...dimensions[normalized.dimension] as Array<Record<string, unknown>>]
+          : [];
+        allRows.sort((left, right) => {
+          if (normalized.sort === 'label') {
+            return String(left.label ?? '').localeCompare(String(right.label ?? ''), 'vi');
+          }
+          const leftValue = typeof left[normalized.sort] === 'number' ? left[normalized.sort] as number : null;
+          const rightValue = typeof right[normalized.sort] === 'number' ? right[normalized.sort] as number : null;
+          if (leftValue === null && rightValue !== null) return 1;
+          if (leftValue !== null && rightValue === null) return -1;
+          if (leftValue !== rightValue) return (rightValue ?? 0) - (leftValue ?? 0);
+          return String(left.label ?? '').localeCompare(String(right.label ?? ''), 'vi');
+        });
+        const offset = (normalized.page - 1) * normalized.pageSize;
+        responsePayload = {
+          ...version,
+          dimension: normalized.dimension,
+          type: normalized.types.length === 1 ? normalized.types[0] : 'all',
+          page: normalized.page,
+          page_size: normalized.pageSize,
+          total_rows: allRows.length,
+          has_more: offset + normalized.pageSize < allRows.length,
+          rows: allRows.slice(offset, offset + normalized.pageSize),
+        };
+        if (endpoint === 'dimension-export') {
+          return new Response(buildDimensionCsv(responsePayload), {
+            headers: {
+              'Content-Type': 'text/csv; charset=utf-8',
+              'Content-Disposition': `attachment; filename="traffic-report-${normalized.dimension}-${normalized.types.join('').toLowerCase()}.csv"`,
+              'Cache-Control': 'no-store',
+              'X-Report-Origin-Ms': String(Math.round(performance.now() - startedAt)),
+              'X-Report-Source-Mode': String(bundle.source_mode ?? 'live'),
+              'X-Content-Type-Options': 'nosniff',
+            },
+          });
+        }
+      }
+      return json(responsePayload, 200, {
+        ETag: etag,
+        'Cache-Control': 'public, max-age=0, s-maxage=30, stale-while-revalidate=15',
+        'X-Report-Origin-Ms': String(Math.round(performance.now() - startedAt)),
+        'X-Report-Source-Mode': String(bundle.source_mode ?? 'live'),
+        Vary: 'Accept-Encoding',
+      });
+    }
     const dataAsOf = new Date().toISOString();
     const canonicalRequestHash = await requestHash(normalized);
+    if (endpoint === 'peak-hour-heatmap') {
+      const payload = await postgrestRpc('get_public_traffic_report_peak_hour_heatmap_v1', peakHourHeatmapArgs(normalized));
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('invalid peak-hour heatmap payload');
+      return json({ ...(payload as Record<string, unknown>), request_hash: canonicalRequestHash }, 200, {
+        'Cache-Control': 'public, max-age=0, s-maxage=60, stale-while-revalidate=30',
+        'X-Report-Origin-Ms': String(Math.round(performance.now() - startedAt)),
+        Vary: 'Accept-Encoding',
+      });
+    }
     if (endpoint === 'dimension' || endpoint === 'dimension-export') {
       const firstPayload = await postgrestRpc('get_public_traffic_report_dimension_v2', dimensionArgs(normalized));
       if (!firstPayload || typeof firstPayload !== 'object' || Array.isArray(firstPayload)) throw new Error('invalid dimension payload');
@@ -554,6 +1242,30 @@ Deno.serve(async (request: Request) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'report request failed';
+    if (message === 'REPORT_VERSION_CHANGED') {
+      return json({
+        error_code: 'REPORT_VERSION_CHANGED',
+        error: 'Dữ liệu vừa được cập nhật. Vui lòng tạo lại file.',
+      }, 409, { 'Cache-Control': 'no-store' });
+    }
+    if (message === 'WORKBOOK_CONTEXT_OUTSIDE_DATA') {
+      return json({
+        error_code: 'WORKBOOK_CONTEXT_OUTSIDE_DATA',
+        error: 'Không đủ dữ liệu cho 7 ngày trước hoặc 7 ngày sau phạm vi đã chọn.',
+      }, 400, { 'Cache-Control': 'no-store' });
+    }
+    if (message === 'WORKBOOK_COMPARISON_OUTSIDE_DATA') {
+      return json({
+        error_code: 'WORKBOOK_COMPARISON_OUTSIDE_DATA',
+        error: 'Một hoặc nhiều cùng kỳ không nằm trọn trong dữ liệu hiện có.',
+      }, 400, { 'Cache-Control': 'no-store' });
+    }
+    if (message === 'WORKBOOK_RESOURCE_BUDGET_EXCEEDED') {
+      return json({
+        error_code: 'WORKBOOK_RESOURCE_BUDGET_EXCEEDED',
+        error: 'Phạm vi báo cáo quá lớn. Hãy thu hẹp kỳ hoặc bộ lọc rồi thử lại.',
+      }, 413, { 'Cache-Control': 'no-store' });
+    }
     const adminRequest = url.pathname.includes('/kpi-admin/');
     if (adminRequest) {
       const unavailable = /not configured/i.test(message);
@@ -561,6 +1273,24 @@ Deno.serve(async (request: Request) => {
         error_code: unavailable ? 'ADMIN_NOT_CONFIGURED' : 'ADMIN_REQUEST_INVALID',
         error: unavailable ? 'Trình chỉnh sửa KPI chưa được cấu hình trên máy chủ.' : 'Thông tin KPI chưa hợp lệ.',
       }, unavailable ? 503 : 400, { 'Cache-Control': 'no-store' });
+    }
+    if (/DATA_VERSION_CHANGED/i.test(message)) {
+      const expected = /expected=(\d+)/u.exec(message)?.[1] ?? null;
+      const actual = /actual=(\d+)/u.exec(message)?.[1] ?? null;
+      return json({
+        error_code: 'DATA_VERSION_CHANGED',
+        error: 'Dữ liệu báo cáo đã thay đổi. Vui lòng tải lại toàn bộ báo cáo.',
+        expected_watermark: expected === null ? null : Number(expected),
+        actual_watermark: actual === null ? null : Number(actual),
+      }, 409, { 'Cache-Control': 'no-store' });
+    }
+    if (/READ_VERSION_(INVALID|REQUIRED)/i.test(message)) {
+      return json({
+        error_code: 'READ_VERSION_CHANGED',
+        error: 'Phiên bản đọc báo cáo đã hết hạn hoặc không còn phù hợp. Vui lòng tải lại toàn bộ báo cáo.',
+        expected_watermark: null,
+        actual_watermark: null,
+      }, 409, { 'Cache-Control': 'no-store' });
     }
     const clientError = /invalid|unsupported|must|required|cardinality|outside|provided|exceed/i.test(message);
     return json({

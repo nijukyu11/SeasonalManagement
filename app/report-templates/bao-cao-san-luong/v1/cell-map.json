@@ -1,0 +1,15 @@
+{
+  "renderer": "traffic-workbook-renderer-v1",
+  "mode": "server-generated-values",
+  "managed_regions": {
+    "TOTAL": "A1:I*",
+    "WEEKLY": "A1:I*",
+    "month": "A1:I*",
+    "Analysis_Airline": "A1:H*",
+    "Analysis_Country": "A1:H*"
+  },
+  "notes": [
+    "Public workbook is generated without Table1, VBA, connections, queries, or external links.",
+    "Asterisk means the final row is determined from canonical aggregate data at render time."
+  ]
+}

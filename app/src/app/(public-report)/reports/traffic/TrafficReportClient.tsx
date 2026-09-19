@@ -5,7 +5,6 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import { cn } from '@/lib/cn';
 import {
   buildOverviewUrl,
-  buildTimelineUrl,
   detectTrafficReportDatePreset,
   getLatestCompletedOpsDate,
   getTrafficReportPresetRange,
@@ -17,18 +16,23 @@ import {
   type TrafficDatePreset,
   type TrafficReportBundle,
   type TrafficReportPageState,
-  type TrafficTimelinePoint,
 } from '@/lib/trafficReportContract';
-import { downloadTrafficReportWorkbook } from '@/lib/trafficReportExcelExport';
 import { getAverageFlightsPerSelectedDay } from '@/lib/trafficReportOperationalHours';
+import {
+  fetchTrafficReportV2Bundle,
+  toTrafficReportPresentationBundle,
+} from '@/lib/trafficReportDataAdapter';
 import { DayOfWeekChart, FleetMixChart, PeakHourChart } from './TrafficReportAdvancedCharts';
 import { TrafficReportDimensionSection } from './TrafficReportDimensionSection';
 import { TrafficReportFilters } from './TrafficReportFilters';
 import { TrafficReportTrend } from './TrafficReportTrend';
+import { TrafficWorkbookExportDialog } from './TrafficWorkbookExportDialog';
 
 const numberFormat = new Intl.NumberFormat('vi-VN');
 const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
 const dateFormat = new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+const TRAFFIC_REPORT_V2_ENABLED = process.env.NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED === '1';
+const workbookExportEnabled = process.env.NEXT_PUBLIC_TRAFFIC_WORKBOOK_EXPORT_ENABLED === 'true';
 
 function formatNumber(value: number | null | undefined): string {
   return value == null ? '—' : numberFormat.format(value);
@@ -68,49 +72,67 @@ function KpiMetric({ label, value, delta, comparisonLabel, divided = false }: {
   );
 }
 
-function KpiCard({ label, flights, pax, flightDelta, paxDelta, comparisonLabel }: {
+function KpiCard({ label, flights, pax, flightDelta, paxDelta, comparisonLabel, insight }: {
   label: string;
   flights: number | null;
   pax: number | null;
   flightDelta: number | null;
   paxDelta: number | null;
   comparisonLabel: string;
+  insight?: string | null;
 }) {
   return (
-    <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-label={`${label}: ${formatNumber(flights)} chuyến bay, sản lượng khách ${formatNumber(pax)}`}>
-      <h3 className="text-balance text-lg font-bold text-blue-950">{label}</h3>
-      <dl className="mt-4 grid grid-cols-2 gap-4">
-        <KpiMetric label="Sản lượng chuyến bay" value={flights} delta={flightDelta} comparisonLabel={comparisonLabel} />
-        <KpiMetric label="Sản lượng khách" value={pax} delta={paxDelta} comparisonLabel={comparisonLabel} divided />
-      </dl>
+    <article className="flex min-w-0 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-label={`${label}: ${formatNumber(flights)} chuyến bay, sản lượng khách ${formatNumber(pax)}`}>
+      <div>
+        <h3 className="text-balance text-lg font-bold text-blue-950">{label}</h3>
+        <dl className="mt-4 grid grid-cols-2 gap-4">
+          <KpiMetric label="Sản lượng chuyến bay" value={flights} delta={flightDelta} comparisonLabel={comparisonLabel} />
+          <KpiMetric label="Sản lượng khách" value={pax} delta={paxDelta} comparisonLabel={comparisonLabel} divided />
+        </dl>
+      </div>
+      {insight ? (
+        <div className="mt-4 border-t border-slate-100 pt-3 text-xs leading-5 text-slate-600">
+          <span className="font-semibold text-blue-900">Điểm tin: </span>{insight}
+        </div>
+      ) : null}
     </article>
   );
 }
 
-function buildInsights(bundle: TrafficReportBundle): string[] {
-  const current = bundle.kpis.current;
-  const comparison = bundle.kpis.comparison;
+function scrollToSection(id: string) {
+  const target = document.getElementById(id);
+  if (!target) return;
+  const bar = document.querySelector<HTMLElement>('[data-report-sticky-bar]');
+  const offset = (bar?.offsetHeight ?? 0) + 8;
+  const top = Math.max(0, window.scrollY + target.getBoundingClientRect().top - offset);
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  window.scrollTo({ top, behavior: reducedMotion ? 'auto' : 'smooth' });
+}
+
+function buildInsights(bundle: TrafficReportBundle): {
+  peakDayNote: string | null;
+  arrivalPeakNote: string | null;
+  departurePeakNote: string | null;
+  topAirlineNote: string | null;
+} {
   const topAirline = bundle.breakdowns.airline.find((row) => !row.suppressed && row.label !== 'Khác');
-  const comparisonAvailable = current.status === 'complete' && comparison.status === 'complete';
-  const delta = comparisonDelta(current.flights, comparison.flights, comparisonAvailable);
   const arrivalPeak = bundle.breakdowns.peak_hour.reduce<(typeof bundle.breakdowns.peak_hour)[number] | null>((peak, row) => row.arrivals != null && (!peak || row.arrivals > (peak.arrivals ?? -1)) ? row : peak, null);
   const departurePeak = bundle.breakdowns.peak_hour.reduce<(typeof bundle.breakdowns.peak_hour)[number] | null>((peak, row) => row.departures != null && (!peak || row.departures > (peak.departures ?? -1)) ? row : peak, null);
   const averagePeakArrivals = getAverageFlightsPerSelectedDay(arrivalPeak?.arrivals ?? null, bundle.metadata.day_count);
   const averagePeakDepartures = getAverageFlightsPerSelectedDay(departurePeak?.departures ?? null, bundle.metadata.day_count);
-  return [
-    bundle.kpis.peak_day.ops_date && bundle.kpis.peak_day.flights != null
-      ? `Ngày cao điểm là ${formatDate(bundle.kpis.peak_day.ops_date)} với ${formatNumber(bundle.kpis.peak_day.flights)} chuyến.`
-      : null,
-    topAirline?.flights != null
-      ? `${topAirline.label} có sản lượng chuyến bay cao nhất trong kỳ với ${formatNumber(topAirline.flights)} chuyến.`
-      : null,
-    arrivalPeak && departurePeak && averagePeakArrivals != null && averagePeakDepartures != null
-      ? `Giờ cao điểm chuyến bay đến là ${arrivalPeak.hour_bucket}, trung bình ${numberFormat.format(Math.round(averagePeakArrivals))} chuyến/ngày; chuyến bay đi là ${departurePeak.hour_bucket}, trung bình ${numberFormat.format(Math.round(averagePeakDepartures))} chuyến/ngày.`
-      : null,
-    delta == null
-      ? null
-      : `Sản lượng chuyến bay ${delta >= 0 ? 'tăng' : 'giảm'} ${percentFormat.format(Math.abs(delta))}% so với kỳ đối chiếu.`,
-  ].filter((insight): insight is string => insight != null);
+  const peakDayNote = bundle.kpis.peak_day.ops_date && bundle.kpis.peak_day.flights != null
+    ? `Ngày cao điểm là ${formatDate(bundle.kpis.peak_day.ops_date)} với ${formatNumber(bundle.kpis.peak_day.flights)} chuyến.`
+    : null;
+  const arrivalPeakNote = arrivalPeak && averagePeakArrivals != null
+    ? `Giờ cao điểm đến là ${arrivalPeak.hour_bucket}, trung bình ${numberFormat.format(Math.round(averagePeakArrivals))} chuyến/ngày.`
+    : null;
+  const departurePeakNote = departurePeak && averagePeakDepartures != null
+    ? `Giờ cao điểm đi là ${departurePeak.hour_bucket}, trung bình ${numberFormat.format(Math.round(averagePeakDepartures))} chuyến/ngày.`
+    : null;
+  const topAirlineNote = topAirline?.flights != null
+    ? `${topAirline.label} có sản lượng chuyến bay cao nhất trong kỳ với ${formatNumber(topAirline.flights)} chuyến.`
+    : null;
+  return { peakDayNote, arrivalPeakNote, departurePeakNote, topAirlineNote };
 }
 
 function LoadingSkeleton() {
@@ -129,10 +151,7 @@ export default function TrafficReportClient() {
   const [bundle, setBundle] = useState<TrafficReportBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [exportingExcel, setExportingExcel] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
-  const exportControllerRef = useRef<AbortController | null>(null);
   const lastSuccessfulQueryRef = useRef<string | null>(null);
 
   const parsed = useMemo(() => {
@@ -151,13 +170,18 @@ export default function TrafficReportClient() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(buildOverviewUrl(filter), { method: 'GET', credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
-      const payload: unknown = await response.json().catch(() => null);
-      if (!response.ok) {
-        const message = payload && typeof payload === 'object' && 'error' in payload ? String((payload as { error: unknown }).error) : 'Báo cáo tạm thời chưa thể cập nhật.';
-        throw new Error(message);
-      }
-      if (!isTrafficReportBundle(payload)) throw new Error('Dữ liệu báo cáo chưa sẵn sàng.');
+      const payload = TRAFFIC_REPORT_V2_ENABLED
+        ? toTrafficReportPresentationBundle(await fetchTrafficReportV2Bundle(filter, { signal: controller.signal }))
+        : await (async () => {
+          const response = await fetch(buildOverviewUrl(filter), { method: 'GET', credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+          const result: unknown = await response.json().catch(() => null);
+          if (!response.ok) {
+            const message = result && typeof result === 'object' && 'error' in result ? String((result as { error: unknown }).error) : 'Báo cáo tạm thời chưa thể cập nhật.';
+            throw new Error(message);
+          }
+          if (!isTrafficReportBundle(result)) throw new Error('Dữ liệu báo cáo chưa sẵn sàng.');
+          return result;
+        })();
       setBundle(payload);
       lastSuccessfulQueryRef.current = toTrafficReportSearchParams(payload.metadata.normalized_filter).toString();
       return payload;
@@ -185,7 +209,6 @@ export default function TrafficReportClient() {
 
   useEffect(() => () => {
     controllerRef.current?.abort();
-    exportControllerRef.current?.abort();
   }, []);
 
   const pageState = parsed.state;
@@ -223,43 +246,20 @@ export default function TrafficReportClient() {
     void applyFilter({ ...normalizedFilter, tz });
   };
 
-  const exportExcel = async () => {
-    if (!bundle || exportingExcel) return;
-    exportControllerRef.current?.abort();
-    const controller = new AbortController();
-    exportControllerRef.current = controller;
-    setExportingExcel(true);
-    setExportError(null);
-    try {
-      const rows = new Map<string, TrafficTimelinePoint>();
-      let after: string | null = null;
-      let hasMore = true;
-      let requests = 0;
-      while (hasMore && requests < 50) {
-        const response = await fetch(buildTimelineUrl(bundle.metadata.normalized_filter, 'all', after), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
-        const payload = await response.json().catch(() => null) as { error?: unknown; timeline?: TrafficTimelinePoint[]; metadata?: { timeline_has_more?: boolean; timeline_next_cursor?: string | null } } | null;
-        if (!response.ok || !payload || !Array.isArray(payload.timeline) || !payload.metadata) throw new Error(payload?.error ? String(payload.error) : 'Không thể tải đủ dãy ngày cho Excel.');
-        for (const row of payload.timeline) rows.set(row.ops_date, row);
-        hasMore = Boolean(payload.metadata.timeline_has_more);
-        const next = payload.metadata.timeline_next_cursor ?? null;
-        if (hasMore && (!next || next === after)) throw new Error('Không thể hoàn tất dãy ngày cho Excel.');
-        after = next;
-        requests += 1;
-      }
-      if (hasMore) throw new Error('Phạm vi quá lớn để xuất trong một lần.');
-      await downloadTrafficReportWorkbook(bundle, [...rows.values()].sort((left, right) => left.ops_date.localeCompare(right.ops_date)));
-    } catch (reason) {
-      if (!controller.signal.aborted) setExportError(reason instanceof Error ? reason.message : 'Không thể tạo file Excel.');
-    } finally {
-      if (!controller.signal.aborted) setExportingExcel(false);
+  const jumpToNetworkSection = (target: 'route' | 'country' | 'airline') => {
+    if (target === 'airline') {
+      scrollToSection('airline-section');
+      return;
     }
+    updateViewState({ marketDimension: target });
+    scrollToSection('market-section');
   };
 
   const current = bundle?.kpis.current;
   const comparison = bundle?.kpis.comparison;
   const comparisonLabel = comparison?.mode === 'year_ago' ? 'cùng kỳ năm trước' : 'kỳ trước liền kề';
   const comparisonAvailable = current?.status === 'complete' && comparison?.status === 'complete';
-  const insights = bundle ? buildInsights(bundle) : [];
+  const insights = bundle ? buildInsights(bundle) : null;
   const fleetRows = useMemo(() => {
     if (!bundle) return [];
     const aircraftTypes = bundle.breakdowns.aircraft_type ?? [];
@@ -282,21 +282,15 @@ export default function TrafficReportClient() {
         ? { title: 'Chưa có dữ liệu cho báo cáo trong phạm vi này.', tone: 'rose' as const }
         : null;
   const visibleError = parsed.error ?? error;
-
+  const readVersion = bundle?.contract_version === 'traffic-report-v2' ? 'v2' as const : 'v1' as const;
+  const expectedWatermark = readVersion === 'v2' && typeof bundle?.source_watermark === 'number' ? bundle.source_watermark : undefined;
+  const readVersionToken = readVersion === 'v2' ? bundle?.read_version_token : undefined;
+  const reloadVersionedBundle = useCallback(() => {
+    if (normalizedFilter) void requestBundle(normalizedFilter);
+  }, [normalizedFilter, requestBundle]);
   return (
     <>
-      <section className="bg-slate-950 text-white">
-        <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8 sm:py-10">
-          <p className="text-sm font-semibold text-cyan-300">Báo cáo vận hành công khai</p>
-          <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 className="text-balance text-3xl font-bold sm:text-4xl">Báo cáo sản lượng khai thác</h1>
-              <p className="mt-3 max-w-3xl text-pretty text-sm leading-6 text-slate-300">Dữ liệu theo dãy ngày khai thác liên tục, không phụ thuộc mùa. Sản lượng khách chỉ tính số khách đã báo cáo.</p>
-            </div>
-            {normalizedFilter ? <p className="text-sm font-semibold text-slate-200">{formatDate(normalizedFilter.from)}–{formatDate(normalizedFilter.to)}</p> : null}
-          </div>
-        </div>
-      </section>
+      <h1 className="sr-only">Báo cáo sản lượng khai thác</h1>
 
       {bundle && normalizedFilter && latestCompletedOpsDate ? <TrafficReportFilters
         filter={normalizedFilter}
@@ -312,9 +306,13 @@ export default function TrafficReportClient() {
         loading={loading}
         onApply={applyFilter}
         onPreset={applyDatePreset}
+        dayCount={bundle.metadata.day_count}
+        coverageCounts={bundle.kpis.coverage_counts}
+        unknownCountryLegs={bundle.quality.unknown_country_legs}
+        onJump={jumpToNetworkSection}
       /> : null}
 
-      <div className="mx-auto max-w-7xl space-y-12 px-5 py-8 sm:px-8 sm:py-10">
+      <div className="mx-auto max-w-[1400px] space-y-12 px-5 py-8 sm:px-8 sm:py-10">
         {loading && !bundle && parsed.state ? <LoadingSkeleton /> : null}
         {loading && bundle ? <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-4 text-cyan-950" role="status">Đang cập nhật số liệu theo bộ lọc mới…</div> : null}
         {visibleError ? <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-rose-950" role="alert"><p className="font-semibold">Không thể cập nhật báo cáo</p><p className="mt-1 text-sm">{visibleError}</p>{pageState ? <button className="report-focus mt-3 min-h-11 rounded-lg bg-rose-800 px-4 text-sm font-bold text-white" type="button" onClick={() => void requestBundle(pageState.filter)}>Thử lại</button> : null}</div> : null}
@@ -337,6 +335,7 @@ export default function TrafficReportClient() {
                 flightDelta={comparisonDelta(current?.flights ?? null, comparison?.flights ?? null, comparisonAvailable)}
                 paxDelta={comparisonDelta(current?.reported_pax ?? null, comparison?.reported_pax ?? null, comparisonAvailable)}
                 comparisonLabel={comparisonLabel}
+                insight={insights?.peakDayNote}
               />
               <KpiCard
                 label="Chuyến bay đến"
@@ -345,6 +344,7 @@ export default function TrafficReportClient() {
                 flightDelta={comparisonDelta(current?.arrivals ?? null, comparison?.arrivals ?? null, comparisonAvailable)}
                 paxDelta={comparisonDelta(current?.arrival_reported_pax ?? null, comparison?.arrival_reported_pax ?? null, comparisonAvailable)}
                 comparisonLabel={comparisonLabel}
+                insight={insights?.arrivalPeakNote}
               />
               <KpiCard
                 label="Chuyến bay đi"
@@ -353,39 +353,37 @@ export default function TrafficReportClient() {
                 flightDelta={comparisonDelta(current?.departures ?? null, comparison?.departures ?? null, comparisonAvailable)}
                 paxDelta={comparisonDelta(current?.departure_reported_pax ?? null, comparison?.departure_reported_pax ?? null, comparisonAvailable)}
                 comparisonLabel={comparisonLabel}
+                insight={insights?.departurePeakNote}
               />
             </div>
             <p className="mt-3 text-pretty text-xs leading-5 text-slate-600">Sản lượng khách chỉ tính số khách đã báo cáo; dấu — nghĩa là chưa có số liệu.</p>
-            {!comparisonAvailable && comparison?.mode !== 'none' ? <p className="mt-4 text-sm text-slate-600">Chưa đủ dữ liệu để đối chiếu với {comparisonLabel}.</p> : null}
-            <div className="mt-5 grid gap-3 md:grid-cols-2">{insights.map((insight, index) => <p key={insight} className="rounded-xl border-l-4 border-cyan-600 bg-white p-4 text-pretty text-sm leading-6 text-slate-700 shadow-sm"><span className="mr-2 font-bold text-blue-900">{index + 1}.</span>{insight}</p>)}</div>
+            {!comparisonAvailable && comparison?.mode !== 'none' ? <p className="mt-2 text-sm text-slate-600">Chưa đủ dữ liệu để đối chiếu với {comparisonLabel}.</p> : null}
+            {insights?.topAirlineNote ? (
+              <p className="mt-2 text-xs font-medium text-slate-600">
+                <span className="font-semibold text-blue-950">Ghi nhận thị trường:</span> {insights.topAirlineNote}
+              </p>
+            ) : null}
           </section>
 
-          <TrafficReportTrend filter={normalizedFilter} scope={pageState.trendType} onScopeChange={(trendType) => updateViewState({ trendType })} />
-
-          <TrafficReportDimensionSection
-            key={`market-${globalQuery}-${pageState.marketDimension}-${pageState.marketType}`}
-            kind="market"
+          <TrafficReportTrend
             filter={normalizedFilter}
-            scope={pageState.marketType}
-            marketDimension={pageState.marketDimension}
-            onScopeChange={(marketType) => updateViewState({ marketType })}
-            onMarketDimensionChange={(marketDimension) => updateViewState({ marketDimension })}
+            scope={pageState.trendType}
+            readVersion={readVersion}
+            expectedWatermark={expectedWatermark}
+            readVersionToken={readVersionToken}
+            comparison={comparison}
+            comparisonLabel={comparisonLabel}
+            onVersionChanged={reloadVersionedBundle}
+            onScopeChange={(trendType) => updateViewState({ trendType })}
           />
 
-          <TrafficReportDimensionSection
-            key={`airline-${globalQuery}-${pageState.airlineType}`}
-            kind="airline"
-            filter={normalizedFilter}
-            scope={pageState.airlineType}
-            onScopeChange={(airlineType) => updateViewState({ airlineType })}
-          />
-
-          <section aria-labelledby="operations-title">
+          <section id="operations-section" aria-labelledby="operations-title">
             <div><p className="text-sm font-bold text-blue-900">Thông tin khai thác</p><h2 id="operations-title" className="mt-1 text-balance text-3xl font-bold text-slate-950">Giờ và cơ cấu khai thác</h2><p className="mt-2 text-pretty text-sm leading-6 text-slate-600">Xem giờ cao điểm của chuyến bay đến, chuyến bay đi và cơ cấu tàu bay trong phạm vi đã chọn.</p></div>
             <div className="mt-6">
               <PeakHourChart
                 rows={bundle.breakdowns.peak_hour}
                 monthlyRows={bundle.breakdowns.peak_hour_monthly ?? []}
+                filter={normalizedFilter}
                 timeBasis={bundle.metadata.normalized_filter.tz}
                 selectedDayCount={bundle.metadata.day_count}
                 fromDate={bundle.metadata.normalized_filter.from}
@@ -393,21 +391,53 @@ export default function TrafficReportClient() {
                 onTimeBasisChange={applyTimeBasis}
               />
             </div>
-            <div className="mt-5 grid gap-5 xl:grid-cols-2">
-              <DayOfWeekChart rows={bundle.breakdowns.day_of_week ?? []} />
+            <div className="mt-5">
+              <DayOfWeekChart rows={bundle.breakdowns.day_of_week ?? []} monthlyRows={bundle.breakdowns.day_of_week_monthly ?? []} />
+            </div>
+            <div className="mt-5">
               <FleetMixChart rows={fleetRows} />
             </div>
           </section>
+
+
+          <div id="market-section">
+            <TrafficReportDimensionSection
+              key={`market-${globalQuery}-${pageState.marketDimension}-${pageState.marketType}`}
+              kind="market"
+              filter={normalizedFilter}
+              scope={pageState.marketType}
+              marketDimension={pageState.marketDimension}
+              readVersion={readVersion}
+              expectedWatermark={expectedWatermark}
+              readVersionToken={readVersionToken}
+              onVersionChanged={reloadVersionedBundle}
+              onScopeChange={(marketType) => updateViewState({ marketType })}
+              onMarketDimensionChange={(marketDimension) => updateViewState({ marketDimension })}
+            />
+          </div>
+
+          <div id="airline-section">
+            <TrafficReportDimensionSection
+              key={`airline-${globalQuery}-${pageState.airlineType}`}
+              kind="airline"
+              filter={normalizedFilter}
+              scope={pageState.airlineType}
+              readVersion={readVersion}
+              expectedWatermark={expectedWatermark}
+              readVersionToken={readVersionToken}
+              onVersionChanged={reloadVersionedBundle}
+              onScopeChange={(airlineType) => updateViewState({ airlineType })}
+            />
+          </div>
+
 
           <section>
             <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-balance text-2xl font-bold text-slate-950">Tải dữ liệu và cách đọc</h2>
               <p className="mt-3 text-pretty text-sm leading-6 text-slate-600">File tải xuống chỉ chứa dữ liệu tổng hợp theo bộ lọc đang áp dụng, không chứa thông tin từng chuyến bay.</p>
               <div className="mt-5 flex flex-wrap gap-3">
-                <button className="report-focus min-h-11 rounded-lg bg-blue-900 px-4 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={exportingExcel} onClick={() => void exportExcel()}>{exportingExcel ? 'Đang tạo Excel…' : 'Tải Excel toàn báo cáo'}</button>
-                <a className="report-focus inline-flex min-h-11 items-center rounded-lg border border-blue-900 px-4 text-sm font-bold text-blue-900 hover:bg-blue-50" href={`/api/report/v1/export?${toTrafficReportSearchParams(bundle.metadata.normalized_filter).toString()}`}>Tải CSV tổng hợp</a>
+                {workbookExportEnabled ? <TrafficWorkbookExportDialog filter={normalizedFilter} minOpsDate={bundle.metadata.min_ops_date} maxOpsDate={bundle.metadata.max_ops_date} /> : null}
               </div>
-              {exportError ? <p className="mt-3 text-sm font-semibold text-rose-800" role="alert">{exportError}</p> : null}
               <details className="mt-5 rounded-xl bg-slate-50 p-4"><summary className="report-focus cursor-pointer rounded-sm font-semibold text-blue-900">Ghi chú dữ liệu</summary><ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600"><li>• Sản lượng khách chỉ tính số khách đã báo cáo; dấu — nghĩa là chưa có số liệu.</li><li>• Quốc gia chưa xác định được hiển thị là Unknown.</li><li>• File tải xuống sử dụng cùng phạm vi và bộ lọc với trang báo cáo.</li></ul></details>
             </article>
           </section>
