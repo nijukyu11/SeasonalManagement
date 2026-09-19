@@ -441,6 +441,7 @@ export function toTrafficReportPresentationBundle(bundle: TrafficV2Bundle): Traf
       peak_hour: report.breakdowns.peak_hour,
       peak_hour_monthly: report.breakdowns.peak_hour_monthly,
       day_of_week: report.breakdowns.day_of_week,
+      flight_category: report.breakdowns.flight_category ?? [],
     },
     quality: {
       ...report.quality,

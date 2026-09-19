@@ -154,3 +154,13 @@ test('interactive report controls use a high-contrast focus ring and long labels
   assert.match(dimensionSource, /title=\{row\.label\}/);
   assert.match(trendSource, /title="Xu hướng chuyến bay và sản lượng khách"/);
 });
+
+test('fleet mix and flight category charts render side by side with clear code classifications', () => {
+  assert.match(advancedChartsSource, /formatFleetGroupLabel/);
+  assert.match(advancedChartsSource, /Small - code C/);
+  assert.match(advancedChartsSource, /Big - code D, E/);
+  assert.match(advancedChartsSource, /export function FlightCategoryChart/);
+  assert.match(advancedChartsSource, /Thường lệ &amp; Không thường lệ/);
+  assert.match(clientSource, /<FleetMixChart rows=\{fleetRows\} \/>/);
+  assert.match(clientSource, /<FlightCategoryChart rows=\{bundle\.breakdowns\.flight_category \?\? \[\]\} \/>/);
+});

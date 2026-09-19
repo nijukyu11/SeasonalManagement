@@ -108,4 +108,14 @@ test('Excel workbook data stays aggregate-only and includes Phase 2 sheets', () 
   assert.equal(isTrafficReportBundle({ ...recurringBundle, breakdowns: { ...recurringBundle.breakdowns, peak_hour: [{ ...recurringBundle.breakdowns.peak_hour[0], regular_flights: { arrivals: [{ bad: true }], departures: [] } }] } }), false);
   assert.equal(isTrafficReportBundle({ ...bundle, breakdowns: { ...bundle.breakdowns, aircraft_type: {} } }), false);
   assert.equal(isTrafficReportBundle({ ...bundle, breakdowns: { ...bundle.breakdowns, aircraft_type: [{}] } }), false);
+  assert.equal(isTrafficReportBundle({
+    ...bundle,
+    breakdowns: {
+      ...bundle.breakdowns,
+      flight_category: [
+        { key: 'scheduled', code: 'J', label: 'Thường lệ (code J)', flights: 7, arrivals: 4, departures: 3, reported_pax: 100, share: 1, suppressed: false },
+      ],
+    },
+  }), true);
+  assert.equal(isTrafficReportBundle({ ...bundle, breakdowns: { ...bundle.breakdowns, flight_category: [{}] } }), false);
 });

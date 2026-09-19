@@ -76,6 +76,10 @@ export interface TrafficAircraftTypeBreakdownRow extends TrafficBreakdownRow {
   aircraft_group_key: string;
   aircraft_group: string;
 }
+export interface TrafficFlightCategoryRow extends TrafficBreakdownRow {
+  code: string;
+}
+
 
 export interface TrafficDimensionRow extends TrafficMetricSet {
   key: string;
@@ -213,6 +217,7 @@ export interface TrafficReportBundle {
     peak_hour: TrafficPeakHourRow[];
     peak_hour_monthly?: TrafficMonthlyPeakRow[];
     day_of_week: TrafficDayOfWeekRow[];
+    flight_category?: TrafficFlightCategoryRow[];
   };
   quality: {
     unknown_country_legs: number | null;
@@ -497,6 +502,17 @@ export function isTrafficReportBundle(value: unknown): value is TrafficReportBun
     && (breakdowns.aircraft_type === undefined || (
       Array.isArray(breakdowns.aircraft_type)
       && breakdowns.aircraft_type.every(isTrafficAircraftTypeBreakdownRow)
+    ))
+    && (breakdowns.flight_category === undefined || (
+      Array.isArray(breakdowns.flight_category)
+      && breakdowns.flight_category.every((row: unknown) => (
+        !!row && typeof row === 'object' && !Array.isArray(row)
+        && typeof (row as Record<string, unknown>).key === 'string'
+        && typeof (row as Record<string, unknown>).code === 'string'
+        && typeof (row as Record<string, unknown>).label === 'string'
+        && typeof (row as Record<string, unknown>).flights === 'number'
+        && typeof (row as Record<string, unknown>).suppressed === 'boolean'
+      ))
     ));
 }
 

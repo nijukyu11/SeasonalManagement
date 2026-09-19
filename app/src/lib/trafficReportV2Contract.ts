@@ -5,6 +5,7 @@ import type {
   TrafficComparison,
   TrafficDayOfWeekRow,
   TrafficDimension,
+  TrafficFlightCategoryRow,
   TrafficMonthlyPeakRow,
   TrafficPeakHourRow,
   TrafficTimeBasis,
@@ -111,6 +112,7 @@ export interface TrafficV2ReportParity {
     peak_hour: TrafficPeakHourRow[];
     peak_hour_monthly: TrafficMonthlyPeakRow[];
     day_of_week: TrafficDayOfWeekRow[];
+    flight_category?: TrafficFlightCategoryRow[];
   };
 }
 
@@ -307,7 +309,8 @@ function isApiReportParity(value: unknown): value is TrafficV2ApiReportParity {
     && value.breakdowns.peak_hour.length === 24
     && Array.isArray(value.breakdowns.peak_hour_monthly)
     && Array.isArray(value.breakdowns.day_of_week)
-    && value.breakdowns.day_of_week.length === 7;
+    && value.breakdowns.day_of_week.length === 7
+    && (value.breakdowns.flight_category === undefined || Array.isArray(value.breakdowns.flight_category));
 }
 
 export function isTrafficV2ApiEnvelope(value: unknown): value is TrafficV2ApiEnvelope {

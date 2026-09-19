@@ -22,6 +22,7 @@ const dailyAcceptanceSql = await readFile(new URL('../migrations/20260901114500_
 const dashboardHybridRunnerSql = await readFile(new URL('../migrations/20260901123000_public_dashboard_hybrid_runner.sql', import.meta.url), 'utf8');
 const dashboardPaxCorrectionSql = await readFile(new URL('../migrations/20260902150000_public_dashboard_pax_correction.sql', import.meta.url), 'utf8');
 const coverageCountsSql = await readFile(new URL('../migrations/20260911120000_public_traffic_report_coverage_counts.sql', import.meta.url), 'utf8');
+const flightCategorySql = await readFile(new URL('../migrations/20260920150000_public_traffic_report_flight_category.sql', import.meta.url), 'utf8');
 const db = await createSupabasePGlite();
 
 async function addSeason(id, code) {
@@ -33,13 +34,13 @@ async function addSeason(id, code) {
   `, [id, code]);
 }
 
-async function addRecord({ seasonId, id, date, time, type = 'A', airline = 'VN', flight = id, route = 'HAN', aircraft = 'A321', pax = null }) {
+async function addRecord({ seasonId, id, date, time, type = 'A', airline = 'VN', flight = id, route = 'HAN', aircraft = 'A321', pax = null, category = 'J' }) {
   await db.query(`
     insert into public.season_flight_records (
       season_id, record_id, type, airline, flight_number, route, schedule, aircraft,
-      pax, date, scheduled_date, operational_date, source_side, status
-    ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, '', $11, 'active')
-  `, [seasonId, id, type, airline, flight, route, time, aircraft, pax, date, type === 'A' ? 'ARR' : 'DEP']);
+      pax, date, scheduled_date, operational_date, source_side, status, category
+    ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, '', $11, 'active', $12)
+  `, [seasonId, id, type, airline, flight, route, time, aircraft, pax, date, type === 'A' ? 'ARR' : 'DEP', category]);
 }
 
 try {
@@ -111,6 +112,8 @@ try {
   await db.exec(dashboardPaxCorrectionSql);
   await db.exec(coverageCountsSql);
   await db.exec(coverageCountsSql);
+  await db.exec(flightCategorySql);
+  await db.exec(flightCategorySql);
 
   await addSeason('old-season', 'W25');
   await addSeason('new-season', 'S26');
@@ -613,6 +616,8 @@ try {
     overview.breakdowns.aircraft_type.map((row) => [row.label, row.aircraft_group, row.flights, row.reported_pax]),
     'v2 feature-parity aircraft types must match the snapshot contract',
   );
+  assert.ok(Array.isArray(liveV2.report.breakdowns.flight_category), 'v2 must publish flight_category breakdown');
+  assert.ok(liveV2.report.breakdowns.flight_category.some((row) => row.code === 'J' && row.flights > 0), 'v2 must aggregate code J flights');
   assert.ok(!JSON.stringify(liveV2).includes('record_id'), 'the live public contract must remain aggregate-only');
   assert.deepEqual(
     liveV2.report.coverage_counts,
@@ -980,6 +985,20 @@ try {
   const staleTypeOverview = await aircraftOverview(['A', 'D']);
   assert.equal(staleTypeOverview.breakdowns.aircraft_type.some((row) => row.label === 'A321'), false, 'an aircraft type changed after the snapshot must not leak ahead of the published snapshot');
   assert.equal(staleTypeOverview.breakdowns.aircraft_type.find((row) => row.label === 'B738').flights, 6, 'the report must keep serving the aircraft type captured by the last snapshot');
+  // Verify flight category aggregation with mixed categories (J, C, OTHER)
+  await db.query(`update public.season_flight_records set category = 'C' where season_id = 'new-season' and record_id = 'arrival-two'`);
+  await db.query(`update public.season_flight_records set category = 'L' where season_id = 'new-season' and record_id = 'arrival-three'`);
+  await db.query(`insert into public.season_change_events (season_id, client_id, op_id, target_type, target_id) values ('new-season', 'edit', 'cat-c', 'flightRecord', 'arrival-two'), ('new-season', 'edit', 'cat-l', 'flightRecord', 'arrival-three')`);
+  const mixedCatResult = await db.query(`select public.get_public_traffic_report_v2(date '2026-03-03', date '2026-03-03', 'all', array[]::text[], array[]::text[], array[]::text[], 'none', 'local', null, 'traffic-report-v2') as result`);
+  const mixedCatReport = mixedCatResult.rows[0].result.report;
+  const cats = mixedCatReport.breakdowns.flight_category;
+  assert.ok(Array.isArray(cats), 'flight_category must be an array');
+  const catKeys = cats.map((c) => c.key);
+  assert.equal(new Set(catKeys).size, catKeys.length, 'category keys must be unique without duplicate other rows');
+  assert.ok(catKeys.includes('scheduled'), 'must include scheduled');
+  assert.ok(catKeys.includes('charter'), 'must include charter');
+  assert.ok(catKeys.includes('other'), 'must include other');
+  assert.equal(cats.reduce((sum, c) => sum + c.flights, 0), mixedCatReport.breakdowns.aircraft_group.reduce((sum, g) => sum + g.flights, 0), 'category flight sum must match total flights');
 
   const firstPageResult = await db.query(`select reporting.get_traffic_report_timeline_v2(date '2026-03-02', date '2026-03-05', null, null, 'day', null, 2, '{}'::jsonb, timestamptz '2026-03-10 00:00:00+00') as result`);
   const secondPageResult = await db.query(`select reporting.get_traffic_report_timeline_v2(date '2026-03-02', date '2026-03-05', null, null, 'day', date '2026-03-03', 2, '{}'::jsonb, timestamptz '2026-03-10 00:00:00+00') as result`);

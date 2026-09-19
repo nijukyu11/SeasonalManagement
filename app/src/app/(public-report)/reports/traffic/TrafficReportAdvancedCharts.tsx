@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/cn';
-import type { TrafficBreakdownRow, TrafficDayOfWeekRow, TrafficMonthlyPeakRow, TrafficPeakHourRow, TrafficRegularFlight, TrafficTimeBasis, TrafficType } from '@/lib/trafficReportContract';
+import type { TrafficBreakdownRow, TrafficDayOfWeekRow, TrafficFlightCategoryRow, TrafficMonthlyPeakRow, TrafficPeakHourRow, TrafficRegularFlight, TrafficTimeBasis, TrafficType } from '@/lib/trafficReportContract';
 import {
   getAverageFlightsPerSelectedDay,
   getSelectedDayCountForMonth,
@@ -13,7 +13,18 @@ const numberFormat = new Intl.NumberFormat('vi-VN');
 const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
 const dayLabels = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'];
 const fleetColors = ['#234093', '#00b4d8', '#526274', '#42c1c7'];
+const flightCategoryColors: Record<string, string> = {
+  scheduled: '#1d4ed8',
+  charter: '#d97706',
+  other: '#64748b',
+};
 
+function formatFleetGroupLabel(label: string): string {
+  const trimmed = label.trim();
+  if (/^small$/i.test(trimmed) || /^narrowbody$/i.test(trimmed)) return 'Small - code C';
+  if (/^big$/i.test(trimmed) || /^widebody$/i.test(trimmed)) return 'Big - code D, E';
+  return label;
+}
 type FleetMixRow = TrafficBreakdownRow & {
   children?: readonly TrafficBreakdownRow[];
 };
@@ -243,19 +254,20 @@ export function FleetMixChart({ rows }: { rows: FleetMixRow[] }) {
   const visibleRows = rows.filter((row) => !row.suppressed && row.share != null && row.flights != null);
   const ariaSummary = visibleRows.length === 0
     ? 'Cơ cấu nhóm tàu bay chưa đủ dữ liệu công bố.'
-    : visibleRows.map((row) => `${row.label} ${percentFormat.format((row.share ?? 0) * 100)} phần trăm`).join(', ');
+    : visibleRows.map((row) => `${formatFleetGroupLabel(row.label)} ${percentFormat.format((row.share ?? 0) * 100)} phần trăm`).join(', ');
   return (
     <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
       <p className="text-sm font-bold text-blue-900">Loại tàu bay</p>
       <h3 className="mt-2 text-balance text-2xl font-bold text-[#102033]">Cơ cấu nhóm tàu bay</h3>
-      <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">So sánh tỷ trọng số chuyến giữa các nhóm tàu bay trong phạm vi đang chọn. Mở từng nhóm để xem các loại tàu bay khi dữ liệu có sẵn.</p>
+      <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">So sánh tỷ trọng số chuyến giữa các nhóm tàu bay (Small - code C, Big - code D, E) trong phạm vi đang chọn. Mở từng nhóm để xem các loại tàu bay khi dữ liệu có sẵn.</p>
       {visibleRows.length > 0 ? <>
         <div className="mt-6 flex h-10 overflow-hidden rounded-xl bg-slate-100" role="img" aria-label={ariaSummary}>
           {visibleRows.map((row, index) => <span key={row.key} className="block h-full border-r-2 border-white last:border-r-0" style={{ width: `${(row.share ?? 0) * 100}%`, backgroundColor: fleetColors[index % fleetColors.length] }} />)}
         </div>
         <ul className="mt-5 grid items-start gap-3 sm:grid-cols-2">{visibleRows.map((row, index) => {
+          const displayLabel = formatFleetGroupLabel(row.label);
           const children = row.children?.filter((child) => !child.suppressed && child.flights != null) ?? [];
-          const summary = <span className="flex min-h-11 w-full items-center justify-between gap-4 py-2"><span className="inline-flex min-w-0 items-center gap-3"><span className="size-3 shrink-0 rounded-sm" style={{ backgroundColor: fleetColors[index % fleetColors.length] }} /><span className="truncate font-semibold text-slate-700" title={row.label} aria-label={row.label}>{row.label}</span></span><span className="shrink-0 text-right text-sm font-bold tabular-nums text-[#102033]">{numberFormat.format(row.flights ?? 0)} · {percentFormat.format((row.share ?? 0) * 100)}%</span></span>;
+          const summary = <span className="flex min-h-11 w-full items-center justify-between gap-4 py-2"><span className="inline-flex min-w-0 items-center gap-3"><span className="size-3 shrink-0 rounded-sm" style={{ backgroundColor: fleetColors[index % fleetColors.length] }} /><span className="truncate font-semibold text-slate-700" title={displayLabel} aria-label={displayLabel}>{displayLabel}</span></span><span className="shrink-0 text-right text-sm font-bold tabular-nums text-[#102033]">{numberFormat.format(row.flights ?? 0)} · {percentFormat.format((row.share ?? 0) * 100)}%</span></span>;
           return <li key={row.key} className="rounded-xl border border-slate-200 px-3">
             {children.length > 0 ? <details>
               <summary className="report-focus cursor-pointer rounded-sm">{summary}</summary>
@@ -268,6 +280,77 @@ export function FleetMixChart({ rows }: { rows: FleetMixRow[] }) {
         })}</ul>
       </> : <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"><p className="font-semibold">Chưa có dữ liệu nhóm tàu bay trong phạm vi đang chọn.</p><p className="mt-1 text-pretty text-slate-600">Hãy chọn khoảng ngày hoặc bộ lọc khác.</p></div>}
       {rows.some((row) => row.suppressed) ? <p className="mt-4 text-xs leading-5 text-slate-500">Một số nhóm chưa có số liệu để hiển thị.</p> : null}
+    </article>
+  );
+}
+
+export function FlightCategoryChart({ rows }: { rows: TrafficFlightCategoryRow[] }) {
+  const visibleRows = rows.filter((row) => !row.suppressed && row.share != null && row.flights != null);
+  const ariaSummary = visibleRows.length === 0
+    ? 'Tỉ trọng chuyến bay thường lệ và không thường lệ chưa đủ dữ liệu công bố.'
+    : visibleRows.map((row) => `${row.label} ${percentFormat.format((row.share ?? 0) * 100)} phần trăm`).join(', ');
+
+  return (
+    <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
+      <p className="text-sm font-bold text-blue-900">Tính chất chuyến bay</p>
+      <h3 className="mt-2 text-balance text-2xl font-bold text-[#102033]">Thường lệ &amp; Không thường lệ</h3>
+      <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">
+        Tỉ trọng số chuyến giữa chuyến bay thường lệ (code J) và chuyến bay không thường lệ (code C) trong phạm vi đang chọn.
+      </p>
+      {visibleRows.length > 0 ? (
+        <>
+          <div className="mt-6 flex h-10 overflow-hidden rounded-xl bg-slate-100" role="img" aria-label={ariaSummary}>
+            {visibleRows.map((row) => {
+              const color = flightCategoryColors[row.key] ?? '#64748b';
+              return (
+                <span
+                  key={row.key}
+                  className="block h-full border-r-2 border-white last:border-r-0"
+                  style={{ width: `${(row.share ?? 0) * 100}%`, backgroundColor: color }}
+                  title={`${row.label}: ${numberFormat.format(row.flights ?? 0)} chuyến (${percentFormat.format((row.share ?? 0) * 100)}%)`}
+                />
+              );
+            })}
+          </div>
+          <ul className="mt-5 grid items-start gap-3 sm:grid-cols-2">
+            {visibleRows.map((row) => {
+              const color = flightCategoryColors[row.key] ?? '#64748b';
+              return (
+                <li key={row.key} className="rounded-xl border border-slate-200 px-3 py-2">
+                  <div className="flex min-h-11 w-full items-center justify-between gap-4">
+                    <span className="inline-flex min-w-0 items-center gap-3">
+                      <span className="size-3 shrink-0 rounded-sm" style={{ backgroundColor: color }} />
+                      <span className="truncate font-semibold text-slate-700" title={row.label} aria-label={row.label}>
+                        {row.label}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-right text-sm font-bold tabular-nums text-[#102033]">
+                      {numberFormat.format(row.flights ?? 0)} · {percentFormat.format((row.share ?? 0) * 100)}%
+                    </span>
+                  </div>
+                  {row.arrivals != null && row.departures != null && (row.arrivals > 0 || row.departures > 0) ? (
+                    <div className="mt-1 flex items-center justify-between border-t border-slate-100 pt-1 text-xs text-slate-500">
+                      <span>Đến: <strong className="tabular-nums text-slate-700">{numberFormat.format(row.arrivals)}</strong></span>
+                      <span>Đi: <strong className="tabular-nums text-slate-700">{numberFormat.format(row.departures)}</strong></span>
+                      {row.reported_pax != null ? (
+                        <span>Khách: <strong className="tabular-nums text-slate-700">{numberFormat.format(row.reported_pax)}</strong></span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      ) : (
+        <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+          <p className="font-semibold">Chưa có dữ liệu tính chất chuyến bay trong phạm vi đang chọn.</p>
+          <p className="mt-1 text-pretty text-slate-600">Hãy chọn khoảng ngày hoặc bộ lọc khác.</p>
+        </div>
+      )}
+      {rows.some((row) => row.suppressed) ? (
+        <p className="mt-4 text-xs leading-5 text-slate-500">Một số nhóm chưa có số liệu để hiển thị.</p>
+      ) : null}
     </article>
   );
 }
