@@ -66,7 +66,13 @@ for (const reportLibrary of [
 const nextCli = join(appRoot, 'node_modules', 'next', 'dist', 'bin', 'next');
 const build = spawnSync(process.execPath, [nextCli, 'build', buildRoot], {
   cwd: appRoot,
-  env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+  env: {
+    ...process.env,
+    NEXT_TELEMETRY_DISABLED: '1',
+    NEXT_PUBLIC_TRAFFIC_WORKBOOK_EXPORT_ENABLED: process.env.NEXT_PUBLIC_TRAFFIC_WORKBOOK_EXPORT_ENABLED ?? 'true',
+    NEXT_PUBLIC_TRAFFIC_HTML_EXPORT_ENABLED: process.env.NEXT_PUBLIC_TRAFFIC_HTML_EXPORT_ENABLED ?? 'true',
+    NEXT_PUBLIC_TRAFFIC_DASHBOARD_DAILY_PUBLICATION: process.env.NEXT_PUBLIC_TRAFFIC_DASHBOARD_DAILY_PUBLICATION ?? 'true',
+  },
   encoding: 'utf8',
   stdio: 'inherit',
 });
