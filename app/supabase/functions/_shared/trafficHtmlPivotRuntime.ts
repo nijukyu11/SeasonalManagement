@@ -29,8 +29,20 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
   const fmt = (n: number | null, decimal = false) => n === null ? '—' : new Intl.NumberFormat('vi-VN',{maximumFractionDigits:decimal?2:0}).format(n);
   const date = (s: string) => `${s.slice(8,10)}/${s.slice(5,7)}/${s.slice(0,4)}`;
   const range = (p: {from:string;to:string}) => `${date(p.from)} – ${date(p.to)}`;
-  const name = (field: string, value: unknown) => value == null || value === '' ? 'Chưa xác định'
-    : field === 'date' ? date(String(value)) : field === 'month' ? `Tháng ${String(value).slice(5)}/${String(value).slice(0,4)}` : String(value);
+  const name = (field: string, value: unknown) => {
+    if (value == null || value === '') return 'Chưa xác định';
+    if (field === 'date') {
+      const s = String(value);
+      try {
+        const wd = new Intl.DateTimeFormat('vi-VN', { weekday: 'short', timeZone: 'UTC' }).format(new Date(s + 'T00:00:00Z'));
+        return `${date(s)} (${wd})`;
+      } catch {
+        return date(s);
+      }
+    }
+    if (field === 'month') return `Tháng ${String(value).slice(5)}/${String(value).slice(0,4)}`;
+    return String(value);
+  };
   const latestCompletedOpsDate = (asOfIso: string): string => {
     const ms = Date.parse(asOfIso); if (isNaN(ms)) return asOfIso.slice(0, 10);
     const vn = new Date(ms + 7 * 3600000); const sub = vn.getUTCHours() < 5 ? 2 : 1;
@@ -42,6 +54,187 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     if (isNumber) return clean;
     return /^[=+@\-\t\r]/.test(clean) ? `'${clean}` : clean;
   };
+  function crc32(bytes: Uint8Array): number {
+    let table = (crc32 as unknown as { table?: Uint32Array }).table;
+    if (!table) {
+      table = (crc32 as unknown as { table: Uint32Array }).table = new Uint32Array(256);
+      for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        table[i] = c;
+      }
+    }
+    let crc = 0 ^ (-1);
+    for (let i = 0; i < bytes.length; i++) crc = (crc >>> 8) ^ table[(crc ^ bytes[i]) & 0xFF];
+    return (crc ^ (-1)) >>> 0;
+  }
+
+  function createZip(files: Array<{ name: string; data: string | Uint8Array }>): Uint8Array {
+    const enc = new TextEncoder();
+    const fileEntries = files.map(f => {
+      const nameBytes = enc.encode(f.name);
+      const dataBytes = typeof f.data === 'string' ? enc.encode(f.data) : f.data;
+      const crc = crc32(dataBytes);
+      return { nameBytes, dataBytes, crc, size: dataBytes.length };
+    });
+
+    let offset = 0;
+    const parts: Uint8Array[] = [];
+    const cdEntries: Uint8Array[] = [];
+
+    for (const entry of fileEntries) {
+      const localHdr = new Uint8Array(30 + entry.nameBytes.length);
+      const v = new DataView(localHdr.buffer);
+      v.setUint32(0, 0x04034b50, true);
+      v.setUint16(4, 20, true);
+      v.setUint16(6, 0x0800, true);
+      v.setUint16(8, 0, true);
+      v.setUint16(10, 0, true);
+      v.setUint16(12, 0, true);
+      v.setUint32(14, entry.crc, true);
+      v.setUint32(18, entry.size, true);
+      v.setUint32(22, entry.size, true);
+      v.setUint16(26, entry.nameBytes.length, true);
+      v.setUint16(28, 0, true);
+      localHdr.set(entry.nameBytes, 30);
+
+      parts.push(localHdr);
+      parts.push(entry.dataBytes);
+
+      const cdHdr = new Uint8Array(46 + entry.nameBytes.length);
+      const cdv = new DataView(cdHdr.buffer);
+      cdv.setUint32(0, 0x02014b50, true);
+      cdv.setUint16(4, 20, true);
+      cdv.setUint16(6, 20, true);
+      cdv.setUint16(8, 0x0800, true);
+      cdv.setUint16(10, 0, true);
+      cdv.setUint16(12, 0, true);
+      cdv.setUint16(14, 0, true);
+      cdv.setUint32(16, entry.crc, true);
+      cdv.setUint32(20, entry.size, true);
+      cdv.setUint32(24, entry.size, true);
+      cdv.setUint16(28, entry.nameBytes.length, true);
+      cdv.setUint16(30, 0, true);
+      cdv.setUint16(32, 0, true);
+      cdv.setUint16(34, 0, true);
+      cdv.setUint16(36, 0, true);
+      cdv.setUint32(38, 0, true);
+      cdv.setUint32(42, offset, true);
+      cdHdr.set(entry.nameBytes, 46);
+
+      cdEntries.push(cdHdr);
+      offset += localHdr.length + entry.size;
+    }
+
+    const cdOffset = offset;
+    let cdSize = 0;
+    for (const cd of cdEntries) {
+      parts.push(cd);
+      cdSize += cd.length;
+    }
+
+    const eocd = new Uint8Array(22);
+    const ev = new DataView(eocd.buffer);
+    ev.setUint32(0, 0x06054b50, true);
+    ev.setUint16(4, 0, true);
+    ev.setUint16(6, 0, true);
+    ev.setUint16(8, fileEntries.length, true);
+    ev.setUint16(10, fileEntries.length, true);
+    ev.setUint32(12, cdSize, true);
+    ev.setUint32(16, cdOffset, true);
+    ev.setUint16(20, 0, true);
+    parts.push(eocd);
+
+    const totalLen = parts.reduce((acc, p) => acc + p.length, 0);
+    const result = new Uint8Array(totalLen);
+    let pos = 0;
+    for (const p of parts) {
+      result.set(p, pos);
+      pos += p.length;
+    }
+    return result;
+  }
+
+  function tableToXlsx(rows: string[][], sheetName = 'Sheet1'): Uint8Array {
+    const colLetter = (colIdx: number) => {
+      let s = '';
+      let n = colIdx;
+      while (n >= 0) {
+        s = String.fromCharCode((n % 26) + 65) + s;
+        n = Math.floor(n / 26) - 1;
+      }
+      return s;
+    };
+
+    const escapeXml = (t: string) => String(t ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+
+    const safeSheet = (sheetName || 'Sheet1').replace(/[:\\/?*[\]]/g, '_').slice(0, 31);
+
+    let sheetXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">\n' +
+      '  <sheetData>\n';
+
+    rows.forEach((row, rIdx) => {
+      sheetXml += `    <row r="${rIdx + 1}">\n`;
+      row.forEach((val, cIdx) => {
+        const cellRef = colLetter(cIdx) + (rIdx + 1);
+        const strVal = String(val ?? '').trim();
+        if (strVal === '') return;
+        
+        const cleanVal = strVal.replace(/\*+$/g, '').trim();
+        const isDate = /^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}/.test(cleanVal);
+        const cleanNum = cleanVal.replace(/\./g, '').replace(/,/g, '.');
+        const isNum = !isDate && !isNaN(Number(cleanNum)) && cleanNum !== '';
+        
+        if (isNum) {
+          sheetXml += `      <c r="${cellRef}"><v>${cleanNum}</v></c>\n`;
+        } else {
+          sheetXml += `      <c r="${cellRef}" t="inlineStr"><is><t>${escapeXml(strVal)}</t></is></c>\n`;
+        }
+      });
+      sheetXml += '    </row>\n';
+    });
+
+    sheetXml += '  </sheetData>\n</worksheet>';
+
+    const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n' +
+      '  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>\n' +
+      '  <Default Extension="xml" ContentType="application/xml"/>\n' +
+      '  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>\n' +
+      '  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>\n' +
+      '</Types>';
+
+    const rels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n' +
+      '  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>\n' +
+      '</Relationships>';
+
+    const wb = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">\n' +
+      '  <sheets>\n' +
+      `    <sheet name="${escapeXml(safeSheet)}" sheetId="1" r:id="rId1"/>\n` +
+      '  </sheets>\n' +
+      '</workbook>';
+
+    const wbRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n' +
+      '  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>\n' +
+      '</Relationships>';
+
+    return createZip([
+      { name: '[Content_Types].xml', data: contentTypes },
+      { name: '_rels/.rels', data: rels },
+      { name: 'xl/workbook.xml', data: wb },
+      { name: 'xl/_rels/workbook.xml.rels', data: wbRels },
+      { name: 'xl/worksheets/sheet1.xml', data: sheetXml }
+    ]);
+  }
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, cls?: string) => {
     const node = document.createElement(tag); if(text !== undefined) node.textContent = text; if(cls) node.className = cls; return node;
   };
@@ -88,8 +281,8 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
       direction:savedCfg.direction ?? (tab.id==='days'?'each':'all'),
       period:savedCfg.period ?? 'current',
       time:savedCfg.time ?? (tab.viewType==='week_horizon'?'business_week':(weekly || data.normalized_request.period_mode==='month'?'period':'month')),
-      search:'',filters:{},depth:0,
-      open:new Set(),closed:new Set(),page:0,pageSize:20,
+      search:'',filters:{},depth:savedCfg.depth ?? (tab.id==='days'?1:0),
+      open:new Set(),closed:new Set(),page:0,pageSize:savedCfg.pageSize ?? (tab.id==='days'?0:20),
       levels:savedCfg.levels ? [...savedCfg.levels] : [...tab.levels],
       sort:savedCfg.sort ?? (tab.levels.some(f=>['airline','country','route'].includes(f))?'flights':'name'),
       showBars:savedCfg.showBars ?? true
@@ -356,14 +549,15 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
         }catch{}
       }
     });copyBtn.classList.add('pivot-btn-action');
-    const csvBtn=button('Xuất CSV',()=>{
-      const csv=tableGrid().map(r=>r.map(t=>/[",\n\r]/.test(t)?`"${t.replace(/"/g,'""')}"`:t).join(',')).join('\r\n');
-      const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
+    const excelBtn=button('Xuất Excel',()=>{
+      const grid=tableGrid();
+      const xlsxBytes=tableToXlsx(grid, title);
+      const blob=new Blob([xlsxBytes as BlobPart],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
       const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-      a.download=`${title.replace(/[^a-zA-Z0-9_\u00C0-\u024F\u1EA0-\u1EF9-]/g,'_')}.csv`;
+      a.download=`${title.replace(/[^a-zA-Z0-9_\u00C0-\u024F\u1EA0-\u1EF9-]/g,'_')}.xlsx`;
       a.click();URL.revokeObjectURL(a.href);
-    });csvBtn.classList.add('pivot-btn-action');
-    actions.append(copyBtn,csvBtn);headerRow.append(actions);section.append(headerRow);
+    });excelBtn.classList.add('pivot-btn-action','pivot-btn-excel');
+    actions.append(copyBtn,excelBtn);headerRow.append(actions);section.append(headerRow);
     const scroll=el('div',undefined,'table-scroll');scroll.tabIndex=0;scroll.setAttribute('role','region');scroll.setAttribute('aria-label',title);
     scroll.append(table);section.append(scroll);parent.append(section);
     const sync=()=>{let top=0;for(const row of Array.from(head.rows)){for(const thNode of Array.from(row.cells))thNode.style.top=`${top}px`;top+=row.getBoundingClientRect().height;}};
@@ -832,7 +1026,47 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
       const grid=el('div',undefined,'bao-total bao-month');content.append(grid);daily(grid,rows,active.month);
       monthChart(grid,rows,active.month,s.metric==='reported_pax'?'reported_pax':'flights');
     } else if(bao){const grid=el('div',undefined,'bao-total');content.append(grid);daily(grid,rows);weeklyTable(grid,rows);}
-    else if(active.id==='days')for(const p of ordinary){const local=dayStates.get(p.id)!;pivot(local,filtered(local));}
+    else if(active.id==='days'){
+      const activePeriods=ordinary.filter(p=>rows.some(r=>r.period===p.id&&(r.flights!==null||r.reported_pax!==null)));
+      const periodsToShow=activePeriods.length>0?activePeriods:[current];
+      if(periodsToShow.length>1){
+        const segBar=el('div',undefined,'pivot-period-selector controls');
+        segBar.append(el('span','Kỳ hiển thị: ','pivot-period-label'));
+        const curChoice=s.period||'current';
+        for(const p of periodsToShow){
+          const isSel=curChoice===p.id;
+          const pBtn=button(`${p.id==='current'?'★ ':''}${p.label} (${range(p)})`,()=>{
+            s.period=p.id;panelsMap.delete(active.id);renderContent();
+          });
+          pBtn.className=`pivot-period-btn ${isSel?'active':''}`;
+          pBtn.setAttribute('aria-pressed',String(isSel));
+          segBar.append(pBtn);
+        }
+        const isAll=curChoice==='all';
+        const allBtn=button('Tất cả kỳ có số liệu',()=>{
+          s.period='all';panelsMap.delete(active.id);renderContent();
+        });
+        allBtn.className=`pivot-period-btn ${isAll?'active':''}`;
+        allBtn.setAttribute('aria-pressed',String(isAll));
+        segBar.append(allBtn);
+        content.append(segBar);
+
+        if(curChoice==='all'){
+          for(const p of periodsToShow){
+            const local=dayStates.get(p.id)||{...s,period:p.id};
+            local.period=p.id;pivot(local,filtered(local));
+          }
+        }else{
+          const targetPeriod=periodsToShow.find(p=>p.id===curChoice)||periodsToShow[0];
+          const local=dayStates.get(targetPeriod.id)||{...s,period:targetPeriod.id};
+          local.period=targetPeriod.id;pivot(local,filtered(local));
+        }
+      }else{
+        const targetPeriod=periodsToShow[0];
+        const local=dayStates.get(targetPeriod.id)||{...s,period:targetPeriod.id};
+        local.period=targetPeriod.id;pivot(local,filtered(local));
+      }
+    }
     else pivot(s,rows);
 
     for(const scope of [content,...Array.from(content.querySelectorAll<HTMLElement>('[data-table-key]'))]){

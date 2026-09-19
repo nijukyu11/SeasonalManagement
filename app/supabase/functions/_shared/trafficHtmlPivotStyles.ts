@@ -33,6 +33,13 @@ export const trafficHtmlPivotStyles = `
 .future-row{opacity:0.92;background-color:#f8fafc}
 .pivot-btn-action{background:#f8fafc;border:1px solid var(--line);border-radius:4px;cursor:pointer;font-size:13px;padding:4px 8px}
 .pivot-btn-action:hover{background:#e2e8f0}
+.pivot-btn-excel{background:#f0fdf4!important;border-color:#bbf7d0!important;color:#166534!important;font-weight:600}
+.pivot-btn-excel:hover{background:#dcfce7!important;border-color:#86efac!important}
+.pivot-period-selector{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:6px 0 10px;padding:6px 10px;background:#f8fafc;border:1px solid var(--line);border-radius:6px}
+.pivot-period-label{font-size:12px;font-weight:600;color:#475569;margin-right:2px}
+.pivot-period-btn{font-size:12px;padding:3px 10px;border:1px solid #cbd5e1;border-radius:4px;background:white;color:#334155;cursor:pointer;transition:all .15s}
+.pivot-period-btn:hover{background:#f1f5f9;border-color:#94a3b8}
+.pivot-period-btn.active{background:#1e40af!important;color:white!important;border-color:#1e40af!important;font-weight:700}
 .pivot-filter-actions{display:flex;gap:6px;margin:4px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--line)}
 .pivot-filter-btn{font-size:11px;padding:2px 8px;border:1px solid #cbd5e1;border-radius:4px;background:#f8fafc;cursor:pointer;color:#1e40af;font-weight:600}
 .pivot-filter-btn:hover{background:#eff6ff;border-color:#93c5fd}
