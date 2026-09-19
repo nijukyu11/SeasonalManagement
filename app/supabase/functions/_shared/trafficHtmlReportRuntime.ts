@@ -318,7 +318,10 @@ export function mountTrafficHtmlReport(data: HtmlEnvelope, helpers: {
       const section=el('section',undefined,'weekly-summary');pairNote(section,p,b);
       const body=tableFrame(section,['Chỉ tiêu',b.id==='current'?'Tuần báo cáo':'Tuần trước',p.id==='next'?'Tuần kế tiếp':'Tuần báo cáo','Chênh lệch','Thay đổi','Bình quân/ngày']);
       for(const d of ['A','D','all'] as Direction[])for(const key of ['flights','reported_pax'] as const){
-        const a=kpi(p.id,d),base=kpi(b.id,d),change=compare(a,base,key),tr=el('tr',undefined,d==='all'?'grand-total':undefined);
+        const a=kpi(p.id,d),base=kpi(b.id,d);
+        const isFuturePax = p.id==='next' && p.contains_future && key==='reported_pax';
+        const change=isFuturePax ? { delta: null, percent: null, provisional: false } : compare(a,base,key);
+        const tr=el('tr',undefined,d==='all'?'grand-total':undefined);
         const label=key==='flights'?(d==='all'?'Tổng chuyến':`Chuyến ${d==='A'?'đến':'đi'}`):(d==='all'?'Tổng khách':`Khách ${d==='A'?'đến':'đi'}`);
         tr.dataset.measure=`${d}-${key}`;const th=el('th',label,'name');th.scope='row';tr.append(th);
         const diffCls=change.delta===null?'':change.delta>0?'diff-pos':change.delta<0?'diff-neg':'diff-zero';
@@ -329,9 +332,12 @@ export function mountTrafficHtmlReport(data: HtmlEnvelope, helpers: {
       section.append(el('p',`Bình quân = sản lượng / ${p.calendar_days} ngày lịch, làm tròn sau khi tính. Ngày thiếu dữ liệu vẫn nằm trong mẫu số.`,'weekly-footnote'));
       if(p.calendar_days!==b.calendar_days)section.append(el('p','Hai kỳ khác số ngày; chênh lệch đang so tổng sản lượng, không phải bình quân/ngày.','weekly-footnote'));
       const a=kpi(p.id,'all'),bMetric=kpi(b.id,'all');const sentences:string[]=[];
-      for(const key of ['flights','reported_pax'] as const){const c=compare(a,bMetric,key),label=key==='flights'?'Tổng chuyến':'Tổng khách';
-        if(c.percent!==null)sentences.push(`${label} ${c.percent===0?'không đổi':`${c.percent>0?'tăng':'giảm'} ${percentageFormat.format(Math.abs(c.percent)*100)}%`} so với ${b.id==='current'?'tuần báo cáo':'tuần trước'}.`);
-        else sentences.push(`${label}: chưa đủ cơ sở tính % thay đổi.`);}
+      for(const key of ['flights','reported_pax'] as const){
+        const isFuturePax = p.id==='next' && p.contains_future && key==='reported_pax';
+        const c=isFuturePax ? { delta: null, percent: null, provisional: false } : compare(a,bMetric,key),label=key==='flights'?'Tổng chuyến':'Tổng khách';
+        if(c.percent!==null)sentences.push(`${label} ${c.percent===0?'không đổi':`${c.percent>0?'tăng':'giảm'} ${percentageFormat.format(Math.abs(c.percent)*100)}%`} so với ${b.id==='current'?'tuần báo cáo':'tuần trước'}${p.id==='next'?' (theo lịch bay dự kiến)':''}.`);
+        else sentences.push(isFuturePax ? 'Tổng khách: tuần kế tiếp có lịch bay tương lai, chưa thực hiện.' : `${label}: chưa đủ cơ sở tính % thay đổi.`);
+      }
       section.append(el('p',sentences.join(' '),'weekly-reading'));target.append(section);
     };
     const controls=el('div',undefined,'weekly-tools controls');

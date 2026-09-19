@@ -82,7 +82,22 @@ export function sumHtmlMetrics(rows: HtmlMetric[], emptyCoverage: HtmlMetric['fl
 }
 export function compareHtmlMetrics(current: HtmlMetric, baseline: HtmlMetric, key: 'flights' | 'reported_pax') {
   const a = current[key], b = baseline[key];
-  const valid = a !== null && b !== null && current.flight_coverage === 'complete' && baseline.flight_coverage === 'complete'
-    && (key === 'flights' || (current.unreported_legs === 0 && baseline.unreported_legs === 0));
-  return { delta: valid ? a! - b! : null, percent: valid && b !== 0 ? (a! - b!) / b! : null };
+  if (a === null || b === null) return { delta: null, percent: null, provisional: false };
+  if (key === 'flights') {
+    return {
+      delta: a - b,
+      percent: b !== 0 ? (a - b) / b : null,
+      provisional: current.flight_coverage !== 'complete' || baseline.flight_coverage !== 'complete',
+    };
+  }
+  if (current.reported_legs === 0 || baseline.reported_legs === 0) {
+    return { delta: null, percent: null, provisional: false };
+  }
+  const isProvisional = current.flight_coverage !== 'complete' || baseline.flight_coverage !== 'complete'
+    || current.unreported_legs !== 0 || baseline.unreported_legs !== 0;
+  return {
+    delta: a - b,
+    percent: b !== 0 ? (a - b) / b : null,
+    provisional: isProvisional,
+  };
 }

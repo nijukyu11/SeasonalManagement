@@ -95,11 +95,33 @@ export function mountTrafficHtmlMonthly(data:HtmlEnvelope,helpers:{sum:typeof su
     }
   };
   root.replaceChildren(header,nav,main);
+  const timelineRows = raw('timeline');
+  const elapsedDaysOf = (periodId: string) => {
+    const p = periods.get(periodId);
+    if (!p || !p.contains_future) return p?.calendar_days ?? 30;
+    const dates = new Set(timelineRows.filter(r => r.period === periodId && (r.reported_pax !== null || (r.due_legs ?? 0) > 0)).map(r => r.grain.date));
+    return dates.size > 0 ? dates.size : p.calendar_days;
+  };
 
   function metricCells(tr:HTMLTableRowElement,get:(p:string)=>HtmlMetric,key:Metric,averages=false){
     for(const id of ordered){const m=get(id),td=el('td',fmt(m[key]),`number ${id==='current'?'monthly-current':''}`);
-      if(averages)td.append(el('small',`TB/ngày: ${m[key]===null?'—':fmt(m[key]!/periods.get(id)!.calendar_days)}`));
-      if(key==='reported_pax'&&m.pax_status==='partial')td.append(el('small','Chưa đủ khách'));
+      if(averages){
+        const p=periods.get(id)!, elapsed=elapsedDaysOf(id);
+        const divisor=(key==='reported_pax'&&p.contains_future&&elapsed<p.calendar_days)?elapsed:p.calendar_days;
+        td.append(el('small',`TB/ngày: ${m[key]===null?'—':fmt(m[key]!/divisor)}${divisor!==p.calendar_days?` (${divisor} ngày)`:''}`));
+      }
+      if(key==='reported_pax'&&m.pax_status==='partial'){
+        const due=m.due_legs??0, rep=m.reported_legs??0;
+        const cov=due>0?(rep/due)*100:0;
+        if(cov>=98||(due-rep<=5)){
+          td.append(el('small',`Độ phủ ${cov.toFixed(1)}%`));
+        } else if(periods.get(id)?.contains_future){
+          const elapsed=elapsedDaysOf(id);
+          td.append(el('small',`Lũy kế ${elapsed} ngày`));
+        } else {
+          td.append(el('small','Chưa đủ khách'));
+        }
+      }
       tr.append(td);
     }
     for(const id of baselines){
@@ -147,7 +169,7 @@ export function mountTrafficHtmlMonthly(data:HtmlEnvelope,helpers:{sum:typeof su
     for(const d of ['A','D','all'] as Direction[])for(const key of ['flights','reported_pax'] as Metric[]){
       const tr=el('tr',undefined,d==='all'?'grand-total':'');tr.dataset.measure=`${d}-${key}`;const th=el('th',d==='all'?`Tổng ${names[key].toLowerCase()}`:`${names[key]} ${directions[d].toLowerCase()}`,'name');th.scope='row';tr.append(th);metricCells(tr,p=>kpi(p,d),key,true);body.append(tr);
     }
-    report.append(el('p','Bình quân lấy tổng từng tháng chia số ngày lịch của chính tháng đó. Chênh lệch = tháng báo cáo − tháng đối chiếu; tỷ lệ dùng tháng đối chiếu làm mẫu số.','monthly-footnote'));main.append(report);
+    report.append(el('p',`Bình quân lấy tổng từng tháng chia số ngày lịch của chính tháng đó${current.contains_future?` (riêng ${month('current')} đang diễn ra, bình quân khách chia cho ${elapsedDaysOf('current')} ngày đã có số liệu)`:''}. Chênh lệch = tháng báo cáo − tháng đối chiếu; tỷ lệ dùng tháng đối chiếu làm mẫu số.${current.contains_future?' Chênh lệch hành khách phản ánh số khách ghi nhận đến thời điểm hiện tại.':''}`,'monthly-footnote'));main.append(report);
     const reading=section('Nhận xét từ số liệu','monthly-reading');
     for(const key of ['flights','reported_pax'] as Metric[]){reading.append(el('p',narrative(p=>kpi(p,'all'),key)));const trend=yearTrend(p=>kpi(p,'all'),key);if(trend)reading.append(el('p',trend));}main.append(reading);
     const draft=disclosure('Nội dung dùng cho báo cáo Word'),copy=el('textarea');copy.readOnly=true;copy.rows=9;copy.setAttribute('aria-label','Nhận xét để sao chép');

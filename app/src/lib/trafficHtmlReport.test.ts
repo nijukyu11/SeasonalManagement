@@ -10,12 +10,14 @@ test('HTML contract is separate from Excel and rejects mismatched templates and 
   assert.equal(normalizeHtmlRequest(new URL(base)).html_template,'weekly-detail-v1');
   for(const query of [base+'&template_version=weekly-detail-v1',base+'&html_template=weekly-detail-v1',base+'&unknown=1',base.replace('2026-09-01','2026-02-30'),base.replace('weekly-detail-v1','period-analysis-v1')]) assert.throws(()=>normalizeHtmlRequest(new URL(query)));
 });
-test('offline math preserves missing, true zero and suppresses incomplete Pax comparisons',()=>{
+test('offline math preserves missing, true zero and computes provisional Pax comparisons when reported legs exist',()=>{
   const empty=sumHtmlMetrics([]); const zero={...sumHtmlMetrics([],'complete'),reported_pax:0,reported_legs:1,due_legs:1,flights:1,unreported_legs:0};
   assert.equal(sumHtmlMetrics([empty],'complete').flights,null);
   assert.equal(sumHtmlMetrics([zero]).reported_pax,0);
-  assert.deepEqual(compareHtmlMetrics(zero,zero,'reported_pax'),{delta:0,percent:null});
-  assert.deepEqual(compareHtmlMetrics({...zero,unreported_legs:1},zero,'reported_pax'),{delta:null,percent:null});
+  assert.deepEqual(compareHtmlMetrics(zero,zero,'reported_pax'),{delta:0,percent:null,provisional:false});
+  assert.deepEqual(compareHtmlMetrics({...zero,unreported_legs:1},zero,'reported_pax'),{delta:0,percent:null,provisional:true});
+  assert.deepEqual(compareHtmlMetrics({...zero,reported_legs:0},zero,'reported_pax'),{delta:null,percent:null,provisional:false});
+  assert.deepEqual(compareHtmlMetrics({...zero,flights:10,flight_coverage:'partial'},{...zero,flights:5},'flights'),{delta:5,percent:1,provisional:true});
 });
 test('monthly has four calendar months and prior-year MoM only when both comparisons are selected',async()=>{
   const db=await createHtmlTestDatabase();
