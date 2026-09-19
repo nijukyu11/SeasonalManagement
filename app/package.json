@@ -19,6 +19,7 @@
     "test:daily-canonical-commit": "node supabase/tests/daily_schedule_canonical_commit_pglite.mjs",
     "test:canonical-manual": "node supabase/tests/canonical_manual_modifications_pglite.mjs",
     "test:canonical-overlay-deletion": "node supabase/tests/canonical_overlay_deletion_pglite.mjs",
+    "test:duplicate-flight-day-repair": "node supabase/tests/duplicate_flight_day_repair_pglite.mjs",
     "test:seasonal-canonical-authority": "node supabase/tests/seasonal_rebuild_daily_authority_pglite.mjs",
     "shadow:daily-import-v1": "node scripts/daily-import-v1-shadow.cjs",
     "test:seasonal-import-sql": "node supabase/tests/seasonal_source_import_v2_pglite.mjs",
