@@ -75,7 +75,7 @@ import {
   setCachedSeasons,
 } from '@/lib/seasonDataCache';
 import {
-  assertNoDuplicateFlightNumbers,
+  assertNoDuplicateFlightNumbersForEffectiveRecords,
   findDuplicateFlightNumberViolations,
   flattenRowsToFlightRecords,
   linkFlightRecordPairs,
@@ -2783,7 +2783,10 @@ export default function HomePage() {
               ...record,
               sourceKind: 'added' as const,
             }));
-            assertNoDuplicateFlightNumbers([...flightRecords, ...candidateRecords]);
+            // Only the added identity is validated: seasons can still carry
+            // pre-policy duplicate flight-days (e.g. legacy NX985 on 2026-07-16)
+            // that must not block creating an unrelated flight.
+            assertNoDuplicateFlightNumbersForEffectiveRecords(flightRecords, modifications, candidateRecords);
             const nextRecords = [...flightRecords, ...candidateRecords];
             const nextMods = modifications;
             const nextRows = buildPatternRowsFromRecords(nextRecords, nextMods);

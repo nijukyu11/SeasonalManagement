@@ -7016,6 +7016,31 @@ async function run() {
     value: 'VN100',
   });
   assert(!duplicateFlightEdit.valid, `duplicate daily flight number edit should be rejected, got ${JSON.stringify(duplicateFlightEdit)}`);
+  const legacyDuplicateWindow = [
+    { ...dailyFixtureRecords[0], id: 'LEGACY-NX985-ARR', type: 'A', date: '2026-07-16', airline: 'NX', flightNumber: 'NX985', rawFlightNumber: '985' },
+    { ...dailyFixtureRecords[0], id: 'LEGACY-NX985-DEP', type: 'D', date: '2026-07-16', airline: 'NX', flightNumber: 'NX985', rawFlightNumber: '985' },
+    { ...dailyFixtureRecords[0], id: 'EDIT-TARGET-NX900', type: 'D', date: '2026-07-16', airline: 'NX', flightNumber: 'NX900', rawFlightNumber: '900' },
+  ];
+  const unrelatedFlightEdit = validateDailyCellEdit({
+    records: legacyDuplicateWindow,
+    record: legacyDuplicateWindow[2],
+    field: 'depFlight',
+    value: '901',
+  });
+  assert(
+    unrelatedFlightEdit.valid,
+    `daily flight-number edit must ignore pre-policy duplicate flight-days elsewhere in the window, got ${JSON.stringify(unrelatedFlightEdit)}`
+  );
+  const legacyIdentityEdit = validateDailyCellEdit({
+    records: legacyDuplicateWindow,
+    record: legacyDuplicateWindow[2],
+    field: 'depFlight',
+    value: '985',
+  });
+  assert(
+    !legacyIdentityEdit.valid,
+    `daily flight-number edit onto a duplicated identity must still be rejected, got ${JSON.stringify(legacyIdentityEdit)}`
+  );
   const validStaEdit = validateDailyCellEdit({
     records: dailyFixtureRecords,
     record: dailyFixtureRecords[1],
@@ -12506,9 +12531,11 @@ async function run() {
   assert(
     detailedPageSource.includes('assertNoDuplicateFlightNumbersForEffectiveRecords(') &&
       dailyPageSource.includes('assertNoDuplicateFlightNumbersForEffectiveRecords(') &&
+      seasonalPageSource.includes('assertNoDuplicateFlightNumbersForEffectiveRecords(') &&
       !detailedPageSource.includes('assertNoDuplicateFlightNumbers([...workspace.records, ...addedRecords])') &&
-      !dailyPageSource.includes('assertNoDuplicateFlightNumbers([...workspace.records, ...addedRecords])'),
-    'Detailed and Daily add flows must validate added flights against effective active records, not raw workspace.records'
+      !dailyPageSource.includes('assertNoDuplicateFlightNumbers([...workspace.records, ...addedRecords])') &&
+      !seasonalPageSource.includes('assertNoDuplicateFlightNumbers([...flightRecords, ...candidateRecords])'),
+    'Seasonal, Detailed and Daily add flows must validate added flights against effective active records, not the raw season record set'
   );
   assert(
     (nativeSeasonBootstrapSource.includes('importNativeSeasonSnapshot({') ||

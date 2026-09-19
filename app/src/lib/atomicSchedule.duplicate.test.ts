@@ -87,3 +87,54 @@ test('duplicate validation canonicalizes short and prefixed flight numbers befor
     /Duplicate flight number LJ081 on 2026-11-01/,
   );
 });
+
+test('pre-policy duplicate flight-days in a season do not block adding an unrelated flight', () => {
+  // S26 still carries duplicate flight-days imported before the F07 policy
+  // (NX985 on 2026-07-16). Adding an unrelated flight must only validate the
+  // added identity instead of rejecting the season as a whole.
+  const legacyArrival = leg({
+    id: 'legacy-nx985-arr',
+    airline: 'NX',
+    flightNumber: 'NX985',
+    rawFlightNumber: '985',
+    type: 'A',
+    date: '2026-07-16',
+  });
+  const legacyDeparture = leg({
+    id: 'legacy-nx985-dep',
+    airline: 'NX',
+    flightNumber: 'NX985',
+    rawFlightNumber: '985',
+    type: 'D',
+    date: '2026-07-16',
+  });
+  const added = leg({
+    id: 'added-jx704',
+    airline: 'JX',
+    flightNumber: 'JX704',
+    rawFlightNumber: '704',
+    date: '2026-09-25',
+    action: 'added',
+  });
+
+  assert.doesNotThrow(() => {
+    assertNoDuplicateFlightNumbersForEffectiveRecords([legacyArrival, legacyDeparture], new Map(), [added]);
+  });
+
+  assert.throws(
+    () => assertNoDuplicateFlightNumbersForEffectiveRecords(
+      [legacyArrival, legacyDeparture],
+      new Map(),
+      [leg({ ...added, id: 'added-nx985', airline: 'NX', flightNumber: 'NX985', rawFlightNumber: '985', date: '2026-07-16' })],
+    ),
+    /Duplicate flight number NX985 on 2026-07-16/,
+  );
+
+  assert.doesNotThrow(() => {
+    assertNoDuplicateFlightNumbersForEffectiveRecords(
+      [legacyArrival, legacyDeparture],
+      new Map([[legacyArrival.id, { legId: legacyArrival.id, action: 'deleted' }], [legacyDeparture.id, { legId: legacyDeparture.id, action: 'deleted' }]]),
+      [leg({ ...added, id: 'added-nx985-again', airline: 'NX', flightNumber: 'NX985', rawFlightNumber: '985', date: '2026-07-16' })],
+    );
+  });
+});

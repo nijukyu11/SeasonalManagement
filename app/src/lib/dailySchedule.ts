@@ -1,4 +1,4 @@
-import { findDuplicateFlightNumberViolations, flightRecordsToLegs } from './atomicSchedule';
+import { canonicalizeSeasonalFlightIdentity, findDuplicateFlightNumberViolations, flightRecordsToLegs } from './atomicSchedule';
 import { applyModificationsToFlightLegs } from './detailedScheduleState';
 import { normalizeStandValue } from './operationalResourceValues';
 import type { FlightCounter, FlightLeg, FlightModification, FlightRecord } from './types';
@@ -422,16 +422,28 @@ export function validateDailyCellEdit(input: DailyCellValidationInput): DailyCel
 
   if (input.field === 'arrFlight' || input.field === 'depFlight') {
     const edited = normalizeEditedFlightNumber(input.record, input.value);
+    const editedIdentity = canonicalizeSeasonalFlightIdentity({
+      airline: input.record.airline,
+      flightNumber: edited,
+      rawFlightNumber: input.value.trim(),
+    });
     const nextRecords = input.records.map((record) => (
       record.id === input.record.id
         ? { ...record, flightNumber: edited, rawFlightNumber: input.value.trim() }
         : record
     ));
-    const violations = findDuplicateFlightNumberViolations(nextRecords);
-    if (violations.length > 0) {
+    // Scope to the edited identity: duplicate flight-days recorded before the
+    // F07 policy elsewhere in the loaded window must not reject an unrelated
+    // flight-number edit.
+    const violation = findDuplicateFlightNumberViolations(nextRecords).find((entry) => (
+      entry.date === input.record.date &&
+      entry.airline === editedIdentity.airline &&
+      entry.flightNumber === editedIdentity.flightNumber
+    ));
+    if (violation) {
       return {
         valid: false,
-        message: `Duplicate flight number ${violations[0].flightNumber} on ${violations[0].date}`,
+        message: `Duplicate flight number ${violation.flightNumber} on ${violation.date}`,
       };
     }
   }
