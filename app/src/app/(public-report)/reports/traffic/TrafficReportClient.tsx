@@ -22,7 +22,7 @@ import {
   fetchTrafficReportV2Bundle,
   toTrafficReportPresentationBundle,
 } from '@/lib/trafficReportDataAdapter';
-import { DayOfWeekChart, FleetMixChart, PeakHourChart } from './TrafficReportAdvancedCharts';
+import { DayOfWeekChart, FleetMixChart, FlightCategoryChart, PeakHourChart } from './TrafficReportAdvancedCharts';
 import { TrafficReportDimensionSection } from './TrafficReportDimensionSection';
 import { TrafficReportFilters } from './TrafficReportFilters';
 import { TrafficReportTrend } from './TrafficReportTrend';
@@ -394,8 +394,9 @@ export default function TrafficReportClient() {
             <div className="mt-5">
               <DayOfWeekChart rows={bundle.breakdowns.day_of_week ?? []} monthlyRows={bundle.breakdowns.day_of_week_monthly ?? []} />
             </div>
-            <div className="mt-5">
+            <div className="mt-5 grid items-start gap-5 lg:grid-cols-2">
               <FleetMixChart rows={fleetRows} />
+              <FlightCategoryChart rows={bundle.breakdowns.flight_category ?? []} />
             </div>
           </section>
 

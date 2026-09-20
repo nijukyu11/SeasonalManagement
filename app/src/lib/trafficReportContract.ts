@@ -157,6 +157,18 @@ export interface TrafficDayOfWeekRow {
   suppressed: boolean;
 }
 
+export interface TrafficFlightCategoryRow {
+  key: 'scheduled' | 'charter' | 'other';
+  code: string;
+  label: string;
+  flights: number | null;
+  arrivals: number | null;
+  departures: number | null;
+  reported_pax: number | null;
+  share: number | null;
+  suppressed: boolean;
+}
+
 export interface TrafficMonthlyDayOfWeekRow {
   month: string;
   day_index: 1 | 2 | 3 | 4 | 5 | 6 | 7;
@@ -265,6 +277,7 @@ export interface TrafficReportBundle {
     peak_hour_monthly?: TrafficMonthlyPeakRow[];
     day_of_week: TrafficDayOfWeekRow[];
     day_of_week_monthly?: TrafficMonthlyDayOfWeekRow[];
+    flight_category?: TrafficFlightCategoryRow[];
   };
   quality: {
     unknown_country_legs: number | null;
@@ -480,6 +493,20 @@ function isTrafficAircraftTypeBreakdownRow(value: unknown): value is TrafficAirc
     && typeof row.suppressed === 'boolean';
 }
 
+export function isTrafficFlightCategoryRow(value: unknown): value is TrafficFlightCategoryRow {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.key === 'string'
+    && typeof row.code === 'string'
+    && typeof row.label === 'string'
+    && isNullableNumber(row.flights)
+    && isNullableNumber(row.arrivals)
+    && isNullableNumber(row.departures)
+    && isNullableNumber(row.reported_pax)
+    && isNullableNumber(row.share)
+    && typeof row.suppressed === 'boolean';
+}
+
 function isTrafficRegularFlight(value: unknown): value is TrafficRegularFlight {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
@@ -595,6 +622,10 @@ export function isTrafficReportBundle(value: unknown): value is TrafficReportBun
     && (breakdowns.aircraft_type === undefined || (
       Array.isArray(breakdowns.aircraft_type)
       && breakdowns.aircraft_type.every(isTrafficAircraftTypeBreakdownRow)
+    ))
+    && (breakdowns.flight_category === undefined || (
+      Array.isArray(breakdowns.flight_category)
+      && breakdowns.flight_category.every(isTrafficFlightCategoryRow)
     ));
 }
 

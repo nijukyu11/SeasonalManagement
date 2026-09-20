@@ -9,8 +9,10 @@ import type {
   TrafficMonthlyPeakRow,
   TrafficPeakHourRow,
   TrafficTimeBasis,
+  TrafficFlightCategoryRow,
   TrafficType,
 } from './trafficReportContract';
+import { isTrafficFlightCategoryRow } from './trafficReportContract';
 
 export const TRAFFIC_REPORT_V2_CONTRACT_VERSION = 'traffic-report-v2' as const;
 export const TRAFFIC_REPORT_V2_API_BASE = '/api/report/v2' as const;
@@ -113,6 +115,7 @@ export interface TrafficV2ReportParity {
     peak_hour_monthly: TrafficMonthlyPeakRow[];
     day_of_week: TrafficDayOfWeekRow[];
     day_of_week_monthly: TrafficMonthlyDayOfWeekRow[];
+    flight_category?: TrafficFlightCategoryRow[];
   };
 }
 
@@ -391,7 +394,11 @@ function isApiReportParity(value: unknown): value is TrafficV2ApiReportParity {
     && value.breakdowns.day_of_week.every(isWeekdayRow)
     && new Set(value.breakdowns.day_of_week.map((row) => String((row as Record<string, unknown>).day_index))).size === 7
     && Array.isArray(value.breakdowns.day_of_week_monthly)
-    && value.breakdowns.day_of_week_monthly.every(isMonthlyWeekdayRow);
+    && value.breakdowns.day_of_week_monthly.every(isMonthlyWeekdayRow)
+    && (value.breakdowns.flight_category === undefined || (
+      Array.isArray(value.breakdowns.flight_category)
+      && value.breakdowns.flight_category.every(isTrafficFlightCategoryRow)
+    ));
 }
 
 export function isTrafficV2ApiMonthlyTimelinePoint(value: unknown): value is TrafficV2ApiMonthlyTimelinePoint {
