@@ -27,7 +27,8 @@ blocking those files.
   `keptSourceRowIndexes`, `occurrenceKey`, `sampleDates`, `affectedDateCount`).
 - Rows whose selected operating days never fall inside their own window are
   skipped with `zero-generated-records` as a **warning**; a file that generates
-  nothing at all still blocks through `no-generated-records`.
+  nothing at all still blocks with production's own `zero-generated-records`
+  code and message, carrying exactly the six fields the client parses.
 - `stage_seasonal_import_v2`/`v3` split diagnostics into blocking
   (`severity <> 'warning'`) and non-blocking channels; `stage_seasonal_import_v3`
   and `seasonal_import_v3_response` expose
@@ -42,15 +43,15 @@ Client: `0.1.33` tolerates missing warning fields (older servers), renders
 ## Evidence
 
 - `app/supabase/tests/seasonal_import_duplicate_resolution_pglite.mjs` — chain
-  from `schema.sql` through the guard plus the new migration; six shapes
-  (equal coverage, wide-vs-narrow, all-zero rows, guard regression, commit,
-  idempotent re-run) plus a rollback rehearsal. Rollback restores the exact
-  pre-state.
+  from `schema.sql` through the guard plus the new migration; the shapes cover
+  equal coverage, wide-vs-narrow, zero-day rows, all-zero rows, structural
+  blocking, a committable mixed file, a committed narrow-first winner case and
+  an idempotent re-run. Rollback restores the exact pre-state.
 - Byte-exact digests (PGlite rehearsal):
 
 | function | pre | post |
 | --- | --- | --- |
-| `seasonal_import_atomic_preview_v2(uuid)` | `2893f79aec30cbec00c0ec44870c7ffa` (24.470 B) | `67203104c1bf80f7c3ac90cee2bdc2a6` (26.672 B) |
+| `seasonal_import_atomic_preview_v2(uuid)` | `2893f79aec30cbec00c0ec44870c7ffa` (24.470 B) | `9987a9adc58d7663876185ae49bf1882` (26.563 B) |
 | `stage_seasonal_import_v2(jsonb)` | `3cfd475c428823d6e8807ab607ab93b4` (47.310 B) | `ae0692092af24660dee5e1ff07d1a2eb` (46.120 B) |
 | `stage_seasonal_import_v3(jsonb)` | `9923e168ddf705b1a0fa50f6d59e80c1` (30.249 B) | `31e99bb3fc2492b2493c0069eab7e0cd` (34.852 B) |
 | `seasonal_import_v3_response(uuid)` | `b2852ef7f2a99c1c01bfb479912db81d` (1.304 B) | `bbe8f218cb074fe2ee5cd9789e585731` (1.545 B) |
@@ -58,11 +59,12 @@ Client: `0.1.33` tolerates missing warning fields (older servers), renders
   `stage-v3` pre equals the post-patch digest recorded in
   `2026-09-20-seasonal-import-daily-duplicate-guard.md`, i.e. the rehearsal chain
   still reproduces production byte-for-byte.
-- `scripts/rule-regression-tests.ts` fixture updated for the new severity split;
-  the suite passes.
-- Server/client contract cross-check: the patched stage and status payloads
-  parse through the shipped `parseSeasonalImportV3StageResult` with the warnings
-  channel intact (exactly the six `DIAGNOSTIC_FIELDS`).
+- `app/scripts/rule-regression-tests.cjs` fixture updated for the new severity
+  split; the suite passes.
+- Server/client contract cross-check (`tmp/audit/w26/rollout/probe-shape.mjs`):
+  the patched stage, status and blocked payloads all parse through the shipped
+  `parseSeasonalImportV3StageResult`; the warning objects and the file-level
+  blocking diagnostic carry exactly the six `DIAGNOSTIC_FIELDS`.
 - Production probes (`tmp/audit/w26/rollout/verify.sql`) rehearsed verbatim in
   PGlite: P1 equal coverage keeps row 1 (`insertCount=1`), P2 wide row wins
   (`insertCount=7`), P3 skipped row warns, P3b nothing-generated blocks, P4 the
@@ -86,3 +88,22 @@ not been executed against production. No production state was modified.
 Clients `<= 0.1.32` reject the new response fields, so every desktop must be
 restarted (the updater installs `0.1.33`) before the migration lands. The
 migration is additive for the client: no RPC signature changed.
+
+## Review notes (2026-09-20)
+
+- The file-level blocking diagnostic originally carried `generatedSourceRowCount`
+  and `sourceRowCount`. The client parses blocking diagnostics with an exact
+  field list, so those two fields would have made the client reject the whole
+  stage response. They were removed; `probe-shape.mjs` now parses both a warning
+  response and a blocked response through `parseSeasonalImportV3StageResult`.
+- Winner persistence was verified end to end: with the narrow row listed first
+  and the wide row second, the committed canonical records carry
+  `source_row_index` of the wide row and its times (P5 in `verify.sql`, plus a
+  committed case in the PGlite suite), so `on conflict (occurrence_key) do
+  nothing` never sees a losing row.
+- A suggested "generated rows below half of the source rows" blocking floor was
+  rejected: production has no such rule, so adding it would newly block files
+  the current stage accepts. The migration header was corrected to describe the
+  rule that is actually implemented.
+- The migration is idempotent by sentinel: a second run leaves all four function
+  digests unchanged (`digest-resolution.mjs` rerun column).

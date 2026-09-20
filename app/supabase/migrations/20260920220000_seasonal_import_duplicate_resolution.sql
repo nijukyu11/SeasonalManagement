@@ -7,11 +7,10 @@
 -- generated occurrences, then the lowest source row index), rows whose selected
 -- operating days never fall inside their own Effective through Discontinue
 -- window are skipped instead of blocking, and both outcomes surface as
--- non-blocking warnings in the stage preview. A file whose generated rows fall
--- below half of its source rows still blocks through
--- insufficient-generated-records, and every structural diagnostic
--- (relationship, pair date, manual and daily occurrence collisions) keeps
--- blocking the commit.
+-- non-blocking warnings in the stage preview. A file whose rows generate no
+-- flight occurrence at all still blocks through zero-generated-records, and
+-- every structural diagnostic (relationship, pair date, manual and daily
+-- occurrence collisions) keeps blocking the commit.
 begin;
 set local lock_timeout = '15s';
 set local statement_timeout = '300s';
@@ -183,14 +182,12 @@ $atomic_preview_duplicate_resolution_rA1$  ), candidate_coverage as (
       pg_catalog.jsonb_build_object(
         'rowIndex', null,
         'stagingRowIndex', null,
-        'code', 'no-generated-records',
+        'code', 'zero-generated-records',
         'column', null,
         'message', pg_catalog.format(
           'None of the %s source rows generate flight occurrences.',
           generated_row_totals.source_row_count
-        ),
-        'generatedSourceRowCount', generated_row_totals.generated_row_count,
-        'sourceRowCount', generated_row_totals.source_row_count
+        )
       ) as issue
     from generated_row_totals
     where generated_row_totals.generated_row_count = 0

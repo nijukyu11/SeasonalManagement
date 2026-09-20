@@ -103,16 +103,17 @@ test('invalid, terminal, and non-preview states never enable commit', () => {
   }
 });
 
-test('grouped KE duplicate diagnostics remain compact and block commit', () => {
+test('grouped resolved duplicate warnings remain compact and keep the commit enabled', () => {
   const result = {
     ...mergePreview,
-    status: 'failed',
-    valid: false,
-    diagnosticCount: 2,
-    diagnostics: [
+    status: 'validated',
+    valid: true,
+    diagnosticCount: 0,
+    warningCount: 2,
+    warnings: [
       {
-        code: 'duplicate-occurrence-key',
-        message: 'Rows 1, 2 generate duplicate 6 occurrence(s) for KE2093.',
+        code: 'duplicate-occurrence-resolved',
+        message: 'Rows 1, 2 generate duplicate occurrence KE2093 on 2026-09-24; kept row 1.',
         sourceRowIndexes: [1, 2],
         occurrenceKey: null,
         affectedDateCount: 6,
@@ -125,8 +126,8 @@ test('grouped KE duplicate diagnostics remain compact and block commit', () => {
         ],
       },
       {
-        code: 'duplicate-occurrence-key',
-        message: 'Rows 1, 2 generate duplicate 6 occurrence(s) for KE2094.',
+        code: 'duplicate-occurrence-resolved',
+        message: 'Rows 1, 2 generate duplicate occurrence KE2094 on 2026-09-24; kept row 1.',
         sourceRowIndexes: [1, 2],
         occurrenceKey: null,
         affectedDateCount: 6,
@@ -141,24 +142,24 @@ test('grouped KE duplicate diagnostics remain compact and block commit', () => {
     ],
   } satisfies SeasonalImportV3StageResult;
 
-  assert.equal(result.diagnostics.length, 2);
+  assert.equal(result.warnings.length, 2);
   assert.deepEqual(
-    result.diagnostics.map((diagnostic) => diagnostic.sourceRowIndexes),
+    result.warnings.map((warning) => warning.sourceRowIndexes),
     [[1, 2], [1, 2]],
   );
   assert.deepEqual(
-    result.diagnostics.map((diagnostic) => diagnostic.affectedDateCount),
+    result.warnings.map((warning) => warning.affectedDateCount),
     [6, 6],
   );
   assert.equal(
-    result.diagnostics.every((diagnostic) => diagnostic.sampleDates.length <= 5),
+    result.warnings.every((warning) => warning.sampleDates.length <= 5),
     true,
   );
   assert.equal(canCommitSeasonalImportPreview({
     state: state(result),
     hasDraftChanges: false,
     busy: false,
-  }), false);
+  }), true, 'resolved duplicates no longer block the commit');
 });
 
 test('Book3 shadow harness stages and cancels without a commit RPC', () => {

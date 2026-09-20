@@ -225,7 +225,7 @@ try {
       }),
     ],
   });
-  assert.deepEqual(codes(allZero), ['no-generated-records'], 'a file that generates nothing is blocked');
+  assert.deepEqual(codes(allZero), ['zero-generated-records'], 'a file that generates nothing is blocked');
   assert.equal(allZero.valid, false);
   assert.equal(allZero.counts.generatedOccurrenceCount, 0);
   assert.equal(allZero.status, 'failed');
@@ -370,6 +370,47 @@ try {
     expectedDataVersion: 8,
   });
   assert.deepEqual(warningCodes(afterSecondRun), ['duplicate-occurrence-resolved'], 're-running the migration keeps the resolution');
+
+  // The narrow row listed first must not win the commit just because it is
+  // generated first: the batch carries the wide row that the preview kept.
+  const narrowFirst = await stage({
+    rows: [
+      sourceRow({
+        rowIndex: 12, airline: 'VJ', arrFlight: '404', sta: '10:00',
+        effective: '2027-03-08', discontinue: '2027-03-08', isoDows: [1],
+      }),
+      sourceRow({
+        rowIndex: 13, airline: 'VJ', arrFlight: '404', depFlight: '405', sta: '11:30', std: '12:45',
+        effective: '2027-03-08', discontinue: '2027-03-14', isoDows: [1, 2, 3, 4, 5, 6, 7],
+      }),
+    ],
+    expectedDataVersion: 8,
+  });
+  assert.equal(narrowFirst.valid, true);
+  assert.match(narrowFirst.warnings[0].message, /kept row 13/);
+  const narrowFirstCommit = await db.query(
+    `select public.commit_seasonal_import_v3($1, $2, $3) as result`,
+    [narrowFirst.batchId, 8, narrowFirst.previewHash],
+  );
+  assert.equal(narrowFirstCommit.rows[0].result.status, 'committed');
+  const narrowFirstRecords = await db.query(
+    `select records.flight_number, records.source_row_index, records.schedule
+     from public.season_flight_records records
+     where records.season_id = $1 and records.flight_number in ('VJ404', 'VJ405')
+     order by records.flight_number, records.date`,
+    [seasonId],
+  );
+  assert.equal(narrowFirstRecords.rows.length, 14, 'seven wide days for both legs');
+  assert.deepEqual(
+    [...new Set(narrowFirstRecords.rows.map((row) => row.source_row_index))],
+    [13],
+    'every committed leg comes from the wide row the preview kept',
+  );
+  assert.deepEqual(
+    [...new Set(narrowFirstRecords.rows.map((row) => row.schedule))].sort(),
+    ['11:30', '12:45'],
+    'the committed times are the wide row times',
+  );
 
   console.log(
     JSON.stringify({
