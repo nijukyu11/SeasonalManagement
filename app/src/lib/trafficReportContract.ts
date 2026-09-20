@@ -496,7 +496,7 @@ function isTrafficAircraftTypeBreakdownRow(value: unknown): value is TrafficAirc
 export function isTrafficFlightCategoryRow(value: unknown): value is TrafficFlightCategoryRow {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
-  return typeof row.key === 'string'
+  return ['scheduled', 'charter', 'other'].includes(String(row.key))
     && typeof row.code === 'string'
     && typeof row.label === 'string'
     && isNullableNumber(row.flights)

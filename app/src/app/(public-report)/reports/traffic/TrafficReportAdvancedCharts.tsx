@@ -15,6 +15,11 @@ const numberFormat = new Intl.NumberFormat('vi-VN');
 const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
 const dayLabels = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'];
 const fleetColors = ['#234093', '#00b4d8', '#526274', '#42c1c7'];
+const flightCategoryColors: Record<string, string> = {
+  scheduled: '#1d4ed8',
+  charter: '#d97706',
+  other: '#64748b',
+};
 
 function formatFleetGroupLabel(label: string): string {
   const trimmed = label.trim();
@@ -370,39 +375,48 @@ export function FleetMixChart({ rows }: { rows: FleetMixRow[] }) {
 export function FlightCategoryChart({ rows }: { rows: TrafficFlightCategoryRow[] }) {
   const visibleRows = rows.filter((row) => !row.suppressed && row.share != null && row.flights != null);
   const ariaSummary = visibleRows.length === 0
-    ? 'Cơ cấu chuyến bay thường lệ chưa đủ dữ liệu công bố.'
+    ? 'Tỉ trọng chuyến bay thường lệ và không thường lệ chưa đủ dữ liệu công bố.'
     : visibleRows.map((row) => `${row.label} ${percentFormat.format((row.share ?? 0) * 100)} phần trăm`).join(', ');
   return (
     <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
       <p className="text-sm font-bold text-blue-900">Tính chất chuyến bay</p>
-      <h3 className="mt-2 text-balance text-2xl font-bold text-[#102033]">Cơ cấu chuyến bay thường lệ & không thường lệ</h3>
-      <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">Phân loại theo tính chất khai thác: thường lệ (J), không thường lệ / thuê chuyến (C) và các chuyến bay khác.</p>
+      <h3 className="mt-2 text-balance text-2xl font-bold text-[#102033]">Thường lệ &amp; Không thường lệ</h3>
+      <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">
+        Tỉ trọng số chuyến giữa chuyến bay thường lệ (code J), không thường lệ / thuê chuyến (code C) và các chuyến bay khác.
+      </p>
       {visibleRows.length > 0 ? (
         <>
           <div className="mt-6 flex h-10 overflow-hidden rounded-xl bg-slate-100" role="img" aria-label={ariaSummary}>
-            {visibleRows.map((row, index) => (
-              <span
-                key={row.key}
-                className="block h-full border-r-2 border-white last:border-r-0"
-                style={{ width: `${(row.share ?? 0) * 100}%`, backgroundColor: fleetColors[index % fleetColors.length] }}
-              />
-            ))}
-          </div>
-          <ul className="mt-5 grid items-start gap-3 sm:grid-cols-2">
-            {visibleRows.map((row, index) => {
+            {visibleRows.map((row) => {
+              const color = flightCategoryColors[row.key] ?? '#64748b';
               return (
-                <li key={row.key} className="rounded-xl border border-slate-200 px-3 py-2">
-                  <div className="flex min-h-11 w-full items-center justify-between gap-4">
+                <span
+                  key={row.key}
+                  className="block h-full border-r-2 border-white last:border-r-0"
+                  style={{ width: `${(row.share ?? 0) * 100}%`, backgroundColor: color }}
+                  title={`${row.label}: ${numberFormat.format(row.flights ?? 0)} chuyến (${percentFormat.format((row.share ?? 0) * 100)}%)`}
+                />
+              );
+            })}
+          </div>
+          <ul className="mt-5 space-y-3">
+            {visibleRows.map((row) => {
+              const color = flightCategoryColors[row.key] ?? '#64748b';
+              return (
+                <li key={row.key} className="rounded-xl border border-slate-200 px-4 py-3">
+                  <div className="flex min-h-8 w-full items-center justify-between gap-4">
                     <span className="inline-flex min-w-0 items-center gap-3">
-                      <span className="size-3 shrink-0 rounded-sm" style={{ backgroundColor: fleetColors[index % fleetColors.length] }} />
-                      <span className="truncate font-semibold text-slate-700" title={row.label} aria-label={row.label}>{row.label}</span>
+                      <span className="size-3 shrink-0 rounded-sm" style={{ backgroundColor: color }} />
+                      <span className="font-semibold text-slate-800" title={row.label} aria-label={row.label}>
+                        {row.label}
+                      </span>
                     </span>
                     <span className="shrink-0 text-right text-sm font-bold tabular-nums text-[#102033]">
-                      {numberFormat.format(row.flights ?? 0)} · {percentFormat.format((row.share ?? 0) * 100)}%
+                      {numberFormat.format(row.flights ?? 0)} chuyến · {percentFormat.format((row.share ?? 0) * 100)}%
                     </span>
                   </div>
                   {row.arrivals != null && row.departures != null && (row.arrivals > 0 || row.departures > 0) ? (
-                    <div className="mt-1 flex items-center justify-between border-t border-slate-100 pt-1 text-xs text-slate-500">
+                    <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2 text-xs text-slate-500">
                       <span>Đến: <strong className="tabular-nums text-slate-700">{numberFormat.format(row.arrivals)}</strong></span>
                       <span>Đi: <strong className="tabular-nums text-slate-700">{numberFormat.format(row.departures)}</strong></span>
                       {row.reported_pax != null ? (
