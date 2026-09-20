@@ -89,7 +89,9 @@ thay đổi khác).
 
 - **Seasonal stage chưa có guard F07**: `stage_seasonal_import_v3` không có check tương đương `DAILY_DUPLICATE_FLIGHT_NUMBER`,
   nên workbook plan có 2 dòng cùng số hiệu trong cùng ngày lịch vẫn stage được ⇒ có thể tái tạo dữ liệu vi phạm.
-  Đề xuất: thêm guard cùng ngữ nghĩa cho seasonal stage ở đợt sau (kèm rehearsal + receipt).
+  **Đã xử lý 2026-09-20**: `20260920170000_seasonal_import_daily_duplicate_guard.sql` thêm diagnostic blocking
+  `daily-occurrence-collision` (xem `2026-09-20-seasonal-import-daily-duplicate-guard.md`); guard cũ `duplicate-occurrence-key`
+  vẫn giữ nguyên.
 - **Export gate** giờ sạch với S26; gate vẫn chặn khi tập export có trùng (đúng thiết kế).
 - **Report site** đọc canonical (`reporting.*` trên `public.season_flight_records`) nên thay đổi sẽ vào ở lần refresh kế tiếp;
   không cần refresh thủ công. Mỗi ngày lịch bị ảnh hưởng mất 1 leg (NX985 2026-07-16, ZE593A 2026-07-27) so với trước.

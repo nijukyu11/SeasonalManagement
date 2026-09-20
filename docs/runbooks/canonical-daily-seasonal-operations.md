@@ -49,6 +49,20 @@ Reset là repair có phá authority, không phải thao tác import bình thư�
 - Merge/Full Replace không được đổi Daily/Manual checksum.
 - Seasonal rows trong active Daily scope được lưu deleted với reason `daily_authority`, kể cả zero-flight scope, để không resurrect lịch.
 
+### 5.1 Plan trùng ngày lịch với Daily active (`daily-occurrence-collision`)
+
+Từ migration `20260920170000_seasonal_import_daily_duplicate_guard.sql`, stage Seasonal V3 chặn mọi occurrence plan trùng
+`(ngày lịch, hãng, số hiệu chuẩn hoá)` với một dòng **Daily đang active**: preview trả `valid=false`, batch ở trạng thái
+`failed`, và commit bị từ chối (`must be validated before commit`). Đây là F07 áp cho đường import plan, không phải lỗi file.
+
+1. Đọc diagnostic: message nêu `record_id` của dòng Daily đang chiếm ngày lịch đó; `sampleDates` là các ngày bị trùng.
+2. Xác định ngày nào trong file plan đã có dữ liệu thực tế (Daily là authority) rồi **thu hẹp `effective`/`discontinue`**
+   của file plan để không phủ các ngày đó, sau đó stage lại bằng request ID mới.
+3. Nếu plan phải thay thế dòng Daily (ví dụ chuyến thực tế bị huỷ và plan mới là đúng), xử lý dòng Daily trước bằng flow
+   repair/reset tương ứng (mục 4 hoặc overlay delete ở mục 8) rồi mới stage plan. Không sửa row canonical trực tiếp.
+4. Không bỏ qua bằng cách commit batch `failed`; không xoá diagnostic phía client. Guard dùng chung bảng diagnostic nên
+   không có đường commit tắt.
+
 ## 6. Rollback release
 
 - Trước write cutover: tắt feature flag/read path mới, giữ additive schema.
