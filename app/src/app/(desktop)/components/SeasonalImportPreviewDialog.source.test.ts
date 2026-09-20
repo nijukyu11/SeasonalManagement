@@ -30,3 +30,11 @@ test('preview dialog never commits automatically after stage', () => {
   assert.match(source, /onClick=\{onCommit\}/);
   assert.match(source, /break-all|break-words|overflow-wrap/);
 });
+
+test('preview dialog surfaces resolved duplicate warnings next to blocking diagnostics', () => {
+  assert.match(source, /Resolved warnings \(\{result\.warningCount\}\)/);
+  assert.match(source, /These rows were resolved while staging the file/);
+  assert.match(source, /warning\.sampleDates\.join/);
+  assert.match(source, /affectedDateCount/);
+  assert.match(source, /warningsTruncated/);
+});
