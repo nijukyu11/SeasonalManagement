@@ -22,8 +22,8 @@ cách nhập cùng một mốc.
 | `app/src/app/(desktop)/daily/page.tsx` | Ô From: có giá trị mới ⇒ `To = From + 1 ngày`; dải nút nhanh dùng helper chung |
 | `app/src/app/(desktop)/checkin/page.tsx`, `app/src/app/(desktop)/gate/page.tsx` | Bỏ bản sao helper cục bộ, dùng helper chung; giữ hành vi `From ⇒ To + 1` |
 
-Quy ước sau đợt này: mọi thay đổi ở ô From (gõ tay, chọn picker, hay nút nhanh) đều đặt lại `To = From + 1 ngày` — đúng
-bằng cửa sổ mặc định 1 ngày của trang. Ô To vẫn sửa độc lập được sau đó.
+Quy ước sau đợt này: sửa ô From (gõ tay hoặc chọn picker) ⇒ đặt lại `To = From + 1 ngày` — đúng bằng cửa sổ mặc định
+1 ngày của trang; ba nút nhanh `1D/2D/7D` giữ ngữ nghĩa riêng `To = From + N ngày`. Ô To vẫn sửa độc lập được sau đó.
 
 Commit: `c04b36e` (feature), `f51f456` (bump 0.1.32).
 
@@ -68,7 +68,7 @@ commit `f51f456`, tag `app-v0.1.32` (build từ chính tag này).
 
 ## 5. Tồn đọng (không sửa trong đợt này)
 
-- Ô To **không** tự lùi khi From đổi sang mốc muộn hơn To — quy ước hiện tại là "neo To theo From + 1", người dùng vẫn
-  phải tự chỉnh nếu muốn khoảng dài.
+- Sửa ô From luôn ép cửa sổ về đúng 1 ngày, kể cả khi người dùng đang xem khoảng dài (2/7 ngày) rồi chỉnh mốc bắt đầu —
+  phải sửa lại ô To hoặc bấm nút nhanh để lấy lại khoảng dài.
 - Chuỗi **không rỗng nhưng không hợp lệ** (ví dụ `garbage`) vẫn bị V8 parse lỏng thành mốc `2000-01-*`; không tới được
   từ UI (`datetime-local` chỉ trả `YYYY-MM-DDTHH:mm` hoặc rỗng) nên không xử lý thêm.
