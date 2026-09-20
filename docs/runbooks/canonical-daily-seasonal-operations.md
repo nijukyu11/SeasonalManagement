@@ -63,6 +63,23 @@ Từ migration `20260920170000_seasonal_import_daily_duplicate_guard.sql`, stage
 4. Không bỏ qua bằng cách commit batch `failed`; không xoá diagnostic phía client. Guard dùng chung bảng diagnostic nên
    không có đường commit tắt.
 
+### 5.2 Plan trùng ngày lịch với dòng Add Flight active (`manual-occurrence-collision`)
+
+Từ migration `20260920230000_seasonal_import_daily_guard_kind_classification.sql`, dòng **Add Flight** (`source_kind='manual'`)
+đang active cũng chặn occurrence plan trùng `(ngày lịch, hãng, số hiệu chuẩn hoá)` ở **cả** Merge và Full Replace, và được báo
+đúng code `manual-occurrence-collision`; trước đó Replace báo nhầm thành `daily-occurrence-collision` với message nêu "active
+Daily leg" dù row bị chặn là dòng Add Flight. Preview trả `valid=false`, batch ở trạng thái `failed`, commit bị từ chối
+(`must be validated before commit`), và `manualCollisionCount` là số occurrence bị chặn.
+
+Lý do vẫn chặn: **Full Replace không reset leg của season**. Đo trên chuỗi migration khớp production, một stage + commit
+Replace trên season 2 leg giữ nguyên cả 2 leg rồi chèn thêm leg của file (2 → 3 dòng). Dòng Add Flight vì vậy không tự biến
+mất khi Replace; bỏ chặn sẽ để file và dòng Add Flight cùng tồn tại cho một ngày lịch.
+
+1. Nếu file plan là đúng và dòng Add Flight là bản sao cũ: xử lý dòng Add Flight trước (Undo/overlay delete ở mục 8, hoặc flow
+   repair tương ứng), rồi stage lại plan bằng request ID mới.
+2. Nếu dòng Add Flight là đúng: thu hẹp `effective`/`discontinue` của file plan để không phủ ngày đó, rồi stage lại.
+3. Không commit batch `failed` và không sửa row canonical trực tiếp.
+
 ## 6. Rollback release
 
 - Trước write cutover: tắt feature flag/read path mới, giữ additive schema.
