@@ -121,6 +121,15 @@ try {
   const safeupdateHotfixMigrationSql = await readFile(safeupdateHotfixMigrationUrl, 'utf8');
   await db.exec(safeupdateHotfixMigrationSql);
   await db.exec(safeupdateHotfixMigrationSql);
+  const dailyDuplicateGuardSql = await readFile(
+    new URL(
+      '../migrations/20260920170000_seasonal_import_daily_duplicate_guard.sql',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  await db.exec(dailyDuplicateGuardSql);
+  await db.exec(dailyDuplicateGuardSql);
   await db.exec(await readFile(testUrl, 'utf8'));
   console.log(JSON.stringify({
     suite: 'seasonal_partial_import_v3.sql',
@@ -130,6 +139,7 @@ try {
     flightNormalizationOptimizationRuns: 2,
     fullReplaceMigrationRuns: 2,
     safeupdateHotfixMigrationRuns: 2,
+    dailyDuplicateGuardRuns: 2,
     elapsedMs: Date.now() - startedAt,
     status: 'passed',
   }));
