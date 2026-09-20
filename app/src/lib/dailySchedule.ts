@@ -250,6 +250,7 @@ function normalizeEditedFlightNumber(record: FlightRecord, value: string): strin
 }
 
 export function addDaysToLocalDateTime(value: string, days: number): string {
+  if (!value) return value;
   const next = new Date(`${value}:00`);
   if (Number.isNaN(next.getTime())) return value;
   next.setDate(next.getDate() + days);
