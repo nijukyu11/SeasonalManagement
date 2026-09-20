@@ -1,8 +1,8 @@
 # Seasonal import duplicate resolution — migration readiness (20260920)
 
-Status: **staged, not applied to production.** The client half shipped in
-desktop `0.1.33`; the database half is ready to apply in one command once the
-ops host credential is available in the session.
+Status: **applied to production 2026-09-20** (client half shipped in desktop
+`0.1.33`). Rollout evidence and the ops-host receipt are recorded in
+`2026-09-20-seasonal-import-duplicate-resolution-rollout.md`.
 
 ## Problem
 
@@ -54,7 +54,7 @@ Client: `0.1.33` tolerates missing warning fields (older servers), renders
 | `seasonal_import_atomic_preview_v2(uuid)` | `2893f79aec30cbec00c0ec44870c7ffa` (24.470 B) | `9987a9adc58d7663876185ae49bf1882` (26.563 B) |
 | `stage_seasonal_import_v2(jsonb)` | `3cfd475c428823d6e8807ab607ab93b4` (47.310 B) | `ae0692092af24660dee5e1ff07d1a2eb` (46.120 B) |
 | `stage_seasonal_import_v3(jsonb)` | `9923e168ddf705b1a0fa50f6d59e80c1` (30.249 B) | `31e99bb3fc2492b2493c0069eab7e0cd` (34.852 B) |
-| `seasonal_import_v3_response(uuid)` | `b2852ef7f2a99c1c01bfb479912db81d` (1.304 B) | `bbe8f218cb074fe2ee5cd9789e585731` (1.545 B) |
+| `seasonal_import_v3_response(uuid)` | `f6c413ad989a5dcbf780a87405c8aadb` (1.271 B) | `bbe8f218cb074fe2ee5cd9789e585731` (1.545 B) |
 
   `stage-v3` pre equals the post-patch digest recorded in
   `2026-09-20-seasonal-import-daily-duplicate-guard.md`, i.e. the rehearsal chain
@@ -71,17 +71,39 @@ Client: `0.1.33` tolerates missing warning fields (older servers), renders
   Daily collision guard still blocks, P5 the previously blocked file commits and
   bumps the season row count. Everything runs inside `begin`/`rollback`.
 
-## Production rollout (pending)
+## Production rollout (applied 2026-09-20)
 
-Bundle: `tmp/audit/w26/rollout/` — `README.md` (ordered commands), `q_digests.sql`
-(pre/post digests), `q_dump.sql` + `build_rollback.py` (byte-exact pre-image),
-`rollback.sql`, `verify.sql`, `rehearse_verify.mjs`. Target host
-`100.91.158.79`, database `opsdata-supabase-db`, user `ops`; requires
-`SEASONAL_SSH_PASSWORD` in the environment.
+Applied to `opsdata-supabase-db` on `100.91.158.79` (user `ops`) via
+`tmp/audit/ssh_sql.py`. All four post digests equal the PGlite rehearsal
+byte-for-byte; a second apply returns early on the `duplicate-occurrence-resolved`
+marker and leaves the digests unchanged.
 
-Blocked on: the ops host credential is not present in this session, so the
-read-only pre-state check, the apply, the probes and the rollback rehearsal have
-not been executed against production. No production state was modified.
+`verify.sql` probes on production (inside `begin; … rollback;`): P1 resolved
+duplicate kept row 1 (`insertCount=1`), P2 wide row wins (`insertCount=7`), P3
+skipped row warns `zero-generated-records`, P3b a file that generates nothing
+stays blocked, P4 the Daily collision guard still blocks, P5 the previously
+blocked file commits and persists the wide row (`source_row_index=3`,
+`schedule=09:15`) while the narrow row is listed first. Season S26 kept
+`data_version=16596`, `record_rows=67138`, `active_rows=25231`.
+
+`rollback_probe.sql` ran the shipped `rollback.sql` bytes in its own transaction,
+restored all four pre-state digests and rolled back; the live digests stayed
+post. Receipt bundle: `/home/ops/seasonal-import-duplicate-resolution-20260920/`
+(`sha256sum -c SHA256SUMS` → OK for all 15 files).
+
+`seasonal_import_v3_response` differs between the local chain and production only
+in line endings: the local migration file stores CRLF (`b2852ef7…`, 1.304 B) while
+production stores LF (`f6c413ad…`, 1.271 B). The bodies are byte-identical after
+`chr(13)||chr(10)` → `chr(10)` normalization, which is what the migration matches
+on, and every post-patch body is LF, so post digests compare directly. The other
+three functions match production raw.
+
+Bundle sources: `tmp/audit/w26/rollout/` — `README.md` (ordered commands),
+`q_digests.sql` (pre/post digests), `q_dump.sql` + `build_rollback.py` (byte-exact
+pre-image), `rollback.sql`, `rollback_probe.sql`, `verify.sql`,
+`probe-transcript.txt`, `rehearse_verify.mjs`. Requires `SEASONAL_SSH_PASSWORD`
+in the environment; `ssh_sql.py` transports stdin as bytes so stored CRLF bodies
+survive the round trip.
 
 ## Compatibility
 
