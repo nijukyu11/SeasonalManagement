@@ -284,8 +284,61 @@ export function FleetMixChart({ rows }: { rows: FleetMixRow[] }) {
   );
 }
 
+function normalizeFlightCategoryRows(rows: TrafficFlightCategoryRow[]): TrafficFlightCategoryRow[] {
+  let scheduled: TrafficFlightCategoryRow | null = null;
+  let charter: TrafficFlightCategoryRow | null = null;
+
+  for (const row of rows) {
+    if (row.key === 'scheduled') {
+      scheduled = {
+        ...row,
+        label: 'Thường lệ',
+      };
+    } else if (!charter) {
+      charter = {
+        key: 'charter',
+        code: 'C',
+        label: 'Không thường lệ',
+        flights: row.flights,
+        arrivals: row.arrivals,
+        departures: row.departures,
+        reported_pax: row.reported_pax,
+        share: row.share,
+        suppressed: row.suppressed,
+      };
+    } else {
+      const prevCharter: TrafficFlightCategoryRow = charter;
+      charter = {
+        ...prevCharter,
+        flights: (prevCharter.flights != null || row.flights != null)
+          ? (prevCharter.flights ?? 0) + (row.flights ?? 0)
+          : null,
+        arrivals: (prevCharter.arrivals != null || row.arrivals != null)
+          ? (prevCharter.arrivals ?? 0) + (row.arrivals ?? 0)
+          : null,
+        departures: (prevCharter.departures != null || row.departures != null)
+          ? (prevCharter.departures ?? 0) + (row.departures ?? 0)
+          : null,
+        reported_pax: (prevCharter.reported_pax != null || row.reported_pax != null)
+          ? (prevCharter.reported_pax ?? 0) + (row.reported_pax ?? 0)
+          : null,
+        share: (prevCharter.share != null || row.share != null)
+          ? (prevCharter.share ?? 0) + (row.share ?? 0)
+          : null,
+        suppressed: prevCharter.suppressed && row.suppressed,
+      };
+    }
+  }
+
+  const result: TrafficFlightCategoryRow[] = [];
+  if (scheduled) result.push(scheduled);
+  if (charter) result.push(charter);
+  return result;
+}
+
 export function FlightCategoryChart({ rows }: { rows: TrafficFlightCategoryRow[] }) {
-  const visibleRows = rows.filter((row) => !row.suppressed && row.share != null && row.flights != null);
+  const normalizedRows = normalizeFlightCategoryRows(rows);
+  const visibleRows = normalizedRows.filter((row) => !row.suppressed && row.share != null && row.flights != null);
   const ariaSummary = visibleRows.length === 0
     ? 'Tỉ trọng chuyến bay thường lệ và không thường lệ chưa đủ dữ liệu công bố.'
     : visibleRows.map((row) => `${row.label} ${percentFormat.format((row.share ?? 0) * 100)} phần trăm`).join(', ');
@@ -295,7 +348,7 @@ export function FlightCategoryChart({ rows }: { rows: TrafficFlightCategoryRow[]
       <p className="text-sm font-bold text-blue-900">Tính chất chuyến bay</p>
       <h3 className="mt-2 text-balance text-2xl font-bold text-[#102033]">Thường lệ &amp; Không thường lệ</h3>
       <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">
-        Tỉ trọng số chuyến giữa chuyến bay thường lệ (code J) và chuyến bay không thường lệ (code C) trong phạm vi đang chọn.
+        Tỉ trọng số chuyến giữa chuyến bay thường lệ và không thường lệ (đã bao gồm các chuyến bay khác).
       </p>
       {visibleRows.length > 0 ? (
         <>
@@ -312,24 +365,24 @@ export function FlightCategoryChart({ rows }: { rows: TrafficFlightCategoryRow[]
               );
             })}
           </div>
-          <ul className="mt-5 grid items-start gap-3 sm:grid-cols-2">
+          <ul className="mt-5 space-y-3">
             {visibleRows.map((row) => {
               const color = flightCategoryColors[row.key] ?? '#64748b';
               return (
-                <li key={row.key} className="rounded-xl border border-slate-200 px-3 py-2">
-                  <div className="flex min-h-11 w-full items-center justify-between gap-4">
+                <li key={row.key} className="rounded-xl border border-slate-200 px-4 py-3">
+                  <div className="flex min-h-8 w-full flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <span className="inline-flex min-w-0 items-center gap-3">
                       <span className="size-3 shrink-0 rounded-sm" style={{ backgroundColor: color }} />
-                      <span className="truncate font-semibold text-slate-700" title={row.label} aria-label={row.label}>
+                      <span className="font-semibold text-slate-800" title={row.label} aria-label={row.label}>
                         {row.label}
                       </span>
                     </span>
-                    <span className="shrink-0 text-right text-sm font-bold tabular-nums text-[#102033]">
-                      {numberFormat.format(row.flights ?? 0)} · {percentFormat.format((row.share ?? 0) * 100)}%
+                    <span className="shrink-0 text-left text-sm font-bold tabular-nums text-[#102033] sm:text-right">
+                      {numberFormat.format(row.flights ?? 0)} chuyến · {percentFormat.format((row.share ?? 0) * 100)}%
                     </span>
                   </div>
                   {row.arrivals != null && row.departures != null && (row.arrivals > 0 || row.departures > 0) ? (
-                    <div className="mt-1 flex items-center justify-between border-t border-slate-100 pt-1 text-xs text-slate-500">
+                    <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2 text-xs text-slate-500">
                       <span>Đến: <strong className="tabular-nums text-slate-700">{numberFormat.format(row.arrivals)}</strong></span>
                       <span>Đi: <strong className="tabular-nums text-slate-700">{numberFormat.format(row.departures)}</strong></span>
                       {row.reported_pax != null ? (

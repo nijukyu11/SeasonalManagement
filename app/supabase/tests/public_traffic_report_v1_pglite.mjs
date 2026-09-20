@@ -23,6 +23,7 @@ const dashboardHybridRunnerSql = await readFile(new URL('../migrations/202609011
 const dashboardPaxCorrectionSql = await readFile(new URL('../migrations/20260902150000_public_dashboard_pax_correction.sql', import.meta.url), 'utf8');
 const coverageCountsSql = await readFile(new URL('../migrations/20260911120000_public_traffic_report_coverage_counts.sql', import.meta.url), 'utf8');
 const flightCategorySql = await readFile(new URL('../migrations/20260920150000_public_traffic_report_flight_category.sql', import.meta.url), 'utf8');
+const flightCategoryBinarySql = await readFile(new URL('../migrations/20260920183000_public_traffic_report_flight_category_binary.sql', import.meta.url), 'utf8');
 const db = await createSupabasePGlite();
 
 async function addSeason(id, code) {
@@ -114,6 +115,8 @@ try {
   await db.exec(coverageCountsSql);
   await db.exec(flightCategorySql);
   await db.exec(flightCategorySql);
+  await db.exec(flightCategoryBinarySql);
+  await db.exec(flightCategoryBinarySql);
 
   await addSeason('old-season', 'W25');
   await addSeason('new-season', 'S26');
@@ -995,9 +998,11 @@ try {
   assert.ok(Array.isArray(cats), 'flight_category must be an array');
   const catKeys = cats.map((c) => c.key);
   assert.equal(new Set(catKeys).size, catKeys.length, 'category keys must be unique without duplicate other rows');
+  assert.equal(cats.length, 2, 'must have exactly 2 categories');
   assert.ok(catKeys.includes('scheduled'), 'must include scheduled');
   assert.ok(catKeys.includes('charter'), 'must include charter');
-  assert.ok(catKeys.includes('other'), 'must include other');
+  assert.equal(cats.find((c) => c.key === 'scheduled')?.label, 'Thường lệ');
+  assert.equal(cats.find((c) => c.key === 'charter')?.label, 'Không thường lệ');
   assert.equal(cats.reduce((sum, c) => sum + c.flights, 0), mixedCatReport.breakdowns.aircraft_group.reduce((sum, g) => sum + g.flights, 0), 'category flight sum must match total flights');
 
   const firstPageResult = await db.query(`select reporting.get_traffic_report_timeline_v2(date '2026-03-02', date '2026-03-05', null, null, 'day', null, 2, '{}'::jsonb, timestamptz '2026-03-10 00:00:00+00') as result`);

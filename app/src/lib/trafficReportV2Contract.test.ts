@@ -182,13 +182,13 @@ test('traffic-report-v2 validates flight_category breakdown when present and all
 
   const withCategory = payload();
   withCategory.report.breakdowns.flight_category = [
-    { key: 'scheduled', code: 'J', label: 'Thường lệ (code J)', flights: 7, arrivals: 4, departures: 3, reported_pax: 100, share: 1, suppressed: false },
+    { key: 'scheduled', code: 'J', label: 'Thường lệ', flights: 7, arrivals: 4, departures: 3, reported_pax: 100, share: 1, suppressed: false },
   ];
   assert.equal(isTrafficV2ApiEnvelope(withCategory), true);
 
   const withNullableCategory = payload();
   withNullableCategory.report.breakdowns.flight_category = [
-    { key: 'scheduled', code: 'J', label: 'Thường lệ (code J)', flights: null, arrivals: null, departures: null, reported_pax: null, share: null, suppressed: false },
+    { key: 'scheduled', code: 'J', label: 'Thường lệ', flights: null, arrivals: null, departures: null, reported_pax: null, share: null, suppressed: false },
   ];
   assert.equal(isTrafficV2ApiEnvelope(withNullableCategory), true);
 
