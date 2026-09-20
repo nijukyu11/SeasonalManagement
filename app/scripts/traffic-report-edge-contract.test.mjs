@@ -70,6 +70,8 @@ assert.match(edge, /get_public_traffic_report_overview_v1/);
 assert.match(edge, /get_public_traffic_report_v2/);
 assert.match(edge, /TRAFFIC_REPORT_READ_VERSION_SECRET/);
 assert.match(edge, /READ_VERSION_CHANGED/);
+assert.doesNotMatch(edge, /filterHash !== readVersion\.filterHash/);
+assert.match(edge, /sourceWatermark !== readVersion\.sourceWatermark[\s\S]+?dataAsOf !== readVersion\.dataAsOf/);
 assert.match(edge, /read_version_token: readVersionToken/);
 assert.match(edge, /get_public_traffic_report_dimension_v2/);
 assert.match(edge, /endpoint === 'peak-hour-heatmap'/);
