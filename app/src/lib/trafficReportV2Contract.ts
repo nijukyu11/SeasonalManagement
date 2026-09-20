@@ -10,7 +10,8 @@ import type {
   TrafficPeakHourRow,
   TrafficTimeBasis,
   TrafficType,
-} from './trafficReportContract';
+} from './trafficReportContract.ts';
+import { isTrafficFlightCategoryRow } from './trafficReportContract.ts';
 
 export const TRAFFIC_REPORT_V2_CONTRACT_VERSION = 'traffic-report-v2' as const;
 export const TRAFFIC_REPORT_V2_API_BASE = '/api/report/v2' as const;
@@ -310,7 +311,10 @@ function isApiReportParity(value: unknown): value is TrafficV2ApiReportParity {
     && Array.isArray(value.breakdowns.peak_hour_monthly)
     && Array.isArray(value.breakdowns.day_of_week)
     && value.breakdowns.day_of_week.length === 7
-    && (value.breakdowns.flight_category === undefined || Array.isArray(value.breakdowns.flight_category));
+    && (value.breakdowns.flight_category === undefined || (
+      Array.isArray(value.breakdowns.flight_category)
+      && value.breakdowns.flight_category.every(isTrafficFlightCategoryRow)
+    ));
 }
 
 export function isTrafficV2ApiEnvelope(value: unknown): value is TrafficV2ApiEnvelope {

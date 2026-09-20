@@ -117,5 +117,17 @@ test('Excel workbook data stays aggregate-only and includes Phase 2 sheets', () 
       ],
     },
   }), true);
+  assert.equal(isTrafficReportBundle({
+    ...bundle,
+    breakdowns: {
+      ...bundle.breakdowns,
+      flight_category: [
+        { key: 'scheduled', code: 'J', label: 'Thường lệ (code J)', flights: null, arrivals: null, departures: null, reported_pax: null, share: null, suppressed: false },
+      ],
+    },
+  }), true);
   assert.equal(isTrafficReportBundle({ ...bundle, breakdowns: { ...bundle.breakdowns, flight_category: [{}] } }), false);
+  assert.equal(isTrafficReportBundle({ ...bundle, breakdowns: { ...bundle.breakdowns, flight_category: [{ key: 'scheduled', code: 'J', label: 'J', flights: '7', arrivals: 4, departures: 3, reported_pax: 100, share: 1, suppressed: false }] } }), false);
+  assert.equal(isTrafficReportBundle({ ...bundle, breakdowns: { ...bundle.breakdowns, flight_category: [{ key: 'scheduled', code: 123, label: 'J', flights: 7, arrivals: 4, departures: 3, reported_pax: 100, share: 1, suppressed: false }] } }), false);
+  assert.equal(isTrafficReportBundle({ ...bundle, breakdowns: { ...bundle.breakdowns, flight_category: [{ key: 'scheduled', code: 'J', label: 'J', flights: 7, arrivals: 4, departures: 3, reported_pax: 100, share: 1, suppressed: 'no' }] } }), false);
 });

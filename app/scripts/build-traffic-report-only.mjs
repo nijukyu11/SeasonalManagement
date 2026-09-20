@@ -67,7 +67,7 @@ const build = spawnSync(process.execPath, [nextCli, 'build', buildRoot], {
   env: {
     ...process.env,
     NEXT_TELEMETRY_DISABLED: '1',
-    NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED: process.env.NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED ?? '1',
+    NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED: process.env.NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED,
   },
   encoding: 'utf8',
   stdio: 'inherit',

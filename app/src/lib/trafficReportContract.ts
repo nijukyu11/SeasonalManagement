@@ -423,6 +423,20 @@ function isTrafficAircraftTypeBreakdownRow(value: unknown): value is TrafficAirc
     && typeof row.suppressed === 'boolean';
 }
 
+export function isTrafficFlightCategoryRow(value: unknown): value is TrafficFlightCategoryRow {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.key === 'string'
+    && typeof row.code === 'string'
+    && typeof row.label === 'string'
+    && isNullableNumber(row.flights)
+    && isNullableNumber(row.arrivals)
+    && isNullableNumber(row.departures)
+    && isNullableNumber(row.reported_pax)
+    && isNullableNumber(row.share)
+    && typeof row.suppressed === 'boolean';
+}
+
 function isTrafficRegularFlight(value: unknown): value is TrafficRegularFlight {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
@@ -505,14 +519,7 @@ export function isTrafficReportBundle(value: unknown): value is TrafficReportBun
     ))
     && (breakdowns.flight_category === undefined || (
       Array.isArray(breakdowns.flight_category)
-      && breakdowns.flight_category.every((row: unknown) => (
-        !!row && typeof row === 'object' && !Array.isArray(row)
-        && typeof (row as Record<string, unknown>).key === 'string'
-        && typeof (row as Record<string, unknown>).code === 'string'
-        && typeof (row as Record<string, unknown>).label === 'string'
-        && typeof (row as Record<string, unknown>).flights === 'number'
-        && typeof (row as Record<string, unknown>).suppressed === 'boolean'
-      ))
+      && breakdowns.flight_category.every(isTrafficFlightCategoryRow)
     ));
 }
 
