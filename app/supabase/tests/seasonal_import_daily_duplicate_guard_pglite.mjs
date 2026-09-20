@@ -25,6 +25,10 @@ const guardMigrationUrl = new URL(
   '../migrations/20260920170000_seasonal_import_daily_duplicate_guard.sql',
   import.meta.url,
 );
+const resolutionMigrationUrl = new URL(
+  '../migrations/20260920220000_seasonal_import_duplicate_resolution.sql',
+  import.meta.url,
+);
 
 const seasonId = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6';
 const writerId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -163,6 +167,7 @@ try {
 
   const guardMigrationSql = await readFile(guardMigrationUrl, 'utf8');
   await db.exec(guardMigrationSql);
+  await db.exec(await readFile(resolutionMigrationUrl, 'utf8'));
   await db.exec(`set role authenticated`);
   await db.query(`select pg_catalog.set_config('request.jwt.claim.sub', $1, false)`, [writerId]);
 
@@ -238,7 +243,15 @@ try {
       sourceRow({ rowIndex: 2, airline: 'NX', flight: '987', sta: '08:00', date: '2026-07-19', isoDow: 7 }),
     ],
   });
-  assert.deepEqual(codes(internalDuplicate), ['duplicate-occurrence-key'], 'in-file duplicates stay blocked');
+  assert.deepEqual(codes(internalDuplicate), [], 'in-file duplicates are resolved instead of blocking');
+  assert.equal(internalDuplicate.valid, true);
+  assert.deepEqual(
+    internalDuplicate.warnings.map((warning) => warning.code),
+    ['duplicate-occurrence-resolved'],
+  );
+  assert.deepEqual(internalDuplicate.warnings[0].sourceRowIndexes, [1, 2]);
+  assert.match(internalDuplicate.warnings[0].message, /kept row 1/);
+  assert.equal(internalDuplicate.counts.insertCount, 1, 'only the winning row is inserted');
 
   const control = await stage({
     rows: [
@@ -254,6 +267,7 @@ try {
 
   await db.exec(`reset role`);
   await db.exec(guardMigrationSql);
+  await db.exec(await readFile(resolutionMigrationUrl, 'utf8'));
   await db.exec(`set role authenticated`);
   const afterSecondRun = await stage({
     rows: [sourceRow({ rowIndex: 1, airline: 'NX', flight: '985', sta: '03:00', date: '2026-07-16', isoDow: 4 })],

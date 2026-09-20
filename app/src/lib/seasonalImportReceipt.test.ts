@@ -102,6 +102,9 @@ const v3Stage = {
   diagnosticCount: 0,
   diagnosticsTruncated: false,
   diagnostics: [],
+  warningCount: 0,
+  warningsTruncated: false,
+  warnings: [],
   expiresAt: '2026-07-24T12:00:00.000Z',
 } satisfies SeasonalImportV3StageResult;
 

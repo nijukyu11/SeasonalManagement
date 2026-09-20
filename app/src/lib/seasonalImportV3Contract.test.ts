@@ -51,6 +51,9 @@ function stageResult(overrides: Record<string, unknown> = {}) {
     diagnosticCount: 0,
     diagnosticsTruncated: false,
     diagnostics: [],
+    warningCount: 0,
+    warningsTruncated: false,
+    warnings: [],
     expiresAt: '2026-07-24T12:00:00.000Z',
     ...overrides,
   };
@@ -169,6 +172,57 @@ test('V3 stage parser is exact and validates identifiers, enums, hashes, and cou
       counts: previewCounts({ removeImportedCount: 1 }),
     })),
     /removeImportedCount/,
+  );
+});
+
+test('V3 stage surfaces resolved warnings without blocking validity', () => {
+  const result = parseSeasonalImportV3StageResult(stageResult({
+    warningCount: 1,
+    warnings: [{
+      code: 'duplicate-occurrence-resolved',
+      message: `Rows 3, 4 generate duplicate occurrence ${SEASON_ID}|2026-10-26|5J|5J5758; kept row 3.`,
+      sourceRowIndexes: [3, 4],
+      occurrenceKey: `${SEASON_ID}|2026-10-26|5J|5J5758`,
+      affectedDateCount: 1,
+      sampleDates: ['2026-10-26'],
+    }],
+  }));
+
+  assert.equal(result.valid, true);
+  assert.equal(result.warningCount, 1);
+  assert.deepEqual(result.warnings[0].sourceRowIndexes, [3, 4]);
+  assert.throws(
+    () => parseSeasonalImportV3StageResult(stageResult({ warningCount: 1 })),
+    /warningCount/,
+  );
+  assert.throws(
+    () => parseSeasonalImportV3StageResult(stageResult({
+      warningCount: 2,
+      warnings: [{
+        code: 'zero-generated-records',
+        message: 'Row 5: no selected operating day occurs within Effective through Discontinue.',
+        sourceRowIndexes: [5],
+        occurrenceKey: null,
+        affectedDateCount: 0,
+        sampleDates: [],
+      }],
+    })),
+    /warningCount/,
+  );
+  assert.throws(
+    () => parseSeasonalImportV3StageResult(stageResult({
+      warningCount: 1,
+      warnings: [{
+        code: 'zero-generated-records',
+        message: 'Row 5: no selected operating day occurs within Effective through Discontinue.',
+        sourceRowIndexes: [5],
+        occurrenceKey: null,
+        affectedDateCount: 1,
+        sampleDates: [],
+        severity: 'warning',
+      }],
+    })),
+    /unexpected field severity/,
   );
 });
 

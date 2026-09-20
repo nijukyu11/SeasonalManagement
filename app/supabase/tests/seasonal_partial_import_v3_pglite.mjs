@@ -22,6 +22,14 @@ const safeupdateHotfixMigrationUrl = new URL(
   '../migrations/20260818100000_bound_seasonal_commit_temp_updates.sql',
   import.meta.url,
 );
+const dailyDuplicateGuardUrl = new URL(
+  '../migrations/20260920170000_seasonal_import_daily_duplicate_guard.sql',
+  import.meta.url,
+);
+const duplicateResolutionUrl = new URL(
+  '../migrations/20260920220000_seasonal_import_duplicate_resolution.sql',
+  import.meta.url,
+);
 const testUrl = new URL('./seasonal_partial_import_v3.sql', import.meta.url);
 
 const preV3FixtureSql = `
@@ -121,15 +129,12 @@ try {
   const safeupdateHotfixMigrationSql = await readFile(safeupdateHotfixMigrationUrl, 'utf8');
   await db.exec(safeupdateHotfixMigrationSql);
   await db.exec(safeupdateHotfixMigrationSql);
-  const dailyDuplicateGuardSql = await readFile(
-    new URL(
-      '../migrations/20260920170000_seasonal_import_daily_duplicate_guard.sql',
-      import.meta.url,
-    ),
-    'utf8',
-  );
+  const dailyDuplicateGuardSql = await readFile(dailyDuplicateGuardUrl, 'utf8');
   await db.exec(dailyDuplicateGuardSql);
   await db.exec(dailyDuplicateGuardSql);
+  const duplicateResolutionSql = await readFile(duplicateResolutionUrl, 'utf8');
+  await db.exec(duplicateResolutionSql);
+  await db.exec(duplicateResolutionSql);
   await db.exec(await readFile(testUrl, 'utf8'));
   console.log(JSON.stringify({
     suite: 'seasonal_partial_import_v3.sql',
@@ -140,6 +145,7 @@ try {
     fullReplaceMigrationRuns: 2,
     safeupdateHotfixMigrationRuns: 2,
     dailyDuplicateGuardRuns: 2,
+    duplicateResolutionRuns: 2,
     elapsedMs: Date.now() - startedAt,
     status: 'passed',
   }));

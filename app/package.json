@@ -21,6 +21,7 @@
     "test:canonical-overlay-deletion": "node supabase/tests/canonical_overlay_deletion_pglite.mjs",
     "test:duplicate-flight-day-repair": "node supabase/tests/duplicate_flight_day_repair_pglite.mjs",
     "test:seasonal-import-daily-duplicate-guard": "node supabase/tests/seasonal_import_daily_duplicate_guard_pglite.mjs",
+    "test:seasonal-import-duplicate-resolution": "node supabase/tests/seasonal_import_duplicate_resolution_pglite.mjs",
     "test:seasonal-canonical-authority": "node supabase/tests/seasonal_rebuild_daily_authority_pglite.mjs",
     "shadow:daily-import-v1": "node scripts/daily-import-v1-shadow.cjs",
     "test:seasonal-import-sql": "node supabase/tests/seasonal_source_import_v2_pglite.mjs",

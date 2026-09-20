@@ -2,7 +2,10 @@
 
 import type { SeasonalImportPreviewState } from '@/lib/seasonalImportPreview';
 import { canCommitSeasonalImportPreview } from '@/lib/seasonalImportPreview';
-import type { SeasonalImportV3Strategy } from '@/lib/seasonalImportV3Contract';
+import type {
+  SeasonalImportV3Diagnostic,
+  SeasonalImportV3Strategy,
+} from '@/lib/seasonalImportV3Contract';
 
 type PreviewDialogState = Extract<
   SeasonalImportPreviewState,
@@ -31,6 +34,15 @@ function countRows(strategy: SeasonalImportV3Strategy) {
   ] as const;
 }
 
+function groupByCode(items: SeasonalImportV3Diagnostic[]) {
+  return items.reduce<Map<string, SeasonalImportV3Diagnostic[]>>((groups, item) => {
+    const current = groups.get(item.code) ?? [];
+    current.push(item);
+    groups.set(item.code, current);
+    return groups;
+  }, new Map());
+}
+
 export default function SeasonalImportPreviewDialog({
   state,
   hasDraftChanges,
@@ -49,15 +61,8 @@ export default function SeasonalImportPreviewDialog({
     hasDraftChanges,
     busy,
   });
-  const diagnosticsByCode = result.diagnostics.reduce<Map<string, typeof result.diagnostics>>(
-    (groups, diagnostic) => {
-      const current = groups.get(diagnostic.code) ?? [];
-      current.push(diagnostic);
-      groups.set(diagnostic.code, current);
-      return groups;
-    },
-    new Map(),
-  );
+  const diagnosticsByCode = groupByCode(result.diagnostics);
+  const warningsByCode = groupByCode(result.warnings);
   const clearedOverlays = result.counts.clearStructuralOverlayCount
     + result.counts.clearDeletedOverlayCount;
 
@@ -160,6 +165,44 @@ export default function SeasonalImportPreviewDialog({
                   </div>
                 ))}
               </div>
+            </section>
+          )}
+
+          {warningsByCode.size > 0 && (
+            <section aria-labelledby="seasonal-import-warnings">
+              <h3 id="seasonal-import-warnings" className="text-sm font-semibold text-tertiary">
+                Resolved warnings ({result.warningCount})
+              </h3>
+              <p className="mt-1 text-sm text-on-surface-variant">
+                These rows were resolved while staging the file; the import can still continue.
+              </p>
+              <div className="mt-2 space-y-3">
+                {Array.from(warningsByCode.entries()).map(([code, warnings]) => (
+                  <div key={code} className="rounded-lg border border-tertiary/40 bg-tertiary-container/20 p-3">
+                    <div className="text-xs font-semibold uppercase text-tertiary">{code}</div>
+                    <div className="mt-2 space-y-2">
+                      {warnings.map((warning, index) => (
+                        <div key={`${code}-${index}`} className="text-sm text-on-surface">
+                          <div>{warning.message}</div>
+                          {warning.sampleDates.length > 0 && (
+                            <div className="mt-1 font-mono text-xs text-on-surface-variant">
+                              {warning.sampleDates.join(', ')}
+                              {warning.affectedDateCount > warning.sampleDates.length
+                                ? ` +${warning.affectedDateCount - warning.sampleDates.length} more`
+                                : ''}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {result.warningsTruncated && (
+                <p className="mt-2 text-xs text-on-surface-variant">
+                  Showing the first {result.warnings.length} of {result.warningCount} warnings.
+                </p>
+              )}
             </section>
           )}
 

@@ -65,6 +65,9 @@ export interface SeasonalImportV3StageResult {
   diagnosticCount: number;
   diagnosticsTruncated: boolean;
   diagnostics: SeasonalImportV3Diagnostic[];
+  warningCount: number;
+  warningsTruncated: boolean;
+  warnings: SeasonalImportV3Diagnostic[];
   expiresAt: string;
 }
 
@@ -122,6 +125,9 @@ const STAGE_RESULT_FIELDS = [
   'diagnosticCount',
   'diagnosticsTruncated',
   'diagnostics',
+  'warningCount',
+  'warningsTruncated',
+  'warnings',
   'expiresAt',
 ] as const;
 
@@ -237,8 +243,12 @@ function parsePreviewCounts(
   return counts;
 }
 
-function parseDiagnostic(value: unknown, index: number): SeasonalImportV3Diagnostic {
-  const label = `Seasonal import V3 response.diagnostics[${index}]`;
+function parseDiagnostic(
+  value: unknown,
+  index: number,
+  collection = 'diagnostics',
+): SeasonalImportV3Diagnostic {
+  const label = `Seasonal import V3 response.${collection}[${index}]`;
   const record = requireExactRecord(value, DIAGNOSTIC_FIELDS, label);
   const sourceRowIndexes = record.sourceRowIndexes;
   if (
@@ -287,7 +297,14 @@ function parseStageStatus(value: unknown): SeasonalImportV3StageResult['status']
 function assertPreviewValidity(
   result: Pick<
     SeasonalImportV3StageResult,
-    'valid' | 'counts' | 'diagnosticCount' | 'diagnosticsTruncated' | 'diagnostics'
+    | 'valid'
+    | 'counts'
+    | 'diagnosticCount'
+    | 'diagnosticsTruncated'
+    | 'diagnostics'
+    | 'warningCount'
+    | 'warningsTruncated'
+    | 'warnings'
   >,
 ): void {
   if (result.counts.manualCollisionCount > 0 && result.valid) {
@@ -310,6 +327,16 @@ function assertPreviewValidity(
       'Seasonal import V3 stage response.diagnosticCount must equal diagnostics.length when diagnostics are not truncated.',
     );
   }
+  if (result.warnings.length > result.warningCount) {
+    throw new Error(
+      'Seasonal import V3 stage response.warningCount cannot be smaller than warnings.length.',
+    );
+  }
+  if (!result.warningsTruncated && result.warnings.length !== result.warningCount) {
+    throw new Error(
+      'Seasonal import V3 stage response.warningCount must equal warnings.length when warnings are not truncated.',
+    );
+  }
 }
 
 export function parseSeasonalImportV3StageResult(value: unknown): SeasonalImportV3StageResult {
@@ -317,9 +344,14 @@ export function parseSeasonalImportV3StageResult(value: unknown): SeasonalImport
   const record = requireExactRecord(value, STAGE_RESULT_FIELDS, label);
   const strategy = parseStrategy(record.strategy, label);
   const diagnostics = Array.isArray(record.diagnostics)
-    ? record.diagnostics.map(parseDiagnostic)
+    ? record.diagnostics.map((diagnostic, index) => parseDiagnostic(diagnostic, index))
     : (() => {
         throw new Error(`${label}.diagnostics must be an array.`);
+      })();
+  const warnings = Array.isArray(record.warnings)
+    ? record.warnings.map((warning, index) => parseDiagnostic(warning, index, 'warnings'))
+    : (() => {
+        throw new Error(`${label}.warnings must be an array.`);
       })();
   const expiresAt = requireString(record, 'expiresAt', label);
   if (!Number.isFinite(Date.parse(expiresAt))) {
@@ -339,6 +371,9 @@ export function parseSeasonalImportV3StageResult(value: unknown): SeasonalImport
     diagnosticCount: requireCount(record, 'diagnosticCount', label),
     diagnosticsTruncated: requireBoolean(record, 'diagnosticsTruncated', label),
     diagnostics,
+    warningCount: requireCount(record, 'warningCount', label),
+    warningsTruncated: requireBoolean(record, 'warningsTruncated', label),
+    warnings,
     expiresAt,
   };
   assertPreviewValidity(result);

@@ -1267,32 +1267,37 @@ begin
     )
   );
 
-  if v_result->>'status' <> 'failed'
-    or (v_result->>'valid')::boolean
-    or (v_result->>'diagnosticCount')::integer <> 2
-    or pg_catalog.jsonb_array_length(v_result->'diagnostics') <> 2
+  if v_result->>'status' <> 'validated'
+    or not (v_result->>'valid')::boolean
+    or (v_result->>'diagnosticCount')::integer <> 0
+    or pg_catalog.jsonb_array_length(v_result->'diagnostics') <> 0
+    or (v_result #>> '{counts,generatedOccurrenceCount}')::integer <> 12
+    or (v_result #>> '{counts,insertCount}')::integer <> 12
+    or (v_result->>'warningCount')::integer <> 2
+    or pg_catalog.jsonb_array_length(v_result->'warnings') <> 2
     or exists (
       select 1
-      from pg_catalog.jsonb_array_elements(v_result->'diagnostics')
-        diagnostics(item)
-      where diagnostics.item->>'code' <> 'duplicate-occurrence-key'
-        or diagnostics.item->'sourceRowIndexes' <> '[1,2]'::jsonb
-        or (diagnostics.item->>'affectedDateCount')::integer <> 6
-        or pg_catalog.jsonb_array_length(diagnostics.item->'sampleDates') <> 5
+      from pg_catalog.jsonb_array_elements(v_result->'warnings')
+        warnings(item)
+      where warnings.item->>'code' <> 'duplicate-occurrence-resolved'
+        or warnings.item->'sourceRowIndexes' <> '[1,2]'::jsonb
+        or warnings.item->'occurrenceKey' <> 'null'::jsonb
+        or (warnings.item->>'affectedDateCount')::integer <> 6
+        or pg_catalog.jsonb_array_length(warnings.item->'sampleDates') <> 5
     )
     or (
       select pg_catalog.array_agg(
-        diagnostics.item->>'message'
-        order by diagnostics.item->>'message'
+        warnings.item->>'message'
+        order by warnings.item->>'message'
       )
-      from pg_catalog.jsonb_array_elements(v_result->'diagnostics')
-        diagnostics(item)
+      from pg_catalog.jsonb_array_elements(v_result->'warnings')
+        warnings(item)
     ) <> array[
-      'Rows 1, 2 generate duplicate 6 occurrence(s) for KE2093.',
-      'Rows 1, 2 generate duplicate 6 occurrence(s) for KE2094.'
+      'Rows 1, 2 generate duplicate occurrence season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6|2026-09-24|KE|KE2093; kept row 1.',
+      'Rows 1, 2 generate duplicate occurrence season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6|2026-09-24|KE|KE2094; kept row 1.'
     ]::text[]
   then
-    raise exception 'grouped duplicate diagnostics are incorrect: %', v_result;
+    raise exception 'resolved duplicate warnings are incorrect: %', v_result;
   end if;
 
   perform public.cancel_seasonal_import_v3((v_result->>'batchId')::uuid);
