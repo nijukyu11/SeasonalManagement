@@ -8,7 +8,7 @@ import {
   loadSeasonWorkspaceWindow,
 } from '@/lib/remoteStore';
 import { revalidateSeasonWorkspaceWindow } from '@/lib/seasonWorkspaceWindowCoordinator';
-import { buildDefaultDailyDateRange, readDailyDateRangeQuery } from '@/lib/dailySchedule';
+import { addDaysToLocalDateTime, buildDefaultDailyDateRange, readDailyDateRangeQuery } from '@/lib/dailySchedule';
 import { buildSeasonDisplayLabel } from '@/lib/importSeasonRules';
 import {
   allocateGate,
@@ -156,15 +156,6 @@ function buildTimelineWidth(from: string, to: string, pixelsPerMinute: number): 
 
 function clampTimelinePixelsPerMinute(value: number): number {
   return Math.min(MAX_TIMELINE_PIXELS_PER_MINUTE, Math.max(MIN_TIMELINE_PIXELS_PER_MINUTE, Number(value.toFixed(2))));
-}
-
-function addDaysToLocalDateTime(value: string, days: number): string {
-  const next = new Date(`${value}:00`);
-  if (Number.isNaN(next.getTime())) return value;
-  next.setDate(next.getDate() + days);
-  const date = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
-  const time = `${String(next.getHours()).padStart(2, '0')}:${String(next.getMinutes()).padStart(2, '0')}`;
-  return `${date}T${time}`;
 }
 
 function buildGateSummary(view: GateAllocationView) {
@@ -1838,7 +1829,9 @@ function GateAllocationContent() {
                     value={fromDateTime}
                     onChange={(event) => {
                       promoteLatestGateModificationsForView();
-                      setFromDateTime(event.target.value);
+                      const nextFrom = event.target.value;
+                      setFromDateTime(nextFrom);
+                      if (nextFrom) setToDateTime(addDaysToLocalDateTime(nextFrom, 1));
                     }}
                     className="rounded border border-outline-variant bg-surface-container px-2 py-1.5 text-sm text-on-surface"
                   />

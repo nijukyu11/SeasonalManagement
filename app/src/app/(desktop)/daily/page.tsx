@@ -25,6 +25,7 @@ import {
 } from '@/lib/detailedScheduleState';
 import type { NewFlightDateSelection } from '@/lib/detailedScheduleState';
 import {
+  addDaysToLocalDateTime,
   buildDailyCellModification,
   buildDailyScheduleRows,
   buildDailySummary,
@@ -819,11 +820,7 @@ function DailyScheduleContent() {
   };
 
   const handleQuickRange = (days: number) => {
-    const start = new Date(`${fromDateTime}:00`);
-    if (Number.isNaN(start.getTime())) return;
-    start.setDate(start.getDate() + days);
-    const nextTo = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}T${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
-    setToDateTime(nextTo);
+    setToDateTime(addDaysToLocalDateTime(fromDateTime, days));
   };
 
   const handleCellCommit = useCallback(async (recordId: string, field: DailyCellField, value: string) => {
@@ -1471,7 +1468,11 @@ function DailyScheduleContent() {
                   <input
                     type="datetime-local"
                     value={fromDateTime}
-                    onChange={(event) => setFromDateTime(event.target.value)}
+                    onChange={(event) => {
+                      const nextFrom = event.target.value;
+                      setFromDateTime(nextFrom);
+                      if (nextFrom) setToDateTime(addDaysToLocalDateTime(nextFrom, 1));
+                    }}
                     className="bg-surface-container border border-outline-variant rounded px-2 py-1.5 text-sm text-on-surface"
                   />
                 </label>

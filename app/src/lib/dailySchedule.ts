@@ -249,6 +249,15 @@ function normalizeEditedFlightNumber(record: FlightRecord, value: string): strin
   return `${record.airline}${trimmed.padStart(3, '0')}`;
 }
 
+export function addDaysToLocalDateTime(value: string, days: number): string {
+  const next = new Date(`${value}:00`);
+  if (Number.isNaN(next.getTime())) return value;
+  next.setDate(next.getDate() + days);
+  const date = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
+  const time = `${String(next.getHours()).padStart(2, '0')}:${String(next.getMinutes()).padStart(2, '0')}`;
+  return `${date}T${time}`;
+}
+
 export function buildDefaultDailyDateRange(baseIsoDate: string): DailyDateRange {
   return {
     from: `${baseIsoDate}T05:00`,

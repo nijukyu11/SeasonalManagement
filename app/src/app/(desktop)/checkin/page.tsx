@@ -48,7 +48,7 @@ import {
   type CheckInResourceBar,
   type CheckInTimelineTicks,
 } from '@/lib/checkinAllocation';
-import { buildDefaultDailyDateRange, readDailyDateRangeQuery } from '@/lib/dailySchedule';
+import { addDaysToLocalDateTime, buildDefaultDailyDateRange, readDailyDateRangeQuery } from '@/lib/dailySchedule';
 import { buildSeasonDisplayLabel } from '@/lib/importSeasonRules';
 import {
   getCachedSeasons,
@@ -196,15 +196,6 @@ function todayIso(): string {
 
 function formatLocalDateTimeLabel(value: string): string {
   return value.replace('T', ' ');
-}
-
-function addDaysToLocalDateTime(value: string, days: number): string {
-  const next = new Date(`${value}:00`);
-  if (Number.isNaN(next.getTime())) return value;
-  next.setDate(next.getDate() + days);
-  const date = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
-  const time = `${String(next.getHours()).padStart(2, '0')}:${String(next.getMinutes()).padStart(2, '0')}`;
-  return `${date}T${time}`;
 }
 
 function parseLocalDateTimeMs(value: string): number {
@@ -3032,7 +3023,9 @@ function CheckInAllocationContent() {
                     value={fromDateTime}
                     onChange={(event) => {
                       promoteLatestCheckInModificationsForView();
-                      setFromDateTime(event.target.value);
+                      const nextFrom = event.target.value;
+                      setFromDateTime(nextFrom);
+                      if (nextFrom) setToDateTime(addDaysToLocalDateTime(nextFrom, 1));
                     }}
                     className="rounded border border-outline-variant bg-surface-container px-2 py-1.5 text-sm text-on-surface"
                   />
