@@ -29,7 +29,7 @@
   - Production (`/etc/nginx/conf.d/traffic-report.conf`): `a064ae9caf9087f2140683a7fdab3513c3b49e94e3dec6b9a3a945e2509805f7`
   - Staging (`/etc/nginx/conf.d/traffic-report-staging.conf`): `1d20cacbd1898f4aa9a6f4849906c2fc368b315d1de1e681e64dc2da775ca94e`
   - Test result: `nginx -t` passed syntax check and test successful.
-- **Named Tunnel:** `cloudflared` systemd unit running with token `eyJhIjoiOTk4...` routing `report.ahtops.xyz` to port 8780.
+- **Named Tunnel:** `cloudflared` systemd unit running (fingerprint: `d2b711877c59991b975fb16b51e5de4fa058aa978d798dccfa25fc899ed1c81d`) routing `report.ahtops.xyz` to port 8780.
 - **Staging Quick Tunnel:** `seasonal-traffic-report-staging-tunnel.service` routing port 8781 to `https://sofa-warriors-cooler-package.trycloudflare.com`.
 
 ---
