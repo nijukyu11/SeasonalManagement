@@ -372,8 +372,61 @@ export function FleetMixChart({ rows }: { rows: FleetMixRow[] }) {
   );
 }
 
+function normalizeFlightCategoryRows(rows: TrafficFlightCategoryRow[]): TrafficFlightCategoryRow[] {
+  let scheduled: TrafficFlightCategoryRow | null = null;
+  let charter: TrafficFlightCategoryRow | null = null;
+
+  for (const row of rows) {
+    if (row.key === 'scheduled') {
+      scheduled = {
+        ...row,
+        label: 'Thường lệ',
+      };
+    } else if (!charter) {
+      charter = {
+        key: 'charter',
+        code: 'C',
+        label: 'Không thường lệ',
+        flights: row.flights,
+        arrivals: row.arrivals,
+        departures: row.departures,
+        reported_pax: row.reported_pax,
+        share: row.share,
+        suppressed: row.suppressed,
+      };
+    } else {
+      const prevCharter: TrafficFlightCategoryRow = charter;
+      charter = {
+        ...prevCharter,
+        flights: (prevCharter.flights != null || row.flights != null)
+          ? (prevCharter.flights ?? 0) + (row.flights ?? 0)
+          : null,
+        arrivals: (prevCharter.arrivals != null || row.arrivals != null)
+          ? (prevCharter.arrivals ?? 0) + (row.arrivals ?? 0)
+          : null,
+        departures: (prevCharter.departures != null || row.departures != null)
+          ? (prevCharter.departures ?? 0) + (row.departures ?? 0)
+          : null,
+        reported_pax: (prevCharter.reported_pax != null || row.reported_pax != null)
+          ? (prevCharter.reported_pax ?? 0) + (row.reported_pax ?? 0)
+          : null,
+        share: (prevCharter.share != null || row.share != null)
+          ? (prevCharter.share ?? 0) + (row.share ?? 0)
+          : null,
+        suppressed: prevCharter.suppressed && row.suppressed,
+      };
+    }
+  }
+
+  const result: TrafficFlightCategoryRow[] = [];
+  if (scheduled) result.push(scheduled);
+  if (charter) result.push(charter);
+  return result;
+}
+
 export function FlightCategoryChart({ rows }: { rows: TrafficFlightCategoryRow[] }) {
-  const visibleRows = rows.filter((row) => !row.suppressed && row.share != null && row.flights != null);
+  const normalizedRows = normalizeFlightCategoryRows(rows);
+  const visibleRows = normalizedRows.filter((row) => !row.suppressed && row.share != null && row.flights != null);
   const ariaSummary = visibleRows.length === 0
     ? 'Tỉ trọng chuyến bay thường lệ và không thường lệ chưa đủ dữ liệu công bố.'
     : visibleRows.map((row) => `${row.label} ${percentFormat.format((row.share ?? 0) * 100)} phần trăm`).join(', ');
@@ -382,7 +435,7 @@ export function FlightCategoryChart({ rows }: { rows: TrafficFlightCategoryRow[]
       <p className="text-sm font-bold text-blue-900">Tính chất chuyến bay</p>
       <h3 className="mt-2 text-balance text-2xl font-bold text-[#102033]">Thường lệ &amp; Không thường lệ</h3>
       <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">
-        Tỉ trọng số chuyến giữa chuyến bay thường lệ (code J), không thường lệ / thuê chuyến (code C) và các chuyến bay khác.
+        Tỉ trọng số chuyến giữa chuyến bay thường lệ và không thường lệ (đã bao gồm các chuyến bay khác).
       </p>
       {visibleRows.length > 0 ? (
         <>
