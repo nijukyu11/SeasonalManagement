@@ -58,9 +58,19 @@ Season S26 giữ nguyên `data_version=16596`, `record_rows=67138`, `active_rows
 
 ## 4. Rollback rehearsal
 
-`rollback_probe.sql` chạy byte của `rollback.sql` (bỏ `begin;`/`set local`/`commit;`) trong một
-transaction, assert 4 digest quay về pre (`NOTICE: rollback rehearsal restored all four pre-state digests`),
-rồi `rollback;` — digest sống vẫn là post. Đường rollback dùng được ngay nếu cần lùi.
+`rollback_probe_verbatim.sql` là **chính byte của `rollback.sql`**, chỉ thay `commit;` cuối bằng 4
+assert digest + `rollback;` — nên `begin;`/`set local` và các câu `CREATE` của file đi qua scanner
+của psql y nguyên (không bọc trong `DO`). Kết quả: `NOTICE: verbatim rollback.sql restored all four
+raw pre-state digests`, exit 0, sau đó `ROLLBACK`.
+
+Digest phục hồi là **raw pre** (giữ CRLF): `2893f79a…` (24.470 B), `3cfd475c…` (47.310 B),
+`9923e168…` (30.249 B), `f6c413ad…` (1.271 B) — đúng giá trị `md5(pg_get_functiondef(...))` mà
+production tự báo. Nếu rehearsal rơi vào bản chuẩn hoá LF (`f4ffd254…`/`a2697494…`) thì byte đã bị
+viết lại ở đâu đó (transport hoặc wrapper), **không** phải do `CREATE FUNCTION` chuẩn hoá xuống dòng.
+`rollback_probe.sql` là biến thể bọc `DO` trước đó, cùng assertion.
+
+Sau rehearsal, chạy lại `q_digests.sql`: digest sống vẫn là post, season S26 vẫn
+`data_version=16596` / `record_rows=67138` / `active_rows=25231` — rehearsal không để lại thay đổi nào.
 
 ## 5. Client và vận hành
 

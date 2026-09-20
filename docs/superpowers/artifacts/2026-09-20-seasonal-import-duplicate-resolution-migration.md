@@ -86,9 +86,14 @@ blocked file commits and persists the wide row (`source_row_index=3`,
 `schedule=09:15`) while the narrow row is listed first. Season S26 kept
 `data_version=16596`, `record_rows=67138`, `active_rows=25231`.
 
-`rollback_probe.sql` ran the shipped `rollback.sql` bytes in its own transaction,
-restored all four pre-state digests and rolled back; the live digests stayed
-post. Receipt bundle: `/home/ops/seasonal-import-duplicate-resolution-20260920/`
+`rollback_probe_verbatim.sql` is `rollback.sql` byte-for-byte with only its final
+`commit;` replaced by the four digest assertions plus `rollback;`, so the shipped
+file's own `begin;`/`set local` and CREATE statements reach the server through
+psql's scanner unchanged. It restored all four **raw** pre-state digests
+(`2893f79a…` 24.470 B / `3cfd475c…` 47.310 B, CRLF preserved) and rolled back;
+`q_digests.sql` then confirmed the live digests stayed post and the season counts
+unchanged. `rollback_probe.sql` is the earlier DO-wrapped variant with the same
+assertion. Receipt bundle: `/home/ops/seasonal-import-duplicate-resolution-20260920/`
 (`sha256sum -c SHA256SUMS` → OK for all 15 files).
 
 `seasonal_import_v3_response` differs between the local chain and production only
