@@ -29,6 +29,10 @@ const resolutionMigrationUrl = new URL(
   '../migrations/20260920220000_seasonal_import_duplicate_resolution.sql',
   import.meta.url,
 );
+const classificationMigrationUrl = new URL(
+  '../migrations/20260920230000_seasonal_import_daily_guard_kind_classification.sql',
+  import.meta.url,
+);
 
 const seasonId = 'season-19cbca13-e11d-4b75-bcaa-00a6c5ca68c6';
 const writerId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -164,10 +168,23 @@ try {
     side: 'ARR',
     action: 'added',
   });
+  await insertRecord({
+    recordId: 'MANUAL_GUARD_NX_CANONICAL',
+    type: 'A',
+    airline: 'NX',
+    flightNumber: 'NX989',
+    rawFlightNumber: '989',
+    schedule: '09:00',
+    date: '2026-07-21',
+    isoDow: 2,
+    sourceKind: 'manual',
+    side: 'ARR',
+  });
 
   const guardMigrationSql = await readFile(guardMigrationUrl, 'utf8');
   await db.exec(guardMigrationSql);
   await db.exec(await readFile(resolutionMigrationUrl, 'utf8'));
+  await db.exec(await readFile(classificationMigrationUrl, 'utf8'));
   await db.exec(`set role authenticated`);
   await db.query(`select pg_catalog.set_config('request.jwt.claim.sub', $1, false)`, [writerId]);
 
@@ -237,6 +254,37 @@ try {
   assert.deepEqual(codes(manualCollision), ['manual-occurrence-collision'], 'manual collisions keep their own code');
   assert.equal(manualCollision.valid, false);
 
+  const canonicalManualRows = [
+    sourceRow({ rowIndex: 1, airline: 'NX', flight: '989', sta: '09:00', date: '2026-07-21', isoDow: 2 }),
+  ];
+  const canonicalManualMerge = await stage({ rows: canonicalManualRows });
+  assert.deepEqual(
+    codes(canonicalManualMerge),
+    ['manual-occurrence-collision'],
+    'a canonical Add Flight row blocks merge imports without a legacy added companion',
+  );
+  assert.equal(canonicalManualMerge.counts.manualCollisionCount, 1);
+
+  const canonicalManualReplace = await stage({ rows: canonicalManualRows, strategy: 'replace' });
+  assert.deepEqual(
+    codes(canonicalManualReplace),
+    ['manual-occurrence-collision'],
+    'replace keeps the Add Flight code instead of reporting a Daily leg',
+  );
+  assert.equal(canonicalManualReplace.valid, false);
+  assert.equal(canonicalManualReplace.status, 'failed');
+  assert.match(canonicalManualReplace.diagnostics[0].message, /manual added flight/);
+  assert.equal(
+    canonicalManualReplace.counts.manualCollisionCount,
+    1,
+    'the replace preview counts the manual collision',
+  );
+  assert.equal(
+    manualCollision.counts.manualCollisionCount,
+    1,
+    'the merge preview counts the legacy manual collision',
+  );
+
   const internalDuplicate = await stage({
     rows: [
       sourceRow({ rowIndex: 1, airline: 'NX', flight: '987', sta: '07:00', date: '2026-07-19', isoDow: 7 }),
@@ -268,6 +316,7 @@ try {
   await db.exec(`reset role`);
   await db.exec(guardMigrationSql);
   await db.exec(await readFile(resolutionMigrationUrl, 'utf8'));
+  await db.exec(await readFile(classificationMigrationUrl, 'utf8'));
   await db.exec(`set role authenticated`);
   const afterSecondRun = await stage({
     rows: [sourceRow({ rowIndex: 1, airline: 'NX', flight: '985', sta: '03:00', date: '2026-07-16', isoDow: 4 })],
@@ -278,7 +327,7 @@ try {
     JSON.stringify({
       suite: 'seasonal_import_daily_duplicate_guard_pglite.mjs',
       engine: 'PGlite',
-      cases: 8,
+      cases: 11,
       elapsedMs: Date.now() - startedAt,
       status: 'passed',
     }),
