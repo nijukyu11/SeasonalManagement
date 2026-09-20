@@ -404,14 +404,14 @@ export function FlightCategoryChart({ rows }: { rows: TrafficFlightCategoryRow[]
               const color = flightCategoryColors[row.key] ?? '#64748b';
               return (
                 <li key={row.key} className="rounded-xl border border-slate-200 px-4 py-3">
-                  <div className="flex min-h-8 w-full items-center justify-between gap-4">
+                  <div className="flex min-h-8 w-full flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                     <span className="inline-flex min-w-0 items-center gap-3">
                       <span className="size-3 shrink-0 rounded-sm" style={{ backgroundColor: color }} />
                       <span className="font-semibold text-slate-800" title={row.label} aria-label={row.label}>
                         {row.label}
                       </span>
                     </span>
-                    <span className="shrink-0 text-right text-sm font-bold tabular-nums text-[#102033]">
+                    <span className="shrink-0 text-left text-sm font-bold tabular-nums text-[#102033] sm:text-right">
                       {numberFormat.format(row.flights ?? 0)} chuyến · {percentFormat.format((row.share ?? 0) * 100)}%
                     </span>
                   </div>

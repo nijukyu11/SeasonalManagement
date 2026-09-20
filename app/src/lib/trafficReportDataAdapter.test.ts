@@ -276,3 +276,16 @@ test('adapter classifies transient API failures as retryable', async () => {
     (error: unknown) => error instanceof TrafficReportRequestError && error.retryable,
   );
 });
+
+test('toTrafficReportPresentationBundle preserves flight_category breakdown', () => {
+  const input = payload();
+  input.report.breakdowns.flight_category = [
+    { key: 'scheduled', code: 'J', label: 'Thường lệ (code J)', flights: 10, arrivals: 5, departures: 5, reported_pax: 1500, share: 0.8, suppressed: false },
+    { key: 'charter', code: 'C', label: 'Không thường lệ (code C)', flights: 2, arrivals: 1, departures: 1, reported_pax: 300, share: 0.2, suppressed: false },
+  ];
+  const live = decodeTrafficV2ApiEnvelope(input);
+  const bundle = toTrafficReportPresentationBundle(live);
+  assert.equal(bundle.breakdowns.flight_category?.length, 2);
+  assert.equal(bundle.breakdowns.flight_category?.[0].code, 'J');
+  assert.equal(bundle.breakdowns.flight_category?.[1].code, 'C');
+});

@@ -11,8 +11,8 @@ import type {
   TrafficTimeBasis,
   TrafficFlightCategoryRow,
   TrafficType,
-} from './trafficReportContract';
-import { isTrafficFlightCategoryRow } from './trafficReportContract';
+} from './trafficReportContract.ts';
+import { isTrafficFlightCategoryRow } from './trafficReportContract.ts';
 
 export const TRAFFIC_REPORT_V2_CONTRACT_VERSION = 'traffic-report-v2' as const;
 export const TRAFFIC_REPORT_V2_API_BASE = '/api/report/v2' as const;
