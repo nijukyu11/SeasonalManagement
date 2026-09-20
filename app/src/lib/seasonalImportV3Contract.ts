@@ -131,6 +131,26 @@ const STAGE_RESULT_FIELDS = [
   'expiresAt',
 ] as const;
 
+// A stage response from a server that predates the warnings channel omits these
+// fields. They default to "no warnings" so a client update never has to be
+// ordered against the server migration.
+const STAGE_RESULT_REQUIRED_FIELDS = [
+  'batchId',
+  'requestId',
+  'seasonId',
+  'seasonCode',
+  'strategy',
+  'status',
+  'valid',
+  'expectedDataVersion',
+  'previewHash',
+  'counts',
+  'diagnosticCount',
+  'diagnosticsTruncated',
+  'diagnostics',
+  'expiresAt',
+] as const satisfies readonly (typeof STAGE_RESULT_FIELDS)[number][];
+
 const COMMITTED_RESULT_FIELDS = [
   'batchId',
   'requestId',
@@ -154,12 +174,13 @@ function requireExactRecord(
   value: unknown,
   fields: readonly string[],
   label: string,
+  required: readonly string[] = fields,
 ): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${label} must be an object.`);
   }
   const record = value as Record<string, unknown>;
-  for (const field of fields) {
+  for (const field of required) {
     if (!Object.prototype.hasOwnProperty.call(record, field)) {
       throw new Error(`${label}.${field} is required.`);
     }
@@ -341,18 +362,26 @@ function assertPreviewValidity(
 
 export function parseSeasonalImportV3StageResult(value: unknown): SeasonalImportV3StageResult {
   const label = 'Seasonal import V3 stage response';
-  const record = requireExactRecord(value, STAGE_RESULT_FIELDS, label);
+  const record = requireExactRecord(value, STAGE_RESULT_FIELDS, label, STAGE_RESULT_REQUIRED_FIELDS);
   const strategy = parseStrategy(record.strategy, label);
   const diagnostics = Array.isArray(record.diagnostics)
     ? record.diagnostics.map((diagnostic, index) => parseDiagnostic(diagnostic, index))
     : (() => {
         throw new Error(`${label}.diagnostics must be an array.`);
       })();
-  const warnings = Array.isArray(record.warnings)
-    ? record.warnings.map((warning, index) => parseDiagnostic(warning, index, 'warnings'))
-    : (() => {
-        throw new Error(`${label}.warnings must be an array.`);
-      })();
+  const warnings = record.warnings === undefined
+    ? []
+    : Array.isArray(record.warnings)
+      ? record.warnings.map((warning, index) => parseDiagnostic(warning, index, 'warnings'))
+      : (() => {
+          throw new Error(`${label}.warnings must be an array.`);
+        })();
+  const warningCount = record.warningCount === undefined
+    ? warnings.length
+    : requireCount(record, 'warningCount', label);
+  const warningsTruncated = record.warningsTruncated === undefined
+    ? false
+    : requireBoolean(record, 'warningsTruncated', label);
   const expiresAt = requireString(record, 'expiresAt', label);
   if (!Number.isFinite(Date.parse(expiresAt))) {
     throw new Error(`${label}.expiresAt must be an ISO date-time string.`);
@@ -371,8 +400,8 @@ export function parseSeasonalImportV3StageResult(value: unknown): SeasonalImport
     diagnosticCount: requireCount(record, 'diagnosticCount', label),
     diagnosticsTruncated: requireBoolean(record, 'diagnosticsTruncated', label),
     diagnostics,
-    warningCount: requireCount(record, 'warningCount', label),
-    warningsTruncated: requireBoolean(record, 'warningsTruncated', label),
+    warningCount,
+    warningsTruncated,
     warnings,
     expiresAt,
   };

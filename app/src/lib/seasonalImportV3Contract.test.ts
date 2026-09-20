@@ -226,6 +226,24 @@ test('V3 stage surfaces resolved warnings without blocking validity', () => {
   );
 });
 
+test('V3 stage tolerates a stage response from a server without the warnings channel', () => {
+  const legacy = stageResult();
+  delete (legacy as Record<string, unknown>).warningCount;
+  delete (legacy as Record<string, unknown>).warningsTruncated;
+  delete (legacy as Record<string, unknown>).warnings;
+
+  const result = parseSeasonalImportV3StageResult(legacy);
+  assert.equal(result.warningCount, 0);
+  assert.equal(result.warningsTruncated, false);
+  assert.deepEqual(result.warnings, []);
+
+  const truncated = stageResult();
+  delete (truncated as Record<string, unknown>).warningCount;
+  delete (truncated as Record<string, unknown>).warnings;
+  (truncated as Record<string, unknown>).warningsTruncated = true;
+  assert.deepEqual(parseSeasonalImportV3StageResult(truncated).warnings, []);
+});
+
 test('V3 stage enforces validity and diagnostic count invariants', () => {
   assert.throws(
     () => parseSeasonalImportV3StageResult(stageResult({
