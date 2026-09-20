@@ -58,6 +58,8 @@ assert.match(edge, /TRAFFIC_REPORT_READ_VERSION_SECRET/);
 assert.match(edge, /createReportReadVersion/);
 assert.match(edge, /verifyReportReadVersion/);
 assert.match(edge, /READ_VERSION_CHANGED/);
+assert.doesNotMatch(edge, /filterHash !== readVersion\.filterHash/);
+assert.match(edge, /sourceWatermark !== readVersion\.sourceWatermark[\s\S]+?dataAsOf !== readVersion\.dataAsOf/);
 assert.match(edge, /read_version_token: readVersionToken/);
 assert.match(edge, /DATA_VERSION_CHANGED/);
 assert.match(edge, /status: 304/);

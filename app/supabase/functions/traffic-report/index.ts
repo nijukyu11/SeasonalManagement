@@ -633,7 +633,6 @@ Deno.serve(async (request: Request) => {
       const dataAsOf = bundle.data_as_of;
       if (!Number.isSafeInteger(sourceWatermark) || typeof filterHash !== 'string' || typeof dataAsOf !== 'string') throw new Error('invalid traffic-report-v2 version envelope');
       if (readVersion && (sourceWatermark !== readVersion.sourceWatermark
-        || filterHash !== readVersion.filterHash
         || dataAsOf !== readVersion.dataAsOf)) throw new Error('READ_VERSION_INVALID');
       const readVersionToken = normalized.readVersion ?? await createReportReadVersion({
         sourceWatermark: Number(sourceWatermark),
