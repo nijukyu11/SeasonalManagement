@@ -545,22 +545,32 @@ export default function AnnualPassengerKpiDashboard() {
                       <p id="countdown-title" className="hero-message max-w-[36ch] text-balance font-semibold text-slate-950">{mainMessage}</p>
                       <p className="hero-note mt-2 max-w-2xl text-pretty text-base leading-relaxed text-slate-800 sm:text-lg">{target == null ? 'KPI năm này chưa được thiết lập.' : reported == null ? 'Chưa có số liệu sản lượng khách cho kỳ KPI.' : reported < target ? <>Còn thiếu <strong className="font-extrabold text-amber-800 tabular-nums">{displayNumber(remaining)} khách</strong> để đạt KPI năm.</> : <>Đã đạt <strong className="font-extrabold text-slate-950 tabular-nums">{displayNumber(reported)} khách</strong> trong năm.</>}</p>
                     </div>
-                    <div className="hero-progress-section border-t border-slate-200/80 pt-2">
-                      <div className="mb-1.5 flex items-end justify-between gap-4">
-                        <div>
-                          <p className="metric-label">Đã đạt / KPI năm</p>
-                          <p className="hero-progress-value mt-0.5 text-2xl font-bold text-slate-950 tabular-nums">{displayNumber(reported)} <span className="font-semibold text-slate-400">/</span> {displayNumber(target)}</p>
-                        </div>
-                        <p className="hero-progress-percent text-3xl sm:text-4xl font-extrabold text-sky-700 tabular-nums">{displayDecimal(completion, '%')}</p>
+                    <div className="hero-target-section border-t border-slate-200/80 pt-2.5">
+                      <p className="metric-label">Mục tiêu KPI năm {snapshot.year}</p>
+                      <div className="mt-1 flex items-baseline justify-between gap-4">
+                        <p className="hero-progress-value text-2xl font-bold text-slate-950 tabular-nums">{displayNumber(target)} <span className="text-lg font-semibold text-slate-500">khách</span></p>
+                        <p className="text-sm font-semibold text-slate-600">Đã tích lũy: <strong className="font-extrabold text-sky-700">{displayNumber(reported)}</strong></p>
                       </div>
-                      <ProgressBar percent={completion} />
                     </div>
                   </div>
                 </article>
 
                 <article className="status-panel">
-                  <div className="flex items-start justify-between gap-4"><div className="min-w-0"><p className="status-heading text-base font-bold uppercase text-slate-900">Đánh giá tiến độ</p><div className={cn('status-value mt-2 flex items-center gap-2.5', tone === 'amber' ? 'text-amber-800' : tone === 'cyan' ? 'text-sky-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-700')}><StatusIcon tone={tone} className="size-9" /><p className="text-4xl font-bold leading-none">{statusLabel(snapshot.status)}</p></div></div><CompletionRing percent={completion} /></div>
-                  <div className="mt-2.5 grid grid-cols-2 gap-3"><div className="soft-stat"><ArrivalIcon className="size-6 text-sky-700" /><p className="soft-stat-label mt-1 text-sm font-bold uppercase text-slate-900">Khách đến</p><p className="soft-stat-value mt-0.5 text-3xl sm:text-4xl font-extrabold text-slate-950 tabular-nums">{displayNumber(snapshot.arrival_reported_pax)}</p></div><div className="soft-stat"><DepartureIcon className="size-6 text-slate-800" /><p className="soft-stat-label mt-1 text-sm font-bold uppercase text-slate-900">Khách đi</p><p className="soft-stat-value mt-0.5 text-3xl sm:text-4xl font-extrabold text-slate-950 tabular-nums">{displayNumber(snapshot.departure_reported_pax)}</p></div></div>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="status-heading text-base font-bold uppercase text-slate-900">Đánh giá tiến độ</p>
+                      <div className={cn('status-value mt-2 flex items-center gap-2.5', tone === 'amber' ? 'text-amber-800' : tone === 'cyan' ? 'text-sky-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-700')}>
+                        <StatusIcon tone={tone} className="size-9" />
+                        <p className="text-4xl font-bold leading-none">{statusLabel(snapshot.status)}</p>
+                      </div>
+                      <p className="mt-2 text-sm font-semibold text-slate-600">Đã đạt <strong className="font-extrabold text-slate-950">{displayNumber(reported)}</strong> / {displayNumber(target)} khách</p>
+                    </div>
+                    <CompletionRing percent={completion} />
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <div className="soft-stat"><ArrivalIcon className="size-6 text-sky-700" /><p className="soft-stat-label mt-1 text-sm font-bold uppercase text-slate-900">Khách đến</p><p className="soft-stat-value mt-0.5 text-3xl sm:text-4xl font-extrabold text-slate-950 tabular-nums">{displayNumber(snapshot.arrival_reported_pax)}</p></div>
+                    <div className="soft-stat"><DepartureIcon className="size-6 text-slate-800" /><p className="soft-stat-label mt-1 text-sm font-bold uppercase text-slate-900">Khách đi</p><p className="soft-stat-value mt-0.5 text-3xl sm:text-4xl font-extrabold text-slate-950 tabular-nums">{displayNumber(snapshot.departure_reported_pax)}</p></div>
+                  </div>
                 </article>
               </section>
 
