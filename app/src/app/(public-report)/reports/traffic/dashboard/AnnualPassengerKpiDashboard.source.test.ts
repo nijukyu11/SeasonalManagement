@@ -30,14 +30,15 @@ test('wallboard preserves the approved Sites layout instead of the alternate KPI
 
 test('wallboard gives all remaining viewport height to the trend chart without scrolling', () => {
   assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.dashboard-shell[\s\S]*?height: 100dvh;/);
-  assert.match(styles, /grid-template-rows: auto auto auto minmax\(0, 1fr\);/);
+  assert.match(styles, /grid-template-rows: auto minmax\(0, 1fr\);/);
+  assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.wallboard-body[\s\S]*?grid-template-columns: minmax\(0, 42fr\) minmax\(0, 58fr\);/);
   assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.bottom-grid[\s\S]*?height: 100%;[\s\S]*?min-height: 0;/);
   assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.chart-panel[\s\S]*?height: 100%;[\s\S]*?grid-template-rows: auto minmax\(0, 1fr\);/);
   assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.kpi-trend-chart[\s\S]*?height: 100%;[\s\S]*?min-height: 0;/);
   assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.dashboard-header[\s\S]*?min-height: 2\.25rem;[\s\S]*?padding-block: 0;/);
-  assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.hero-panel[\s\S]*?min-height: clamp\(17rem, 29vh, 19rem\);/);
-  assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.completion-ring[\s\S]*?width: clamp\(11\.5rem, 12vw, 13\.5rem\);/);
-  assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.hero-progress-value[\s\S]*?font-size: clamp\(2\.1rem, 2\.1vw, 2\.75rem\);/);
+  assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.hero-panel[\s\S]*?min-height: 0;/);
+  assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.completion-ring[\s\S]*?width: clamp\(8\.5rem, 9\.5vw, 10\.5rem\);/);
+  assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.hero-progress-value[\s\S]*?font-size: clamp\(1\.6rem, 1\.7vw, 2\.1rem\);/);
 });
 
 test('compact screens reserve ring width instead of squeezing the status row', () => {
@@ -58,7 +59,7 @@ test('wallboard uses the high-contrast light operations theme', () => {
   assert.match(source, /Ngày số liệu mới nhất: \$\{displayDayMonth\(snapshot\.period_to\)\}/);
   assert.match(source, /Đã đạt \$\{displayMillions\(actualEnd\)\}/);
   assert.match(source, /<XAxis dataKey="day" type="number" domain=\{\[1, daysInYear\]\}/);
-  assert.match(source, /<XAxis xAxisId="days"[\s\S]*?ticks=\{dayTicks\} interval=\{0\}[\s\S]*?tick=\{<DayDot \/>\}/);
+  assert.doesNotMatch(source, /<DayDot/);
   assert.match(source, /Dự báo \$\{displayMillions\(projectionEnd\)\}/);
   assert.match(source, /KPI \$\{displayMillions\(targetEnd\)\}/);
   assert.doesNotMatch(source, /blur-3xl/);

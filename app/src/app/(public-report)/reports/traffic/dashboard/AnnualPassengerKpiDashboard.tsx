@@ -44,7 +44,6 @@ import {
   type AnnualKpiStatus,
   type AnnualPassengerKpiSnapshot,
 } from '@/lib/annualPassengerKpiContract';
-import { mockAnnualPassengerKpiSnapshot } from '@/lib/annualPassengerKpiMock';
 
 const numberFormat = new Intl.NumberFormat('vi-VN');
 const decimalFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
@@ -86,13 +85,11 @@ function dayOfYear(year: number, isoDate: string | null | undefined): number | n
   return day >= 1 && day <= 366 ? day : null;
 }
 
-function monthLabelForDay(year: number, day: number | string): string {
-  const date = new Date(Date.UTC(year, 0, Number(day)));
+function monthLabelForDay(year: number, day: unknown): string {
+  const numericDay = Number(day);
+  if (!Number.isFinite(numericDay) || numericDay < 1) return '';
+  const date = new Date(Date.UTC(year, 0, numericDay));
   return `T${date.getUTCMonth() + 1}`;
-}
-function DayDot({ x, y }: { x?: number | string; y?: number | string }) {
-  if (typeof x !== 'number' || typeof y !== 'number') return null;
-  return <circle cx={x} cy={y - 5} r={1.2} fill="#cbd5e1" />;
 }
 
 function displayUpdated(value: string | null | undefined): string {
@@ -207,7 +204,7 @@ function CompletionRing({ percent }: { percent: number | null }) {
   const safePercent = Math.max(0, Math.min(percent ?? 0, 100));
   return (
     <div className={cn('completion-ring', percent == null && 'completion-ring-missing')} style={{ '--progress': `${safePercent * 3.6}deg` } as CSSProperties} role="img" aria-label={percent == null ? 'Chưa đủ dữ liệu để tính tỷ lệ hoàn thành' : `Đã hoàn thành ${displayDecimal(percent, '%')}`}>
-      <div><span>{percent == null ? '—' : `${Math.round(percent)}%`}</span><small>hoàn thành</small></div>
+      <div><span>{percent == null ? '—' : displayDecimal(percent, '%')}</span><small>hoàn thành</small></div>
     </div>
   );
 }
@@ -258,6 +255,26 @@ function buildTrend(snapshot: AnnualPassengerKpiSnapshot): { points: TrendPoint[
 }
 
 function TrendChart({ snapshot, wallboard }: { snapshot: AnnualPassengerKpiSnapshot; wallboard: boolean }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [chartSize, setChartSize] = useState<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    if (!wallboard) return;
+    const node = containerRef.current;
+    if (!node) return;
+    const update = () => {
+      const width = Math.floor(node.clientWidth);
+      const height = Math.floor(node.clientHeight);
+      if (width > 0 && height > 0) {
+        setChartSize((prev) => (prev?.width === width && prev?.height === height ? prev : { width, height }));
+      }
+    };
+    update();
+    const observer = new ResizeObserver(() => update());
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [wallboard]);
+
   const { points, periodMonth, daysInYear, monthEnds } = useMemo(() => buildTrend(snapshot), [snapshot]);
   const maximum = Math.max(1, ...points.flatMap((point) => [point.actual ?? 0, point.target ?? 0, point.projection ?? 0]));
   const yAxisMax = Math.max(2.5, Math.ceil(maximum * 2) / 2 + 0.5);
@@ -268,8 +285,42 @@ function TrendChart({ snapshot, wallboard }: { snapshot: AnnualPassengerKpiSnaps
   const projectionEnd = points[points.length - 1]?.projection ?? null;
   const forecastGap = snapshot.forecast_pct == null ? null : snapshot.forecast_pct - 100;
   const monthTicks = monthEnds;
-  const dayTicks = Array.from({ length: daysInYear }, (_, index) => index + 1);
   const periodDay = dayOfYear(snapshot.year, snapshot.period_to);
+
+  const chart = (
+    <LineChart
+      data={points}
+      width={wallboard ? chartSize?.width : undefined}
+      height={wallboard ? chartSize?.height : undefined}
+      margin={{ top: 12, right: 18, left: -8, bottom: 2 }}
+    >
+      <CartesianGrid vertical={false} stroke="#cbd5e1" strokeWidth={1.2} />
+      <XAxis dataKey="day" type="number" domain={[1, daysInYear]} ticks={monthTicks} tickFormatter={(day) => monthLabelForDay(snapshot.year, day)} tickLine={false} axisLine={false} tickMargin={wallboard ? 14 : 10} stroke="#334155" fontSize={wallboard ? 20 : 15} fontWeight={wallboard ? 600 : 500} />
+      <YAxis domain={[0, yAxisMax]} ticks={yAxisTicks} interval={0} tickFormatter={(value) => `${value}M`} tickLine={false} axisLine={false} width={wallboard ? 72 : 56} stroke="#334155" fontSize={wallboard ? 20 : 15} fontWeight={wallboard ? 600 : 500} />
+      <Tooltip contentStyle={{ background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: 12, color: '#0f172a' }} labelStyle={{ color: '#0f172a', fontWeight: 650 }} itemStyle={{ color: '#0f172a' }} labelFormatter={(day) => monthLabelForDay(snapshot.year, day)} formatter={(value, name) => [`${Number(value).toFixed(2).replace('.', ',')} triệu`, name === 'actual' ? 'Đã đạt' : name === 'projection' ? 'Dự báo luỹ kế năm' : 'Tiến độ cần đạt']} />
+      <Legend verticalAlign="top" align="center" height={wallboard ? 40 : 32} formatter={(value) => value === 'actual' ? 'Đã đạt' : value === 'projection' ? 'Dự báo luỹ kế năm' : 'Tiến độ cần đạt'} wrapperStyle={{ fontSize: wallboard ? 20 : 15, fontWeight: 600, color: '#334155' }} />
+      {periodDay != null ? <ReferenceLine x={periodDay} stroke="#64748b" strokeWidth={wallboard ? 2.5 : 1.5} strokeDasharray="8 6" label={{ value: `Ngày số liệu mới nhất: ${displayDayMonth(snapshot.period_to)}`, position: 'insideTopRight', fill: '#334155', fontSize: wallboard ? 16 : 12, fontWeight: 650 }} /> : null}
+      <Line dataKey="actual" type="monotone" stroke="#0369a1" strokeWidth={wallboard ? 6 : 3.5} dot={{ r: wallboard ? 5.5 : 3, fill: '#0369a1', stroke: '#ffffff', strokeWidth: wallboard ? 2 : 1 }} activeDot={{ r: wallboard ? 8 : 5 }} connectNulls={false} isAnimationActive={false} />
+      <Line dataKey="target" type="monotone" stroke="#334155" strokeWidth={wallboard ? 5 : 2.5} strokeDasharray="4 8" dot={false} isAnimationActive={false} />
+      <Line dataKey="projection" type="monotone" stroke="#c2410c" strokeWidth={wallboard ? 5 : 3} strokeDasharray="16 8" dot={false} connectNulls={false} isAnimationActive={false} />
+      {wallboard && actualEnd != null && periodDay != null ? (
+        <ReferenceDot x={periodDay} y={actualEnd} r={6} fill="#0369a1" stroke="#ffffff" strokeWidth={2}>
+          <Label value={`Đã đạt ${displayMillions(actualEnd)}`} position="bottom" offset={16} fill="#075985" fontSize={18} fontWeight={700} stroke="#f8fafc" strokeWidth={4} paintOrder="stroke" />
+        </ReferenceDot>
+      ) : null}
+      {wallboard && projectionEnd != null ? (
+        <ReferenceDot x={daysInYear} y={projectionEnd} r={6} fill="#c2410c" stroke="#ffffff" strokeWidth={2}>
+          <Label value={`Dự báo ${displayMillions(projectionEnd)}`} position="left" offset={14} dy={targetEnd != null && projectionEnd >= targetEnd ? -18 : targetEnd != null ? 18 : -14} fill="#9a3412" fontSize={18} fontWeight={700} stroke="#f8fafc" strokeWidth={4} paintOrder="stroke" />
+        </ReferenceDot>
+      ) : null}
+      {wallboard && targetEnd != null ? (
+        <ReferenceDot x={daysInYear} y={targetEnd} r={6} fill="#334155" stroke="#ffffff" strokeWidth={2}>
+          <Label value={`KPI ${displayMillions(targetEnd)}`} position="left" offset={14} dy={projectionEnd != null && projectionEnd >= targetEnd ? 18 : projectionEnd != null ? -18 : 14} fill="#1e293b" fontSize={18} fontWeight={700} stroke="#f8fafc" strokeWidth={4} paintOrder="stroke" />
+        </ReferenceDot>
+      ) : null}
+    </LineChart>
+  );
+
   return (
     <article className="chart-panel" aria-labelledby="trend-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -278,36 +329,14 @@ function TrendChart({ snapshot, wallboard }: { snapshot: AnnualPassengerKpiSnaps
           <TrendIcon className="size-4" /> {forecastGap == null ? 'Chưa đủ dữ liệu dự báo' : `Dự báo ${forecastGap >= 0 ? '+' : ''}${displayDecimal(forecastGap, '%')}`}
         </span>
       </div>
-      <div className="kpi-trend-chart mt-3" role="img" aria-label="Biểu đồ sản lượng khách tích lũy so với tiến độ KPI">
-        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={wallboard ? 0 : 190}>
-          <LineChart data={points} margin={{ top: 12, right: 18, left: -8, bottom: 2 }}>
-            <CartesianGrid vertical={false} stroke="#cbd5e1" strokeWidth={1.2} />
-            <XAxis dataKey="day" type="number" domain={[1, daysInYear]} ticks={monthTicks} tickFormatter={(day) => monthLabelForDay(snapshot.year, day)} tickLine={false} axisLine={false} tickMargin={wallboard ? 14 : 10} stroke="#334155" fontSize={wallboard ? 20 : 15} fontWeight={wallboard ? 600 : 500} />
-            <XAxis xAxisId="days" dataKey="day" type="number" domain={[1, daysInYear]} ticks={dayTicks} interval={0} tickFormatter={() => ''} tickLine={false} axisLine={false} height={12} tick={<DayDot />} />
-            <YAxis domain={[0, yAxisMax]} ticks={yAxisTicks} interval={0} tickFormatter={(value) => `${value}M`} tickLine={false} axisLine={false} width={wallboard ? 72 : 56} stroke="#334155" fontSize={wallboard ? 20 : 15} fontWeight={wallboard ? 600 : 500} />
-            <Tooltip contentStyle={{ background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: 12, color: '#0f172a' }} labelStyle={{ color: '#0f172a', fontWeight: 650 }} itemStyle={{ color: '#0f172a' }} labelFormatter={(day) => monthLabelForDay(snapshot.year, day)} formatter={(value, name) => [`${Number(value).toFixed(2).replace('.', ',')} triệu`, name === 'actual' ? 'Đã đạt' : name === 'projection' ? 'Dự báo luỹ kế năm' : 'Tiến độ cần đạt']} />
-            <Legend verticalAlign="top" align="center" height={wallboard ? 40 : 32} formatter={(value) => value === 'actual' ? 'Đã đạt' : value === 'projection' ? 'Dự báo luỹ kế năm' : 'Tiến độ cần đạt'} wrapperStyle={{ fontSize: wallboard ? 20 : 15, fontWeight: 600, color: '#334155' }} />
-            {periodDay != null ? <ReferenceLine x={periodDay} stroke="#64748b" strokeWidth={wallboard ? 2.5 : 1.5} strokeDasharray="8 6" label={{ value: `Ngày số liệu mới nhất: ${displayDayMonth(snapshot.period_to)}`, position: 'insideTopRight', fill: '#334155', fontSize: wallboard ? 16 : 12, fontWeight: 650 }} /> : null}
-            <Line dataKey="actual" type="monotone" stroke="#0369a1" strokeWidth={wallboard ? 6 : 3.5} dot={{ r: wallboard ? 5.5 : 3, fill: '#0369a1', stroke: '#ffffff', strokeWidth: wallboard ? 2 : 1 }} activeDot={{ r: wallboard ? 8 : 5 }} connectNulls={false} isAnimationActive={false} />
-            <Line dataKey="target" type="monotone" stroke="#334155" strokeWidth={wallboard ? 5 : 2.5} strokeDasharray="4 8" dot={false} isAnimationActive={false} />
-            <Line dataKey="projection" type="monotone" stroke="#c2410c" strokeWidth={wallboard ? 5 : 3} strokeDasharray="16 8" dot={false} connectNulls={false} isAnimationActive={false} />
-            {wallboard && actualEnd != null && periodDay != null ? (
-              <ReferenceDot x={periodDay} y={actualEnd} r={6} fill="#0369a1" stroke="#ffffff" strokeWidth={2}>
-                <Label value={`Đã đạt ${displayMillions(actualEnd)}`} position="bottom" offset={16} fill="#075985" fontSize={18} fontWeight={700} stroke="#f8fafc" strokeWidth={4} paintOrder="stroke" />
-              </ReferenceDot>
-            ) : null}
-            {wallboard && projectionEnd != null ? (
-              <ReferenceDot x={daysInYear} y={projectionEnd} r={6} fill="#c2410c" stroke="#ffffff" strokeWidth={2}>
-                <Label value={`Dự báo ${displayMillions(projectionEnd)}`} position="left" offset={14} dy={-12} fill="#9a3412" fontSize={18} fontWeight={700} stroke="#f8fafc" strokeWidth={4} paintOrder="stroke" />
-              </ReferenceDot>
-            ) : null}
-            {wallboard && targetEnd != null ? (
-              <ReferenceDot x={daysInYear} y={targetEnd} r={6} fill="#334155" stroke="#ffffff" strokeWidth={2}>
-                <Label value={`KPI ${displayMillions(targetEnd)}`} position="left" offset={14} dy={14} fill="#1e293b" fontSize={18} fontWeight={700} stroke="#f8fafc" strokeWidth={4} paintOrder="stroke" />
-              </ReferenceDot>
-            ) : null}
-          </LineChart>
-        </ResponsiveContainer>
+      <div ref={containerRef} className="kpi-trend-chart mt-3" role="img" aria-label="Biểu đồ sản lượng khách tích lũy so với tiến độ KPI">
+        {wallboard ? (
+          chartSize ? chart : null
+        ) : (
+          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={190}>
+            {chart}
+          </ResponsiveContainer>
+        )}
       </div>
     </article>
   );
@@ -449,9 +478,7 @@ export default function AnnualPassengerKpiDashboard() {
       if (versionResponse.ok) versionEtagRef.current = versionResponse.headers.get('ETag');
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === 'AbortError') return;
-      const fallback = mockAnnualPassengerKpiSnapshot(selected);
-      if (fallback) { setSnapshot(fallback); setError(null); }
-      else setError(caught instanceof Error ? caught.message : 'Dashboard tạm thời chưa thể cập nhật.');
+      setError(caught instanceof Error ? caught.message : 'Dashboard tạm thời chưa thể cập nhật.');
     } finally { if (!controller.signal.aborted) setLoading(false); }
   }, []);
   const checkVersion = useCallback(async () => {
@@ -507,31 +534,37 @@ export default function AnnualPassengerKpiDashboard() {
         {loading && !snapshot ? <DashboardSkeleton /> : null}
 
         {snapshot ? <>
-          <section className="hero-grid" aria-labelledby="countdown-title">
-            <article className="hero-panel relative overflow-hidden">
-              <div className="hero-content relative flex h-full flex-col justify-between gap-6">
-                <div>
-                  <div className="hero-context mb-4 flex flex-wrap items-center gap-2 text-sm font-medium text-slate-600"><span className="rounded-full bg-slate-100 px-3 py-1.5 ring-1 ring-slate-200">Năm dương lịch</span>{snapshot.period_to ? <span className="px-1.5 text-slate-500">Đến hết {displayDate(snapshot.period_to)}</span> : null}</div>
-                  <p id="countdown-title" className="hero-message max-w-[28ch] text-balance text-[clamp(2rem,3.8vw,4rem)] font-semibold leading-[1.08] text-slate-950">{mainMessage}</p>
-                  <p className="hero-note mt-3 max-w-2xl text-pretty text-base leading-relaxed text-slate-600 sm:text-lg">{target == null ? 'KPI năm này chưa được thiết lập.' : reported == null ? 'Chưa có số liệu sản lượng khách cho kỳ KPI.' : reported < target ? <>Còn thiếu <strong className="font-semibold text-slate-900 tabular-nums">{displayNumber(remaining)} khách</strong> để đạt KPI năm.</> : <>Đã đạt <strong className="font-semibold text-slate-900 tabular-nums">{displayNumber(reported)} khách</strong> trong năm.</>}</p>
-                </div>
-                <div><div className="mb-2.5 flex items-end justify-between gap-4"><div><p className="metric-label">Đã đạt / KPI năm</p><p className="hero-progress-value mt-1 text-2xl font-semibold text-slate-950 tabular-nums">{displayNumber(reported)} <span className="font-normal text-slate-400">/</span> {displayNumber(target)}</p></div><p className="hero-progress-percent text-4xl font-bold text-sky-700 tabular-nums">{displayDecimal(completion, '%')}</p></div><ProgressBar percent={completion} /></div>
-              </div>
-            </article>
+          <div className="wallboard-body">
+            <div className="wallboard-col-left">
+              <section className="hero-grid" aria-labelledby="countdown-title">
+                <article className="hero-panel relative overflow-hidden">
+                  <div className="hero-content relative flex h-full flex-col justify-between gap-6">
+                    <div>
+                      <div className="hero-context mb-4 flex flex-wrap items-center gap-2 text-sm font-medium text-slate-600"><span className="rounded-full bg-slate-100 px-3 py-1.5 ring-1 ring-slate-200">Năm dương lịch</span>{snapshot.period_to ? <span className="px-1.5 text-slate-500">Đến hết {displayDate(snapshot.period_to)}</span> : null}</div>
+                      <p id="countdown-title" className="hero-message max-w-[28ch] text-balance text-[clamp(2rem,3.8vw,4rem)] font-semibold leading-[1.08] text-slate-950">{mainMessage}</p>
+                      <p className="hero-note mt-3 max-w-2xl text-pretty text-base leading-relaxed text-slate-600 sm:text-lg">{target == null ? 'KPI năm này chưa được thiết lập.' : reported == null ? 'Chưa có số liệu sản lượng khách cho kỳ KPI.' : reported < target ? <>Còn thiếu <strong className="font-semibold text-slate-900 tabular-nums">{displayNumber(remaining)} khách</strong> để đạt KPI năm.</> : <>Đã đạt <strong className="font-semibold text-slate-900 tabular-nums">{displayNumber(reported)} khách</strong> trong năm.</>}</p>
+                    </div>
+                    <div><div className="mb-2.5 flex items-end justify-between gap-4"><div><p className="metric-label">Đã đạt / KPI năm</p><p className="hero-progress-value mt-1 text-2xl font-semibold text-slate-950 tabular-nums">{displayNumber(reported)} <span className="font-normal text-slate-400">/</span> {displayNumber(target)}</p></div><p className="hero-progress-percent text-4xl font-bold text-sky-700 tabular-nums">{displayDecimal(completion, '%')}</p></div><ProgressBar percent={completion} /></div>
+                  </div>
+                </article>
 
-            <article className="status-panel">
-              <div className="flex items-start justify-between gap-4"><div className="min-w-0"><p className="status-heading text-base font-semibold uppercase text-slate-600">Đánh giá tiến độ</p><div className={cn('status-value mt-3 flex items-center gap-2.5', tone === 'amber' ? 'text-amber-700' : tone === 'cyan' ? 'text-sky-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-600')}><StatusIcon tone={tone} className="size-9" /><p className="text-4xl font-semibold leading-none">{statusLabel(snapshot.status)}</p></div></div><CompletionRing percent={completion} /></div>
-              <div className="mt-auto grid grid-cols-2 gap-3"><div className="soft-stat"><ArrivalIcon className="size-6 text-sky-700" /><p className="soft-stat-label mt-3 text-base font-semibold uppercase text-slate-600">Khách đến</p><p className="soft-stat-value mt-1.5 text-4xl font-bold text-slate-950 tabular-nums">{displayNumber(snapshot.arrival_reported_pax)}</p></div><div className="soft-stat"><DepartureIcon className="size-6 text-slate-700" /><p className="soft-stat-label mt-3 text-base font-semibold uppercase text-slate-600">Khách đi</p><p className="soft-stat-value mt-1.5 text-4xl font-bold text-slate-950 tabular-nums">{displayNumber(snapshot.departure_reported_pax)}</p></div></div>
-            </article>
-          </section>
+                <article className="status-panel">
+                  <div className="flex items-start justify-between gap-4"><div className="min-w-0"><p className="status-heading text-base font-semibold uppercase text-slate-600">Đánh giá tiến độ</p><div className={cn('status-value mt-3 flex items-center gap-2.5', tone === 'amber' ? 'text-amber-700' : tone === 'cyan' ? 'text-sky-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-600')}><StatusIcon tone={tone} className="size-9" /><p className="text-4xl font-semibold leading-none">{statusLabel(snapshot.status)}</p></div></div><CompletionRing percent={completion} /></div>
+                  <div className="mt-auto grid grid-cols-2 gap-3"><div className="soft-stat"><ArrivalIcon className="size-6 text-sky-700" /><p className="soft-stat-label mt-3 text-base font-semibold uppercase text-slate-600">Khách đến</p><p className="soft-stat-value mt-1.5 text-4xl font-bold text-slate-950 tabular-nums">{displayNumber(snapshot.arrival_reported_pax)}</p></div><div className="soft-stat"><DepartureIcon className="size-6 text-slate-700" /><p className="soft-stat-label mt-3 text-base font-semibold uppercase text-slate-600">Khách đi</p><p className="soft-stat-value mt-1.5 text-4xl font-bold text-slate-950 tabular-nums">{displayNumber(snapshot.departure_reported_pax)}</p></div></div>
+                </article>
+              </section>
 
-          <section className="metrics-grid" aria-label="Các chỉ số tiến độ">
-            <MetricCard icon={CalendarIcon} label="Ngày còn lại" value={snapshot.period_state === 'current' ? displayNumber(snapshot.remaining_days) : '—'} note={snapshot.period_state === 'future' ? 'Chưa bắt đầu kỳ KPI' : snapshot.period_state === 'past' ? 'Kỳ KPI đã kết thúc' : 'Tính từ hôm nay đến 31/12'} />
-            <MetricCard icon={UsersIcon} label="Trung bình thực tế / ngày" value={displayNumber(snapshot.average_reported_pax_per_day == null ? null : Math.round(snapshot.average_reported_pax_per_day))} note={snapshot.elapsed_days > 0 ? `${displayNumber(snapshot.elapsed_days)} ngày đã hoàn tất` : 'Chưa có ngày hoàn tất'} accent="emerald" />
-            <MetricCard icon={TrendIcon} label="Dự báo cuối năm" value={displayNumber(snapshot.forecast_reported_pax)} note={forecastBasisNote(snapshot)} accent="amber" />
-          </section>
+              <section className="metrics-grid" aria-label="Các chỉ số tiến độ">
+                <MetricCard icon={CalendarIcon} label="Ngày còn lại" value={snapshot.period_state === 'current' ? displayNumber(snapshot.remaining_days) : '—'} note={snapshot.period_state === 'future' ? 'Chưa bắt đầu kỳ KPI' : snapshot.period_state === 'past' ? 'Kỳ KPI đã kết thúc' : 'Tính từ hôm nay đến 31/12'} />
+                <MetricCard icon={UsersIcon} label="Trung bình thực tế / ngày" value={displayNumber(snapshot.average_reported_pax_per_day == null ? null : Math.round(snapshot.average_reported_pax_per_day))} note={snapshot.elapsed_days > 0 ? `${displayNumber(snapshot.elapsed_days)} ngày đã hoàn tất` : 'Chưa có ngày hoàn tất'} accent="emerald" />
+                <MetricCard icon={TrendIcon} label="Dự báo cuối năm" value={displayNumber(snapshot.forecast_reported_pax)} note={forecastBasisNote(snapshot)} accent="amber" />
+              </section>
+            </div>
 
-          <section className="bottom-grid"><TrendChart snapshot={snapshot} wallboard={wallboard} /></section>
+            <div className="wallboard-col-right">
+              <section className="bottom-grid"><TrendChart snapshot={snapshot} wallboard={wallboard} /></section>
+            </div>
+          </div>
           <footer className="dashboard-footer flex items-center justify-between gap-4 border-t py-2 text-[10px] uppercase"><span>Dashboard KPI sản lượng khách năm</span><span className="lg:hidden">Cập nhật lúc {displayUpdated(snapshot.projection.refreshed_at)}</span><span className="hidden lg:inline">Cập nhật khi có dữ liệu mới</span></footer>
         </> : null}
       </div>
