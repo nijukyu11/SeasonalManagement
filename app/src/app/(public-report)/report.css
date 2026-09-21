@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,600&display=swap');
 :root {
   --report-navy: #081322;
   --report-navy-soft: #10243b;
@@ -17,7 +18,7 @@
   overflow-x: hidden;
   background: var(--report-surface);
   color: var(--report-ink);
-  font-family: Arial, "Helvetica Neue", sans-serif;
+  font-family: "Be Vietnam Pro", Arial, "Helvetica Neue", sans-serif;
 }
 
 .report-focus:focus-visible {
@@ -61,7 +62,7 @@ body:has(.kpi-admin-dialog[open]) {
   background: #f1f5f9;
   color: #0f172a;
   color-scheme: light;
-  font-family: Inter, "Segoe UI", Arial, sans-serif;
+  font-family: "Be Vietnam Pro", Inter, "Segoe UI", Arial, sans-serif;
 }
 
 .kpi-dashboard .dashboard-shell {
@@ -312,6 +313,7 @@ body:has(.kpi-admin-dialog[open]) {
   .kpi-dashboard.kpi-wallboard .hero-grid {
     display: grid;
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
     gap: clamp(0.5rem, 0.75vh, 0.75rem);
     min-height: 0;
   }
@@ -326,11 +328,11 @@ body:has(.kpi-admin-dialog[open]) {
     grid-column: span 2;
   }
   .kpi-dashboard.kpi-wallboard .hero-panel {
-    padding: clamp(0.55rem, 0.7vh, 0.75rem) clamp(0.75rem, 0.9vw, 1.05rem);
+    padding: clamp(0.65rem, 0.8vh, 0.95rem) clamp(0.85rem, 1vw, 1.25rem);
     min-height: 0;
   }
   .kpi-dashboard.kpi-wallboard .status-panel {
-    padding: clamp(0.7rem, 0.85vw, 1rem);
+    padding: clamp(0.65rem, 0.8vh, 0.95rem) clamp(0.85rem, 1vw, 1.25rem);
   }
 
   .kpi-dashboard.kpi-wallboard .dashboard-title {
@@ -349,29 +351,34 @@ body:has(.kpi-admin-dialog[open]) {
     font-weight: 700;
   }
   .kpi-dashboard.kpi-wallboard .hero-content {
-    gap: clamp(0.35rem, 0.5vh, 0.5rem);
+    gap: clamp(0.5rem, 0.7vh, 0.75rem);
   }
 
   .kpi-dashboard.kpi-wallboard .hero-context {
-    font-size: clamp(1rem, 0.95vw, 1.2rem);
+    font-size: clamp(0.95rem, 0.95vw, 1.15rem);
     font-weight: 700;
     color: #1e293b;
   }
 
   .kpi-dashboard.kpi-wallboard .hero-message {
     max-width: 36ch;
-    font-size: clamp(1.75rem, 1.95vw, 2.25rem);
-    line-height: 1.12;
+    font-size: clamp(1.85rem, 2.05vw, 2.45rem);
+    line-height: 1.18;
   }
 
   .kpi-dashboard.kpi-wallboard .hero-note {
     color: #1e293b;
-    font-size: clamp(0.95rem, 1vw, 1.1rem);
+    font-size: clamp(1rem, 1.05vw, 1.2rem);
     font-weight: 600;
   }
   .kpi-dashboard.kpi-wallboard .hero-note strong {
     color: #0f172a;
     font-weight: 800;
+  }
+
+  .kpi-dashboard.kpi-wallboard .hero-progress-section {
+    border-top: 1px solid #cbd5e1;
+    padding-top: clamp(0.45rem, 0.6vh, 0.7rem);
   }
 
   .kpi-dashboard.kpi-wallboard .kpi-progress-track {
@@ -405,21 +412,21 @@ body:has(.kpi-admin-dialog[open]) {
 
   .kpi-dashboard.kpi-wallboard .metric-card {
     align-items: center;
-    gap: 1rem;
-    padding: clamp(1rem, 1.15vw, 1.4rem);
+    gap: 0.85rem;
+    padding: clamp(0.55rem, 0.7vh, 0.8rem) clamp(0.85rem, 1vw, 1.25rem);
   }
   .kpi-dashboard.kpi-wallboard .metric-icon {
-    width: 2.75rem;
-    height: 2.75rem;
+    width: 2.5rem;
+    height: 2.5rem;
   }
 
   .kpi-dashboard.kpi-wallboard .metric-icon svg {
-    width: 1.25rem;
-    height: 1.25rem;
+    width: 1.2rem;
+    height: 1.2rem;
   }
 
   .kpi-dashboard.kpi-wallboard .metric-value {
-    font-size: clamp(2.4rem, 2.4vw, 3.1rem);
+    font-size: clamp(2rem, 2.1vw, 2.7rem);
     font-weight: 800;
     color: #0f172a;
   }
@@ -443,24 +450,23 @@ body:has(.kpi-admin-dialog[open]) {
   }
 
   .kpi-dashboard.kpi-wallboard .status-value > p {
-    font-size: clamp(2.1rem, 2.2vw, 2.9rem);
+    font-size: clamp(1.85rem, 1.95vw, 2.4rem);
   }
 
   .kpi-dashboard.kpi-wallboard .status-value > svg {
-    width: 2.25rem;
-    height: 2.25rem;
+    width: 2rem;
+    height: 2rem;
   }
 
   .kpi-dashboard.kpi-wallboard .soft-stat {
-    padding: clamp(0.7rem, 0.75vw, 0.9rem);
+    padding: clamp(0.45rem, 0.6vh, 0.7rem) clamp(0.65rem, 0.75vw, 0.9rem);
   }
 
   .kpi-dashboard.kpi-wallboard .soft-stat-value {
-    font-size: clamp(2.35rem, 2.2vw, 3rem);
+    font-size: clamp(2rem, 1.95vw, 2.6rem);
     font-weight: 800;
     color: #0f172a;
   }
-
   .kpi-dashboard.kpi-wallboard .completion-ring {
     width: clamp(8.5rem, 9.5vw, 10.5rem);
   }
@@ -499,8 +505,10 @@ body:has(.kpi-admin-dialog[open]) {
   }
 
   .kpi-dashboard.kpi-wallboard .trend-forecast {
-    font-size: clamp(0.95rem, 0.9vw, 1.15rem);
-    font-weight: 750;
+    font-size: clamp(1.2rem, 1.35vw, 1.6rem);
+    font-weight: 800;
+    padding: clamp(0.5rem, 0.65vh, 0.75rem) clamp(1.1rem, 1.25vw, 1.6rem);
+    border-radius: 9999px;
   }
 
   .kpi-dashboard.kpi-wallboard .kpi-trend-chart {
