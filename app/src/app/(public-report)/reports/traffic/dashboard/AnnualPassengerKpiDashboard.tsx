@@ -326,8 +326,8 @@ function TrendChart({ snapshot, wallboard }: { snapshot: AnnualPassengerKpiSnaps
     <article className="chart-panel" aria-labelledby="trend-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><p className="metric-label">Xu hướng tích lũy</p><h2 id="trend-title" className="trend-title mt-1 text-balance text-lg font-semibold text-slate-950 sm:text-xl">Sản lượng khách so với tiến độ KPI</h2></div>
-        <span className={cn('trend-forecast flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-medium ring-1', forecastGap == null ? 'bg-slate-100 text-slate-700 ring-slate-200' : forecastGap < -2 ? 'bg-amber-50 text-amber-800 ring-amber-200' : 'bg-emerald-50 text-emerald-800 ring-emerald-200')}>
-          <TrendIcon className="size-4" /> {forecastGap == null ? 'Chưa đủ dữ liệu dự báo' : `Dự báo ${forecastGap >= 0 ? '+' : ''}${displayDecimal(forecastGap, '%')}`}
+        <span className={cn('trend-forecast flex items-center gap-2 rounded-full font-bold ring-2 transition-all', wallboard ? 'px-4 py-2 text-lg sm:text-xl font-extrabold shadow-sm' : 'px-2.5 py-1.5 text-sm font-medium ring-1', forecastGap == null ? 'bg-slate-100 text-slate-700 ring-slate-300' : forecastGap < -2 ? 'bg-amber-100 text-amber-950 ring-amber-400' : 'bg-emerald-100 text-emerald-950 ring-emerald-400')}>
+          <TrendIcon className={wallboard ? 'size-6 shrink-0' : 'size-4 shrink-0'} /> {forecastGap == null ? 'Chưa đủ dữ liệu dự báo' : `Dự báo ${forecastGap >= 0 ? '+' : ''}${displayDecimal(forecastGap, '%')}`}
         </span>
       </div>
       <div ref={containerRef} className="kpi-trend-chart mt-3" role="img" aria-label="Biểu đồ sản lượng khách tích lũy so với tiến độ KPI">
@@ -539,19 +539,28 @@ export default function AnnualPassengerKpiDashboard() {
             <div className="wallboard-col-left">
               <section className="hero-grid" aria-labelledby="countdown-title">
                 <article className="hero-panel relative overflow-hidden">
-                  <div className="hero-content relative flex h-full flex-col justify-between gap-6">
+                  <div className="hero-content relative flex h-full flex-col justify-between">
                     <div>
-                      <div className="hero-context mb-2 flex flex-wrap items-center gap-2 text-sm font-bold text-slate-800"><span className="rounded-full bg-sky-100 px-3 py-1.5 font-bold text-sky-950 ring-1 ring-sky-300">Năm dương lịch</span>{snapshot.period_to ? <span className="px-1.5 font-bold text-slate-900">Đến hết {displayDate(snapshot.period_to)}</span> : null}</div>
-                      <p id="countdown-title" className="hero-message max-w-[36ch] text-balance text-[clamp(1.75rem,3.4vw,3.6rem)] font-semibold leading-[1.08] text-slate-950">{mainMessage}</p>
-                      <p className="hero-note mt-1.5 max-w-2xl text-pretty text-base leading-relaxed text-slate-800 sm:text-lg">{target == null ? 'KPI năm này chưa được thiết lập.' : reported == null ? 'Chưa có số liệu sản lượng khách cho kỳ KPI.' : reported < target ? <>Còn thiếu <strong className="font-extrabold text-amber-800 tabular-nums">{displayNumber(remaining)} khách</strong> để đạt KPI năm.</> : <>Đã đạt <strong className="font-extrabold text-slate-950 tabular-nums">{displayNumber(reported)} khách</strong> trong năm.</>}</p>
+                      <div className="hero-context mb-2.5 flex flex-wrap items-center gap-2 text-sm font-bold text-slate-800"><span className="rounded-full bg-sky-100 px-3 py-1 font-bold text-sky-950 ring-1 ring-sky-300">Năm dương lịch</span>{snapshot.period_to ? <span className="px-1.5 font-bold text-slate-900">Đến hết {displayDate(snapshot.period_to)}</span> : null}</div>
+                      <p id="countdown-title" className="hero-message max-w-[36ch] text-balance font-semibold text-slate-950">{mainMessage}</p>
+                      <p className="hero-note mt-2 max-w-2xl text-pretty text-base leading-relaxed text-slate-800 sm:text-lg">{target == null ? 'KPI năm này chưa được thiết lập.' : reported == null ? 'Chưa có số liệu sản lượng khách cho kỳ KPI.' : reported < target ? <>Còn thiếu <strong className="font-extrabold text-amber-800 tabular-nums">{displayNumber(remaining)} khách</strong> để đạt KPI năm.</> : <>Đã đạt <strong className="font-extrabold text-slate-950 tabular-nums">{displayNumber(reported)} khách</strong> trong năm.</>}</p>
                     </div>
-                    <div><div className="mb-1.5 flex items-end justify-between gap-4"><div><p className="metric-label">Đã đạt / KPI năm</p><p className="hero-progress-value mt-1 text-2xl font-bold text-slate-950 tabular-nums">{displayNumber(reported)} <span className="font-semibold text-slate-400">/</span> {displayNumber(target)}</p></div><p className="hero-progress-percent text-4xl font-extrabold text-sky-700 tabular-nums">{displayDecimal(completion, '%')}</p></div><ProgressBar percent={completion} /></div>
+                    <div className="hero-progress-section border-t border-slate-200/80 pt-2">
+                      <div className="mb-1.5 flex items-end justify-between gap-4">
+                        <div>
+                          <p className="metric-label">Đã đạt / KPI năm</p>
+                          <p className="hero-progress-value mt-0.5 text-2xl font-bold text-slate-950 tabular-nums">{displayNumber(reported)} <span className="font-semibold text-slate-400">/</span> {displayNumber(target)}</p>
+                        </div>
+                        <p className="hero-progress-percent text-3xl sm:text-4xl font-extrabold text-sky-700 tabular-nums">{displayDecimal(completion, '%')}</p>
+                      </div>
+                      <ProgressBar percent={completion} />
+                    </div>
                   </div>
                 </article>
 
                 <article className="status-panel">
-                  <div className="flex items-start justify-between gap-4"><div className="min-w-0"><p className="status-heading text-base font-bold uppercase text-slate-900">Đánh giá tiến độ</p><div className={cn('status-value mt-3 flex items-center gap-2.5', tone === 'amber' ? 'text-amber-800' : tone === 'cyan' ? 'text-sky-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-700')}><StatusIcon tone={tone} className="size-9" /><p className="text-4xl font-bold leading-none">{statusLabel(snapshot.status)}</p></div></div><CompletionRing percent={completion} /></div>
-                  <div className="mt-auto grid grid-cols-2 gap-3"><div className="soft-stat"><ArrivalIcon className="size-6 text-sky-700" /><p className="soft-stat-label mt-3 text-base font-bold uppercase text-slate-900">Khách đến</p><p className="soft-stat-value mt-1.5 text-4xl font-extrabold text-slate-950 tabular-nums">{displayNumber(snapshot.arrival_reported_pax)}</p></div><div className="soft-stat"><DepartureIcon className="size-6 text-slate-800" /><p className="soft-stat-label mt-3 text-base font-bold uppercase text-slate-900">Khách đi</p><p className="soft-stat-value mt-1.5 text-4xl font-extrabold text-slate-950 tabular-nums">{displayNumber(snapshot.departure_reported_pax)}</p></div></div>
+                  <div className="flex items-start justify-between gap-4"><div className="min-w-0"><p className="status-heading text-base font-bold uppercase text-slate-900">Đánh giá tiến độ</p><div className={cn('status-value mt-2 flex items-center gap-2.5', tone === 'amber' ? 'text-amber-800' : tone === 'cyan' ? 'text-sky-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-700')}><StatusIcon tone={tone} className="size-9" /><p className="text-4xl font-bold leading-none">{statusLabel(snapshot.status)}</p></div></div><CompletionRing percent={completion} /></div>
+                  <div className="mt-2.5 grid grid-cols-2 gap-3"><div className="soft-stat"><ArrivalIcon className="size-6 text-sky-700" /><p className="soft-stat-label mt-1 text-sm font-bold uppercase text-slate-900">Khách đến</p><p className="soft-stat-value mt-0.5 text-3xl sm:text-4xl font-extrabold text-slate-950 tabular-nums">{displayNumber(snapshot.arrival_reported_pax)}</p></div><div className="soft-stat"><DepartureIcon className="size-6 text-slate-800" /><p className="soft-stat-label mt-1 text-sm font-bold uppercase text-slate-900">Khách đi</p><p className="soft-stat-value mt-0.5 text-3xl sm:text-4xl font-extrabold text-slate-950 tabular-nums">{displayNumber(snapshot.departure_reported_pax)}</p></div></div>
                 </article>
               </section>
 
