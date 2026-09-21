@@ -549,7 +549,7 @@ export default function AnnualPassengerKpiDashboard() {
                       <p className="metric-label">Mục tiêu KPI năm {snapshot.year}</p>
                       <div className="mt-1 flex items-baseline justify-between gap-4">
                         <p className="hero-progress-value text-2xl font-bold text-slate-950 tabular-nums">{displayNumber(target)} <span className="text-lg font-semibold text-slate-500">khách</span></p>
-                        <p className="text-sm font-semibold text-slate-600">Đã tích lũy: <strong className="font-extrabold text-sky-700">{displayNumber(reported)}</strong></p>
+                        <p className="text-base font-bold text-slate-700">Đã tích lũy: <strong className="font-extrabold text-sky-700">{displayNumber(reported)}</strong></p>
                       </div>
                     </div>
                   </div>
@@ -557,13 +557,21 @@ export default function AnnualPassengerKpiDashboard() {
 
                 <article className="status-panel">
                   <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <p className="status-heading text-base font-bold uppercase text-slate-900">Đánh giá tiến độ</p>
-                      <div className={cn('status-value mt-2 flex items-center gap-2.5', tone === 'amber' ? 'text-amber-800' : tone === 'cyan' ? 'text-sky-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-700')}>
+                      <div className={cn('status-value mt-1.5 flex items-center gap-2.5', tone === 'amber' ? 'text-amber-800' : tone === 'cyan' ? 'text-sky-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-700')}>
                         <StatusIcon tone={tone} className="size-9" />
                         <p className="text-4xl font-bold leading-none">{statusLabel(snapshot.status)}</p>
                       </div>
-                      <p className="mt-2 text-sm font-semibold text-slate-600">Đã đạt <strong className="font-extrabold text-slate-950">{displayNumber(reported)}</strong> / {displayNumber(target)} khách</p>
+                      <div className="status-progress-metric mt-2.5">
+                        <p className="metric-label text-xs font-bold uppercase tracking-wider text-slate-500">Đã đạt / KPI năm</p>
+                        <div className="status-progress-numbers mt-0.5 flex items-baseline gap-2 font-bold tabular-nums">
+                          <span className="status-reported text-3xl sm:text-4xl font-extrabold text-sky-700 leading-none">{displayNumber(reported)}</span>
+                          <span className="text-xl font-normal text-slate-400">/</span>
+                          <span className="status-target text-xl sm:text-2xl font-bold text-slate-800 leading-none">{displayNumber(target)}</span>
+                          <span className="text-xs font-semibold text-slate-500 uppercase">khách</span>
+                        </div>
+                      </div>
                     </div>
                     <CompletionRing percent={completion} />
                   </div>

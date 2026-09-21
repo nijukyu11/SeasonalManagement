@@ -426,7 +426,7 @@ body:has(.kpi-admin-dialog[open]) {
   }
 
   .kpi-dashboard.kpi-wallboard .metric-value {
-    font-size: clamp(2rem, 2.1vw, 2.7rem);
+    font-size: clamp(2.2rem, 2.35vw, 2.95rem);
     font-weight: 800;
     color: #0f172a;
   }
@@ -458,12 +458,28 @@ body:has(.kpi-admin-dialog[open]) {
     height: 2rem;
   }
 
+  .kpi-dashboard.kpi-wallboard .status-progress-metric {
+    margin-top: clamp(0.4rem, 0.6vh, 0.75rem);
+  }
+
+  .kpi-dashboard.kpi-wallboard .status-reported {
+    font-size: clamp(2rem, 2.2vw, 2.75rem);
+    font-weight: 850;
+    color: #0369a1;
+  }
+
+  .kpi-dashboard.kpi-wallboard .status-target {
+    font-size: clamp(1.4rem, 1.55vw, 1.85rem);
+    font-weight: 750;
+    color: #1e293b;
+  }
+
   .kpi-dashboard.kpi-wallboard .soft-stat {
     padding: clamp(0.45rem, 0.6vh, 0.7rem) clamp(0.65rem, 0.75vw, 0.9rem);
   }
 
   .kpi-dashboard.kpi-wallboard .soft-stat-value {
-    font-size: clamp(2rem, 1.95vw, 2.6rem);
+    font-size: clamp(2.2rem, 2.3vw, 2.85rem);
     font-weight: 800;
     color: #0f172a;
   }
