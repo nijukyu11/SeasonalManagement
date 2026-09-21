@@ -547,10 +547,7 @@ export default function AnnualPassengerKpiDashboard() {
                     </div>
                     <div className="hero-target-section border-t border-slate-200/80 pt-2.5">
                       <p className="metric-label">Mục tiêu KPI năm {snapshot.year}</p>
-                      <div className="mt-1 flex items-baseline justify-between gap-4">
-                        <p className="hero-progress-value text-2xl font-bold text-slate-950 tabular-nums">{displayNumber(target)} <span className="text-lg font-semibold text-slate-500">khách</span></p>
-                        <p className="text-base font-bold text-slate-700">Đã tích lũy: <strong className="font-extrabold text-sky-700">{displayNumber(reported)}</strong></p>
-                      </div>
+                      <p className="hero-progress-value mt-1 text-2xl font-bold text-slate-950 tabular-nums">{displayNumber(target)} <span className="text-lg font-semibold text-slate-500">khách</span></p>
                     </div>
                   </div>
                 </article>
