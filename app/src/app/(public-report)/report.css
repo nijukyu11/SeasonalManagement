@@ -362,7 +362,7 @@ body:has(.kpi-admin-dialog[open]) {
 
   .kpi-dashboard.kpi-wallboard .hero-message {
     max-width: 36ch;
-    font-size: clamp(1.85rem, 2.05vw, 2.45rem);
+    font-size: clamp(2.1rem, 2.3vw, 2.75rem);
     line-height: 1.18;
   }
 
