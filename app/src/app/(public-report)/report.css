@@ -331,14 +331,20 @@ body:has(.kpi-admin-dialog[open]) {
   }
 
   .kpi-dashboard.kpi-wallboard .dashboard-title {
-    font-size: clamp(1.35rem, 1.35vw, 1.75rem);
+    font-size: clamp(1.5rem, 1.6vw, 2rem);
+    font-weight: 750;
+    color: #0f172a;
   }
 
-  .kpi-dashboard.kpi-wallboard .snapshot-meta,
+  .kpi-dashboard.kpi-wallboard .snapshot-meta {
+    font-size: clamp(0.95rem, 0.95vw, 1.15rem);
+    font-weight: 650;
+    color: #1e293b;
+  }
   .kpi-dashboard.kpi-wallboard .freshness-badge {
-    font-size: clamp(0.85rem, 0.8vw, 1rem);
+    font-size: clamp(0.95rem, 0.95vw, 1.15rem);
+    font-weight: 700;
   }
-
   .kpi-dashboard.kpi-wallboard .hero-panel {
     min-height: 0;
   }
@@ -348,7 +354,9 @@ body:has(.kpi-admin-dialog[open]) {
   }
 
   .kpi-dashboard.kpi-wallboard .hero-context {
-    font-size: clamp(0.95rem, 0.9vw, 1.1rem);
+    font-size: clamp(1rem, 0.95vw, 1.2rem);
+    font-weight: 700;
+    color: #1e293b;
   }
 
   .kpi-dashboard.kpi-wallboard .hero-message {
@@ -358,21 +366,42 @@ body:has(.kpi-admin-dialog[open]) {
   }
 
   .kpi-dashboard.kpi-wallboard .hero-note {
-    color: #475569;
-    font-size: clamp(0.95rem, 1vw, 1.15rem);
+    color: #1e293b;
+    font-size: clamp(1.05rem, 1.1vw, 1.25rem);
+    font-weight: 600;
+  }
+  .kpi-dashboard.kpi-wallboard .hero-note strong {
+    color: #0f172a;
+    font-weight: 800;
+  }
+
+  .kpi-dashboard.kpi-wallboard .kpi-progress-track {
+    height: 1.125rem;
+    background: #cbd5e1;
+  }
+
+  .kpi-dashboard.kpi-wallboard .kpi-progress-value {
+    background: #0284c7;
   }
 
   .kpi-dashboard.kpi-wallboard .hero-progress-value {
-    font-size: clamp(1.6rem, 1.7vw, 2.1rem);
+    font-size: clamp(1.65rem, 1.75vw, 2.2rem);
+    font-weight: 750;
+    color: #0f172a;
   }
 
   .kpi-dashboard.kpi-wallboard .hero-progress-percent {
-    font-size: clamp(1.75rem, 1.8vw, 2.25rem);
+    font-size: clamp(1.85rem, 1.9vw, 2.35rem);
+    font-weight: 800;
+    color: #0284c7;
   }
 
   .kpi-dashboard.kpi-wallboard .metric-label {
-    color: #475569;
-    font-size: clamp(0.95rem, 0.9vw, 1.1rem);
+    color: #0f172a;
+    font-size: clamp(1rem, 0.95vw, 1.15rem);
+    font-weight: 750;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
   }
 
   .kpi-dashboard.kpi-wallboard .metric-card {
@@ -392,16 +421,26 @@ body:has(.kpi-admin-dialog[open]) {
 
   .kpi-dashboard.kpi-wallboard .metric-value {
     font-size: clamp(2.4rem, 2.4vw, 3.1rem);
+    font-weight: 800;
+    color: #0f172a;
   }
 
   .kpi-dashboard.kpi-wallboard .metric-note {
-    color: #526274;
-    font-size: clamp(0.95rem, 0.9vw, 1.1rem);
+    color: #1e293b;
+    font-size: clamp(1rem, 0.95vw, 1.15rem);
+    font-weight: 600;
+  }
+  .kpi-dashboard.kpi-wallboard .metric-note strong {
+    color: #0f172a;
+    font-weight: 800;
   }
 
   .kpi-dashboard.kpi-wallboard .status-heading,
   .kpi-dashboard.kpi-wallboard .soft-stat-label {
-    font-size: clamp(1rem, 0.95vw, 1.2rem);
+    font-size: clamp(1.05rem, 1vw, 1.25rem);
+    font-weight: 750;
+    color: #0f172a;
+    text-transform: uppercase;
   }
 
   .kpi-dashboard.kpi-wallboard .status-value > p {
@@ -418,7 +457,9 @@ body:has(.kpi-admin-dialog[open]) {
   }
 
   .kpi-dashboard.kpi-wallboard .soft-stat-value {
-    font-size: clamp(2.25rem, 2.1vw, 2.9rem);
+    font-size: clamp(2.35rem, 2.2vw, 3rem);
+    font-weight: 800;
+    color: #0f172a;
   }
 
   .kpi-dashboard.kpi-wallboard .completion-ring {
@@ -426,7 +467,7 @@ body:has(.kpi-admin-dialog[open]) {
   }
 
   .kpi-dashboard.kpi-wallboard .completion-ring::before {
-    width: calc(clamp(8.5rem, 9.5vw, 10.5rem) - 0.9rem);
+    width: calc(clamp(8.5rem, 9.5vw, 10.5rem) - 1.25rem);
   }
 
   .kpi-dashboard.kpi-wallboard .completion-ring span {
@@ -434,8 +475,10 @@ body:has(.kpi-admin-dialog[open]) {
   }
 
   .kpi-dashboard.kpi-wallboard .completion-ring small {
-    color: #475569;
-    font-size: 0.9rem;
+    color: #0f172a;
+    font-size: 1rem;
+    font-weight: 750;
+    letter-spacing: 0.08em;
   }
 
   .kpi-dashboard.kpi-wallboard .chart-panel {
@@ -451,11 +494,14 @@ body:has(.kpi-admin-dialog[open]) {
   }
 
   .kpi-dashboard.kpi-wallboard .trend-title {
-    font-size: clamp(1.15rem, 1.15vw, 1.45rem);
+    font-size: clamp(1.25rem, 1.25vw, 1.6rem);
+    font-weight: 750;
+    color: #0f172a;
   }
 
   .kpi-dashboard.kpi-wallboard .trend-forecast {
-    font-size: clamp(0.85rem, 0.8vw, 1rem);
+    font-size: clamp(0.95rem, 0.9vw, 1.15rem);
+    font-weight: 750;
   }
 
   .kpi-dashboard.kpi-wallboard .kpi-trend-chart {

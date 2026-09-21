@@ -286,36 +286,37 @@ function TrendChart({ snapshot, wallboard }: { snapshot: AnnualPassengerKpiSnaps
   const forecastGap = snapshot.forecast_pct == null ? null : snapshot.forecast_pct - 100;
   const monthTicks = monthEnds;
   const periodDay = dayOfYear(snapshot.year, snapshot.period_to);
+  const isClose = targetEnd != null && projectionEnd != null && Math.abs(projectionEnd - targetEnd) < 0.15;
 
   const chart = (
     <LineChart
       data={points}
       width={wallboard ? chartSize?.width : undefined}
       height={wallboard ? chartSize?.height : undefined}
-      margin={{ top: 12, right: 18, left: -8, bottom: 2 }}
+      margin={{ top: 14, right: 24, left: wallboard ? 0 : -8, bottom: 4 }}
     >
-      <CartesianGrid vertical={false} stroke="#cbd5e1" strokeWidth={1.2} />
-      <XAxis dataKey="day" type="number" domain={[1, daysInYear]} ticks={monthTicks} tickFormatter={(day) => monthLabelForDay(snapshot.year, day)} tickLine={false} axisLine={false} tickMargin={wallboard ? 14 : 10} stroke="#334155" fontSize={wallboard ? 20 : 15} fontWeight={wallboard ? 600 : 500} />
-      <YAxis domain={[0, yAxisMax]} ticks={yAxisTicks} interval={0} tickFormatter={(value) => `${value}M`} tickLine={false} axisLine={false} width={wallboard ? 72 : 56} stroke="#334155" fontSize={wallboard ? 20 : 15} fontWeight={wallboard ? 600 : 500} />
+      <CartesianGrid vertical={false} stroke={wallboard ? '#94a3b8' : '#cbd5e1'} strokeWidth={wallboard ? 1.5 : 1.2} />
+      <XAxis dataKey="day" type="number" domain={[1, daysInYear]} ticks={monthTicks} tickFormatter={(day) => monthLabelForDay(snapshot.year, day)} tickLine={false} axisLine={false} tickMargin={wallboard ? 14 : 10} stroke="#0f172a" fontSize={wallboard ? 23 : 15} fontWeight={wallboard ? 700 : 500} />
+      <YAxis domain={[0, yAxisMax]} ticks={yAxisTicks} interval={0} tickFormatter={(value) => `${value}M`} tickLine={false} axisLine={false} width={wallboard ? 86 : 56} stroke="#0f172a" fontSize={wallboard ? 23 : 15} fontWeight={wallboard ? 700 : 500} />
       <Tooltip contentStyle={{ background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: 12, color: '#0f172a' }} labelStyle={{ color: '#0f172a', fontWeight: 650 }} itemStyle={{ color: '#0f172a' }} labelFormatter={(day) => monthLabelForDay(snapshot.year, day)} formatter={(value, name) => [`${Number(value).toFixed(2).replace('.', ',')} triệu`, name === 'actual' ? 'Đã đạt' : name === 'projection' ? 'Dự báo luỹ kế năm' : 'Tiến độ cần đạt']} />
-      <Legend verticalAlign="top" align="center" height={wallboard ? 40 : 32} formatter={(value) => value === 'actual' ? 'Đã đạt' : value === 'projection' ? 'Dự báo luỹ kế năm' : 'Tiến độ cần đạt'} wrapperStyle={{ fontSize: wallboard ? 20 : 15, fontWeight: 600, color: '#334155' }} />
-      {periodDay != null ? <ReferenceLine x={periodDay} stroke="#64748b" strokeWidth={wallboard ? 2.5 : 1.5} strokeDasharray="8 6" label={{ value: `Ngày số liệu mới nhất: ${displayDayMonth(snapshot.period_to)}`, position: 'insideTopRight', fill: '#334155', fontSize: wallboard ? 16 : 12, fontWeight: 650 }} /> : null}
-      <Line dataKey="actual" type="monotone" stroke="#0369a1" strokeWidth={wallboard ? 6 : 3.5} dot={{ r: wallboard ? 5.5 : 3, fill: '#0369a1', stroke: '#ffffff', strokeWidth: wallboard ? 2 : 1 }} activeDot={{ r: wallboard ? 8 : 5 }} connectNulls={false} isAnimationActive={false} />
-      <Line dataKey="target" type="monotone" stroke="#334155" strokeWidth={wallboard ? 5 : 2.5} strokeDasharray="4 8" dot={false} isAnimationActive={false} />
-      <Line dataKey="projection" type="monotone" stroke="#c2410c" strokeWidth={wallboard ? 5 : 3} strokeDasharray="16 8" dot={false} connectNulls={false} isAnimationActive={false} />
+      <Legend verticalAlign="top" align="center" height={wallboard ? 44 : 32} formatter={(value) => value === 'actual' ? 'Đã đạt' : value === 'projection' ? 'Dự báo luỹ kế năm' : 'Tiến độ cần đạt'} wrapperStyle={{ fontSize: wallboard ? 22 : 15, fontWeight: 700, color: '#0f172a' }} />
+      {periodDay != null ? <ReferenceLine x={periodDay} stroke="#475569" strokeWidth={wallboard ? 3 : 1.5} strokeDasharray="8 6" label={{ value: `Ngày số liệu mới nhất: ${displayDayMonth(snapshot.period_to)}`, position: 'insideTopRight', fill: '#0f172a', fontSize: wallboard ? 17 : 12, fontWeight: 750 }} /> : null}
+      <Line dataKey="actual" type="monotone" stroke="#0369a1" strokeWidth={wallboard ? 8.5 : 3.5} dot={{ r: wallboard ? 7.5 : 3, fill: '#0369a1', stroke: '#ffffff', strokeWidth: wallboard ? 2.5 : 1 }} activeDot={{ r: wallboard ? 10 : 5 }} connectNulls={false} isAnimationActive={false} />
+      <Line dataKey="target" type="monotone" stroke="#0f172a" strokeWidth={wallboard ? 6.5 : 2.5} strokeDasharray="5 8" dot={false} isAnimationActive={false} />
+      <Line dataKey="projection" type="monotone" stroke="#c2410c" strokeWidth={wallboard ? 7 : 3} strokeDasharray="16 8" dot={false} connectNulls={false} isAnimationActive={false} />
       {wallboard && actualEnd != null && periodDay != null ? (
-        <ReferenceDot x={periodDay} y={actualEnd} r={6} fill="#0369a1" stroke="#ffffff" strokeWidth={2}>
-          <Label value={`Đã đạt ${displayMillions(actualEnd)}`} position="bottom" offset={16} fill="#075985" fontSize={18} fontWeight={700} stroke="#f8fafc" strokeWidth={4} paintOrder="stroke" />
+        <ReferenceDot x={periodDay} y={actualEnd} r={7.5} fill="#0369a1" stroke="#ffffff" strokeWidth={2.5}>
+          <Label value={`Đã đạt ${displayMillions(actualEnd)}`} position="bottom" offset={16} fill="#0369a1" fontSize={20} fontWeight={800} stroke="#ffffff" strokeWidth={6} paintOrder="stroke" />
         </ReferenceDot>
       ) : null}
       {wallboard && projectionEnd != null ? (
-        <ReferenceDot x={daysInYear} y={projectionEnd} r={6} fill="#c2410c" stroke="#ffffff" strokeWidth={2}>
-          <Label value={`Dự báo ${displayMillions(projectionEnd)}`} position="left" offset={14} dy={targetEnd != null && projectionEnd >= targetEnd ? -18 : targetEnd != null ? 18 : -14} fill="#9a3412" fontSize={18} fontWeight={700} stroke="#f8fafc" strokeWidth={4} paintOrder="stroke" />
+        <ReferenceDot x={daysInYear} y={projectionEnd} r={7.5} fill="#c2410c" stroke="#ffffff" strokeWidth={2.5}>
+          <Label value={`Dự báo ${displayMillions(projectionEnd)}`} position="left" offset={16} dy={isClose ? (projectionEnd >= (targetEnd ?? 0) ? -24 : 26) : (targetEnd != null && projectionEnd >= targetEnd ? -18 : 18)} fill="#9a3412" fontSize={20} fontWeight={800} stroke="#ffffff" strokeWidth={6} paintOrder="stroke" />
         </ReferenceDot>
       ) : null}
       {wallboard && targetEnd != null ? (
-        <ReferenceDot x={daysInYear} y={targetEnd} r={6} fill="#334155" stroke="#ffffff" strokeWidth={2}>
-          <Label value={`KPI ${displayMillions(targetEnd)}`} position="left" offset={14} dy={projectionEnd != null && projectionEnd >= targetEnd ? 18 : projectionEnd != null ? -18 : 14} fill="#1e293b" fontSize={18} fontWeight={700} stroke="#f8fafc" strokeWidth={4} paintOrder="stroke" />
+        <ReferenceDot x={daysInYear} y={targetEnd} r={7.5} fill="#0f172a" stroke="#ffffff" strokeWidth={2.5}>
+          <Label value={`KPI ${displayMillions(targetEnd)}`} position="left" offset={16} dy={isClose ? (projectionEnd != null && projectionEnd >= targetEnd ? 26 : -24) : (projectionEnd != null && projectionEnd >= targetEnd ? 18 : -18)} fill="#0f172a" fontSize={20} fontWeight={800} stroke="#ffffff" strokeWidth={6} paintOrder="stroke" />
         </ReferenceDot>
       ) : null}
     </LineChart>
@@ -525,8 +526,8 @@ export default function AnnualPassengerKpiDashboard() {
         <header className="dashboard-header relative flex min-h-11 items-center justify-between gap-3 border-b border-slate-200 py-2">
           <h1 className="dashboard-title min-w-0 truncate text-balance text-base font-semibold text-slate-950 sm:text-lg">KPI sản lượng khách năm {year}</h1>
           <div className="flex shrink-0 items-center gap-2">
-            <span className="snapshot-meta hidden items-center gap-1.5 text-xs font-medium text-slate-600 lg:flex">{snapshot?.publication ? `Ngày số liệu ${displayDate(snapshot.publication.business_date)} · ` : ''}Cập nhật lúc {displayUpdated(snapshot?.projection.refreshed_at)}</span>
-            <span className={cn('freshness-badge hidden items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium sm:flex', snapshot?.projection.projection_status === 'fresh' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800')} aria-live="polite"><span aria-hidden="true" className={cn('size-2 rounded-full', snapshot?.projection.projection_status === 'fresh' ? 'bg-emerald-600' : 'bg-amber-600')} />{loading && snapshot ? 'Đang cập nhật' : snapshot?.projection.projection_status === 'fresh' ? 'Dữ liệu mới nhất' : 'Bản cập nhật gần nhất'}</span>
+            <span className="snapshot-meta hidden items-center gap-1.5 text-sm font-bold text-slate-800 lg:flex">{snapshot?.publication ? `Ngày số liệu ${displayDate(snapshot.publication.business_date)} · ` : ''}Cập nhật lúc {displayUpdated(snapshot?.projection.refreshed_at)}</span>
+            <span className={cn('freshness-badge hidden items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-bold sm:flex', snapshot?.projection.projection_status === 'fresh' ? 'border-emerald-300 bg-emerald-100 text-emerald-950' : 'border-amber-300 bg-amber-100 text-amber-950')} aria-live="polite"><span aria-hidden="true" className={cn('size-2.5 rounded-full', snapshot?.projection.projection_status === 'fresh' ? 'bg-emerald-600' : 'bg-amber-600')} />{loading && snapshot ? 'Đang cập nhật' : snapshot?.projection.projection_status === 'fresh' ? 'Dữ liệu mới nhất' : 'Bản cập nhật gần nhất'}</span>
           </div>
         </header>
 
@@ -540,17 +541,17 @@ export default function AnnualPassengerKpiDashboard() {
                 <article className="hero-panel relative overflow-hidden">
                   <div className="hero-content relative flex h-full flex-col justify-between gap-6">
                     <div>
-                      <div className="hero-context mb-4 flex flex-wrap items-center gap-2 text-sm font-medium text-slate-600"><span className="rounded-full bg-slate-100 px-3 py-1.5 ring-1 ring-slate-200">Năm dương lịch</span>{snapshot.period_to ? <span className="px-1.5 text-slate-500">Đến hết {displayDate(snapshot.period_to)}</span> : null}</div>
+                      <div className="hero-context mb-4 flex flex-wrap items-center gap-2 text-sm font-bold text-slate-800"><span className="rounded-full bg-sky-100 px-3 py-1.5 font-bold text-sky-950 ring-1 ring-sky-300">Năm dương lịch</span>{snapshot.period_to ? <span className="px-1.5 font-bold text-slate-900">Đến hết {displayDate(snapshot.period_to)}</span> : null}</div>
                       <p id="countdown-title" className="hero-message max-w-[28ch] text-balance text-[clamp(2rem,3.8vw,4rem)] font-semibold leading-[1.08] text-slate-950">{mainMessage}</p>
-                      <p className="hero-note mt-3 max-w-2xl text-pretty text-base leading-relaxed text-slate-600 sm:text-lg">{target == null ? 'KPI năm này chưa được thiết lập.' : reported == null ? 'Chưa có số liệu sản lượng khách cho kỳ KPI.' : reported < target ? <>Còn thiếu <strong className="font-semibold text-slate-900 tabular-nums">{displayNumber(remaining)} khách</strong> để đạt KPI năm.</> : <>Đã đạt <strong className="font-semibold text-slate-900 tabular-nums">{displayNumber(reported)} khách</strong> trong năm.</>}</p>
+                      <p className="hero-note mt-3 max-w-2xl text-pretty text-base leading-relaxed text-slate-800 sm:text-lg">{target == null ? 'KPI năm này chưa được thiết lập.' : reported == null ? 'Chưa có số liệu sản lượng khách cho kỳ KPI.' : reported < target ? <>Còn thiếu <strong className="font-extrabold text-amber-800 tabular-nums">{displayNumber(remaining)} khách</strong> để đạt KPI năm.</> : <>Đã đạt <strong className="font-extrabold text-slate-950 tabular-nums">{displayNumber(reported)} khách</strong> trong năm.</>}</p>
                     </div>
-                    <div><div className="mb-2.5 flex items-end justify-between gap-4"><div><p className="metric-label">Đã đạt / KPI năm</p><p className="hero-progress-value mt-1 text-2xl font-semibold text-slate-950 tabular-nums">{displayNumber(reported)} <span className="font-normal text-slate-400">/</span> {displayNumber(target)}</p></div><p className="hero-progress-percent text-4xl font-bold text-sky-700 tabular-nums">{displayDecimal(completion, '%')}</p></div><ProgressBar percent={completion} /></div>
+                    <div><div className="mb-2.5 flex items-end justify-between gap-4"><div><p className="metric-label">Đã đạt / KPI năm</p><p className="hero-progress-value mt-1 text-2xl font-bold text-slate-950 tabular-nums">{displayNumber(reported)} <span className="font-semibold text-slate-400">/</span> {displayNumber(target)}</p></div><p className="hero-progress-percent text-4xl font-extrabold text-sky-700 tabular-nums">{displayDecimal(completion, '%')}</p></div><ProgressBar percent={completion} /></div>
                   </div>
                 </article>
 
                 <article className="status-panel">
-                  <div className="flex items-start justify-between gap-4"><div className="min-w-0"><p className="status-heading text-base font-semibold uppercase text-slate-600">Đánh giá tiến độ</p><div className={cn('status-value mt-3 flex items-center gap-2.5', tone === 'amber' ? 'text-amber-700' : tone === 'cyan' ? 'text-sky-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-600')}><StatusIcon tone={tone} className="size-9" /><p className="text-4xl font-semibold leading-none">{statusLabel(snapshot.status)}</p></div></div><CompletionRing percent={completion} /></div>
-                  <div className="mt-auto grid grid-cols-2 gap-3"><div className="soft-stat"><ArrivalIcon className="size-6 text-sky-700" /><p className="soft-stat-label mt-3 text-base font-semibold uppercase text-slate-600">Khách đến</p><p className="soft-stat-value mt-1.5 text-4xl font-bold text-slate-950 tabular-nums">{displayNumber(snapshot.arrival_reported_pax)}</p></div><div className="soft-stat"><DepartureIcon className="size-6 text-slate-700" /><p className="soft-stat-label mt-3 text-base font-semibold uppercase text-slate-600">Khách đi</p><p className="soft-stat-value mt-1.5 text-4xl font-bold text-slate-950 tabular-nums">{displayNumber(snapshot.departure_reported_pax)}</p></div></div>
+                  <div className="flex items-start justify-between gap-4"><div className="min-w-0"><p className="status-heading text-base font-bold uppercase text-slate-900">Đánh giá tiến độ</p><div className={cn('status-value mt-3 flex items-center gap-2.5', tone === 'amber' ? 'text-amber-800' : tone === 'cyan' ? 'text-sky-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-700')}><StatusIcon tone={tone} className="size-9" /><p className="text-4xl font-bold leading-none">{statusLabel(snapshot.status)}</p></div></div><CompletionRing percent={completion} /></div>
+                  <div className="mt-auto grid grid-cols-2 gap-3"><div className="soft-stat"><ArrivalIcon className="size-6 text-sky-700" /><p className="soft-stat-label mt-3 text-base font-bold uppercase text-slate-900">Khách đến</p><p className="soft-stat-value mt-1.5 text-4xl font-extrabold text-slate-950 tabular-nums">{displayNumber(snapshot.arrival_reported_pax)}</p></div><div className="soft-stat"><DepartureIcon className="size-6 text-slate-800" /><p className="soft-stat-label mt-3 text-base font-bold uppercase text-slate-900">Khách đi</p><p className="soft-stat-value mt-1.5 text-4xl font-extrabold text-slate-950 tabular-nums">{displayNumber(snapshot.departure_reported_pax)}</p></div></div>
                 </article>
               </section>
 
