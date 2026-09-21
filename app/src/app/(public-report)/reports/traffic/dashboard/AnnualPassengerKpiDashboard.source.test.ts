@@ -38,7 +38,7 @@ test('wallboard gives all remaining viewport height to the trend chart without s
   assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.dashboard-header[\s\S]*?min-height: 2\.25rem;[\s\S]*?padding-block: 0;/);
   assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.hero-panel[\s\S]*?min-height: 0;/);
   assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.completion-ring[\s\S]*?width: clamp\(8\.5rem, 9\.5vw, 10\.5rem\);/);
-  assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.hero-progress-value[\s\S]*?font-size: clamp\(1\.6rem, 1\.7vw, 2\.1rem\);/);
+  assert.match(styles, /\.kpi-dashboard\.kpi-wallboard \.hero-progress-value[\s\S]*?font-size: clamp\(1\.65rem, 1\.75vw, 2\.2rem\);/);
 });
 
 test('compact screens reserve ring width instead of squeezing the status row', () => {
@@ -50,11 +50,11 @@ test('wallboard uses the high-contrast light operations theme', () => {
   assert.match(styles, /\.kpi-dashboard \{[\s\S]*?background: #f1f5f9;[\s\S]*?color: #0f172a;[\s\S]*?color-scheme: light;/);
   assert.match(styles, /\.kpi-dashboard \.hero-panel,[\s\S]*?background: #ffffff;/);
   assert.match(styles, /\.kpi-dashboard \.kpi-trend-chart \{[\s\S]*?background: #f8fafc;/);
-  assert.match(source, /<CartesianGrid vertical=\{false\} stroke="#cbd5e1" strokeWidth=\{1\.2\}/);
+  assert.match(source, /<CartesianGrid vertical=\{false\} stroke=\{wallboard \? '#94a3b8' : '#cbd5e1'\} strokeWidth=\{wallboard \? 1\.5 : 1\.2\}/);
   assert.match(source, /const yAxisMax = Math\.max\(2\.5, Math\.ceil\(maximum \* 2\) \/ 2 \+ 0\.5\)/);
   assert.match(source, /ticks=\{yAxisTicks\} interval=\{0\}/);
-  assert.match(source, /dataKey="actual"[\s\S]*?stroke="#0369a1"[\s\S]*?strokeWidth=\{wallboard \? 6 : 3\.5\}/);
-  assert.match(source, /dataKey="target"[\s\S]*?stroke="#334155"[\s\S]*?strokeDasharray="4 8"/);
+  assert.match(source, /dataKey="actual"[\s\S]*?stroke="#0369a1"[\s\S]*?strokeWidth=\{wallboard \? 8\.5 : 3\.5\}/);
+  assert.match(source, /dataKey="target"[\s\S]*?stroke="#0f172a"[\s\S]*?strokeDasharray="5 8"/);
   assert.match(source, /dataKey="projection"[\s\S]*?stroke="#c2410c"[\s\S]*?strokeDasharray="16 8"/);
   assert.match(source, /Ngày số liệu mới nhất: \$\{displayDayMonth\(snapshot\.period_to\)\}/);
   assert.match(source, /Đã đạt \$\{displayMillions\(actualEnd\)\}/);
