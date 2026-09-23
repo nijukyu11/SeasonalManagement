@@ -48,6 +48,13 @@ function weekdayStatus(calendarDays: number, completeDays: number): 'complete' |
   if (completeDays === 0) return 'missing';
   return completeDays === calendarDays ? 'complete' : 'partial';
 }
+function isEligibleWeekdayRow(row: TrafficAggregateRow): boolean {
+  const status = statusOf(row);
+  if (COMPLETE_STATUSES.has(status)) return true;
+  if (status === 'future' && finiteNumber(row.flights) !== null) return true;
+  return false;
+}
+
 
 export function buildV2WeekdayBreakdowns(timelineValue: unknown): {
   summary: TrafficAggregateRow[];
@@ -63,7 +70,7 @@ export function buildV2WeekdayBreakdowns(timelineValue: unknown): {
   const summary = Array.from({ length: 7 }, (_, offset) => {
     const dayIndex = offset + 1;
     const rows = datedRows.filter((row) => row.day_index === dayIndex);
-    const completeRows = rows.filter((row) => COMPLETE_STATUSES.has(statusOf(row)));
+    const completeRows = rows.filter(isEligibleWeekdayRow);
     const flights = aggregateValues(completeRows, 'flights');
     const arrivals = aggregateValues(completeRows, 'arrivals');
     const departures = aggregateValues(completeRows, 'departures');
@@ -92,7 +99,7 @@ export function buildV2WeekdayBreakdowns(timelineValue: unknown): {
   const rawMonthly = months.flatMap((month) => Array.from({ length: 7 }, (_, offset) => {
     const dayIndex = offset + 1;
     const rows = datedRows.filter((row) => String(row.ops_date).startsWith(`${month}-`) && row.day_index === dayIndex);
-    const completeRows = rows.filter((row) => COMPLETE_STATUSES.has(statusOf(row)));
+    const completeRows = rows.filter(isEligibleWeekdayRow);
     const flights = aggregateValues(completeRows, 'flights');
     const arrivals = aggregateValues(completeRows, 'arrivals');
     const departures = aggregateValues(completeRows, 'departures');

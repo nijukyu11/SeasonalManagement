@@ -112,3 +112,21 @@ test('overview enrichment replaces incomplete weekday fields without changing th
   assert.equal((breakdowns.day_of_week as unknown[]).length, 7);
   assert.equal((breakdowns.day_of_week_monthly as unknown[]).length, 14);
 });
+
+test('weekday breakdowns include future dates with planned flights in averages', () => {
+  const futureTimeline = [
+    { ops_date: '2026-11-02', flights: 160, arrivals: 80, departures: 80, status: 'future' },
+    { ops_date: '2026-11-09', flights: 170, arrivals: 85, departures: 85, status: 'future' },
+    { ops_date: '2026-11-03', flights: 150, arrivals: 75, departures: 75, status: 'future' },
+    { ops_date: '2026-11-10', flights: null, arrivals: null, departures: null, status: 'future' },
+  ];
+  const result = buildV2WeekdayBreakdowns(futureTimeline);
+  assert.equal(result.summary[0].complete_day_count, 2);
+  assert.equal(result.summary[0].average_flights, 165);
+  assert.equal(result.summary[0].average_arrivals, 83);
+  assert.equal(result.summary[0].average_departures, 83);
+  assert.equal(result.summary[0].status, 'complete');
+  assert.equal(result.summary[1].complete_day_count, 1);
+  assert.equal(result.summary[1].average_flights, 150);
+  assert.equal(result.summary[1].status, 'partial');
+});

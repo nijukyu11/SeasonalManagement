@@ -88,16 +88,18 @@ export function PeakHourChart({ rows, monthlyRows, filter, timeBasis, selectedDa
   const peakDeparture = [...orderedRows]
     .filter((row) => !row.suppressed && row.averageDepartures != null)
     .sort((left, right) => (right.averageDepartures ?? 0) - (left.averageDepartures ?? 0))[0];
-  const activeKey = hoveredKey ?? selectedKey;
-  const [activeHour, activeType] = activeKey?.split('|') ?? [];
-  const activeRow = activeHour ? orderedRows.find((row) => row.hour_bucket === activeHour) ?? null : null;
-  const activeAverage = activeRow ? (activeType === 'A' ? activeRow.averageArrivals : activeRow.averageDepartures) : null;
-  const activeTotal = activeRow ? (activeType === 'A' ? activeRow.arrivals : activeRow.departures) : null;
-  const activeRegularFlights = activeRow
-    ? activeType === 'A'
-      ? activeRow.regular_flights?.arrivals ?? []
-      : activeRow.regular_flights?.departures ?? []
+  const [selectedHour, selectedType] = selectedKey?.split('|') ?? [];
+  const selectedRow = selectedHour ? orderedRows.find((row) => row.hour_bucket === selectedHour) ?? null : null;
+  const selectedAverage = selectedRow ? (selectedType === 'A' ? selectedRow.averageArrivals : selectedRow.averageDepartures) : null;
+  const selectedTotal = selectedRow ? (selectedType === 'A' ? selectedRow.arrivals : selectedRow.departures) : null;
+  const selectedRegularFlights = selectedRow
+    ? selectedType === 'A'
+      ? selectedRow.regular_flights?.arrivals ?? []
+      : selectedRow.regular_flights?.departures ?? []
     : [];
+
+  const [hoveredHour, hoveredType] = hoveredKey?.split('|') ?? [];
+  const hoveredRow = hoveredHour ? orderedRows.find((row) => row.hour_bucket === hoveredHour) ?? null : null;
 
   useEffect(() => {
     const closeOnOutsidePointer = (event: PointerEvent) => {
@@ -109,7 +111,6 @@ export function PeakHourChart({ rows, monthlyRows, filter, timeBasis, selectedDa
   }, []);
 
   const closeDetails = () => {
-    setHoveredKey(null);
     setSelectedKey(null);
   };
 
@@ -180,8 +181,30 @@ export function PeakHourChart({ rows, monthlyRows, filter, timeBasis, selectedDa
           aria-label="Biểu đồ 24 khung giờ khai thác, có thể cuộn ngang trên màn hình nhỏ"
           aria-describedby="peak-hour-scroll-cue"
         >
-          <div className="relative flex h-72 w-full min-w-[960px] items-end gap-1 border-b border-slate-300 px-2 pt-6">
-            {orderedRows.map((row) => <div key={row.hour_bucket} className="flex h-full min-w-0 flex-1 flex-col justify-end">
+          <div className="relative flex h-80 w-full min-w-[960px] items-end gap-1 border-b border-slate-300 px-2 pt-14">
+            {orderedRows.map((row, colIndex) => <div key={row.hour_bucket} className="relative flex h-full min-w-0 flex-1 flex-col justify-end">
+              {hoveredKey?.startsWith(`${row.hour_bucket}|`) && hoveredRow ? (
+                <div
+                  role="tooltip"
+                  className={cn(
+                    'pointer-events-none absolute top-0 z-30 w-44 rounded-lg bg-slate-900/95 p-2 text-left text-xs text-white shadow-xl backdrop-blur-sm',
+                    colIndex < 3 ? 'left-0' : colIndex > 20 ? 'right-0' : 'left-1/2 -translate-x-1/2'
+                  )}
+                >
+                  <p className="font-bold text-slate-100">
+                    {row.hour_bucket}–{`${String((Number(row.hour_bucket.slice(0, 2)) + 1) % 24).padStart(2, '0')}:00`} · {hoveredType === 'A' ? 'Chuyến bay đến' : 'Chuyến bay đi'}
+                  </p>
+                  <p className="mt-1 text-slate-300">
+                    TB: <strong className="text-white">{averageOrDash(hoveredType === 'A' ? hoveredRow.averageArrivals : hoveredRow.averageDepartures)}</strong> chuyến/ngày
+                  </p>
+                  <p className="text-slate-300">
+                    Tổng: <strong className="text-white">{valueOrDash(hoveredType === 'A' ? hoveredRow.arrivals : hoveredRow.departures)}</strong> chuyến
+                  </p>
+                  <p className="mt-1 text-[10px] font-medium text-cyan-300">
+                    {selectedKey === hoveredKey ? 'Đang ghim chi tiết · Nhấp để đóng' : 'Nhấp vào cột để ghim chi tiết'}
+                  </p>
+                </div>
+              ) : null}
               {row.suppressed ? <div className="mb-1 flex min-h-8 items-center justify-center rounded-t border border-dashed border-slate-400 bg-slate-50 text-xs font-bold text-slate-500">—</div> : <div className="flex h-full items-end justify-center gap-1">
                 {visibleTypes.map((type) => {
                   const value = type === 'A' ? row.averageArrivals ?? 0 : row.averageDepartures ?? 0;
@@ -193,11 +216,13 @@ export function PeakHourChart({ rows, monthlyRows, filter, timeBasis, selectedDa
                     type="button"
                     aria-label={`${row.hour_bucket}, ${direction}, trung bình ${averageOrDash(value)} chuyến mỗi ngày`}
                     aria-pressed={selectedKey === key}
-                    onFocus={() => setSelectedKey(key)}
+                    onFocus={() => setHoveredKey(key)}
+                    onBlur={() => setHoveredKey((current) => current === key ? null : current)}
                     onPointerEnter={(event) => { if (event.pointerType !== 'touch') setHoveredKey(key); }}
+                    onPointerLeave={() => setHoveredKey((current) => current === key ? null : current)}
                     onClick={() => setSelectedKey((current) => current === key ? null : key)}
                   ><span
-                    className={cn('pointer-events-none block w-full max-w-5 rounded-t', type === 'A' ? 'bg-blue-900' : 'border-x-2 border-t-2 border-cyan-700 bg-white', activeKey === key && 'ring-2 ring-slate-950 ring-offset-1')}
+                    className={cn('pointer-events-none block w-full max-w-5 rounded-t transition-shadow duration-150', type === 'A' ? 'bg-blue-900' : 'border-x-2 border-t-2 border-cyan-700 bg-white', selectedKey === key ? 'ring-2 ring-amber-500 ring-offset-2' : hoveredKey === key ? 'ring-2 ring-slate-900 ring-offset-1' : '')}
                     style={{ height: `${value === 0 ? 0 : Math.max(1, (value / maxFlights) * 100)}%` }}
                     aria-hidden="true"
                   /></button>;
@@ -207,13 +232,13 @@ export function PeakHourChart({ rows, monthlyRows, filter, timeBasis, selectedDa
             </div>)}
           </div>
         </div>
-        {activeRow && (activeType === 'A' || activeType === 'D') ? <section className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4" aria-live="polite" aria-label="Thông tin khung giờ đang chọn">
+        {selectedRow && (selectedType === 'A' || selectedType === 'D') ? <section className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4" aria-live="polite" aria-label="Thông tin khung giờ đang chọn">
           <div className="flex items-start justify-between gap-4">
-            <div><p className="text-balance font-bold text-slate-950">{activeRow.hour_bucket}–{`${String((Number(activeRow.hour_bucket.slice(0, 2)) + 1) % 24).padStart(2, '0')}:00`} · {peakHourScopeLabels[activeType]}</p><p className="mt-1 text-sm tabular-nums text-slate-700">Trung bình <strong>{averageOrDash(activeAverage)} chuyến/ngày</strong> · Tổng trong kỳ <strong>{valueOrDash(activeTotal)} chuyến</strong></p></div>
-            {selectedKey ? <button className="report-focus min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700" type="button" onClick={closeDetails}>Đóng</button> : null}
+            <div><p className="text-balance font-bold text-slate-950">{selectedRow.hour_bucket}–{`${String((Number(selectedRow.hour_bucket.slice(0, 2)) + 1) % 24).padStart(2, '0')}:00`} · {peakHourScopeLabels[selectedType]}</p><p className="mt-1 text-sm tabular-nums text-slate-700">Trung bình <strong>{averageOrDash(selectedAverage)} chuyến/ngày</strong> · Tổng trong kỳ <strong>{valueOrDash(selectedTotal)} chuyến</strong></p></div>
+            <button className="report-focus min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 hover:bg-slate-100" type="button" onClick={closeDetails}>Đóng</button>
           </div>
           <h4 className="mt-4 text-sm font-bold text-blue-950">Các chuyến bay thường lệ trong khung giờ</h4>
-          {activeRegularFlights.length > 0 ? <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto pr-1">{activeRegularFlights.map((flight) => <li key={`${flight.airline}-${flight.flight_number}-${flight.route}`} className="grid gap-1 rounded-lg bg-white px-3 py-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+          {selectedRegularFlights.length > 0 ? <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto pr-1">{selectedRegularFlights.map((flight) => <li key={`${flight.airline}-${flight.flight_number}-${flight.route}`} className="grid gap-1 rounded-lg bg-white px-3 py-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
             <span className="font-bold text-slate-900">{regularFlightCode(flight)} · {flight.route || 'Unknown'}</span>
             <span className="text-slate-600 sm:text-right">{operatingPattern(flight.operating_days)} · thường lúc <span className="font-semibold tabular-nums">{flight.typical_time}</span></span>
           </li>)}</ul> : <p className="mt-2 text-pretty text-sm text-slate-600">Không ghi nhận lịch bay lặp ổn định trong kỳ. Chọn khung giờ khác để xem lịch thường lệ.</p>}
@@ -327,7 +352,7 @@ export function DayOfWeekChart({ rows, monthlyRows }: { rows: TrafficDayOfWeekRo
       </div>
       <details className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
         <summary className="report-focus cursor-pointer rounded-sm font-semibold text-[#234093]">Bảng dữ liệu theo Thứ</summary>
-        <div className="report-focus mt-4 overflow-x-auto overscroll-x-contain rounded-lg" role="region" tabIndex={0} aria-label="Bảng dữ liệu theo Thứ, có thể cuộn ngang"><table className="w-full min-w-[680px] text-left text-sm"><thead><tr className="border-b border-slate-300"><th className="p-2">Thứ</th><th className="p-2 text-right">Ngày hoàn chỉnh</th><th className="p-2 text-right">Trung bình số chuyến</th><th className="p-2 text-right">Thấp nhất</th><th className="p-2 text-right">Cao nhất</th></tr></thead><tbody>{normalizedRows.map((row) => <tr key={row.day_index} className="border-b border-slate-200"><td className="p-2">{dayLabels[row.day_index - 1]}</td><td className="p-2 text-right tabular-nums">{row.complete_day_count == null ? valueOrDash(row.calendar_days) : `${numberFormat.format(row.complete_day_count)}/${valueOrDash(row.calendar_days)}`}</td><td className="p-2 text-right tabular-nums">{averageOrDash(weekdayMetric(row, scope, 'average'))}</td><td className="p-2 text-right tabular-nums">{valueOrDash(weekdayMetric(row, scope, 'min'))}</td><td className="p-2 text-right tabular-nums">{valueOrDash(weekdayMetric(row, scope, 'max'))}</td></tr>)}</tbody></table></div>
+        <div className="report-focus mt-4 overflow-x-auto overscroll-x-contain rounded-lg" role="region" tabIndex={0} aria-label="Bảng dữ liệu theo Thứ, có thể cuộn ngang"><table className="w-full min-w-[680px] text-left text-sm"><thead><tr className="border-b border-slate-300"><th className="p-2">Thứ</th><th className="p-2 text-right">Số ngày có số liệu</th><th className="p-2 text-right">Trung bình số chuyến</th><th className="p-2 text-right">Thấp nhất</th><th className="p-2 text-right">Cao nhất</th></tr></thead><tbody>{normalizedRows.map((row) => <tr key={row.day_index} className="border-b border-slate-200"><td className="p-2">{dayLabels[row.day_index - 1]}</td><td className="p-2 text-right tabular-nums">{row.complete_day_count == null ? valueOrDash(row.calendar_days) : `${row.complete_day_count}/${row.calendar_days}`}</td><td className="p-2 text-right tabular-nums">{valueOrDash(weekdayMetric(row, scope, 'average'))}</td><td className="p-2 text-right tabular-nums">{valueOrDash(weekdayMetric(row, scope, 'min'))}</td><td className="p-2 text-right tabular-nums">{valueOrDash(weekdayMetric(row, scope, 'max'))}</td></tr>)}</tbody></table></div>
       </details>
       </> : (
         <div className="mt-4">

@@ -34,7 +34,7 @@ export function TrafficMonthlyDayOfWeekHeatmap({ rows, scope }: { rows: TrafficM
   }));
   return <section className="mt-6 border-t border-slate-200 pt-6" aria-labelledby="weekday-heatmap-title">
     <h4 id="weekday-heatmap-title" className="text-balance text-lg font-bold text-slate-950">Breakdown Thứ trong tuần theo tháng</h4>
-    <p className="mt-1 text-pretty text-sm leading-6 text-slate-600">Mỗi ô là trung bình số chuyến của Thứ đó trong tháng, tính trên ngày hoàn chỉnh và làm tròn số nguyên.</p>
+    <p className="mt-1 text-pretty text-sm leading-6 text-slate-600">Mỗi ô là trung bình số chuyến của Thứ đó trong tháng, tính trên các ngày có số liệu và làm tròn số nguyên.</p>
     <div className="report-focus mt-4 overflow-x-auto overscroll-x-contain rounded-lg border border-slate-200" role="region" tabIndex={0} aria-label="Ma trận trung bình chuyến bay theo tháng và Thứ trong tuần">
       <table className="w-full min-w-[720px] border-collapse text-sm">
         <thead><tr className="bg-slate-100 text-slate-700"><th className="border-b border-r border-slate-200 p-3 text-left">Tháng</th>{dayLabels.map((label) => <th key={label} className="border-b border-slate-200 p-3 text-center">{label}</th>)}</tr></thead>
@@ -44,8 +44,8 @@ export function TrafficMonthlyDayOfWeekHeatmap({ rows, scope }: { rows: TrafficM
             const value = valueForScope(row, scope);
             const isPeak = isPeakForScope(row, scope);
             const coverageLabel = row.complete_day_count === row.selected_day_count
-              ? `${row.complete_day_count} ngày hoàn chỉnh`
-              : `${row.complete_day_count}/${row.selected_day_count} ngày hoàn chỉnh`;
+              ? `${row.complete_day_count} ngày có số liệu`
+              : `${row.complete_day_count}/${row.selected_day_count} ngày có số liệu`;
             return <td key={row.day_index} className="p-2 text-center"><span
               className={cn('inline-flex min-h-12 min-w-14 flex-col items-center justify-center rounded-lg px-2 font-bold tabular-nums', heatClass(value, maxValue), isPeak && 'ring-2 ring-amber-500 ring-offset-2')}
               title={`${dayLabels[row.day_index - 1]}, ${coverageLabel}${isPeak ? ', cao nhất tháng' : ''}`}
