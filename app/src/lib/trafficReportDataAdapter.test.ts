@@ -289,3 +289,19 @@ test('toTrafficReportPresentationBundle preserves flight_category breakdown', ()
   assert.equal(bundle.breakdowns.flight_category?.[0].code, 'J');
   assert.equal(bundle.breakdowns.flight_category?.[1].code, 'C');
 });
+
+test('adapter maps future null flight rows to completeness: missing', () => {
+  const input = payload();
+  input.normalized_filter.to = '2026-09-01';
+  input.timeline.push({
+    ops_date: '2026-09-01', flights: null, arrivals: null, departures: null,
+    reported_pax: null, reported_legs: null, due_legs: null,
+    missing_due_legs: null, true_zero_reported_legs: null, status: 'future',
+  });
+  const live = decodeTrafficV2ApiEnvelope(input);
+  const bundle = toTrafficReportPresentationBundle(live);
+  const futurePoint = bundle.timeline.find((p) => p.ops_date === '2026-09-01');
+  assert.equal(futurePoint?.completeness, 'missing');
+  assert.equal(futurePoint?.flights, null);
+  assert.equal(futurePoint?.status, 'future');
+});

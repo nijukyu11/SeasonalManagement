@@ -278,7 +278,7 @@ function presentationTimeline(bundle: TrafficV2Bundle): TrafficTimelinePoint[] {
     pax_status: row.status === 'future'
       ? 'not_due'
       : row.dueLegs != null && row.dueLegs > 0 ? 'available' : 'unavailable',
-    completeness: row.status === 'missing' ? 'missing' : row.status === 'partial' ? 'partial' : 'complete',
+    completeness: row.status === 'missing' || row.flights === null ? 'missing' : row.status === 'partial' ? 'partial' : 'complete',
     suppressed: false,
     status: row.status,
   }));
@@ -301,7 +301,7 @@ function apiTimelinePoint(row: TrafficV2ApiTimelinePoint): TrafficTimelinePoint 
     pax_status: row.status === 'future'
       ? 'not_due'
       : dueLegs != null && dueLegs > 0 ? 'available' : 'unavailable',
-    completeness: row.status === 'missing' ? 'missing' : row.status === 'partial' ? 'partial' : 'complete',
+    completeness: row.status === 'missing' || row.flights === null ? 'missing' : row.status === 'partial' ? 'partial' : 'complete',
     suppressed: false,
     status: row.status,
   };
