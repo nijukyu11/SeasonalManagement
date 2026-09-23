@@ -129,6 +129,20 @@ test('traffic-report-v2 preserves NULL, true zero, and future as different state
   assert.equal(decoded.timeline[1].trueZeroReportedLegs, 1);
   assert.equal(decoded.timeline[2].status, 'future');
 });
+test('traffic-report-v2 accepts future timeline points with null flights for unscheduled dates', () => {
+  const input = payload();
+  input.normalized_filter.to = '2026-09-01';
+  input.timeline.push({
+    ops_date: '2026-09-01', flights: null, arrivals: null, departures: null,
+    reported_pax: null, reported_legs: null, due_legs: null,
+    missing_due_legs: null, true_zero_reported_legs: null, status: 'future',
+  });
+  assert.equal(isTrafficV2ApiEnvelope(input), true);
+  const decoded = decodeTrafficV2ApiEnvelope(input);
+  assert.equal(decoded.timeline[3].flights, null);
+  assert.equal(decoded.timeline[3].status, 'future');
+});
+
 
 test('traffic-report-v2 rejects a fake zero when no Pax leg was reported', () => {
   const input = payload();
