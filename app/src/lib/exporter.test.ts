@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  formatExcelDate,
   groupFlightLegs,
   validateFlightLegsForSeasonalExport,
 } from './exporter.ts';
@@ -240,4 +241,45 @@ test('grouping after a merge keeps preserved and incoming pairs once while exclu
   assert.equal(groups.length, 1);
   assert.equal(groups[0].effective, '2026-06-06');
   assert.equal(groups[0].discontinue, '2026-06-07');
+});
+
+test('validateFlightLegsForSeasonalExport and groupFlightLegs accept daily legs with occurrence-key turnaroundId', () => {
+  const dailyPR586 = leg({
+    id: 'DAILY_V2_0024fb99f353151a608ce1c54c8d01cc',
+    flightNumber: 'PR586',
+    date: '2026-08-13',
+    dayOfWeek: 4,
+    type: 'D',
+    airline: 'PR',
+    route: 'MNL',
+    schedule: '14:10',
+    aircraft: '321',
+    turnaroundId: 'S26|2026-08-13|DEP|PR|PR586',
+  });
+  const dailyIT586 = leg({
+    id: 'DAILY_V2_5bbd2d6d5a51c9174fb061b2316de8f0',
+    flightNumber: 'IT586',
+    date: '2026-08-13',
+    dayOfWeek: 4,
+    type: 'D',
+    airline: 'IT',
+    route: 'KHH',
+    schedule: '19:00',
+    aircraft: '320',
+    turnaroundId: 'S26|2026-08-13|DEP|IT|IT586',
+  });
+
+  const validation = validateFlightLegsForSeasonalExport([dailyPR586, dailyIT586]);
+  assert.equal(validation.valid, true, JSON.stringify(validation.issues));
+
+  const groups = groupFlightLegs([dailyPR586, dailyIT586]);
+  assert.equal(groups.length, 2);
+  assert.equal(groups.some((g) => g.airline === 'PR' && g.depFlightNumber === '586'), true);
+  assert.equal(groups.some((g) => g.airline === 'IT' && g.depFlightNumber === '586'), true);
+});
+
+test('formatExcelDate formats UTC ISO dates deterministically regardless of timezone', () => {
+  assert.equal(formatExcelDate('2026-03-29'), '29-Mar-26');
+  assert.equal(formatExcelDate('2026-10-25'), '25-Oct-26');
+  assert.equal(formatExcelDate('2027-01-01'), '1-Jan-27');
 });

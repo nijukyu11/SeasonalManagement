@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import type { ParsedRow, FlightModification, FlightLeg } from '@/lib/types';
 import {
   buildDetailedNewFlightModifications,
@@ -28,7 +28,7 @@ interface NewFlightModalProps {
   prefillLinked?: FlightLeg | null; // Linked leg for turnaround pre-fill
   prefillDateSelection?: NewFlightDateSelection; // Pre-fill date vector for detailed mode
   onSubmitSeasonal?: (row: Omit<ParsedRow, 'rowIndex'>) => void;
-  onSubmitDetailed?: (mods: FlightModification[]) => void;
+  onSubmitDetailed?: (mods: FlightModification[]) => void | Promise<void>;
 }
 
 export default function NewFlightModal(props: NewFlightModalProps) {
@@ -77,6 +77,9 @@ function NewFlightModalContent({
 
   // Detailed-only
   const [flightDates, setFlightDates] = useState(selectedDatesText);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const submittingRef = useRef(false);
 
   const showArr = flightType === 'arrival' || flightType === 'turnaround';
   const showDep = flightType === 'departure' || flightType === 'turnaround';
@@ -91,7 +94,7 @@ function NewFlightModalContent({
   };
 
   const handleSubmit = () => {
-    if (!canSubmit()) return;
+    if (submittingRef.current || !canSubmit()) return;
 
     if (mode === 'seasonal' && onSubmitSeasonal) {
       const row: Omit<ParsedRow, 'rowIndex'> = {
@@ -134,7 +137,16 @@ function NewFlightModalContent({
         depTime,
         depCodeShares,
       });
-      onSubmitDetailed(mods);
+      submittingRef.current = true;
+      setSubmitting(true);
+      setSubmitError(null);
+      void Promise.resolve().then(() => onSubmitDetailed(mods)).then(onClose).catch((error) => {
+        setSubmitError(error instanceof Error ? error.message : String(error));
+      }).finally(() => {
+        submittingRef.current = false;
+        setSubmitting(false);
+      });
+      return;
     }
 
     onClose();
@@ -153,7 +165,7 @@ function NewFlightModalContent({
         </div>
 
         {/* Body */}
-        <div className="p-6 overflow-y-auto flex-1 flex flex-col gap-5">
+        <fieldset disabled={submitting} className="p-6 overflow-y-auto flex-1 flex flex-col gap-5">
 
           {/* Flight Type */}
           <div>
@@ -303,20 +315,21 @@ function NewFlightModalContent({
             </div>
           )}
 
-        </div>
+        </fieldset>
+        {submitError && <p role="alert" className="px-6 py-2 text-sm text-error">{submitError}</p>}
 
         {/* Footer */}
         <div className="p-4 border-t border-surface-variant bg-surface-container-low flex justify-between gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-variant rounded transition-colors">
+          <button onClick={onClose} disabled={submitting} className="px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-variant rounded transition-colors disabled:opacity-40">
             Cancel
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!canSubmit()}
+            disabled={submitting || !canSubmit()}
             className="px-6 py-2 text-sm font-medium bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container rounded transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
           >
             <span className="material-symbols-outlined text-[18px]">add</span>
-            {mode === 'seasonal' ? 'Create Schedule' : 'Add Flights'}
+            {submitting ? 'Saving…' : mode === 'seasonal' ? 'Create Schedule' : 'Add Flights'}
           </button>
         </div>
 

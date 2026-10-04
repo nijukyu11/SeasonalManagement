@@ -4,7 +4,8 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOperatorAuth } from './OperatorAuthGate';
 import PbbIcon from './PbbIcon';
-
+import { isOperationalScheduleV1Enabled } from '@/lib/operationalScheduleContract';
+import { useOperationalScheduleStore } from '@/lib/operationalScheduleAdapter';
 const SIDEBAR_COLLAPSED_KEY = 'appSidebarCollapsed';
 const APP_SIDEBAR_LAST_MODULE_ROUTE_PREFIX = 'appSidebarLastModuleRoute:';
 
@@ -21,8 +22,18 @@ const NAV_ITEMS = [
 
 type LastModuleRoutes = Record<string, string>;
 
-const MODULE_PATHS = new Set(NAV_ITEMS.map((item) => item.href));
-
+const MODULE_PATHS: Record<string, true> = {
+  '/': true,
+  '/dashboard': true,
+  '/seasonal': true,
+  '/detailed': true,
+  '/daily': true,
+  '/checkin': true,
+  '/gate': true,
+  '/audit': true,
+  '/settings': true,
+};
+const OPERATIONAL_MODULE_PATHS: Record<string, true> = { '/': true, '/dashboard': true, '/daily': true, '/checkin': true, '/gate': true };
 function resolveActiveSeasonId(querySeasonId: string | null, includeStoredSeason: boolean): string | null {
   if (querySeasonId) return querySeasonId;
   if (!includeStoredSeason) return null;
@@ -33,6 +44,7 @@ function resolveActiveSeasonId(querySeasonId: string | null, includeStoredSeason
 
 function buildSeasonRouteHref(pathname: string, seasonId: string | null): string {
   if (!seasonId) return pathname;
+  if (isOperationalScheduleV1Enabled() && OPERATIONAL_MODULE_PATHS[pathname]) return pathname;
   return `${pathname}?season=${encodeURIComponent(seasonId)}`;
 }
 
@@ -40,7 +52,7 @@ function readStoredModuleRoutes(): LastModuleRoutes {
   if (typeof window === 'undefined') return {};
 
   const routes: LastModuleRoutes = {};
-  for (const pathname of MODULE_PATHS) {
+  for (const pathname of Object.keys(MODULE_PATHS)) {
     const stored = sessionStorage.getItem(`${APP_SIDEBAR_LAST_MODULE_ROUTE_PREFIX}${pathname}`);
     if (!stored) continue;
     const [storedPathname] = stored.split('?');
@@ -56,14 +68,21 @@ function getPreservedModuleHref(
 ): string {
   const fallbackHref = buildSeasonRouteHref(pathname, seasonId);
   const preservedHref = lastModuleRoutes[pathname];
-  if (!preservedHref || pathname === '/') return fallbackHref;
+  if (!preservedHref) return fallbackHref;
 
   const [preservedPathname, preservedSearch = ''] = preservedHref.split('?');
   if (preservedPathname !== pathname) return fallbackHref;
+  if (!isOperationalScheduleV1Enabled() || !OPERATIONAL_MODULE_PATHS[pathname]) {
+    if (pathname === '/') return fallbackHref;
+    const preservedSeasonId = new URLSearchParams(preservedSearch).get('season');
+    if (seasonId && preservedSeasonId === seasonId) return preservedHref;
+    return fallbackHref;
+  }
 
-  const preservedSeasonId = new URLSearchParams(preservedSearch).get('season');
-  if (seasonId && preservedSeasonId === seasonId) return preservedHref;
-  return fallbackHref;
+  const params = new URLSearchParams(preservedSearch);
+  params.delete('season');
+  const cleanSearch = params.toString();
+  return cleanSearch ? `${pathname}?${cleanSearch}` : pathname;
 }
 
 function scheduleAfterHydration(callback: () => void): () => void {
@@ -89,6 +108,17 @@ export default function AppSidebar() {
   const searchParams = useSearchParams();
   const operatorAuth = useOperatorAuth();
   const currentSearch = searchParams.toString();
+  const operationalWritePending = useOperationalScheduleStore((state) => state.mutating || state.importing);
+  const navigationBlocked = isOperationalScheduleV1Enabled() && operationalWritePending;
+  useEffect(() => {
+    if (!navigationBlocked) return;
+    const preventUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', preventUnload);
+    return () => window.removeEventListener('beforeunload', preventUnload);
+  }, [navigationBlocked]);
   const querySeasonId = searchParams.get('season');
   const ignoreNextClickRef = useRef(false);
   const [canReadStoredSeason, setCanReadStoredSeason] = useState(false);
@@ -119,6 +149,8 @@ export default function AppSidebar() {
   }, [toggleCollapsed]);
 
   const navigateTo = useCallback((href: string) => {
+    const pending = useOperationalScheduleStore.getState();
+    if (isOperationalScheduleV1Enabled() && (pending.mutating || pending.importing)) return;
     router.push(href);
   }, [router]);
 
@@ -146,16 +178,17 @@ export default function AppSidebar() {
   }, [activeSeasonId]);
 
   useEffect(() => {
-    if (!pathname || !MODULE_PATHS.has(pathname)) return undefined;
+    if (!pathname || !MODULE_PATHS[pathname]) return undefined;
 
     const currentHref = currentSearch ? `${pathname}?${currentSearch}` : pathname;
-    sessionStorage.setItem(`${APP_SIDEBAR_LAST_MODULE_ROUTE_PREFIX}${pathname}`, currentHref);
+    const storageKey = pathname === '/dashboard' ? '/' : pathname;
+    sessionStorage.setItem(`${APP_SIDEBAR_LAST_MODULE_ROUTE_PREFIX}${storageKey}`, currentHref);
 
     return scheduleAfterHydration(() => {
       setLastModuleRoutes((current) => (
-        current[pathname] === currentHref
+        current[storageKey] === currentHref
           ? current
-          : { ...current, [pathname]: currentHref }
+          : { ...current, [storageKey]: currentHref }
       ));
     });
   }, [currentSearch, pathname]);
@@ -177,6 +210,7 @@ export default function AppSidebar() {
         <button
           type="button"
           onClick={() => navigateTo('/')}
+          disabled={navigationBlocked}
           className={`flex min-w-0 items-center gap-3 rounded-lg px-2 py-1.5 text-slate-900 transition-colors hover:bg-slate-100 dark:text-white dark:hover:bg-slate-900 ${collapsed ? 'justify-center' : ''}`}
           title="Seasonal Management"
         >
@@ -199,14 +233,16 @@ export default function AppSidebar() {
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
         {navItems.map((item) => {
-          const isActive = item.href === '/'
-            ? pathname === '/'
-            : pathname === item.href.split('?')[0];
+          const itemPath = item.href.split('?')[0];
+          const isActive = itemPath === '/'
+            ? (pathname === '/' || pathname === '/dashboard')
+            : pathname === itemPath;
           return (
             <button
               key={item.label}
               type="button"
               onClick={() => navigateTo(item.href)}
+              disabled={navigationBlocked}
               title={collapsed ? item.label : undefined}
               aria-current={isActive ? 'page' : undefined}
               className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium tracking-tight transition-colors ${collapsed ? 'justify-center px-2' : ''} ${

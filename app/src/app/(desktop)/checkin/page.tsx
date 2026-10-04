@@ -14,6 +14,8 @@ import {
 } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  applyOperationalResourceChangesV1,
+  getOperationalScheduleAllocationWindowV1,
   getOperationalSettings,
   getSeasons,
   loadSeasonWorkspaceWindow,
@@ -79,6 +81,26 @@ import {
   type CheckInPdfExportRange,
   type CheckInPdfPreviewPlan,
 } from '@/lib/checkinPdfExport';
+import {
+  buildOperationalDateRange,
+  buildOperationalLegPatchAndPreimage,
+  getOperationalDayVietnamIso,
+  isOperationalScheduleV1Enabled,
+  loadFullOperationalScheduleWindow,
+  shiftVietnamIsoDate,
+  subscribeToOperationalChanges,
+  type OperationalWindowSnapshot,
+  type OperationalMutationReceipt,
+} from '@/lib/operationalScheduleContract';
+import {
+  useOperationalScheduleStore,
+  isRecentOperationalMutationRequestId,
+  rememberOperationalMutationRequestId,
+  getPendingOperationalMutation,
+  setPendingOperationalMutation,
+  clearPendingOperationalMutation,
+} from '@/lib/operationalScheduleAdapter';
+import { getSupabaseClient } from '@/lib/supabase';
 import { appendAuditLogEntry, createFlightActionAuditFromHistory } from '@/lib/auditLog';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
 import type { FlightModification, FlightRecord, OperationalSettings, Season } from '@/lib/types';
@@ -155,12 +177,13 @@ function readInitialCheckInRouteState(input: {
   fromDateTime: string;
   toDateTime: string;
 }): CheckInRouteState | null {
+  if (isOperationalScheduleV1Enabled()) return null;
   const storeState = useSeasonWorkspaceStore.getState();
   const cachedSeasons = getCachedSeasons() ?? storeState.seasons;
   if (!cachedSeasons || cachedSeasons.length === 0) return null;
 
-  const targetSeason = cachedSeasons.find((item) => item.id === input.targetSeasonId) ?? cachedSeasons[0];
-  if (!input.targetSeasonId || input.targetSeasonId !== targetSeason.id) return null;
+  const targetSeason = (input.targetSeasonId ? cachedSeasons.find((item) => item.id === input.targetSeasonId) : null) ?? cachedSeasons[0];
+  if (input.targetSeasonId && input.targetSeasonId !== targetSeason.id) return null;
 
   const windowKey = buildCheckInWindowKey(input.fromDateTime, input.toDateTime);
   const cachedWindow = readWorkspaceWindowSnapshot(storeState.workspaces[targetSeason.id], windowKey);
@@ -191,6 +214,9 @@ function logCheckInPerformance(label: string, startedAt: number, details: Record
 }
 
 function todayIso(): string {
+  if (isOperationalScheduleV1Enabled()) {
+    return getOperationalDayVietnamIso();
+  }
   return new Date().toISOString().slice(0, 10);
 }
 
@@ -623,6 +649,38 @@ interface CheckInUndoEntry {
   description: string;
   mods: FlightModification[];
 }
+const CHECKIN_UNDO_STORAGE_KEY = 'checkin:ui-undo-stack:v1';
+
+function readStoredCheckInUndoStack(): CheckInUndoEntry[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.sessionStorage?.getItem(CHECKIN_UNDO_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return trimUiUndoStack(parsed.filter((item): item is CheckInUndoEntry => (
+        item && typeof item === 'object' && typeof item.id === 'number' && typeof item.description === 'string' && Array.isArray(item.mods)
+      )));
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function persistCheckInUndoStack(stack: CheckInUndoEntry[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (stack.length > 0) {
+      window.sessionStorage?.setItem(CHECKIN_UNDO_STORAGE_KEY, JSON.stringify(trimUiUndoStack(stack)));
+    } else {
+      window.sessionStorage?.removeItem(CHECKIN_UNDO_STORAGE_KEY);
+    }
+  } catch {
+    // Best-effort storage
+  }
+}
+
 
 interface PendingAccumulatedCheckInCommit {
   legIds: string[];
@@ -907,7 +965,7 @@ function CheckInAllocationContent() {
   const checkInCommitWorkerRef = useRef<Worker | null>(null);
   const checkInCommitRequestsRef = useRef(new Map<number, PendingCheckInCommitRequest>());
   const checkInCommitRequestSeqRef = useRef(0);
-  const checkInUndoStackRef = useRef<CheckInUndoEntry[]>([]);
+  const checkInUndoStackRef = useRef<CheckInUndoEntry[]>(readStoredCheckInUndoStack());
   const checkInUndoSeqRef = useRef(0);
   const latestCheckInModificationsRef = useRef(modifications);
   const optimisticAllocationViewRef = useRef<CheckInAllocationView | null>(null);
@@ -925,6 +983,17 @@ function CheckInAllocationContent() {
   });
   const historySeqRef = useRef(0);
   const appliedRangeQueryRef = useRef<string | null>(null);
+  const operationalSnapshotRef = useRef<OperationalWindowSnapshot | null>(null);
+  const [operationalMutating, setOperationalMutatingState] = useState(false);
+  const operationalMutatingRef = useRef(false);
+  const setOperationalMutating = useCallback((value: boolean) => {
+    operationalMutatingRef.current = value;
+    setOperationalMutatingState(value);
+  }, []);
+  const pendingRevalidateOnSettleRef = useRef(false);
+  const operationalRequestIdRef = useRef(0);
+  const operationalStoreMutating = useOperationalScheduleStore((s) => s.mutating || s.importing);
+  const unresolvedAttempt = useOperationalScheduleStore((s) => s.unresolvedAttempt);
   useSessionScrollRestoration('checkin:gantt-scroll', ganttScrollRef);
   const syncSeasonId = season?.id ?? targetSeasonId;
   const { status: syncStatus, syncNow } = useSeasonSync(syncSeasonId, 'checkin');
@@ -932,6 +1001,9 @@ function CheckInAllocationContent() {
   const syncInProgress = syncStatus.status === 'syncing';
   const syncing = syncInProgress && syncStatus.mode === 'manual';
   const syncWriteInProgress = syncInProgress || fetchingServerData;
+  const isWriteInProgress = isOperationalScheduleV1Enabled()
+    ? (operationalMutating || operationalStoreMutating)
+    : syncWriteInProgress;
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' ? syncStatus.message : null);
   const fetchProgress = fetchingServerData ? 'Fetching server data' : syncStatus.message;
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncSummary.pendingCount);
@@ -960,6 +1032,7 @@ function CheckInAllocationContent() {
 
   const clearCheckInUndoStack = useCallback(() => {
     checkInUndoStackRef.current = [];
+    persistCheckInUndoStack([]);
   }, []);
 
   useEffect(() => {
@@ -1037,6 +1110,30 @@ function CheckInAllocationContent() {
   }, []);
 
   const refreshCheckInWindow = useCallback(async (options: { revalidate?: boolean } = {}) => {
+    if (isOperationalScheduleV1Enabled()) {
+      clearOptimisticAllocationView();
+      const requestId = ++operationalRequestIdRef.current;
+      const startDate = fromDateTime.slice(0, 10);
+      const endDate = toDateTime.slice(0, 10);
+      const requestedRangeKey = `${startDate}:${endDate}`;
+      const operationalResult = await loadFullOperationalScheduleWindow({
+        startDate,
+        endDate,
+        resourceType: 'checkin',
+        fetchWindowFn: (p) => getOperationalScheduleAllocationWindowV1(p),
+      });
+      if (
+        operationalRequestIdRef.current !== requestId ||
+        !isRouteActive ||
+        `${fromDateTime.slice(0, 10)}:${toDateTime.slice(0, 10)}` !== requestedRangeKey
+      ) {
+        return null;
+      }
+      operationalSnapshotRef.current = operationalResult.snapshot;
+      setFlightRecords(operationalResult.records);
+      replaceCheckInModifications(new Map());
+      return operationalResult;
+    }
     if (!season) return;
     const windowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
     if (options.revalidate) {
@@ -1065,7 +1162,7 @@ function CheckInAllocationContent() {
     });
     loadedWindowKeyRef.current = windowKey;
     return snapshot;
-  }, [clearOptimisticAllocationView, fromDateTime, replaceCheckInModifications, season, toDateTime]);
+  }, [clearOptimisticAllocationView, fromDateTime, isRouteActive, replaceCheckInModifications, season, toDateTime]);
 
   const tryApplyCachedCheckInRouteWindow = useCallback((): false | 'fresh' | 'stale' => {
     const storeState = useSeasonWorkspaceStore.getState();
@@ -1073,8 +1170,8 @@ function CheckInAllocationContent() {
     const cachedSettings = storeState.operationalSettings;
     if (!cachedSeasons || !cachedSettings || cachedSeasons.length === 0) return false;
 
-    const targetSeason = cachedSeasons.find((item) => item.id === targetSeasonId) ?? cachedSeasons[0];
-    if (!targetSeasonId || targetSeasonId !== targetSeason.id) return false;
+    const targetSeason = (targetSeasonId ? cachedSeasons.find((item) => item.id === targetSeasonId) : null) ?? cachedSeasons[0];
+    if (targetSeasonId && targetSeasonId !== targetSeason.id) return false;
 
     const windowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
     const freshWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
@@ -1303,6 +1400,52 @@ function CheckInAllocationContent() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      if (isOperationalScheduleV1Enabled()) {
+        if (!isRouteActive) return;
+        setLoading(true);
+        setLoadError(null);
+        const requestId = ++operationalRequestIdRef.current;
+        const startDate = fromDateTime.slice(0, 10);
+        const endDate = toDateTime.slice(0, 10);
+        const requestedRangeKey = `${startDate}:${endDate}`;
+        try {
+          const loadedSettings = await getOperationalSettings().catch(() => null);
+          if (cancelled || operationalRequestIdRef.current !== requestId || !isRouteActive) return;
+          if (loadedSettings) setSettings(loadedSettings);
+          setLoadProgress(buildLoadProgress('Loading operational check-in window', 40, `${startDate}..${endDate}`));
+          const operationalResult = await loadFullOperationalScheduleWindow({
+            startDate,
+            endDate,
+            resourceType: 'checkin',
+            fetchWindowFn: (p) => getOperationalScheduleAllocationWindowV1(p),
+          });
+          if (
+            cancelled ||
+            operationalRequestIdRef.current !== requestId ||
+            !isRouteActive ||
+            `${fromDateTime.slice(0, 10)}:${toDateTime.slice(0, 10)}` !== requestedRangeKey
+          ) {
+            return;
+          }
+          operationalSnapshotRef.current = operationalResult.snapshot;
+          setFlightRecords(operationalResult.records);
+          replaceCheckInModifications(new Map());
+          setLoading(false);
+          return;
+        } catch (err) {
+          console.error('Error loading operational checkin schedule', err);
+          if (!cancelled && operationalRequestIdRef.current === requestId && isRouteActive) {
+            const message = err instanceof Error && err.message ? err.message : 'Could not load operational check-in schedule.';
+            setLoadError(message);
+            void showAlert({ title: 'Load Failed', message, tone: 'error' });
+          }
+          return;
+        } finally {
+          if (!cancelled && operationalRequestIdRef.current === requestId) {
+            setLoading(false);
+          }
+        }
+      }
       const cachedState = tryApplyCachedCheckInRouteWindow();
       if (cachedState === 'fresh') return;
       setLoading(cachedState !== 'stale');
@@ -1332,8 +1475,8 @@ function CheckInAllocationContent() {
           return;
         }
 
-        const targetSeason = nextSeasons.find((item) => item.id === targetSeasonId) ?? nextSeasons[0];
-        if (!targetSeasonId || targetSeasonId !== targetSeason.id) {
+        const targetSeason = (targetSeasonId ? nextSeasons.find((item) => item.id === targetSeasonId) : null) ?? nextSeasons[0];
+        if (targetSeasonId && targetSeasonId !== targetSeason.id) {
           router.replace(`/checkin?season=${targetSeason.id}`);
           return;
         }
@@ -1417,7 +1560,49 @@ function CheckInAllocationContent() {
     return () => {
       cancelled = true;
     };
-  }, [clearCheckInUndoStack, clearOptimisticAllocationView, fromDateTime, replaceCheckInModifications, router, showAlert, targetSeasonId, toDateTime, tryApplyCachedCheckInRouteWindow]);
+  }, [clearCheckInUndoStack, clearOptimisticAllocationView, fromDateTime, isRouteActive, replaceCheckInModifications, router, showAlert, targetSeasonId, toDateTime, tryApplyCachedCheckInRouteWindow]);
+  useEffect(() => {
+    if (!isOperationalScheduleV1Enabled() || !isRouteActive) return;
+    const client = getSupabaseClient();
+    const sub = subscribeToOperationalChanges(client, {
+      onDateInvalidated: (_dates, event) => {
+        const requestId = event && typeof event === 'object' && typeof event.request_id === 'string'
+          ? event.request_id
+          : undefined;
+        if (requestId && isRecentOperationalMutationRequestId(requestId)) {
+          return;
+        }
+        // The mutation revision is global: a write on any date, visible or not, stales the snapshot token.
+        const storeState = useOperationalScheduleStore.getState();
+        if (operationalMutatingRef.current || storeState.mutating || storeState.importing) {
+          pendingRevalidateOnSettleRef.current = true;
+          return;
+        }
+
+        void refreshCheckInWindow({ revalidate: true });
+      },
+      onReconnect: () => {
+        const storeState = useOperationalScheduleStore.getState();
+        if (operationalMutatingRef.current || storeState.mutating || storeState.importing) {
+          pendingRevalidateOnSettleRef.current = true;
+          return;
+        }
+        void refreshCheckInWindow({ revalidate: true });
+      },
+    });
+    return () => {
+      sub.unsubscribe();
+    };
+  }, [isRouteActive, refreshCheckInWindow]);
+
+  useEffect(() => {
+    if (!isOperationalScheduleV1Enabled() || !isRouteActive) return;
+    if (operationalMutating || operationalStoreMutating) return;
+    if (pendingRevalidateOnSettleRef.current) {
+      pendingRevalidateOnSettleRef.current = false;
+      void refreshCheckInWindow({ revalidate: true });
+    }
+  }, [isRouteActive, operationalMutating, operationalStoreMutating, refreshCheckInWindow]);
 
   const allocationResult = useMemo(() => {
     if (!settings) return { view: null, error: null };
@@ -1613,6 +1798,7 @@ function CheckInAllocationContent() {
     if (!entry) return;
     checkInUndoStackRef.current.push(entry);
     checkInUndoStackRef.current = trimUiUndoStack(checkInUndoStackRef.current);
+    persistCheckInUndoStack(checkInUndoStackRef.current);
   }, []);
 
   const applyOptimisticCheckInModifications = useCallback((mods: FlightModification[]) => {
@@ -1984,29 +2170,178 @@ function CheckInAllocationContent() {
     },
   });
 
-  const commitOneModification = useCallback(async (
-    mod: FlightModification,
-    description: string,
-    options: CheckInCommitOptions = {}
-  ) => {
-    if (!season) return;
-    const legIds = [mod.legId];
-    const undoEntry = buildCheckInUndoEntry([mod], description);
-    applyOptimisticCheckInModifications([mod]);
-    scheduleAccumulatedCheckInCommit({
-      legIds,
-      mods: [mod],
-      description,
-      undoEntry,
-      trackUndo: options.trackUndo !== false,
-    });
-  }, [applyOptimisticCheckInModifications, buildCheckInUndoEntry, scheduleAccumulatedCheckInCommit, season]);
+  const handleRetryPendingMutation = useCallback(async () => {
+    setOperationalMutating(true);
+    try {
+      const outcome = await useOperationalScheduleStore.getState().retryPendingMutation();
+      if (outcome && 'refreshError' in outcome && outcome.refreshError) {
+        void showAlert({ title: 'Saved; refresh failed', message: outcome.refreshError, tone: 'warning' });
+      } else {
+        await refreshCheckInWindow({ revalidate: true });
+      }
+    } catch (err) {
+      void showAlert({ title: 'Retry Failed', message: (err as Error).message, tone: 'error' });
+    } finally {
+      const remaining = useOperationalScheduleStore.getState().unresolvedAttempt;
+      if (!remaining) {
+        setOperationalMutating(false);
+      }
+    }
+  }, [refreshCheckInWindow, setOperationalMutating, showAlert]);
 
   const commitCheckInModificationBatch = useCallback(async (
     mods: FlightModification[],
     description: string,
     options: CheckInCommitOptions = {}
   ) => {
+    if (isOperationalScheduleV1Enabled()) {
+      if (mods.length === 0) return;
+      if (operationalMutatingRef.current || useOperationalScheduleStore.getState().mutating || useOperationalScheduleStore.getState().importing) {
+        return;
+      }
+      const patches = mods
+        .map((mod) => {
+          const rec = recordById.get(mod.legId);
+          if (!rec) return null;
+          const patchFields: Record<string, unknown> = {};
+          if (mod.counter !== undefined) patchFields.counter = mod.counter;
+          if (mod.checkInStart !== undefined) patchFields.checkInStart = mod.checkInStart;
+          if (mod.checkInEnd !== undefined) patchFields.checkInEnd = mod.checkInEnd;
+          if (mod.checkInAllocationMode !== undefined) patchFields.checkInAllocationMode = mod.checkInAllocationMode;
+          if (mod.checkInCounterWindows !== undefined) patchFields.checkInCounterWindows = mod.checkInCounterWindows;
+          if (mod.bhs !== undefined) patchFields.bhs = mod.bhs;
+          return buildOperationalLegPatchAndPreimage(rec, patchFields);
+        })
+        .filter((p): p is NonNullable<typeof p> => p !== null);
+
+      if (patches.length === 0) {
+        if (options.trackUndo === false) {
+          throw new Error('Undo cannot be applied: target flight occurrence is not in current view.');
+        }
+        return;
+      }
+
+      const currentPayload = JSON.stringify(patches);
+      let requestId = crypto.randomUUID();
+      let expectedRevision = operationalSnapshotRef.current?.revision ?? '0';
+
+      const pending = getPendingOperationalMutation();
+      if (pending && pending.kind === 'apply_resource' && pending.serializedPayload === currentPayload) {
+        requestId = pending.requestId;
+        expectedRevision = pending.expectedRevision;
+      } else if (pending) {
+        throw new Error('The previous operational write is unconfirmed. Retry that write unchanged before submitting another.');
+      } else {
+        setPendingOperationalMutation({
+          kind: 'apply_resource',
+          requestId,
+          expectedRevision,
+          serializedPayload: currentPayload,
+        });
+      }
+
+      const undoEntry = options.trackUndo !== false ? buildCheckInUndoEntry(mods, description) : null;
+
+      operationalMutatingRef.current = true;
+      setOperationalMutating(true);
+      useOperationalScheduleStore.setState({ mutating: true });
+
+      const previousModifications = new Map(latestCheckInModificationsRef.current);
+      applyOptimisticCheckInModifications(mods);
+
+      try {
+        let receipt: OperationalMutationReceipt;
+        try {
+          const request = {
+            requestId,
+            expectedRevision,
+            changes: patches,
+          };
+          rememberOperationalMutationRequestId(request.requestId);
+          let unknownFailureCount = 0;
+          while (true) {
+            try {
+              receipt = await applyOperationalResourceChangesV1(request);
+              break;
+            } catch (error) {
+              const rawCode = error && typeof error === 'object' && 'code' in error ? error.code : null;
+              const code = typeof rawCode === 'string' ? rawCode : null;
+              if (code && /^[0-9A-Z]{5}$/i.test(code) && !code.toUpperCase().startsWith('08') && !code.toUpperCase().startsWith('57')) {
+                throw error;
+              }
+              unknownFailureCount += 1;
+              if (unknownFailureCount > 1) {
+                await showAlert({
+                  title: 'Check-in Update Status Unknown',
+                  message: 'The outcome of your update is unknown due to a connection interruption. Click OK to retry the exact same request.',
+                  tone: 'warning',
+                });
+              }
+            }
+          }
+        } catch (rpcErr) {
+          const rawCode = rpcErr && typeof rpcErr === 'object' && 'code' in rpcErr ? rpcErr.code : null;
+          const code = typeof rawCode === 'string' ? rawCode : null;
+          if (code && /^[0-9A-Z]{5}$/i.test(code) && !code.toUpperCase().startsWith('08') && !code.toUpperCase().startsWith('57')) {
+            clearPendingOperationalMutation(requestId);
+          }
+          latestCheckInModificationsRef.current = previousModifications;
+          setModifications(previousModifications);
+          clearOptimisticAllocationView();
+          void refreshCheckInWindow().catch(() => undefined);
+          void showAlert({
+            title: 'Check-in Update Failed',
+            message: (rpcErr as Error).message,
+            tone: 'error',
+          });
+          return;
+        }
+
+        if (receipt.status !== 'committed') {
+          clearPendingOperationalMutation(requestId);
+          latestCheckInModificationsRef.current = previousModifications;
+          setModifications(previousModifications);
+          clearOptimisticAllocationView();
+          void refreshCheckInWindow().catch(() => undefined);
+          void showAlert({
+            title: 'Check-in Update Failed',
+            message: receipt.message || `Mutation ${receipt.status}`,
+            tone: 'error',
+          });
+          return;
+        }
+
+        clearPendingOperationalMutation(requestId);
+        if (receipt.revision) {
+          operationalSnapshotRef.current = {
+            revision: receipt.revision,
+            token: operationalSnapshotRef.current?.token ?? '',
+          };
+        }
+        if (undoEntry) {
+          pushCheckInUndoEntry(undoEntry);
+        }
+
+        try {
+          await refreshCheckInWindow({ revalidate: true });
+        } catch (refreshErr) {
+          console.error('Failed to refresh checkin window after commit', refreshErr);
+          void showAlert({
+            title: 'Refresh Failed',
+            message: `Changes were saved (revision ${receipt.revision}), but the check-in display could not be refreshed: ${(refreshErr as Error).message}`,
+            tone: 'warning',
+          });
+        }
+      } finally {
+        const remainingPending = getPendingOperationalMutation();
+        if (!remainingPending) {
+          operationalMutatingRef.current = false;
+          setOperationalMutating(false);
+          useOperationalScheduleStore.setState({ mutating: false });
+        }
+      }
+      return;
+    }
     if (!season || mods.length === 0) return;
     const legIds = Array.from(new Set(mods.map((mod) => mod.legId)));
     const undoEntry = buildCheckInUndoEntry(mods, description);
@@ -2018,19 +2353,29 @@ function CheckInAllocationContent() {
       undoEntry,
       trackUndo: options.trackUndo !== false,
     });
-  }, [applyOptimisticCheckInModifications, buildCheckInUndoEntry, scheduleAccumulatedCheckInCommit, season]);
+  }, [applyOptimisticCheckInModifications, buildCheckInUndoEntry, clearOptimisticAllocationView, pushCheckInUndoEntry, recordById, refreshCheckInWindow, scheduleAccumulatedCheckInCommit, season, setOperationalMutating, showAlert]);
+
+  const commitOneModification = useCallback(async (
+    mod: FlightModification,
+    description: string,
+    options: CheckInCommitOptions = {}
+  ) => {
+    return commitCheckInModificationBatch([mod], description, options);
+  }, [commitCheckInModificationBatch]);
 
   const handleUndoCheckInAllocation = useCallback(async () => {
-    if (syncWriteInProgress) return;
+    if (isWriteInProgress) return;
     const entry = checkInUndoStackRef.current.pop();
+    persistCheckInUndoStack(checkInUndoStackRef.current);
     if (!entry) return;
     try {
       await commitCheckInModificationBatch(entry.mods, `Undo ${entry.description}`, { trackUndo: false });
     } catch (err) {
       checkInUndoStackRef.current.push(entry);
+      persistCheckInUndoStack(checkInUndoStackRef.current);
       void showAlert({ title: 'Undo Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [commitCheckInModificationBatch, showAlert, syncWriteInProgress]);
+  }, [commitCheckInModificationBatch, isWriteInProgress, showAlert]);
 
   const setActiveDropRowIndexIfChanged = useCallback((rowIndex: number | null) => {
     setActiveDropRowIndex((current) => current === rowIndex ? current : rowIndex);
@@ -2109,7 +2454,7 @@ function CheckInAllocationContent() {
   }, [setActiveDropRowIndexIfChanged, setActiveDropSpanIfChanged]);
 
   const startResizeInteraction = useCallback((edge: ResizeState['edge'], bar: CheckInResourceBar, clientX: number) => {
-    if (syncWriteInProgress) return;
+    if (isWriteInProgress) return;
     resizeDragGuardRef.current = true;
     const left = (bar.leftPercent / 100) * timeline.width;
     const width = (bar.widthPercent / 100) * timeline.width;
@@ -2122,7 +2467,7 @@ function CheckInAllocationContent() {
     };
     setResizeState(nextResizeState);
     updateSnapLine(nextResizeState, clientX);
-  }, [syncWriteInProgress, timeline.width, updateSnapLine]);
+  }, [isWriteInProgress, timeline.width, updateSnapLine]);
 
   useEffect(() => {
     const commitRequests = checkInCommitRequestsRef.current;
@@ -2164,6 +2509,11 @@ function CheckInAllocationContent() {
   }, [season, showAlert, syncInProgress, syncNow]);
 
   const fetchServerData = useCallback(async () => {
+    if (isWriteInProgress) return;
+    if (isOperationalScheduleV1Enabled()) {
+      await refreshCheckInWindow({ revalidate: true });
+      return;
+    }
     if (!season || fetchingServerData || syncInProgress) return;
     const windowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
     if (checkInCommitAccumulatorRef.current || checkInCommitFlushTimerRef.current != null) {
@@ -2238,7 +2588,7 @@ function CheckInAllocationContent() {
     } finally {
       setFetchingServerData(false);
     }
-  }, [fetchingServerData, fromDateTime, replaceCheckInModifications, season, showAlert, syncInProgress, toDateTime]);
+  }, [fetchingServerData, fromDateTime, isWriteInProgress, refreshCheckInWindow, replaceCheckInModifications, season, showAlert, syncInProgress, toDateTime]);
 
   const handleOpenExportDialog = useCallback(() => {
     promoteLatestCheckInModificationsForView();
@@ -2260,7 +2610,7 @@ function CheckInAllocationContent() {
   }, [flightRecords, fromDateTime, promoteLatestCheckInModificationsForView, settings, toDateTime]);
 
   const handleExportCheckInPdf = useCallback(async () => {
-    if (!season || !settings || !exportDraft) return;
+    if ((!isOperationalScheduleV1Enabled() && !season) || !settings || !exportDraft) return;
     if (!isValidCheckInExportRange(exportDraft)) {
       void showAlert({
         title: 'Export PDF Failed',
@@ -2285,8 +2635,8 @@ function CheckInAllocationContent() {
         settings,
         range: exportDraft,
         selectedGroupIds: exportDraft.selectedGroupIds,
-        seasonCode: season.seasonCode,
-        fileName: buildCheckInPdfFileName(season.seasonCode, exportDraft),
+        seasonCode: season?.seasonCode ?? 'OPS',
+        fileName: buildCheckInPdfFileName(season?.seasonCode ?? 'OPS', exportDraft),
       });
       notifyExportCompleted(result.saveResult);
       setExportDraft(null);
@@ -2347,7 +2697,7 @@ function CheckInAllocationContent() {
 
   const handleResizeCommit = useCallback(async (state: ResizeState, endClientX: number) => {
     const view = displayAllocationView;
-    if (syncWriteInProgress || !view || !settings) return;
+    if (isWriteInProgress || !view || !settings) return;
     const record = getEffectiveRecord(state.bar.recordId);
     if (!record) return;
     try {
@@ -2374,7 +2724,7 @@ function CheckInAllocationContent() {
     } catch (err) {
       void showAlert({ title: 'Resize Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [commitOneModification, displayAllocationView, flightRecords, getEffectiveRecord, settings, showAlert, syncWriteInProgress, timeline.width, timelinePixelsPerMinute]);
+  }, [commitOneModification, displayAllocationView, flightRecords, getEffectiveRecord, isWriteInProgress, settings, showAlert, timeline.width, timelinePixelsPerMinute]);
 
   useEffect(() => {
     if (!isRouteActive) return undefined;
@@ -2463,7 +2813,7 @@ function CheckInAllocationContent() {
   const canZoomIn = timelinePixelsPerMinute < MAX_TIMELINE_PIXELS_PER_MINUTE;
 
   const commitCheckInPoolDrop = useCallback((drag: Extract<DragState, { kind: 'allocated' }>) => {
-    if (syncWriteInProgress) return;
+    if (isWriteInProgress) return;
     const record = getEffectiveRecord(drag.recordId);
     if (!record) return;
     const currentCounters = normalizeCheckInCounterList(record.counter);
@@ -2490,7 +2840,7 @@ function CheckInAllocationContent() {
     ).catch((err) => {
       void showAlert({ title: 'Unallocate Failed', message: (err as Error).message, tone: 'error' });
     });
-  }, [commitOneModification, displayAllocationView, getEffectiveRecord, settings, showAlert, syncWriteInProgress]);
+  }, [commitOneModification, displayAllocationView, getEffectiveRecord, isWriteInProgress, settings, showAlert]);
 
   const resolveCheckInPointerDrop = useCallback((clientX: number, clientY: number) => {
     const target = document.elementFromPoint(clientX, clientY);
@@ -2549,7 +2899,7 @@ function CheckInAllocationContent() {
   }, [clearDropPreview, setPoolDropActiveIfChanged, stopCheckInDragScroll]);
 
   const handleUnallocatedPointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>, item: CheckInPackedItem) => {
-    if (!isRouteActive || syncWriteInProgress || event.button !== 0) return;
+    if (!isRouteActive || isWriteInProgress || event.button !== 0) return;
     const color = getCheckInColorToken(item.record, settings);
     event.currentTarget.setPointerCapture(event.pointerId);
     const rect = event.currentTarget.getBoundingClientRect();
@@ -2571,7 +2921,7 @@ function CheckInAllocationContent() {
       backgroundColor: color.backgroundColor,
       textColor: color.textColor,
     };
-  }, [isRouteActive, settings, syncWriteInProgress]);
+  }, [isRouteActive, isWriteInProgress, settings]);
 
   const handleResourceBarPointerDown = useCallback((
     event: ReactPointerEvent<HTMLDivElement>,
@@ -2582,7 +2932,7 @@ function CheckInAllocationContent() {
     if (resizeDragGuardRef.current || resizeState) {
       return;
     }
-    if (!isRouteActive || syncWriteInProgress || event.button !== 0) return;
+    if (!isRouteActive || isWriteInProgress || event.button !== 0) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     const rect = event.currentTarget.getBoundingClientRect();
     const record = recordById.get(bar.recordId);
@@ -2610,7 +2960,7 @@ function CheckInAllocationContent() {
       backgroundColor: color.backgroundColor,
       textColor: color.textColor,
     };
-  }, [isRouteActive, recordById, resizeState, settings, syncWriteInProgress]);
+  }, [isRouteActive, isWriteInProgress, recordById, resizeState, settings]);
 
   const handleCheckInPointerMove = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     const current = dragStateRef.current;
@@ -2651,14 +3001,14 @@ function CheckInAllocationContent() {
     const recordId = drag.recordId;
     releaseCheckInInteraction(recordId);
     clearCheckInPointerDrag();
-    if (syncWriteInProgress) return;
+    if (isWriteInProgress) return;
     if (target.kind === 'row') {
       if (drag.kind === 'unallocated') void handleAllocate(recordId, target.counter);
       else void handleMove(drag, target.rowIndex);
       return;
     }
     if (target.kind === 'pool' && drag.kind === 'allocated') commitCheckInPoolDrop(drag);
-  }, [clearCheckInPointerDrag, commitCheckInPoolDrop, handleAllocate, handleMove, releaseCheckInInteraction, resolveCheckInPointerDrop, syncWriteInProgress]);
+  }, [clearCheckInPointerDrag, commitCheckInPoolDrop, handleAllocate, handleMove, isWriteInProgress, releaseCheckInInteraction, resolveCheckInPointerDrop]);
 
   const handleCheckInPointerCancel = useCallback(() => {
     const drag = dragStateRef.current;
@@ -2793,6 +3143,7 @@ function CheckInAllocationContent() {
   }, [commitOneModification, getEffectiveRecord, showAlert]);
 
   const handleUnallocateAllInPeriod = useCallback(async () => {
+    if (isWriteInProgress) return;
     const view = displayAllocationView;
     if (!view) return;
     const visibleRecordIds = Array.from(new Set(view.resourceBars.map((bar) => bar.recordId)));
@@ -2814,7 +3165,7 @@ function CheckInAllocationContent() {
     } catch (err) {
       void showAlert({ title: 'Unallocate All Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [commitCheckInModificationBatch, displayAllocationView, fromDateTime, getEffectiveRecord, settings, showAlert, toDateTime]);
+  }, [commitCheckInModificationBatch, displayAllocationView, fromDateTime, getEffectiveRecord, isWriteInProgress, settings, showAlert, toDateTime]);
 
   const handleContextAction = useCallback((action: 'break' | 'reshape' | 'add' | 'remove' | 'override' | 'unallocate') => {
     if (!contextMenu) return;
@@ -2927,7 +3278,7 @@ function CheckInAllocationContent() {
         width={width}
         groupedSpan={groupedSpan}
         groupStartIndex={groupStartIndex}
-        syncing={syncWriteInProgress}
+        syncing={isWriteInProgress}
         resizing={resizeState !== null}
         onPointerDown={handleResourceBarPointerDown}
         onPointerMove={handleCheckInPointerMove}
@@ -2957,7 +3308,7 @@ function CheckInAllocationContent() {
     resizeState,
     settings,
     startResizeInteraction,
-    syncWriteInProgress,
+    isWriteInProgress,
     timeline.width,
   ]);
 
@@ -2967,21 +3318,25 @@ function CheckInAllocationContent() {
         <header className="z-30 flex flex-none items-center justify-between border-b border-slate-200 bg-white/80 px-6 py-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
           <div>
             <h1 className="font-h3 text-h3 text-on-surface">Check-in Allocation</h1>
-            <p className="font-body-sm text-body-sm text-on-surface-variant">{season ? buildSeasonDisplayLabel(season) : 'No season selected'}</p>
+            <p className="font-body-sm text-body-sm text-on-surface-variant">
+              {isOperationalScheduleV1Enabled() ? 'Operational Turns' : (season ? buildSeasonDisplayLabel(season) : 'No season selected')}
+            </p>
           </div>
           <div className="flex items-center gap-3">
-            <select
-              value={season?.id ?? ''}
-              onChange={(event) => router.push(`/checkin?season=${event.target.value}`)}
-              disabled={seasons.length === 0 || syncing}
-              className="min-w-[200px] cursor-pointer rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface shadow-sm transition-colors hover:bg-surface-container-high focus:outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {seasons.length === 0 ? (
-                <option value="">No seasons</option>
-              ) : seasons.map((item) => (
-                <option key={item.id} value={item.id}>{buildSeasonDisplayLabel(item)}</option> 
-              ))}
-            </select>
+            {!isOperationalScheduleV1Enabled() && (
+              <select
+                value={season?.id ?? ''}
+                onChange={(event) => router.push(`/checkin?season=${event.target.value}`)}
+                disabled={seasons.length === 0 || syncing}
+                className="min-w-[200px] cursor-pointer rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface shadow-sm transition-colors hover:bg-surface-container-high focus:outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {seasons.length === 0 ? (
+                  <option value="">No seasons</option>
+                ) : seasons.map((item) => (
+                  <option key={item.id} value={item.id}>{buildSeasonDisplayLabel(item)}</option> 
+                ))}
+              </select>
+            )}
             {season && (
               <>
                 <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${
@@ -3011,11 +3366,29 @@ function CheckInAllocationContent() {
             )}
           </div>
         </header>
+        {unresolvedAttempt && (
+          <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-warning/30 bg-warning/10 px-6 py-2.5 text-sm text-on-surface">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-[18px] text-warning">warning</span>
+              <p className="text-pretty">
+                Có thao tác check-in chưa xác nhận trên server (Yêu cầu {unresolvedAttempt.requestId.slice(0, 8)}…). Các thao tác khác đang bị tạm khóa.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={operationalMutating}
+              onClick={() => void handleRetryPendingMutation()}
+              className="rounded border border-primary bg-primary px-3 py-1.5 font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {operationalMutating ? 'Đang gửi lại…' : 'Gửi lại yêu cầu'}
+            </button>
+          </div>
+        )}
 
         <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-4">
           <section className="flex-none rounded-lg border border-surface-variant bg-surface-container-lowest shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-surface-variant px-4 py-3">
-              <div className="flex flex-wrap items-center gap-3">
+              <fieldset disabled={isOperationalScheduleV1Enabled() && isWriteInProgress} className="flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-xs font-label-caps text-on-surface-variant">
                   From
                   <input
@@ -3042,22 +3415,63 @@ function CheckInAllocationContent() {
                     className="rounded border border-outline-variant bg-surface-container px-2 py-1.5 text-sm text-on-surface"
                   />
                 </label>
-                <button
-                  onClick={handleToday}
-                  className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high"
-                >
-                  <span className="material-symbols-outlined text-[16px]">today</span>
-                  Today
-                </button>
-                {[1, 2, 3].map((days) => (
-                  <button
-                    key={days}
-                    onClick={() => handleQuickRange(days)}
-                    className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant transition-colors hover:bg-surface-container-high"
-                  >
-                    {days}D
-                  </button>
-                ))}
+                {isOperationalScheduleV1Enabled() ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        promoteLatestCheckInModificationsForView();
+                        const range = buildOperationalDateRange('today');
+                        setFromDateTime(`${range.startDate}T05:00`);
+                        setToDateTime(`${shiftVietnamIsoDate(range.endDate, 1)}T05:00`);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">today</span>
+                      Today
+                    </button>
+                    <button
+                      onClick={() => {
+                        promoteLatestCheckInModificationsForView();
+                        const range = buildOperationalDateRange('tomorrow');
+                        setFromDateTime(`${range.startDate}T05:00`);
+                        setToDateTime(`${shiftVietnamIsoDate(range.endDate, 1)}T05:00`);
+                      }}
+                      className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant transition-colors hover:bg-surface-container-high"
+                    >
+                      Tomorrow
+                    </button>
+                    <button
+                      onClick={() => {
+                        promoteLatestCheckInModificationsForView();
+                        const range = buildOperationalDateRange('next7days');
+                        setFromDateTime(`${range.startDate}T05:00`);
+                        setToDateTime(`${shiftVietnamIsoDate(range.endDate, 1)}T05:00`);
+                      }}
+                      className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant transition-colors hover:bg-surface-container-high"
+                    >
+                      7 Days
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={handleToday}
+                      className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">today</span>
+                      Today
+                    </button>
+                    {[1, 2, 3].map((days) => (
+                      <button
+                        key={days}
+                        onClick={() => handleQuickRange(days)}
+                        className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant transition-colors hover:bg-surface-container-high"
+                      >
+                        {days}D
+                      </button>
+                    ))}
+                  </>
+                )}
                 <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high">
                   <input
                     type="checkbox"
@@ -3073,7 +3487,7 @@ function CheckInAllocationContent() {
                   </span>
                   Group by island
                 </label>
-              </div>
+              </fieldset>
               <div className="flex items-center gap-2">
                 <span className="rounded-full bg-primary-container px-3 py-1 text-xs font-bold text-on-primary-container">UNALLOC {summary.unallocated}</span>
                 <span className="rounded-full bg-secondary-container px-3 py-1 text-xs font-bold text-on-secondary-container">ALLOC {summary.allocatedFlights}</span>
@@ -3104,7 +3518,7 @@ function CheckInAllocationContent() {
                       event.stopPropagation();
                       void handleUnallocateAllInPeriod();
                     }}
-                    disabled={syncWriteInProgress || summary.counterBlocks === 0}
+                    disabled={isWriteInProgress || summary.counterBlocks === 0}
                     className="flex h-7 items-center gap-1.5 rounded border border-outline-variant bg-surface-container-lowest px-2 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
                     aria-label="Unallocate all counters in selected period"
                     title="Unallocate all counters in selected period"
@@ -3118,7 +3532,7 @@ function CheckInAllocationContent() {
                       event.stopPropagation();
                       handleOpenExportDialog();
                     }}
-                    disabled={!season || !settings || loading || exportingPdf}
+                    disabled={(!isOperationalScheduleV1Enabled() && !season) || !settings || loading || exportingPdf || isWriteInProgress}
                     className="flex h-7 items-center gap-1.5 rounded border border-outline-variant bg-surface-container-lowest px-2 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
                     aria-label="Export PDF"
                     title="Export PDF"
@@ -3182,7 +3596,7 @@ function CheckInAllocationContent() {
                   />
                 )}
               </div>
-            ) : !season ? (
+            ) : !isOperationalScheduleV1Enabled() && !season ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-on-surface-variant">
                 <div>No season data.</div>
                 {syncSeasonId && (
@@ -3410,7 +3824,7 @@ function CheckInAllocationContent() {
                     key={action}
                     type="button"
                     role="menuitem"
-                    disabled={syncWriteInProgress || (action === 'reshape' && contextMenu.bar.mode !== 'broken')}
+                    disabled={isWriteInProgress || (action === 'reshape' && contextMenu.bar.mode !== 'broken')}
                     onClick={() => handleContextAction(action as 'break' | 'reshape' | 'add' | 'remove' | 'override' | 'unallocate')}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-on-surface hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -3492,7 +3906,7 @@ function CheckInAllocationContent() {
                     </button>
                     <button
                       type="submit"
-                      disabled={syncWriteInProgress}
+                      disabled={isWriteInProgress}
                       className="rounded bg-primary px-3 py-1.5 text-sm font-semibold text-on-primary hover:bg-primary-container hover:text-on-primary-container disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       Apply
@@ -3555,7 +3969,7 @@ function CheckInAllocationContent() {
                           />
                         </label>
                         <div className="min-w-0 truncate rounded border border-surface-variant bg-surface-container-low px-3 py-2 font-data-tabular text-[11px] text-on-surface-variant">
-                          {season ? buildCheckInPdfFileName(season.seasonCode, exportDraft) : 'CheckIn_Allocation_Season.pdf'}
+                          {buildCheckInPdfFileName(season?.seasonCode ?? 'OPS', exportDraft)}
                         </div>
                       </section>
                       <section className="grid min-w-0 gap-3">
@@ -3612,7 +4026,7 @@ function CheckInAllocationContent() {
                       error={exportPreviewError}
                       preview={exportPreview}
                       records={flightRecords}
-                      seasonCode={season?.seasonCode ?? 'Season'}
+                      seasonCode={season?.seasonCode ?? 'OPS'}
                     />
                   </div>
                   <div className="flex justify-end gap-2 border-t border-surface-variant px-4 py-3">

@@ -190,8 +190,9 @@ function canRepresentAsSingleImportRow(arrival: FlightLeg, departure: FlightLeg)
   const linkType = pairLinkType(arrival, departure);
   const inferred = inferredSameRowLinkType(arrival, departure);
   if (!linkType || !inferred || linkType !== inferred) return false;
-  if (linkType !== 'sameday') return false;
-  return departure.date === arrival.date;
+  if (linkType === 'sameday') return departure.date === arrival.date;
+  if (linkType === 'overnight') return departure.date === shiftIsoDate(arrival.date, 1);
+  return false;
 }
 
 function legSort(left: FlightLeg, right: FlightLeg): number {
@@ -243,12 +244,6 @@ function buildCandidates(legs: FlightLeg[]): {
       const arrival = leg.type === 'A' ? leg : counterpart;
       const departure = leg.type === 'D' ? leg : counterpart;
       if (arrival.type === 'A' && departure.type === 'D') {
-        if (pairLinkType(arrival, departure) === 'overnight') {
-          candidates.push(candidateFromLeg(arrival), candidateFromLeg(departure));
-          processed.add(arrival.id);
-          processed.add(departure.id);
-          continue;
-        }
         if (canRepresentAsSingleImportRow(arrival, departure)) {
           candidates.push({
             date: arrival.date,
@@ -257,6 +252,12 @@ function buildCandidates(legs: FlightLeg[]): {
             arrival,
             departure,
           });
+          processed.add(arrival.id);
+          processed.add(departure.id);
+          continue;
+        }
+        if (pairLinkType(arrival, departure) === 'overnight') {
+          candidates.push(candidateFromLeg(arrival), candidateFromLeg(departure));
           processed.add(arrival.id);
           processed.add(departure.id);
           continue;
@@ -418,7 +419,6 @@ export function validateCanonicalSeasonalRoundTrip(
     issues,
   };
 }
-
 export function buildCanonicalSeasonalRows(input: CanonicalSeasonalRowsInput): CanonicalSeasonalRowsResult {
   const effectiveLegs = buildEffectiveLegs(input);
   const { candidates, unpairedLinkedLegs } = buildCandidates(effectiveLegs);
@@ -442,6 +442,7 @@ export function buildCanonicalSeasonalRows(input: CanonicalSeasonalRowsInput): C
       rows.push(rowFromCandidate(group.sample, run, rowIndex++));
     }
   }
+
 
   const validation = validateCanonicalSeasonalRoundTrip(rows, effectiveLegs);
   return {

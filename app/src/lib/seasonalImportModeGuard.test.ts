@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,14 @@ function requireSqlSection(source: string, pattern: RegExp, label: string): stri
   assert.ok(section, `${label} must be present`);
   return section.replace(/\r\n/g, '\n');
 }
+function readAppFile(...subpath: string[]): string {
+  const p1 = join(root, 'app', ...subpath);
+  if (existsSync(p1)) return readFileSync(p1, 'utf8');
+  const p2 = join(root, 'app', '(desktop)', ...subpath);
+  if (existsSync(p2)) return readFileSync(p2, 'utf8');
+  return readFileSync(p1, 'utf8');
+}
+
 
 test('Seasonal import V3 schema is additive and preserves V2 RPC signatures', () => {
   const migrationSource = readFileSync(
@@ -168,10 +176,7 @@ test('Seasonal import V3 safeupdate hotfix upgrades an already deployed commit R
 });
 
 test('Replace preview states the full-season destructive boundary', () => {
-  const source = readFileSync(
-    join(root, 'app', 'components', 'SeasonalImportPreviewDialog.tsx'),
-    'utf8',
-  );
+  const source = readAppFile('components', 'SeasonalImportPreviewDialog.tsx');
 
   assert.match(source, /Prior season flights removed/);
   assert.match(
@@ -181,7 +186,7 @@ test('Replace preview states the full-season destructive boundary', () => {
 });
 
 test('main Seasonal import sends canonical source rows and never builds client atomic import arrays', () => {
-  const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
+  const source = readAppFile('SeasonalSchedulePage.tsx');
   const contractSource = readFileSync(join(root, 'lib', 'seasonalImportV3Contract.ts'), 'utf8');
   const importStart = source.indexOf('const handleFile = useCallback');
   const importEnd = source.indexOf('const handleRowDoubleClick', importStart);
@@ -219,7 +224,7 @@ test('main Seasonal import sends canonical source rows and never builds client a
 });
 
 test('Seasonal strategy restage preserves the current valid batch when the next strategy fails', () => {
-  const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
+  const source = readAppFile('SeasonalSchedulePage.tsx');
   const handlerStart = source.indexOf('const handleImportStrategyChange = useCallback');
   const handlerEnd = source.indexOf('const handleCancelImportPreview = useCallback', handlerStart);
   const handlerSource = source.slice(handlerStart, handlerEnd);
@@ -324,7 +329,7 @@ test('remote store performs the exact stage-then-commit V2 RPC sequence without 
 });
 
 test('committed seasonal import refresh failures have a dedicated non-retry UI branch', () => {
-  const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
+  const source = readAppFile('SeasonalSchedulePage.tsx');
   const contractSource = readFileSync(join(root, 'lib', 'seasonalImportRpcContract.ts'), 'utf8');
   const importStart = source.indexOf('const handleFile = useCallback');
   const importEnd = source.indexOf('const handleRowDoubleClick', importStart);
@@ -337,7 +342,7 @@ test('committed seasonal import refresh failures have a dedicated non-retry UI b
 });
 
 test('seasonal import recovery exposes explicit resume and targeted read-only refresh paths', () => {
-  const source = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
+  const source = readAppFile('SeasonalSchedulePage.tsx');
   const resumeStart = source.indexOf('const handleResumeImportAttempt = useCallback');
   const resumeEnd = source.indexOf('const stagePreparedSeasonalImport = useCallback', resumeStart);
   const refreshStart = source.indexOf('const handlePendingCommittedRefresh = useCallback');
@@ -378,7 +383,7 @@ test('server workspace window never fans out to direct-table fallback', () => {
 
 test('Supabase auth survives self-hosted cutover without remounting on token refresh', () => {
   const supabaseSource = readFileSync(join(root, 'lib', 'supabase.ts'), 'utf8');
-  const authGateSource = readFileSync(join(root, 'app', 'components', 'OperatorAuthGate.tsx'), 'utf8');
+  const authGateSource = readAppFile('components', 'OperatorAuthGate.tsx');
   assert.match(supabaseSource, /seasonal-management-supabase-auth-token/);
   assert.match(supabaseSource, /sb-rhmehiinfchiiuqmdukz-auth-token/);
   assert.match(supabaseSource, /sb-supabase-auth-token/);
@@ -422,9 +427,9 @@ test('app operator schema includes role permissions with server-side write bound
 });
 
 test('operator display uses app profile username and display name when available', () => {
-  const sidebarSource = readFileSync(join(root, 'app', 'components', 'AppSidebar.tsx'), 'utf8');
+  const sidebarSource = readAppFile('components', 'AppSidebar.tsx');
   const supabaseStoreSource = readFileSync(join(root, 'lib', 'supabaseStore.ts'), 'utf8');
-  const auditSource = readFileSync(join(root, 'app', 'audit', 'page.tsx'), 'utf8');
+  const auditSource = readAppFile('audit', 'page.tsx');
   assert.match(sidebarSource, /operatorAuth\.operatorLabel/);
   assert.match(supabaseStoreSource, /username,display_name/);
   assert.match(supabaseStoreSource, /operator\?\.display_name/);
@@ -433,8 +438,8 @@ test('operator display uses app profile username and display name when available
 });
 
 test('Settings Seasonal Full Replace uses the permissioned V3 preview pipeline only', () => {
-  const settingsSource = readFileSync(join(root, 'app', 'settings', 'page.tsx'), 'utf8');
-  const repairSource = readFileSync(join(root, 'app', 'settings', 'components', 'SeasonRepairTab.tsx'), 'utf8');
+  const settingsSource = readAppFile('settings', 'page.tsx');
+  const repairSource = readAppFile('settings', 'components', 'SeasonRepairTab.tsx');
   const handlerStart = settingsSource.indexOf('const handleSeasonRepairImport');
   const handlerEnd = settingsSource.indexOf('const updateAirlineColor', handlerStart);
   const handlerSource = settingsSource.slice(handlerStart, handlerEnd);
@@ -473,8 +478,8 @@ test('Settings Seasonal Full Replace uses the permissioned V3 preview pipeline o
 test('Seasonal remote stores expose provenance reads and no direct source-row/import compatibility mutations', () => {
   const remoteSource = readFileSync(join(root, 'lib', 'remoteStore.ts'), 'utf8');
   const supabaseSource = readFileSync(join(root, 'lib', 'supabaseStore.ts'), 'utf8');
-  const seasonalSource = readFileSync(join(root, 'app', 'SeasonalSchedulePage.tsx'), 'utf8');
-  const settingsSource = readFileSync(join(root, 'app', 'settings', 'page.tsx'), 'utf8');
+  const seasonalSource = readAppFile('SeasonalSchedulePage.tsx');
+  const settingsSource = readAppFile('settings', 'page.tsx');
   const interfaceStart = remoteSource.indexOf('export interface RemoteStore');
   const interfaceEnd = remoteSource.indexOf('let cachedStore', interfaceStart);
   const exportsStart = remoteSource.indexOf('export function getRemoteStore');

@@ -45,6 +45,7 @@ const {
   buildSourceRowRebuildPlan,
 } = require(path.join(tempDir, 'canonicalSeasonalRows.js'));
 const { expandToFlightLegs } = require(path.join(tempDir, 'parser.js'));
+const { resolveSeasonalPairs } = require(path.join(tempDir, 'seasonalPairing.js'));
 
 test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -306,4 +307,75 @@ test('synthetic merge export round-trips preserved and incoming occurrence signa
     reparsedLegs.map(signature).sort(),
     canonical.effectiveLegs.map(signature).sort(),
   );
+});
+
+test('canonical rows preserve overnight turnaround in single source row with arrival anchor date', () => {
+  const arrivalId = 'k6-arr-1';
+  const departureId = 'k6-dep-1';
+  const records = [
+    flightRecord({
+      id: arrivalId,
+      airline: 'K6',
+      flightNumber: 'K6842',
+      rawFlightNumber: '842',
+      route: 'SAI',
+      schedule: '19:00',
+      aircraft: '320',
+      type: 'A',
+      date: '2026-10-25',
+      linkId: 'TRN-K6-1',
+      turnaroundId: 'TRN-K6-1',
+      linkType: 'overnight',
+      pairAnchorDate: '2026-10-25',
+      linkedRecordId: departureId,
+      sourceRowIndex: 1,
+    }),
+    flightRecord({
+      id: departureId,
+      airline: 'K6',
+      flightNumber: 'K6841',
+      rawFlightNumber: '841',
+      route: 'TPE',
+      schedule: '15:40',
+      aircraft: '320',
+      type: 'D',
+      date: '2026-10-26',
+      linkId: 'TRN-K6-1',
+      turnaroundId: 'TRN-K6-1',
+      linkType: 'overnight',
+      pairAnchorDate: '2026-10-25',
+      linkedRecordId: arrivalId,
+      sourceRowIndex: 2,
+    }),
+  ];
+
+  const canonical = buildCanonicalSeasonalRows({
+    records,
+    modifications: new Map(),
+  });
+
+  assert.equal(canonical.rows.length, 1);
+  const row = canonical.rows[0];
+  assert.equal(row.arrFlight, '842');
+  assert.equal(row.sta, '19:00');
+  assert.equal(row.depFlight, '841');
+  assert.equal(row.std, '15:40');
+  assert.equal(row.effective, '25-Oct-26');
+  assert.equal(row.discontinue, '25-Oct-26');
+
+  const reparsedLegs = expandToFlightLegs(canonical.rows);
+  assert.equal(reparsedLegs.length, 2);
+  const arrLeg = reparsedLegs.find((l) => l.type === 'A');
+  const depLeg = reparsedLegs.find((l) => l.type === 'D');
+  assert(arrLeg && depLeg);
+  assert.equal(arrLeg.date, '2026-10-25');
+  assert.equal(depLeg.date, '2026-10-26');
+  assert.equal(arrLeg.linkType, 'overnight');
+  assert.equal(depLeg.linkType, 'overnight');
+
+  const reparsedPairs = resolveSeasonalPairs(reparsedLegs);
+  assert.equal(reparsedPairs.pairs.length, 1);
+  assert.equal(reparsedPairs.issues.length, 0);
+  assert.equal(reparsedPairs.pairs[0].arrival.flightNumber, 'K6842');
+  assert.equal(reparsedPairs.pairs[0].departure.flightNumber, 'K6841');
 });

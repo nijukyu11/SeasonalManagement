@@ -214,3 +214,89 @@ test('legacy compatibility helpers delegate to turnaround resolution', () => {
   assert.equal(isValidLinkedFlightPair(arrival, departure), true);
   assert.equal(findValidLinkedCounterpart(arrival, [arrival, departure])?.id, departure.id);
 });
+
+test('pair resolver ignores occurrence-key-only turnaround IDs without emitting missing-counterpart', () => {
+  const dailyDep = leg({
+    id: 'DAILY_V2_0024fb99f353151a608ce1c54c8d01cc',
+    flightNumber: 'PR586',
+    date: '2026-08-13',
+    type: 'D',
+    turnaroundId: 'S26|2026-08-13|DEP|PR|PR586',
+  });
+  const dailyArr = leg({
+    id: 'DAILY_V2_1a74f6547f82a7feea5f2024a91feca7',
+    flightNumber: 'PR585',
+    date: '2026-08-13',
+    type: 'A',
+    turnaroundId: 'S26|2026-08-13|ARR|PR|PR585',
+  });
+
+  const result = resolveSeasonalPairs([dailyDep, dailyArr]);
+
+  assert.equal(result.issues.length, 0);
+  assert.equal(result.pairs.length, 0);
+  assert.equal(result.unpaired.length, 2);
+});
+
+test('pair resolver pairs 1:1 daily turnarounds with TRN_DAILY_ identifiers (sameday and overnight)', () => {
+  const arrSameday = leg({
+    id: 'DAILY_ARR_SAME',
+    flightNumber: 'PR585',
+    date: '2026-08-13',
+    type: 'A',
+    turnaroundId: 'TRN_DAILY_PR_585_586_2026-08-13_DAILY_ARR_SAME_DAILY_DEP_SAME',
+    linkId: 'TRN_DAILY_PR_585_586_2026-08-13_DAILY_ARR_SAME_DAILY_DEP_SAME',
+    linkedRecordId: 'DAILY_DEP_SAME',
+    linkType: 'sameday',
+    pairAnchorDate: '2026-08-13',
+  });
+  const depSameday = leg({
+    id: 'DAILY_DEP_SAME',
+    flightNumber: 'PR586',
+    date: '2026-08-13',
+    type: 'D',
+    turnaroundId: 'TRN_DAILY_PR_585_586_2026-08-13_DAILY_ARR_SAME_DAILY_DEP_SAME',
+    linkId: 'TRN_DAILY_PR_585_586_2026-08-13_DAILY_ARR_SAME_DAILY_DEP_SAME',
+    linkedRecordId: 'DAILY_ARR_SAME',
+    linkType: 'sameday',
+    pairAnchorDate: '2026-08-13',
+  });
+
+  const arrOvernight = leg({
+    id: 'DAILY_ARR_NIGHT',
+    flightNumber: 'LJ081',
+    date: '2026-08-01',
+    type: 'A',
+    turnaroundId: 'TRN_DAILY_LJ_081_082_2026-08-01_DAILY_ARR_NIGHT_DAILY_DEP_NIGHT',
+    linkId: 'TRN_DAILY_LJ_081_082_2026-08-01_DAILY_ARR_NIGHT_DAILY_DEP_NIGHT',
+    linkedRecordId: 'DAILY_DEP_NIGHT',
+    linkType: 'overnight',
+    pairAnchorDate: '2026-08-01',
+  });
+  const depOvernight = leg({
+    id: 'DAILY_DEP_NIGHT',
+    flightNumber: 'LJ082',
+    date: '2026-08-02',
+    type: 'D',
+    turnaroundId: 'TRN_DAILY_LJ_081_082_2026-08-01_DAILY_ARR_NIGHT_DAILY_DEP_NIGHT',
+    linkId: 'TRN_DAILY_LJ_081_082_2026-08-01_DAILY_ARR_NIGHT_DAILY_DEP_NIGHT',
+    linkedRecordId: 'DAILY_ARR_NIGHT',
+    linkType: 'overnight',
+    pairAnchorDate: '2026-08-01',
+  });
+
+  const singleDep = leg({
+    id: 'DAILY_DEP_SINGLE',
+    flightNumber: 'QH9588',
+    date: '2026-08-23',
+    type: 'D',
+    linkId: 'DAILY_DEP_SINGLE',
+  });
+
+  const result = resolveSeasonalPairs([arrSameday, depSameday, arrOvernight, depOvernight, singleDep]);
+
+  assert.equal(result.issues.length, 0);
+  assert.equal(result.pairs.length, 2);
+  assert.equal(result.unpaired.length, 1);
+  assert.equal(result.unpaired[0].id, 'DAILY_DEP_SINGLE');
+});

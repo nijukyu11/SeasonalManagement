@@ -13,6 +13,7 @@ import {
   getSeasonalExportSnapshot,
   loadSeasonWorkspaceWindow,
   stageSeasonalImportV3,
+  type RemoteSeasonalExportSnapshot,
 } from '@/lib/remoteStore';
 import { validateFlightLegsForSeasonalExport } from '@/lib/exporter';
 import { buildCanonicalSeasonalRows, downloadCanonicalSeasonalExcel } from '@/lib/canonicalSeasonalRows';
@@ -52,6 +53,7 @@ import {
   prepareSeasonalImportV3Attempt,
   type SeasonalImportV3Attempt,
   type SeasonalImportV3CommittedResult,
+  type SeasonalImportV3StageResult,
   type SeasonalImportV3Strategy,
 } from '@/lib/seasonalImportV3Contract';
 import {
@@ -106,6 +108,28 @@ import SyncActionButton from './components/SyncActionButton';
 import NewFlightModal from './components/NewFlightModal';
 import SeasonalImportPreviewDialog from './components/SeasonalImportPreviewDialog';
 import LoadingStatusPanel from './components/LoadingStatusPanel';
+import SeasonalPublishModal from './components/SeasonalPublishModal';
+import { isSeasonalPlanningV1Enabled, seasonalDraftToFlightRecord, type SeasonalDraftChangeInput, type SeasonalDraftRecord } from '@/lib/seasonalPlanningContract';
+import {
+  applyModificationsToFlightRecords,
+  buildAuthoritativeDraftUndoChanges,
+  createInitialDraftSaveState,
+  executeSeasonalPlanningDraftSave,
+  isDraftWorkspaceNotFoundError,
+  loadFullSeasonalDraftRecords,
+  retrySeasonalPlanningDraft,
+  seasonalDraftExportSnapshotToFlightRecords,
+  type SeasonalDraftSaveState,
+} from '@/lib/seasonalPlanningSaveManager';
+import {
+  applySeasonalDraftChangesV1,
+  cancelSeasonalDraftImportV1,
+  commitSeasonalDraftImportV1,
+  getSeasonalDraftExportSnapshotV1,
+  getSeasonalDraftWindowV1,
+  getSeasonalDraftImportStatusV1,
+  stageSeasonalDraftImportV1,
+} from '@/lib/remoteStore';
 import WorkspacePageHeader from './components/WorkspacePageHeader';
 import {
   getSeasonSyncLabel,
@@ -204,6 +228,61 @@ function noOpModificationForRecord(record: FlightRecord): FlightModification {
   };
 }
 
+interface SeasonalDraftImportResponse {
+  batchId: string;
+  requestId?: string;
+  seasonId?: string;
+  status?: string;
+  previewHash: string;
+  expiresAt?: string;
+  preview?: {
+    seasonId?: string;
+    seasonCode?: string;
+    valid?: boolean;
+    expectedDataVersion?: number;
+    counts?: Record<string, number>;
+    diagnostics?: unknown[];
+    warnings?: unknown[];
+  };
+  counts?: Record<string, number>;
+  diagnostics?: unknown[];
+  warnings?: unknown[];
+  result?: {
+    draftEpoch?: string;
+    draftRevision?: string | number;
+    counts?: Record<string, number>;
+  } | null;
+}
+
+function draftImportResponseToPreview(
+  response: SeasonalDraftImportResponse,
+  fallback: { requestId: string; seasonId: string; seasonCode: string; strategy: SeasonalImportV3Strategy; expectedDataVersion: number },
+): SeasonalImportV3StageResult {
+  const counts = response.counts || response.preview?.counts || {};
+  const diagnostics = (response.diagnostics || response.preview?.diagnostics || []) as SeasonalImportV3StageResult['diagnostics'];
+  const warnings = (response.warnings || response.preview?.warnings || []) as SeasonalImportV3StageResult['warnings'];
+  const status = (response.status as SeasonalImportV3StageResult['status']) || 'validated';
+  return {
+    batchId: response.batchId,
+    requestId: response.requestId || fallback.requestId,
+    seasonId: response.seasonId || response.preview?.seasonId || fallback.seasonId,
+    seasonCode: response.preview?.seasonCode || fallback.seasonCode,
+    strategy: fallback.strategy,
+    status,
+    valid: Boolean(response.preview?.valid ?? (status === 'validated')),
+    expectedDataVersion: response.preview?.expectedDataVersion ?? fallback.expectedDataVersion,
+    previewHash: response.previewHash,
+    counts: counts as unknown as SeasonalImportV3StageResult['counts'],
+    diagnosticCount: diagnostics.length,
+    diagnosticsTruncated: false,
+    diagnostics,
+    warningCount: warnings.length,
+    warningsTruncated: false,
+    warnings,
+    expiresAt: response.expiresAt || new Date(Date.now() + 7200000).toISOString(),
+  };
+}
+
 export default function HomePage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -236,6 +315,7 @@ export default function HomePage() {
   const [modifications, setModifications] = useState<Map<string, FlightModification>>(new Map());
   const [modHistory, setModHistory] = useState<ModHistoryEntry[]>([]);
   const [draftState, setDraftStateValue] = useState<SeasonalScheduleDraftState | null>(null);
+  const [draftSaveState, setDraftSaveState] = useState<SeasonalDraftSaveState>(() => createInitialDraftSaveState(0));
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
@@ -314,6 +394,9 @@ export default function HomePage() {
   const draftChangeCount = countSeasonalDraftChanges(draftState);
   const hasDraftChanges = draftChangeCount > 0;
 
+  const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
+  const latestDraftRevisionRef = useRef<number | string>(0);
+  const latestDraftEpochRef = useRef<string | null>(null);
   useEffect(() => {
     if (!activeSeason?.id) return;
     setSeasonalFileActionRuntimeState(activeSeason.id, {
@@ -321,6 +404,18 @@ export default function HomePage() {
       draftRevision: latestDraftStateRef.current.revision,
     });
   }, [activeSeason?.id, draftState, hasDraftChanges]);
+
+
+  useEffect(() => {
+    if (!isSeasonalPlanningV1Enabled()) return;
+    if (!draftSaveState.hasUnconfirmedChanges && draftSaveState.status !== 'saving') return;
+    const preventUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', preventUnload);
+    return () => window.removeEventListener('beforeunload', preventUnload);
+  }, [draftSaveState.hasUnconfirmedChanges, draftSaveState.status]);
   const seasonalFileActionActive = activeFileActionToken !== null;
   const seasonalMutationActive = activeMutationToken !== null;
   const seasonalImportRecoveryPending = pendingImportAttempt !== null || pendingCommittedImport !== null;
@@ -442,6 +537,27 @@ export default function HomePage() {
     });
     setExportAllSelected(false);
   }, []);
+
+  const handleRetryDraftSave = useCallback(async () => {
+    if (!activeSeason || draftSaveState.status !== 'error') return;
+    setDraftSaveState((prev) => ({ ...prev, status: 'saving', error: null }));
+    const saveResult = await retrySeasonalPlanningDraft(draftSaveState);
+    if (saveResult.result) {
+      setDraftSaveState(saveResult.state);
+      if (saveResult.result.status === 'saved' && saveResult.result.receipt) {
+        latestDraftRevisionRef.current = saveResult.result.receipt.revision;
+        try {
+          const draftData = await loadFullSeasonalDraftRecords(activeSeason.id, getSeasonalDraftWindowV1);
+          setFlightRecords(draftData.records);
+          const nextRows = buildPatternRowsFromRecords(draftData.records, modifications);
+          setDisplayRows(enrichRows(nextRows));
+          applySeasonData(nextRows, draftData.records, modifications);
+        } catch {
+          // Keep optimistic if reload window transiently fails
+        }
+      }
+    }
+  }, [activeSeason, applySeasonData, draftSaveState, modifications, setDraftSaveState]);
 
   const publishSeasonalWorkspaceChange = useCallback((
     seasonId: string,
@@ -622,11 +738,72 @@ export default function HomePage() {
       flight: debouncedFilters.flight || null,
       route: debouncedFilters.route || null,
     });
+    const startDraftRevision = latestDraftStateRef.current.revision;
     const requestIsCurrent = () => !requestGuard || (
       fetchServerDataRequestRef.current === requestGuard.requestId &&
       latestRouteWindowRef.current.seasonId === requestGuard.seasonId &&
-      latestRouteWindowRef.current.windowKey === requestGuard.windowKey
+      latestRouteWindowRef.current.windowKey === requestGuard.windowKey &&
+      !latestDraftStateRef.current.hasDraftChanges &&
+      latestDraftStateRef.current.revision === startDraftRevision &&
+      latestDraftStateRef.current.value === null
     );
+    if (isSeasonalPlanningV1Enabled()) {
+      setLoadProgress(buildLoadProgress('Loading seasonal draft workspace', 25, season.seasonCode));
+      try {
+        const draftData = await loadFullSeasonalDraftRecords(season.id, getSeasonalDraftWindowV1);
+        if (!requestIsCurrent()) return;
+        loadedWindowKeyRef.current = windowKey;
+        latestDraftRevisionRef.current = draftData.revision;
+        latestDraftEpochRef.current = draftData.epoch;
+        setDraftSaveState(createInitialDraftSaveState(draftData.revision));
+        const records = draftData.records;
+        const mods = new Map<string, FlightModification>();
+        const rows = buildPatternRowsFromRecords(records, mods);
+        setLoadProgress(buildLoadProgress('Rendering seasonal schedule', 80, `${records.length} records`));
+        setCachedSeasonData(season.id, {
+          rows,
+          records,
+          modifications: mods,
+          seasonDataVersion: season.dataVersion,
+        });
+        const syncMeta: LocalSyncMeta = {
+          seasonId: season.id,
+          localRevision: Number(draftData.revision) || 0,
+          pendingCount: 0,
+          lastLocalChangeAt: Date.now(),
+          baseServerVersion: season.dataVersion ?? 0,
+          syncStatus: 'synced',
+        };
+        useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+          seasonId: season.id,
+          season,
+          rows,
+          records,
+          modifications: mods,
+          syncMeta,
+          windowKey,
+        });
+        setActiveSeason(season);
+        applySeasonData(rows, records, mods);
+        setModHistory([]);
+        setDraftState(null);
+        setSyncSummary({
+          pendingCount: 0,
+          lastLocalChangeAt: Date.now(),
+        });
+        publishSeasonWorkspaceChanged({
+          seasonId: season.id,
+          localRevision: syncMeta.localRevision,
+          source: 'server-window',
+          syncMeta,
+        });
+        return;
+      } catch (err) {
+        if (!isDraftWorkspaceNotFoundError(err)) {
+          throw err;
+        }
+      }
+    }
     const cachedWindow = force
       ? null
       : readCachedWorkspaceWindow(useSeasonWorkspaceStore.getState().workspaces[season.id], windowKey);
@@ -687,6 +864,16 @@ export default function HomePage() {
         source: 'server-window',
         syncMeta: serverWindow.syncMeta,
       });
+      if (isSeasonalPlanningV1Enabled()) {
+        try {
+          const draftWindow = await getSeasonalDraftWindowV1({ seasonId: season.id, pageSize: 1 });
+          latestDraftRevisionRef.current = draftWindow.revision;
+          latestDraftEpochRef.current = draftWindow.epoch;
+          setDraftSaveState(createInitialDraftSaveState(draftWindow.revision));
+        } catch {
+          // Draft window not yet initialized
+        }
+      }
       return;
     }
     throw new Error('Server seasonal schedule window is unavailable.');
@@ -765,6 +952,14 @@ export default function HomePage() {
 
   const handleSeasonChange = useCallback(async (seasonId: string) => {
     if (fileActionControllerRef.current.isFileActionActive()) return;
+    if (isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges)) {
+      void showAlert({
+        title: 'Bản nháp chưa được lưu',
+        message: 'Không thể chuyển mùa khi có thay đổi bản nháp đang lưu hoặc chưa được xác nhận bởi máy chủ.',
+        tone: 'warning',
+      });
+      return;
+    }
     const found = seasons.find(s => s.id === seasonId);
     if (!found) return;
     setSelectedRecordIds(new Set());
@@ -782,7 +977,7 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [loadSeasonRows, seasons, setActiveSeason]);
+  }, [draftSaveState.hasUnconfirmedChanges, draftSaveState.status, loadSeasonRows, seasons, setActiveSeason, showAlert]);
 
   const handleRetryLoad = useCallback(async () => {
     if (!activeSeason || fileActionControllerRef.current.isFileActionActive()) return;
@@ -997,9 +1192,12 @@ export default function HomePage() {
   const handleExportUpdated = useCallback(async () => {
     if (!activeSeason) return;
     const exportSeason = activeSeason;
+    const isPlanning = isSeasonalPlanningV1Enabled();
     const exportSelection: SeasonalExportSelection = {
       seasonId: exportSeason.id,
-      dataVersion: exportSeason.dataVersion ?? 0,
+      dataVersion: isPlanning
+        ? Number(latestDraftRevisionRef.current ?? 0)
+        : (exportSeason.dataVersion ?? 0),
       mode: exportAllSelected ? 'all' : 'ids',
       recordIds: Array.from(selectedRecordIds),
     };
@@ -1031,10 +1229,41 @@ export default function HomePage() {
     }
     try {
       setIsExporting(true);
-      const exportSnapshot = await getSeasonalExportSnapshot({
-        seasonId: exportSeason.id,
-        expectedDataVersion: exportSelection.dataVersion,
-      });
+      let exportSnapshot: RemoteSeasonalExportSnapshot;
+      if (isPlanning) {
+        let epoch = latestDraftEpochRef.current;
+        let revision = latestDraftRevisionRef.current;
+        if (!epoch) {
+          const draftWindow = await getSeasonalDraftWindowV1({ seasonId: exportSeason.id, pageSize: 1 });
+          epoch = draftWindow.epoch;
+          revision = draftWindow.revision;
+          latestDraftEpochRef.current = epoch;
+          latestDraftRevisionRef.current = revision;
+        }
+        const draftSnapshot = await getSeasonalDraftExportSnapshotV1({
+          seasonId: exportSeason.id,
+          expectedEpoch: epoch,
+          expectedRevision: revision,
+        });
+        const records = seasonalDraftExportSnapshotToFlightRecords(draftSnapshot);
+        exportSnapshot = {
+          seasonId: draftSnapshot.seasonId,
+          seasonCode: draftSnapshot.seasonCode,
+          dataVersion: Number(draftSnapshot.draftRevision),
+          totalCount: draftSnapshot.totalCount,
+          sourceRowCount: draftSnapshot.totalCount,
+          serverHighWater: Number(draftSnapshot.serverHighWater),
+          truncated: false,
+          records,
+          modifications: new Map(),
+        };
+        exportSelection.dataVersion = exportSnapshot.dataVersion;
+      } else {
+        exportSnapshot = await getSeasonalExportSnapshot({
+          seasonId: exportSeason.id,
+          expectedDataVersion: exportSelection.dataVersion,
+        });
+      }
       const snapshotInvalidation = validateSeasonalFileAction(operation);
       if (snapshotInvalidation) {
         showSeasonalFileActionInvalidation('export', snapshotInvalidation);
@@ -1148,8 +1377,8 @@ export default function HomePage() {
       if (targetIdx === -1) return;
       const historyToUndoFrom = modHistory;
       const entriesToUndo = historyToUndoFrom.slice(0, targetIdx + 1);
-      const nextMods = revertModificationHistoryMap(modifications, entriesToUndo);
-      const nextRecords = revertFlightRecordHistoryList(flightRecords, entriesToUndo);
+      let nextMods = revertModificationHistoryMap(modifications, entriesToUndo);
+      let nextRecords = revertFlightRecordHistoryList(flightRecords, entriesToUndo);
       const undoTimestamp = new Date().getTime();
       const currentRecordsById = new Map(flightRecords.map((record) => [record.id, record]));
       const nextRecordsById = new Map(nextRecords.map((record) => [record.id, record]));
@@ -1178,19 +1407,60 @@ export default function HomePage() {
           }
         }
       }
-      const nativeSyncMeta = await runNativeScheduleMutation(
-        activeSeason.id,
-        Array.from(undoRecords.values()),
-        Array.from(undoDeletedRecords.values()),
-        Array.from(undoMods.values()),
-        {
-          id: `LOCAL_UNDO_${undoTimestamp}`,
-          timestamp: undoTimestamp,
-          description: `Undid ${targetEntry.description}`,
-        },
-        [],
-        'seasonal'
-      );
+      let nativeSyncMeta: LocalSyncMeta | null = null;
+      if (isSeasonalPlanningV1Enabled()) {
+        const undoChanges = (entriesToUndo as Array<ModHistoryEntry & { draftUndoChanges?: SeasonalDraftChangeInput[] }>)
+          .flatMap((entry) => entry.draftUndoChanges ?? []);
+
+        setDraftSaveState((prev) => ({ ...prev, status: 'saving', hasUnconfirmedChanges: true, error: null }));
+        const saveResult = await executeSeasonalPlanningDraftSave({
+          seasonId: activeSeason.id,
+          currentRecords: nextRecords,
+          baseRecords: flightRecords,
+          expectedRevision: latestDraftRevisionRef.current,
+          applyFn: applySeasonalDraftChangesV1,
+          changes: undoChanges.length > 0 ? undoChanges : undefined,
+        });
+        setDraftSaveState((prev) => ({ ...saveResult.state, lastSavedAt: saveResult.state.lastSavedAt ?? prev.lastSavedAt }));
+        if (saveResult.result.status === 'stale') {
+          throw new Error('Phiên bản kế hoạch mùa đã thay đổi bởi người dùng khác. Vui lòng tải lại dữ liệu.');
+        }
+        if (saveResult.result.status === 'error') {
+          throw new Error(saveResult.result.error || 'Lưu thay đổi kế hoạch mùa thất bại.');
+        }
+        if (saveResult.result.receipt) {
+          latestDraftRevisionRef.current = saveResult.result.receipt.revision;
+          try {
+            const draftData = await loadFullSeasonalDraftRecords(activeSeason.id, getSeasonalDraftWindowV1);
+            nextRecords = draftData.records;
+          } catch {
+            // Keep optimistic records if reload transiently fails
+          }
+        }
+        nextMods = new Map();
+        nativeSyncMeta = {
+          seasonId: activeSeason.id,
+          localRevision: Number(saveResult.result.receipt?.revision ?? latestDraftRevisionRef.current),
+          pendingCount: 0,
+          lastLocalChangeAt: Date.now(),
+          baseServerVersion: activeSeason.dataVersion ?? 0,
+          syncStatus: 'synced',
+        };
+      } else {
+        nativeSyncMeta = await runNativeScheduleMutation(
+          activeSeason.id,
+          Array.from(undoRecords.values()),
+          Array.from(undoDeletedRecords.values()),
+          Array.from(undoMods.values()),
+          {
+            id: `LOCAL_UNDO_${undoTimestamp}`,
+            timestamp: undoTimestamp,
+            description: `Undid ${targetEntry.description}`,
+          },
+          [],
+          'seasonal'
+        );
+      }
       if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
       const nextRows = buildPatternRowsFromRecords(nextRecords, nextMods);
       applySeasonData(nextRows, nextRecords, nextMods);
@@ -1206,10 +1476,12 @@ export default function HomePage() {
         ...entry.changes.map((change) => change.legId),
         ...(entry.recordChanges?.map((change) => change.recordId) ?? []),
       ]);
+      const nextRecordIds = new Set(nextRecords.map((record) => record.id));
       useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
         seasonId: activeSeason.id,
         affectedIds,
         records: nextRecords,
+        deletedIds: flightRecords.filter((record) => !nextRecordIds.has(record.id)).map((record) => record.id),
         modifications: nextMods,
         syncMeta: nativeSyncMeta,
       });
@@ -1308,6 +1580,91 @@ export default function HomePage() {
     const mutation = beginSeasonalMutation();
     if (!mutation) throw new Error('Another Seasonal operation is still running.');
     try {
+      if (isSeasonalPlanningV1Enabled()) {
+        const appliedBaseRecords = applyModificationsToFlightRecords(draftState.baseRecords, regularMods);
+        const currentRecords = [...appliedBaseRecords, ...addedRecords];
+        setDraftSaveState((prev) => ({ ...prev, status: 'saving', hasUnconfirmedChanges: true, error: null }));
+        const saveResult = await executeSeasonalPlanningDraftSave({
+          seasonId: activeSeason.id,
+          currentRecords,
+          baseRecords: draftState.baseRecords,
+          expectedRevision: latestDraftRevisionRef.current,
+          applyFn: applySeasonalDraftChangesV1,
+        });
+        setDraftSaveState((prev) => ({ ...saveResult.state, lastSavedAt: saveResult.state.lastSavedAt ?? prev.lastSavedAt }));
+        const planningResult = saveResult.result;
+        if (planningResult.status === 'stale') {
+          throw new Error('Phiên bản kế hoạch mùa đã thay đổi bởi người dùng khác. Vui lòng tải lại dữ liệu trước khi lưu.');
+        }
+        if (planningResult.status === 'error') {
+          throw new Error(planningResult.error || 'Lỗi lưu bản nháp mùa lên server.');
+        }
+        if (planningResult.receipt) {
+          latestDraftRevisionRef.current = planningResult.receipt.revision;
+        }
+        // Planning bakes modifications into rows, so undo must restore rows; server events carry the
+        // authoritative post-state (deleted rows and survivors the RPC unlinked).
+        const committedRecordsById = new Map((planningResult.receipt?.events ?? []).map((event) => [
+          event.draftId,
+          seasonalDraftToFlightRecord(event.after as unknown as SeasonalDraftRecord),
+        ]));
+        const planningUndoChanges = planningResult.receipt
+          ? buildAuthoritativeDraftUndoChanges(planningResult.receipt, draftState?.baseRecords ?? flightRecords)
+          : [];
+        const planningHistoryEntry: ModHistoryEntry & { draftUndoChanges?: SeasonalDraftChangeInput[] } = {
+          ...historyEntry,
+          changes: [],
+          draftUndoChanges: planningUndoChanges,
+          recordChanges: Array.from(committedRecordsById, ([recordId, newRecord]) => ({
+            recordId,
+            previousRecord: existingRecordsById.get(recordId) ?? null,
+            newRecord,
+          })),
+        };
+        const effectiveRecords = currentRecords
+          .map((record) => committedRecordsById.get(record.id) ?? record)
+          .filter((record) => record.status !== 'deleted');
+        const nextRows = buildPatternRowsFromRecords(effectiveRecords, new Map());
+        applySeasonData(nextRows, effectiveRecords, new Map());
+        setCachedSeasonData(activeSeason.id, {
+          rows: nextRows,
+          records: effectiveRecords,
+          modifications: new Map(),
+          seasonDataVersion: activeSeason.dataVersion,
+        });
+        const committedIds = Array.from(committedRecordsById.keys());
+        const planningSyncMeta: LocalSyncMeta = {
+          seasonId: activeSeason.id,
+          localRevision: Number(latestDraftRevisionRef.current),
+          pendingCount: 0,
+          lastLocalChangeAt: Date.now(),
+          baseServerVersion: activeSeason.dataVersion ?? 0,
+          syncStatus: 'synced',
+        };
+        useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
+          seasonId: activeSeason.id,
+          affectedIds: committedIds,
+          rows: nextRows,
+          records: effectiveRecords.filter((record) => committedRecordsById.has(record.id)),
+          deletedIds: committedIds.filter((id) => committedRecordsById.get(id)?.status === 'deleted'),
+          syncMeta: planningSyncMeta,
+        });
+        publishSeasonalWorkspaceChange(activeSeason.id, planningSyncMeta.localRevision, committedIds, planningSyncMeta);
+        setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([planningHistoryEntry, ...modHistory])));
+        setDraftState(null);
+        void appendAuditLogEntry(createFlightActionAuditFromHistory({
+          season: activeSeason,
+          module: 'seasonal',
+          operation: description,
+          beforeRecords: draftState.baseRecords,
+          afterRecords: effectiveRecords,
+          beforeModifications: draftState.baseModifications,
+          afterModifications: modifications,
+          targetRecordIds,
+        }));
+        return;
+      }
+
       const nativeSyncMeta = await runNativeScheduleMutation(
         activeSeason.id,
         addedRecords,
@@ -1346,6 +1703,7 @@ export default function HomePage() {
     }
   }, [
     activeSeason,
+    applySeasonData,
     beginSeasonalMutation,
     draftState,
     finishSeasonalMutation,
@@ -1369,10 +1727,39 @@ export default function HomePage() {
     blockingUi: false,
   });
   useSeasonSyncGuard(activeSeason?.id, 'seasonal-draft', {
-    blocked: false,
-    quiet: true,
-    blockingUi: false,
+    blocked: isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges),
+    reason: draftSaveState.status === 'saving'
+      ? 'Đang lưu bản nháp kế hoạch mùa...'
+      : draftSaveState.status === 'error'
+        ? 'Lưu bản nháp kế hoạch mùa thất bại, có thay đổi chưa xác nhận'
+        : 'Có thay đổi bản nháp kế hoạch mùa chưa xác nhận',
+    quiet: false,
+    blockingUi: true,
   });
+  const handleOpenPublishModal = useCallback(async () => {
+    if (syncInProgress || fileActionControllerRef.current.isFileActionActive()) return;
+    if (isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges)) {
+      void showAlert({
+        title: 'Chưa thể công bố',
+        message: 'Không thể công bố khi bản nháp đang được lưu hoặc có thay đổi chưa được xác nhận bởi máy chủ.',
+        tone: 'warning',
+      });
+      return;
+    }
+    if (hasDraftChanges) {
+      try {
+        await commitDraftBeforeSave();
+      } catch (err) {
+        void showAlert({
+          title: 'Chưa thể công bố',
+          message: `Lưu thay đổi nháp thất bại: ${(err as Error).message}. Vui lòng kiểm tra lại.`,
+          tone: 'error',
+        });
+        return;
+      }
+    }
+    setIsPublishModalOpen(true);
+  }, [commitDraftBeforeSave, draftSaveState.hasUnconfirmedChanges, draftSaveState.status, hasDraftChanges, showAlert, syncInProgress]);
 
   const handleDeleteGroup = useCallback(async (group: DisplayGroup) => {
     if (!activeSeason || syncInProgress) return;
@@ -1409,48 +1796,107 @@ export default function HomePage() {
         if (!shouldDelete) return;
       }
 
-      const baseRecordIds = new Set((draftState?.baseRecords ?? flightRecords).map((record) => record.id));
-      // A leg created inside this draft has no server row yet: deleting it is a
-      // local removal. Writing a 'deleted' draft mod for it would be dropped by
-      // compactDraftModifications at commit, leaving the record as an active
-      // insert that survives reload.
-      const { draftAddedIds, persistedIds } = partitionDraftDeleteTargets(targetIds, baseRecordIds);
-      const localDeleteIds = new Set(draftAddedIds);
-      const deleteMods = persistedIds.map((id) => ({ legId: id, action: 'deleted' as const }));
-      const nextRecords = localDeleteIds.size === 0
-        ? flightRecords
-        : flightRecords.filter((record) => !localDeleteIds.has(record.id));
-      const nextMods = new Map(modifications);
-      deleteMods.forEach((mod) => nextMods.set(mod.legId, mod));
-      localDeleteIds.forEach((id) => nextMods.delete(id));
-      const baseDraft = draftState ?? {
-        baseRows: displayRows as unknown as ParsedRow[],
-        baseRecords: flightRecords,
-        baseModifications: modifications,
-        records: [],
-        modifications: [],
-      };
-      const nextRows = buildPatternRowsFromRecords(nextRecords, nextMods);
-      applySeasonData(nextRows, nextRecords, nextMods);
-      setCachedSeasonData(activeSeason.id, {
-        rows: nextRows,
-        records: nextRecords,
-        modifications: nextMods,
-        seasonDataVersion: activeSeason.dataVersion,
-      });
-      useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
-        seasonId: activeSeason.id,
-        affectedIds: [...getAffectedIdsFromSeasonalModifications(deleteMods), ...draftAddedIds],
-        deletedIds: draftAddedIds,
-        rows: nextRows,
-        records: nextRecords,
-        modifications: nextMods,
-      });
-      setDraftState({
-        ...baseDraft,
-        records: baseDraft.records.filter((record) => !localDeleteIds.has(record.id)),
-        modifications: [...baseDraft.modifications, ...deleteMods],
-      });
+      if (isSeasonalPlanningV1Enabled()) {
+        const deletedRecords = flightRecords.filter((r) => targetIds.includes(r.id));
+        let effectiveRecords = flightRecords.filter((r) => !targetIds.includes(r.id));
+        const historyTimestamp = Date.now();
+        const historyEntry: ModHistoryEntry = {
+          id: `LOCAL_DEL_${historyTimestamp}`,
+          timestamp: historyTimestamp,
+          description: `Deleted ${targetIds.length} flight occurrence(s) for ${flightLabel}`,
+          changes: [],
+          recordChanges: deletedRecords.map((record) => ({
+            recordId: record.id,
+            previousRecord: record,
+            newRecord: null,
+          })),
+        };
+        const nextRows = buildPatternRowsFromRecords(effectiveRecords, new Map());
+        applySeasonData(nextRows, effectiveRecords, new Map());
+        setCachedSeasonData(activeSeason.id, {
+          rows: nextRows,
+          records: effectiveRecords,
+          modifications: new Map(),
+          seasonDataVersion: activeSeason.dataVersion,
+        });
+        useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
+          seasonId: activeSeason.id,
+          affectedIds: targetIds,
+          deletedIds: targetIds,
+          rows: nextRows,
+          records: effectiveRecords,
+          modifications: new Map(),
+        });
+        setDraftSaveState((prev) => ({ ...prev, status: 'saving', hasUnconfirmedChanges: true, error: null }));
+        const saveResult = await executeSeasonalPlanningDraftSave({
+          seasonId: activeSeason.id,
+          currentRecords: effectiveRecords,
+          baseRecords: flightRecords,
+          expectedRevision: latestDraftRevisionRef.current,
+          applyFn: applySeasonalDraftChangesV1,
+        });
+        setDraftSaveState((prev) => ({ ...saveResult.state, lastSavedAt: saveResult.state.lastSavedAt ?? prev.lastSavedAt }));
+        if (saveResult.result.status === 'stale') {
+          throw new Error('Phiên bản kế hoạch mùa đã thay đổi bởi người dùng khác. Vui lòng tải lại dữ liệu.');
+        }
+        if (saveResult.result.status === 'error') {
+          throw new Error(saveResult.result.error || 'Lưu thay đổi kế hoạch mùa thất bại.');
+        }
+        if (saveResult.result.receipt) {
+          latestDraftRevisionRef.current = saveResult.result.receipt.revision;
+          try {
+            const draftData = await loadFullSeasonalDraftRecords(activeSeason.id, getSeasonalDraftWindowV1);
+            effectiveRecords = draftData.records;
+            const refreshedRows = buildPatternRowsFromRecords(draftData.records, new Map());
+            applySeasonData(refreshedRows, draftData.records, new Map());
+          } catch {
+            // Keep optimistic records if reload transiently fails
+          }
+        }
+        if (saveResult.result.status === 'saved' && saveResult.result.receipt) {
+          const draftUndoChanges = buildAuthoritativeDraftUndoChanges(saveResult.result.receipt, flightRecords);
+          setModHistory((prev) => trimUiUndoEntries(filterUiUndoEntriesForSession([{ ...historyEntry, draftUndoChanges }, ...prev])));
+        }
+      } else {
+        const baseRecordIds = new Set((draftState?.baseRecords ?? flightRecords).map((record) => record.id));
+        const { draftAddedIds, persistedIds } = partitionDraftDeleteTargets(targetIds, baseRecordIds);
+        const localDeleteIds = new Set(draftAddedIds);
+        const deleteMods = persistedIds.map((id) => ({ legId: id, action: 'deleted' as const }));
+        const nextRecords = localDeleteIds.size === 0
+          ? flightRecords
+          : flightRecords.filter((record) => !localDeleteIds.has(record.id));
+        const nextMods = new Map(modifications);
+        deleteMods.forEach((mod) => nextMods.set(mod.legId, mod));
+        localDeleteIds.forEach((id) => nextMods.delete(id));
+        const baseDraft = draftState ?? {
+          baseRows: displayRows as unknown as ParsedRow[],
+          baseRecords: flightRecords,
+          baseModifications: modifications,
+          records: [],
+          modifications: [],
+        };
+        const nextRows = buildPatternRowsFromRecords(nextRecords, nextMods);
+        applySeasonData(nextRows, nextRecords, nextMods);
+        setCachedSeasonData(activeSeason.id, {
+          rows: nextRows,
+          records: nextRecords,
+          modifications: nextMods,
+          seasonDataVersion: activeSeason.dataVersion,
+        });
+        useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
+          seasonId: activeSeason.id,
+          affectedIds: [...getAffectedIdsFromSeasonalModifications(deleteMods), ...draftAddedIds],
+          deletedIds: draftAddedIds,
+          rows: nextRows,
+          records: nextRecords,
+          modifications: nextMods,
+        });
+        setDraftState({
+          ...baseDraft,
+          records: baseDraft.records.filter((record) => !localDeleteIds.has(record.id)),
+          modifications: [...baseDraft.modifications, ...deleteMods],
+        });
+      }
       setSelectedRecordIds((prev) => {
         const next = new Set(prev);
         targetIds.forEach((id) => next.delete(id));
@@ -1496,21 +1942,55 @@ export default function HomePage() {
         beforeRecords: flightRecords,
         afterRecords: result.records,
       });
-      const nativeSyncMeta = await runNativeScheduleMutation(
-        activeSeason.id,
-        result.updatedRecords,
-        [],
-        [],
-        historyEntry
-          ? {
-              id: historyEntry.id,
-              timestamp: historyEntry.timestamp,
-              description: historyEntry.description,
-            }
-          : undefined,
-        [],
-        'seasonal'
-      );
+      let nativeSyncMeta: LocalSyncMeta | null = null;
+      if (isSeasonalPlanningV1Enabled()) {
+        setDraftSaveState((prev) => ({ ...prev, status: 'saving', hasUnconfirmedChanges: true, error: null }));
+        const saveResult = await executeSeasonalPlanningDraftSave({
+          seasonId: activeSeason.id,
+          currentRecords: result.records,
+          baseRecords: flightRecords,
+          expectedRevision: latestDraftRevisionRef.current,
+          applyFn: applySeasonalDraftChangesV1,
+        });
+        setDraftSaveState((prev) => ({ ...saveResult.state, lastSavedAt: saveResult.state.lastSavedAt ?? prev.lastSavedAt }));
+        if (saveResult.result.status === 'stale') {
+          throw new Error('Phiên bản kế hoạch mùa đã thay đổi bởi người dùng khác. Vui lòng tải lại dữ liệu.');
+        }
+        if (saveResult.result.status === 'error') {
+          throw new Error(saveResult.result.error || 'Lưu thay đổi kế hoạch mùa thất bại.');
+        }
+        if (saveResult.result.receipt) {
+          latestDraftRevisionRef.current = saveResult.result.receipt.revision;
+          const draftUndoChanges = buildAuthoritativeDraftUndoChanges(saveResult.result.receipt, flightRecords);
+          if (historyEntry) {
+            (historyEntry as ModHistoryEntry & { draftUndoChanges?: SeasonalDraftChangeInput[] }).draftUndoChanges = draftUndoChanges;
+          }
+        }
+        nativeSyncMeta = {
+          seasonId: activeSeason.id,
+          localRevision: Number(saveResult.result.receipt?.revision ?? latestDraftRevisionRef.current),
+          pendingCount: 0,
+          lastLocalChangeAt: Date.now(),
+          baseServerVersion: activeSeason.dataVersion ?? 0,
+          syncStatus: 'synced',
+        };
+      } else {
+        nativeSyncMeta = await runNativeScheduleMutation(
+          activeSeason.id,
+          result.updatedRecords,
+          [],
+          [],
+          historyEntry
+            ? {
+                id: historyEntry.id,
+                timestamp: historyEntry.timestamp,
+                description: historyEntry.description,
+              }
+            : undefined,
+          [],
+          'seasonal'
+        );
+      }
       if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
       const nextRows = buildPatternRowsFromRecords(result.records, modifications);
       setFlightRecords(result.records);
@@ -1568,21 +2048,55 @@ export default function HomePage() {
         beforeRecords: flightRecords,
         afterRecords: result.records,
       });
-      const nativeSyncMeta = await runNativeScheduleMutation(
-        activeSeason.id,
-        result.updatedRecords,
-        [],
-        [],
-        historyEntry
-          ? {
-              id: historyEntry.id,
-              timestamp: historyEntry.timestamp,
-              description: historyEntry.description,
-            }
-          : undefined,
-        [],
-        'seasonal'
-      );
+      let nativeSyncMeta: LocalSyncMeta | null = null;
+      if (isSeasonalPlanningV1Enabled()) {
+        setDraftSaveState((prev) => ({ ...prev, status: 'saving', hasUnconfirmedChanges: true, error: null }));
+        const saveResult = await executeSeasonalPlanningDraftSave({
+          seasonId: activeSeason.id,
+          currentRecords: result.records,
+          baseRecords: flightRecords,
+          expectedRevision: latestDraftRevisionRef.current,
+          applyFn: applySeasonalDraftChangesV1,
+        });
+        setDraftSaveState((prev) => ({ ...saveResult.state, lastSavedAt: saveResult.state.lastSavedAt ?? prev.lastSavedAt }));
+        if (saveResult.result.status === 'stale') {
+          throw new Error('Phiên bản kế hoạch mùa đã thay đổi bởi người dùng khác. Vui lòng tải lại dữ liệu.');
+        }
+        if (saveResult.result.status === 'error') {
+          throw new Error(saveResult.result.error || 'Lưu thay đổi kế hoạch mùa thất bại.');
+        }
+        if (saveResult.result.receipt) {
+          latestDraftRevisionRef.current = saveResult.result.receipt.revision;
+          const draftUndoChanges = buildAuthoritativeDraftUndoChanges(saveResult.result.receipt, flightRecords);
+          if (historyEntry) {
+            (historyEntry as ModHistoryEntry & { draftUndoChanges?: SeasonalDraftChangeInput[] }).draftUndoChanges = draftUndoChanges;
+          }
+        }
+        nativeSyncMeta = {
+          seasonId: activeSeason.id,
+          localRevision: Number(saveResult.result.receipt?.revision ?? latestDraftRevisionRef.current),
+          pendingCount: 0,
+          lastLocalChangeAt: Date.now(),
+          baseServerVersion: activeSeason.dataVersion ?? 0,
+          syncStatus: 'synced',
+        };
+      } else {
+        nativeSyncMeta = await runNativeScheduleMutation(
+          activeSeason.id,
+          result.updatedRecords,
+          [],
+          [],
+          historyEntry
+            ? {
+                id: historyEntry.id,
+                timestamp: historyEntry.timestamp,
+                description: historyEntry.description,
+              }
+            : undefined,
+          [],
+          'seasonal'
+        );
+      }
       if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
       const nextRows = buildPatternRowsFromRecords(result.records, modifications);
       setFlightRecords(result.records);
@@ -1716,6 +2230,62 @@ export default function HomePage() {
     showAlert,
   ]);
 
+  const applyCommittedSeasonalDraftImport = useCallback(async (
+    response: SeasonalDraftImportResponse,
+    seasonId: string,
+    seasonCode: string,
+    fallbackSourceRowCount: number,
+  ) => {
+    if (response.result?.draftRevision !== undefined) {
+      latestDraftRevisionRef.current = response.result.draftRevision;
+    }
+    if (response.result?.draftEpoch !== undefined) {
+      latestDraftEpochRef.current = response.result.draftEpoch;
+    }
+
+    clearSeasonalImportV3RecoveryReceipt(sessionStorage);
+    setPendingImportAttempt(null);
+    pendingPreparedImportRef.current = null;
+    setImportPreviewState({ kind: 'idle' });
+
+    setUploadProgress(buildImportProgress('Reloading draft schedule', 90, seasonCode));
+    const draftData = await loadFullSeasonalDraftRecords(seasonId, getSeasonalDraftWindowV1);
+    latestDraftRevisionRef.current = draftData.revision;
+    latestDraftEpochRef.current = draftData.epoch;
+    const patternRows = buildPatternRowsFromRecords(draftData.records, new Map());
+    applySeasonData(patternRows, draftData.records, new Map());
+    setCachedSeasonData(seasonId, {
+      rows: patternRows,
+      records: draftData.records,
+      modifications: new Map(),
+      seasonDataVersion: activeSeason?.dataVersion,
+    });
+    useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+      seasonId,
+      season: activeSeason!,
+      rows: patternRows,
+      records: draftData.records,
+      modifications: new Map(),
+      syncMeta: {
+        seasonId,
+        localRevision: Number(draftData.revision) || 0,
+        pendingCount: 0,
+        lastLocalChangeAt: Date.now(),
+        baseServerVersion: activeSeason?.dataVersion ?? 0,
+        syncStatus: 'synced',
+      },
+      windowKey: currentSeasonalWindowKey,
+    });
+    setDraftState(null);
+
+    const sourceRowCount = response.result?.counts?.sourceRowCount ?? fallbackSourceRowCount;
+    void showAlert({
+      title: 'Import Kế Hoạch Thành Công',
+      message: `Đã nạp thành công ${sourceRowCount} dòng vào bản nháp mùa ${seasonCode}. Dữ liệu đã sẵn sàng để kiểm tra và Công bố (Publish) sang Vận hành.`,
+      tone: 'success',
+    });
+  }, [activeSeason, applySeasonData, currentSeasonalWindowKey, setDraftState, setPendingImportAttempt, showAlert]);
+
   const handleResumeImportAttempt = useCallback(async () => {
     const receipt = pendingImportAttemptRef.current;
     if (!receipt) return;
@@ -1737,6 +2307,33 @@ export default function HomePage() {
       const statusInvalidation = validateSeasonalFileAction(operation);
       if (statusInvalidation) {
         showSeasonalFileActionInvalidation('import', statusInvalidation);
+        return;
+      }
+      if (isSeasonalPlanningV1Enabled()) {
+        // Planning imports are contract-v4 batches; the V3 status RPC cannot see them.
+        const status = await getSeasonalDraftImportStatusV1(receipt.requestId, { operatorSessionEpoch }) as SeasonalDraftImportResponse;
+        if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+        if (status.status === 'committed') {
+          await applyCommittedSeasonalDraftImport(status, receipt.seasonId, receipt.seasonCode, 0);
+          return;
+        }
+        if (status.status === 'validated') {
+          const preview = draftImportResponseToPreview(status, receipt);
+          const nextReceipt = buildSeasonalImportV3RecoveryReceipt(preview);
+          persistSeasonalImportV3RecoveryReceipt(sessionStorage, nextReceipt);
+          setPendingImportAttempt(nextReceipt);
+          setImportPreviewState({ kind: 'preview', result: preview, confirmation: '' });
+          return;
+        }
+        await showAlert({
+          title: 'Seasonal import unavailable',
+          message: `Import batch is ${status.status ?? 'unavailable'}.`,
+          tone: 'warning',
+        });
+        clearSeasonalImportV3RecoveryReceipt(sessionStorage);
+        setPendingImportAttempt(null);
+        pendingPreparedImportRef.current = null;
+        setImportPreviewState({ kind: 'idle' });
         return;
       }
       const recovery = await checkSeasonalImportV3RecoveryStatusOnce(
@@ -1781,6 +2378,7 @@ export default function HomePage() {
       finishSeasonalFileAction(operation);
     }
   }, [
+    applyCommittedSeasonalDraftImport,
     applyTargetedCommittedImportRefresh,
     beginSeasonalFileAction,
     finishSeasonalFileAction,
@@ -1808,14 +2406,34 @@ export default function HomePage() {
       55,
       `${attemptedImport.sourceRows.length} source rows`,
     ));
-    const preview = await stageSeasonalImportV3(attemptedImport, { operatorSessionEpoch });
-    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+    let preview: SeasonalImportV3StageResult;
+    if (isSeasonalPlanningV1Enabled()) {
+      const stageRes = (await stageSeasonalDraftImportV1({
+        ...attemptedImport,
+        expectedRevision: String(latestDraftRevisionRef.current ?? '0'),
+        expectedEpoch: latestDraftEpochRef.current ?? null,
+      })) as SeasonalDraftImportResponse;
+      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+      preview = draftImportResponseToPreview(stageRes, {
+        requestId: attemptedImport.requestId,
+        seasonId: attemptedImport.seasonId || activeSeason?.id || '',
+        seasonCode: attemptedImport.seasonCode || activeSeason?.code || '',
+        strategy: attemptedImport.strategy,
+        expectedDataVersion: activeSeason?.dataVersion ?? 0,
+      });
+    } else {
+      preview = await stageSeasonalImportV3(attemptedImport, { operatorSessionEpoch });
+      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+    }
     const receipt = buildSeasonalImportV3RecoveryReceipt(preview);
     persistSeasonalImportV3RecoveryReceipt(sessionStorage, receipt);
     pendingPreparedImportRef.current = attemptedImport;
     setPendingImportAttempt(receipt);
     setImportPreviewState({ kind: 'preview', result: preview, confirmation: '' });
   }, [
+    activeSeason?.code,
+    activeSeason?.dataVersion,
+    activeSeason?.id,
     setPendingImportAttempt,
     showSeasonalFileActionInvalidation,
     validateSeasonalFileAction,
@@ -1980,9 +2598,13 @@ export default function HomePage() {
     setUploading(true);
     try {
       if (preview.status === 'validated') {
-        await cancelSeasonalImportV3(preview.batchId, {
-          operatorSessionEpoch: getOperatorSessionEpoch(),
-        });
+        if (isSeasonalPlanningV1Enabled()) {
+          await cancelSeasonalDraftImportV1(preview.batchId);
+        } else {
+          await cancelSeasonalImportV3(preview.batchId, {
+            operatorSessionEpoch: getOperatorSessionEpoch(),
+          });
+        }
       }
       clearSeasonalImportV3RecoveryReceipt(sessionStorage);
       setPendingImportAttempt(null);
@@ -2023,6 +2645,46 @@ export default function HomePage() {
     setUploading(true);
     setImportPreviewState({ kind: 'committing', result: preview });
     setUploadProgress(buildImportProgress('Committing seasonal import', 75, preview.seasonCode));
+    if (isSeasonalPlanningV1Enabled()) {
+      setUploading(true);
+      setImportPreviewState({ kind: 'committing', result: preview });
+      setUploadProgress(buildImportProgress('Committing seasonal draft import', 75, preview.seasonCode));
+      try {
+        const commitRes = (await commitSeasonalDraftImportV1({
+          batchId: preview.batchId,
+          previewHash: preview.previewHash,
+        })) as SeasonalDraftImportResponse;
+        if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+        await applyCommittedSeasonalDraftImport(commitRes, preview.seasonId, preview.seasonCode, preview.counts.sourceRowCount);
+      } catch (error) {
+        const message = getLoadErrorMessage(error);
+        if (/stale|changed|expired/i.test(message)) {
+          clearSeasonalImportV3RecoveryReceipt(sessionStorage);
+          setPendingImportAttempt(null);
+          pendingPreparedImportRef.current = null;
+          setImportPreviewState({ kind: 'idle' });
+          void showAlert({
+            title: 'Bản nháp đã thay đổi',
+            message: 'Bản nháp mùa đã thay đổi hoặc phiên bản hết hạn. Vui lòng thử nạp lại file.',
+            tone: 'warning',
+          });
+        } else {
+          setPendingImportAttempt(receipt);
+          setImportPreviewState({ kind: 'preview', result: preview, confirmation: '' });
+          void showAlert({
+            title: 'Lỗi nạp bản nháp',
+            message: message || 'Lỗi không xác định khi commit bản nháp mùa.',
+            tone: 'warning',
+          });
+        }
+      } finally {
+        setUploading(false);
+        setUploadProgress(null);
+        finishSeasonalFileAction(operation);
+      }
+      return;
+    }
+
     try {
       const committed = await commitSeasonalImportV3({
         batchId: preview.batchId,
@@ -2080,6 +2742,7 @@ export default function HomePage() {
       finishSeasonalFileAction(operation);
     }
   }, [
+    applyCommittedSeasonalDraftImport,
     applyTargetedCommittedImportRefresh,
     beginSeasonalFileAction,
     debouncedFilters.dateFrom,
@@ -2119,7 +2782,7 @@ export default function HomePage() {
               <select
                 value={activeSeason?.id ?? ''}
                 onChange={(event) => handleSeasonChange(event.target.value)}
-                disabled={seasonalFileActionActive}
+                disabled={seasonalFileActionActive || (isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges))}
                 className="min-w-[200px] cursor-pointer appearance-none rounded-lg border border-outline-variant bg-surface-container-low py-2 pl-10 pr-10 text-sm font-medium text-on-surface shadow-sm transition-colors hover:bg-surface-container-high focus:outline-none focus:ring-2 focus:ring-primary"
               >
                 {seasons.map((seasonItem) => (
@@ -2132,34 +2795,83 @@ export default function HomePage() {
             </div>
           )}
           statusControls={activeSeason && (
-            <>
-              <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${
-                syncTone === 'error'
-                  ? 'border-red-200 bg-red-50 text-red-800'
-                  : syncTone === 'info'
-                    ? 'border-sky-200 bg-sky-50 text-sky-800'
-                    : syncTone === 'warning'
-                      ? 'border-amber-200 bg-amber-50 text-amber-800'
-                      : 'border-emerald-200 bg-emerald-50 text-emerald-800'
-              }`}>
-                {syncLabel}
-              </span>
-              <FetchServerUpdatesButton
-                fetching={fetchingServerData}
-                progress={fetchProgress}
-                disabled={syncInProgress || seasonalFileActionActive}
-                onFetch={fetchServerData}
-              />
-              <SyncActionButton
-                syncing={syncInProgress || seasonalFileActionActive}
-                pendingCount={syncPendingCount}
-                draftCount={draftChangeCount}
-                progress={syncProgress}
-                onSync={handleSync}
-              />
-            </>
+            isSeasonalPlanningV1Enabled() ? (
+              <>
+                {draftSaveState.status === 'saving' && (
+                  <span className="flex items-center gap-1.5 rounded-full border border-sky-300 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-800">
+                    <span className="material-symbols-outlined animate-spin text-[16px]">sync</span>
+                    <span>Đang lưu nháp...</span>
+                  </span>
+                )}
+                {draftSaveState.status === 'saved' && (
+                  <span className="flex items-center gap-1.5 rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800">
+                    <span className="material-symbols-outlined text-[16px]">check_circle</span>
+                    <span>Đã lưu nháp (rev {draftSaveState.revision})</span>
+                  </span>
+                )}
+                {draftSaveState.status === 'error' && (
+                  <span className="flex items-center gap-1.5 rounded-full border border-red-300 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-800">
+                    <span className="material-symbols-outlined text-[16px]">error</span>
+                    <span>Lỗi lưu nháp</span>
+                    <button
+                      type="button"
+                      onClick={() => { void handleRetryDraftSave(); }}
+                      className="ml-1 rounded bg-red-700 px-2 py-0.5 text-xs text-white hover:bg-red-800 font-medium"
+                    >
+                      Thử lại
+                    </button>
+                  </span>
+                )}
+                {draftSaveState.status === 'stale' && (
+                  <span className="flex items-center gap-1.5 rounded-full border border-amber-400 bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-950">
+                    <span className="material-symbols-outlined text-[16px]">warning</span>
+                    <span>Xung đột phiên bản</span>
+                    <button
+                      type="button"
+                      onClick={() => { void handleRetryLoad(); }}
+                      className="ml-1 rounded bg-amber-800 px-2 py-0.5 text-xs text-white hover:bg-amber-700 font-medium"
+                    >
+                      Tải lại
+                    </button>
+                  </span>
+                )}
+                <FetchServerUpdatesButton
+                  fetching={fetchingServerData}
+                  progress={fetchProgress}
+                  disabled={syncInProgress || seasonalFileActionActive || draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges}
+                  onFetch={fetchServerData}
+                />
+              </>
+            ) : (
+              <>
+                <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${
+                  syncTone === 'error'
+                    ? 'border-red-200 bg-red-50 text-red-800'
+                    : syncTone === 'info'
+                      ? 'border-sky-200 bg-sky-50 text-sky-800'
+                      : syncTone === 'warning'
+                        ? 'border-amber-200 bg-amber-50 text-amber-800'
+                        : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                }`}>
+                  {syncLabel}
+                </span>
+                <FetchServerUpdatesButton
+                  fetching={fetchingServerData}
+                  progress={fetchProgress}
+                  disabled={syncInProgress || seasonalFileActionActive}
+                  onFetch={fetchServerData}
+                />
+                <SyncActionButton
+                  syncing={syncInProgress || seasonalFileActionActive}
+                  pendingCount={syncPendingCount}
+                  draftCount={draftChangeCount}
+                  progress={syncProgress}
+                  onSync={handleSync}
+                />
+              </>
+            )
           )}
-          draftControls={hasDraftChanges && (
+          draftControls={!isSeasonalPlanningV1Enabled() && hasDraftChanges && (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-amber-900">
               <span className="material-symbols-outlined text-[18px]">edit_note</span>
               <span className="text-xs font-semibold">
@@ -2227,6 +2939,17 @@ export default function HomePage() {
                   </>
                 )}
               </div>
+              {isSeasonalPlanningV1Enabled() && (
+                <button
+                  className="flex items-center gap-2 rounded-lg bg-emerald-700 px-3 py-1.5 font-label-caps text-label-caps text-white shadow-sm transition-colors hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-40"
+                  onClick={() => { void handleOpenPublishModal(); }}
+                  disabled={syncInProgress || seasonalFileActionActive || (isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges))}
+                  title="Công bố lịch bay mùa sang phân hệ Vận hành (Operations)"
+                >
+                  <span className="material-symbols-outlined text-[16px]">publish</span>
+                  Công bố lịch bay
+                </button>
+              )}
             </div>
           )}
         />
@@ -2343,7 +3066,7 @@ export default function HomePage() {
                 type="button"
                 className="flex items-center gap-1.5 bg-primary text-on-primary text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-40"
                 onClick={handleImportClick}
-                disabled={seasonalFileActionBusy || hasDraftChanges || seasonalImportRecoveryPending}
+                disabled={seasonalFileActionBusy || hasDraftChanges || seasonalImportRecoveryPending || (isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges))}
               >
                 <span className="material-symbols-outlined text-[16px]">cloud_upload</span>
                 Import
@@ -2358,7 +3081,7 @@ export default function HomePage() {
               <button
                 className="flex items-center gap-1.5 bg-tertiary-container text-on-tertiary-container text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-tertiary-container/80 transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={handleExportUpdated}
-                disabled={(!exportAllSelected && (activeDisplayLegs.length === 0 || selectedRecordIds.size === 0)) || seasonalFileActionBusy || hasDraftChanges}
+                disabled={(!exportAllSelected && (activeDisplayLegs.length === 0 || selectedRecordIds.size === 0)) || seasonalFileActionBusy || hasDraftChanges || (isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges))}
                 title={isExporting ? 'Exporting selected flights' : exportAllSelected ? 'Export all flights in season' : selectedRecordIds.size === 0 ? 'Select flights to export' : 'Export selected flights'}
               >
                 <span className={`material-symbols-outlined text-[16px] ${isExporting ? 'animate-spin' : ''}`}>{isExporting ? 'sync' : 'download'}</span>
@@ -2811,10 +3534,47 @@ export default function HomePage() {
               modifications: nextMods,
             });
             applySeasonData(nextRows, nextRecords, nextMods);
-            setDraftState({
-              ...baseDraft,
-              records: [...baseDraft.records, ...candidateRecords],
-            });
+            if (isSeasonalPlanningV1Enabled()) {
+              const historyTimestamp = Date.now();
+              const historyEntry: ModHistoryEntry = {
+                id: `LOCAL_ADD_${historyTimestamp}`,
+                timestamp: historyTimestamp,
+                description: `Added flight ${candidateRecords[0]?.airline ?? savedRow.airline}${candidateRecords[0]?.flightNumber ?? (savedRow.arrFlight || savedRow.depFlight || '')}`,
+                changes: [],
+                recordChanges: candidateRecords.map((record) => ({
+                  recordId: record.id,
+                  previousRecord: null,
+                  newRecord: record,
+                })),
+              };
+              setFlightRecords(nextRecords);
+              setDisplayRows(enrichRows(nextRows));
+              setDraftSaveState((prev) => ({ ...prev, status: 'saving', hasUnconfirmedChanges: true, error: null }));
+              const saveResult = await executeSeasonalPlanningDraftSave({
+                seasonId: activeSeason.id,
+                currentRecords: nextRecords,
+                baseRecords: flightRecords,
+                expectedRevision: latestDraftRevisionRef.current,
+                applyFn: applySeasonalDraftChangesV1,
+              });
+              setDraftSaveState((prev) => ({ ...saveResult.state, lastSavedAt: saveResult.state.lastSavedAt ?? prev.lastSavedAt }));
+              if (saveResult.result.status === 'stale') {
+                throw new Error('Phiên bản kế hoạch mùa đã thay đổi bởi người dùng khác. Vui lòng tải lại dữ liệu.');
+              }
+              if (saveResult.result.status === 'error') {
+                throw new Error(saveResult.result.error || 'Lưu thay đổi kế hoạch mùa thất bại.');
+              }
+              if (saveResult.result.status === 'saved' && saveResult.result.receipt) {
+                latestDraftRevisionRef.current = saveResult.result.receipt.revision;
+                const draftUndoChanges = buildAuthoritativeDraftUndoChanges(saveResult.result.receipt, flightRecords);
+                setModHistory((prev) => trimUiUndoEntries(filterUiUndoEntriesForSession([{ ...historyEntry, draftUndoChanges }, ...prev])));
+              }
+            } else {
+              setDraftState({
+                ...baseDraft,
+                records: [...baseDraft.records, ...candidateRecords],
+              });
+            }
             setIsNewFlightOpen(false);
           } catch (err) {
             console.error(err);
@@ -2842,6 +3602,14 @@ export default function HomePage() {
         onCancel={() => { void handleCancelImportPreview(); }}
         onCommit={() => { void handleCommitImportPreview(); }}
       />
+      {activeSeason && isSeasonalPlanningV1Enabled() && (
+        <SeasonalPublishModal
+          isOpen={isPublishModalOpen}
+          seasonId={activeSeason.id}
+          seasonCode={activeSeason.seasonCode || activeSeason.code || ''}
+          onClose={() => setIsPublishModalOpen(false)}
+        />
+      )}
 
       {dialogNode}
 

@@ -183,7 +183,7 @@ test('applyServerModificationPatch merges a partial event into the canonical mod
   const target = makeRecord({ id: 'LEG-PARTIAL', gate: 1 });
   const existingModification = {
     ...makeModification(target.id, 1),
-    stand: '5',
+    stand: '5A',
   };
   store.getState().replaceSeasonWindow({
     seasonId: 'season-1',
@@ -203,11 +203,11 @@ test('applyServerModificationPatch merges a partial event into the canonical mod
 
   const canonical = store.getState().workspaces['season-1'].modificationsByLegId.get(target.id);
   assert.equal(canonical?.gate, 1);
-  assert.equal(canonical?.stand, 5);
+  assert.equal(canonical?.stand, existingModification.stand);
   assert.deepEqual(canonical?.counter, [21, 22]);
   const snapshot = store.getState().workspaces['season-1'].windowSnapshots.get('checkin:partial');
   assert.equal(snapshot?.modifications.get(target.id)?.gate, 1);
-  assert.equal(snapshot?.modifications.get(target.id)?.stand, 5);
+  assert.equal(snapshot?.modifications.get(target.id)?.stand, existingModification.stand);
   assert.deepEqual(snapshot?.modifications.get(target.id)?.counter, [21, 22]);
 });
 

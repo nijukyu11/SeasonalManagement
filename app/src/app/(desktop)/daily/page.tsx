@@ -1,7 +1,7 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import {
   cancelDailyScheduleImportV1,
@@ -12,6 +12,30 @@ import {
   loadSeasonWorkspaceWindow,
   stageDailyScheduleImportV1,
 } from '@/lib/remoteStore';
+import {
+  cancelDailyScheduleImportV2,
+  commitDailyScheduleImportV2,
+  getDailyScheduleImportV2Status,
+  stageDailyScheduleImportV2,
+} from '@/lib/remoteStore';
+import {
+  buildOperationalDateRange,
+  buildOperationalLegPatchAndPreimage,
+  flightCounterToDbCounters,
+  flightWindowsToDbWindows,
+  getOperationalDayVietnamIso,
+  isOperationalScheduleV1Enabled,
+  shiftVietnamIsoDate,
+  subscribeToOperationalChanges,
+  type DailyImportLegInputV2,
+  type DailyImportStagePayloadV2,
+  type DailyImportStageResultV2,
+  type OperationalWindowSnapshot,
+} from '@/lib/operationalScheduleContract';
+import DailyImportPreviewDialogV2 from '@/app/(desktop)/components/DailyImportPreviewDialogV2';
+import { useOperationalScheduleStore, isRecentOperationalMutationRequestId } from '@/lib/operationalScheduleAdapter';
+import type { OperationalLegChangeInput } from '@/lib/operationalScheduleContract';
+import { getSupabaseClient } from '@/lib/supabase';
 import { revalidateSeasonWorkspaceWindow } from '@/lib/seasonWorkspaceWindowCoordinator';
 import {
   assertNoDuplicateFlightNumbersForEffectiveRecords,
@@ -32,6 +56,7 @@ import {
   buildDefaultDailyDateRange,
   filterDailyRows,
   formatDailyScheduleDateTime,
+  readDailyDateRangeQuery,
   getDailyRowRecordIds,
   sortDailyRows,
   validateDailyCellEdit,
@@ -45,8 +70,12 @@ import { analyzeDailyScheduleWorkbook } from '@/lib/dailyScheduleWorkbook';
 import {
   buildDailyImportStagePayloadV1,
   confirmDailyImportZeroFlightDatesV1,
+  DAILY_RESOURCE_POLICY_VERSION,
+  sha256Hex,
   type DailyImportStagePayloadV1,
 } from '@/lib/dailyImportV1Contract';
+import { normalizeCheckInCounterList } from '@/lib/checkinAllocation';
+import { parseDailyImportRowsStrict } from '@/lib/dailyScheduleImport';
 import {
   isDailyImportStaleVersionConflictV1,
   finishCommittedDailyImportV1,
@@ -114,6 +143,9 @@ const NUMERIC_FILTER_FIELDS = new Set<DailyGridField>(['arrPax', 'carousel', 'de
 const DAILY_IMPORT_V1_STAGE_ENABLED = process.env.NEXT_PUBLIC_DAILY_IMPORT_V1_STAGE_ENABLED !== 'false';
 
 function todayIso(): string {
+  if (isOperationalScheduleV1Enabled()) {
+    return getOperationalDayVietnamIso();
+  }
   return new Date().toISOString().slice(0, 10);
 }
 
@@ -136,12 +168,13 @@ function readInitialDailyRouteState(input: {
   fromDateTime: string;
   toDateTime: string;
 }): DailyRouteState | null {
+  if (isOperationalScheduleV1Enabled()) return null;
   const storeState = useSeasonWorkspaceStore.getState();
   const cachedSeasons = getCachedSeasons() ?? storeState.seasons;
   if (!cachedSeasons || cachedSeasons.length === 0) return null;
 
-  const targetSeason = cachedSeasons.find((item) => item.id === input.targetSeasonId) ?? cachedSeasons[0];
-  if (!input.targetSeasonId || input.targetSeasonId !== targetSeason.id) return null;
+  const targetSeason = (input.targetSeasonId ? cachedSeasons.find((item) => item.id === input.targetSeasonId) : null) ?? cachedSeasons[0];
+  if (input.targetSeasonId && input.targetSeasonId !== targetSeason.id) return null;
 
   const windowKey = buildDailyWindowKey(input.fromDateTime, input.toDateTime);
   const cachedWindow = readWorkspaceWindowSnapshot(storeState.workspaces[targetSeason.id], windowKey);
@@ -371,12 +404,20 @@ function EditableCell({
 
 function DailyScheduleContent() {
   const router = useRouter();
+  const pathname = usePathname();
+  const isActiveRoute = pathname === '/daily';
   const searchParams = useCachedRouteSearchParams();
   const { dialogNode, showAlert, showConfirm } = useAppDialog();
   const { notifyExportCompleted } = useExportNotifications();
+  const operationalWritePending = useOperationalScheduleStore((state) => state.mutating || state.importing);
+  const operationalUnresolvedAttempt = useOperationalScheduleStore((state) => state.unresolvedAttempt);
   const targetSeasonId = searchParams.get('season');
+  const requestedRange = readDailyDateRangeQuery(searchParams);
   const requestedDailyDate = normalizeDailyDateParam(searchParams.get('date'));
-  const defaultRange = useMemo(() => buildDefaultDailyDateRange(requestedDailyDate ?? todayIso()), [requestedDailyDate]);
+  const defaultRange = useMemo(
+    () => requestedRange ?? buildDefaultDailyDateRange(requestedDailyDate ?? todayIso()),
+    [requestedDailyDate, requestedRange],
+  );
   const [fromDateTime, setFromDateTime] = useSessionState('daily:fromDateTime', defaultRange.from);
   const [toDateTime, setToDateTime] = useSessionState('daily:toDateTime', defaultRange.to);
   const initialDailyRouteState = readInitialDailyRouteState({ targetSeasonId, fromDateTime, toDateTime });
@@ -393,13 +434,40 @@ function DailyScheduleContent() {
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
     buildLoadProgress('Loading daily schedule...', 10, 'Preparing workspace')
   );
-  const [dailyImporting, setDailyImporting] = useState(false);
+  const [dailyImporting, setDailyImportingState] = useState(false);
+  const setDailyImporting = useCallback((value: boolean) => {
+    if (isOperationalScheduleV1Enabled()) useOperationalScheduleStore.setState({ importing: value });
+    setDailyImportingState(value);
+  }, []);
   const [dailyImportCommitting, setDailyImportCommitting] = useState(false);
   const [pendingImportRefresh, setPendingImportRefresh] = useSessionState<DailyImportCommittedResultV1 | null>('daily:committed-import-refresh', null);
   const [dailyImportPreview, setDailyImportPreview] = useState<{
     payload: DailyImportStagePayloadV1;
     result: DailyImportStageResultV1;
   } | null>(null);
+  const [dailyImportPreviewV2, setDailyImportPreviewV2] = useSessionState<DailyImportStageResultV2 | null>('daily:operational-import-preview', null);
+  const [operationalMutating, setOperationalMutatingState] = useState(false);
+  const operationalMutatingRef = useRef(false);
+  const setOperationalMutating = useCallback((value: boolean) => {
+    operationalMutatingRef.current = value;
+    setOperationalMutatingState(value);
+  }, []);
+  const pendingRevalidateOnSettleRef = useRef(false);
+  const operationalSnapshotRef = useRef<OperationalWindowSnapshot | null>(null);
+  const lastStagedV2PayloadRef = useRef<DailyImportStagePayloadV2 | null>(null);
+  const pendingManualBatchRef = useRef<{ signature: string; requestId: string; legs: Array<Record<string, unknown>> } | null>(null);
+  const appliedRangeQueryRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!requestedRange) {
+      appliedRangeQueryRef.current = null;
+      return;
+    }
+    const rangeKey = `${requestedRange.from}|${requestedRange.to}`;
+    if (appliedRangeQueryRef.current === rangeKey) return;
+    setFromDateTime(requestedRange.from);
+    setToDateTime(requestedRange.to);
+    appliedRangeQueryRef.current = rangeKey;
+  }, [requestedRange, setFromDateTime, setToDateTime]);
   const [exportingExcel, setExportingExcel] = useState(false);
   const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; lastLocalChangeAt: number | null }>(
     () => initialDailyRouteState?.syncSummary ?? {
@@ -544,8 +612,8 @@ function DailyScheduleContent() {
     const cachedSettings = storeState.operationalSettings;
     if (!cachedSeasons || !cachedSettings || cachedSeasons.length === 0) return false;
 
-    const targetSeason = cachedSeasons.find((item) => item.id === targetSeasonId) ?? cachedSeasons[0];
-    if (!targetSeasonId || targetSeasonId !== targetSeason.id) return false;
+    const targetSeason = (targetSeasonId ? cachedSeasons.find((item) => item.id === targetSeasonId) : null) ?? cachedSeasons[0];
+    if (targetSeasonId && targetSeasonId !== targetSeason.id) return false;
 
     const windowKey = buildDailyWindowKey(fromDateTime, toDateTime);
     const freshWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
@@ -566,6 +634,18 @@ function DailyScheduleContent() {
   }, [applyDailyNativeState, fromDateTime, targetSeasonId, toDateTime]);
 
   const refreshDailyWindow = useCallback(async (options: { revalidate?: boolean } = {}) => {
+    if (isOperationalScheduleV1Enabled()) {
+      const startDate = fromDateTime.slice(0, 10);
+      const endDate = toDateTime.slice(0, 10);
+      useOperationalScheduleStore.setState({ startDate, endDate, resourceType: 'schedule' });
+      await useOperationalScheduleStore.getState().loadWindow({ force: true });
+      const current = useOperationalScheduleStore.getState();
+      if (current.startDate !== startDate || current.endDate !== endDate || current.resourceType !== 'schedule') return null;
+      operationalSnapshotRef.current = current.snapshot;
+      setFlightRecords(current.records);
+      setModifications(new Map());
+      return { records: current.records, resources: current.resources, snapshot: current.snapshot };
+    }
     if (!season?.id) return null;
     const windowKey = buildDailyWindowKey(fromDateTime, toDateTime);
     if (options.revalidate) {
@@ -606,6 +686,34 @@ function DailyScheduleContent() {
     let cancelled = false;
     (async () => {
       const cachedState = tryApplyCachedDailyRouteWindow();
+      if (isOperationalScheduleV1Enabled()) {
+        if (!isActiveRoute) return;
+        setLoading(true);
+        setLoadError(null);
+        try {
+          const loadedSettings = await getOperationalSettings().catch(() => null);
+          if (cancelled) return;
+          if (loadedSettings) setSettings(loadedSettings);
+          const startDate = fromDateTime.slice(0, 10);
+          const endDate = toDateTime.slice(0, 10);
+          setLoadProgress(buildLoadProgress('Loading operational window', 40, `${startDate}..${endDate}`));
+          await refreshDailyWindow();
+          if (cancelled) return;
+          setSyncSummary({ pendingCount: 0, lastLocalChangeAt: null });
+          setLoading(false);
+          return;
+        } catch (err) {
+          console.error('Error loading operational daily schedule', err);
+          if (!cancelled) {
+            const message = err instanceof Error && err.message ? err.message : 'Could not load operational schedule.';
+            setLoadError(message);
+            void showAlert({ title: 'Load Failed', message, tone: 'error' });
+          }
+          return;
+        } finally {
+          if (!cancelled) setLoading(false);
+        }
+      }
       if (cachedState === 'fresh') return;
       setLoading(cachedState !== 'stale');
       setLoadError(null);
@@ -632,8 +740,8 @@ function DailyScheduleContent() {
           return;
         }
 
-        const targetSeason = nextSeasons.find((item) => item.id === targetSeasonId) ?? nextSeasons[0];
-        if (!targetSeasonId || targetSeasonId !== targetSeason.id) {
+        const targetSeason = (targetSeasonId ? nextSeasons.find((item) => item.id === targetSeasonId) : null) ?? nextSeasons[0];
+        if (targetSeasonId && targetSeasonId !== targetSeason.id) {
           router.replace(`/daily?season=${targetSeason.id}`);
           return;
         }
@@ -699,8 +807,48 @@ function DailyScheduleContent() {
     return () => {
       cancelled = true;
     };
-  }, [applyDailyNativeState, fromDateTime, router, showAlert, targetSeasonId, toDateTime, tryApplyCachedDailyRouteWindow]);
+  }, [applyDailyNativeState, fromDateTime, isActiveRoute, refreshDailyWindow, router, showAlert, targetSeasonId, toDateTime, tryApplyCachedDailyRouteWindow]);
+  useEffect(() => {
+    if (!isOperationalScheduleV1Enabled() || !isActiveRoute) return;
+    const client = getSupabaseClient();
+    const sub = subscribeToOperationalChanges(client, {
+      onDateInvalidated: (_dates, event) => {
+        const requestId = event && typeof event === 'object' && typeof event.request_id === 'string'
+          ? event.request_id
+          : undefined;
+        if (requestId && isRecentOperationalMutationRequestId(requestId)) {
+          return;
+        }
+        // The mutation revision is global: a write on any date, visible or not, stales the snapshot token.
+        const storeState = useOperationalScheduleStore.getState();
+        if (storeState.mutating || storeState.importing || operationalMutatingRef.current) {
+          pendingRevalidateOnSettleRef.current = true;
+          return;
+        }
 
+        void refreshDailyWindow({ revalidate: true }).catch((error) => setLoadError(error instanceof Error ? error.message : String(error)));
+      },
+      onReconnect: () => {
+        const storeState = useOperationalScheduleStore.getState();
+        if (storeState.mutating || storeState.importing || operationalMutatingRef.current) {
+          pendingRevalidateOnSettleRef.current = true;
+          return;
+        }
+        void refreshDailyWindow({ revalidate: true }).catch((error) => setLoadError(error instanceof Error ? error.message : String(error)));
+      },
+    });
+    return () => {
+      sub.unsubscribe();
+    };
+  }, [isActiveRoute, refreshDailyWindow]);
+  useEffect(() => {
+    if (!isOperationalScheduleV1Enabled() || !isActiveRoute) return;
+    if (operationalMutating || operationalWritePending) return;
+    if (pendingRevalidateOnSettleRef.current) {
+      pendingRevalidateOnSettleRef.current = false;
+      void refreshDailyWindow({ revalidate: true }).catch((error) => setLoadError(error instanceof Error ? error.message : String(error)));
+    }
+  }, [isActiveRoute, operationalMutating, operationalWritePending, refreshDailyWindow]);
   const rows = useMemo(() => buildDailyScheduleRows({
     records: flightRecords,
     modifications,
@@ -713,7 +861,7 @@ function DailyScheduleContent() {
   const summary = useMemo(() => buildDailySummary(filteredRows), [filteredRows]);
 
   const handleExportDailyExcel = useCallback(async () => {
-    if (!season) return;
+    if (!isOperationalScheduleV1Enabled() && !season) return;
     if (sortedRows.length === 0) {
       void showAlert({ title: 'Nothing to Export', message: 'No visible Daily Schedule rows match the current date range and filters.', tone: 'warning' });
       return;
@@ -724,7 +872,8 @@ function DailyScheduleContent() {
         rows: sortedRows,
         routeCountries: settings?.routeCountries,
       });
-      const fileName = buildDailyScheduleExportFileName(season.seasonCode, fromDateTime, toDateTime);
+      const prefix = season?.seasonCode ?? 'OPS';
+      const fileName = buildDailyScheduleExportFileName(prefix, fromDateTime, toDateTime);
       const result = await saveWorkbookAsXlsx(workbook, fileName);
       notifyExportCompleted(result);
     } catch (err) {
@@ -754,8 +903,12 @@ function DailyScheduleContent() {
     dates: [fromDateTime.slice(0, 10), toDateTime.slice(0, 10)],
   }), [fromDateTime, toDateTime]);
   const hasSelectedRecords = selectedRecordIds.length > 0;
-  const actionsDisabled = !season || syncWriteInProgress || dailyImporting;
-  const dailyImportDisabled = !DAILY_IMPORT_V1_STAGE_ENABLED || syncWriteInProgress || dailyImporting || syncPendingCount > 0;
+  const actionsDisabled = isOperationalScheduleV1Enabled()
+    ? loading || operationalWritePending || operationalMutating
+    : !season || syncWriteInProgress || dailyImporting;
+  const dailyImportDisabled = isOperationalScheduleV1Enabled()
+    ? loading || operationalWritePending || operationalMutating
+    : !DAILY_IMPORT_V1_STAGE_ENABLED || syncWriteInProgress || dailyImporting || syncPendingCount > 0;
   const hasDailyImportTargetDraft = dailyImportPreview?.payload.seasons.some((target) => (
     (useSeasonWorkspaceStore.getState().workspaces[target.seasonId]?.syncMeta?.pendingCount ?? 0) > 0
   )) ?? false;
@@ -805,9 +958,9 @@ function DailyScheduleContent() {
   };
 
   function handleAllocationNavigation(path: '/checkin' | '/gate') {
-    if (!season) return;
+    if (isOperationalScheduleV1Enabled() && operationalWritePending) return;
     const params = new URLSearchParams();
-    params.set('season', season.id);
+    if (!isOperationalScheduleV1Enabled() && season) params.set('season', season.id);
     params.set('from', fromDateTime);
     params.set('to', toDateTime);
     router.push(`${path}?${params.toString()}`);
@@ -824,6 +977,46 @@ function DailyScheduleContent() {
   };
 
   const handleCellCommit = useCallback(async (recordId: string, field: DailyCellField, value: string) => {
+    if (isOperationalScheduleV1Enabled()) {
+      const pending = useOperationalScheduleStore.getState();
+      if (pending.mutating || pending.importing) throw new Error('Wait for the pending operational write.');
+      const canonicalRecord = flightRecords.find((record) => record.id === recordId);
+      if (!canonicalRecord) throw new Error(`Daily record ${recordId} was not found`);
+      const validation = validateDailyCellEdit({
+        records: flightRecords,
+        record: canonicalRecord,
+        field,
+        value,
+      });
+      if (!validation.valid) throw new Error(validation.message ?? 'Invalid daily schedule edit');
+      const row = buildDailyScheduleRows({
+        records: flightRecords, modifications, from: fromDateTime, to: toDateTime,
+      }).find((item) => getDailyRowRecordIds(item).includes(recordId));
+      const mapped = settings && row ? buildDailyStandGateModifications({
+        row, record: canonicalRecord, field, value, settings, previousModifications: new Map(),
+      }) : [];
+      const mods = mapped.length ? mapped : [buildDailyCellModification(canonicalRecord, field, value)];
+      const patches = mods.flatMap(({ legId, action: _action, ...updates }) => {
+        const record = flightRecords.find((item) => item.id === legId);
+        if (!record) throw new Error(`Daily record ${legId} was not found`);
+        if (updates.counter !== undefined) updates.counter = normalizeCheckInCounterList(updates.counter);
+        const patch = buildOperationalLegPatchAndPreimage(record, updates);
+        return patch ? [patch] : [];
+      });
+      setOperationalMutating(true);
+      try {
+        const res = await useOperationalScheduleStore.getState().applyMutations(patches);
+        operationalSnapshotRef.current = useOperationalScheduleStore.getState().snapshot;
+        if (res.refreshError) {
+          await showAlert({ title: 'Saved; refresh failed', message: res.refreshError, tone: 'error' });
+        } else {
+          setFlightRecords(useOperationalScheduleStore.getState().records);
+        }
+      } finally {
+        setOperationalMutating(false);
+      }
+      return;
+    }
     if (!season) throw new Error('No season selected for daily edit');
     const seasonId = season.id;
     await enqueueLocalMutation(async () => {
@@ -899,10 +1092,94 @@ function DailyScheduleContent() {
         targetRecordIds: mods.map((mod) => mod.legId),
       }));
     });
-  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, fromDateTime, modifications, publishDailyWorkspaceChange, season, settings, toDateTime]);
+  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, fromDateTime, modifications, publishDailyWorkspaceChange, season, setOperationalMutating, settings, showAlert, toDateTime]);
+
+  const stageOperationalImport = useCallback(async (payload: DailyImportStagePayloadV2) => {
+    lastStagedV2PayloadRef.current = payload;
+    let staged;
+    try {
+      staged = await stageDailyScheduleImportV2(payload);
+    } catch (error) {
+      staged = await getDailyScheduleImportV2Status(payload.requestId).catch(() => { throw error; });
+    }
+    setDailyImportPreviewV2(staged);
+  }, [setDailyImportPreviewV2]);
 
   const handleDailyImportFile = useCallback(async (file: File | null) => {
-    if (!file || !DAILY_IMPORT_V1_STAGE_ENABLED || syncWriteInProgress || dailyImporting || syncPendingCount > 0) return;
+    if (!file || dailyImporting || (isOperationalScheduleV1Enabled() ? (operationalWritePending || useOperationalScheduleStore.getState().importing) : (!DAILY_IMPORT_V1_STAGE_ENABLED || syncWriteInProgress || syncPendingCount > 0))) return;
+    if (isOperationalScheduleV1Enabled()) {
+      setDailyImporting(true);
+      try {
+        const buffer = await file.arrayBuffer();
+        const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
+        const analysis = analyzeDailyScheduleWorkbook(workbook);
+        if (!analysis.selected) throw new Error(analysis.diagnostics.map((item) => item.message).join(' '));
+        const selectedSheet = analysis.selected;
+        const strict = parseDailyImportRowsStrict(selectedSheet.rows, { workbookProfile: selectedSheet.profile });
+        const blocking = strict.diagnostics.filter((item) => item.severity === 'blocking');
+        if (blocking.length) throw new Error(blocking.map((item) => item.message).join('\n'));
+        const v2Legs: DailyImportLegInputV2[] = strict.legs.map((leg) => {
+          const row = selectedSheet.rows[leg.rowNumber - 1] ?? {};
+          return {
+            operationalDate: leg.operationalDate,
+            scheduledDate: leg.scheduledDate,
+            scheduledTime: leg.scheduledTime,
+            side: leg.side,
+            airline: leg.airline,
+            flightNumber: leg.flightNumber,
+            rawFlightNumber: leg.rawFlightNumber,
+            route: String(leg.updates.route ?? ''),
+            aircraft: leg.aircraft,
+            category: leg.category,
+            flightType: leg.flightType,
+            requestStatusCode: leg.requestStatusCode,
+            sheetName: selectedSheet.sheetName,
+            sourceRowNumber: leg.rowNumber,
+            resources: leg.updates,
+            rawResourceTokens: {
+              stand: row[`${leg.side}Stand`] ? String(row[`${leg.side}Stand`]).trim() : null,
+              gate: leg.side === 'DEP' && row.DEPGate ? String(row.DEPGate).trim() : null,
+              carousel: leg.side === 'ARR' && row.ARRReclaimBelt ? String(row.ARRReclaimBelt).trim() : null,
+              counter: leg.side === 'DEP' && row.CheckInDesk ? String(row.CheckInDesk).trim() : null,
+            },
+          };
+        });
+        const affectedDates = [...new Set(strict.coverage.map((entry) => entry.operationalDate))].sort();
+        if (affectedDates.length === 0) affectedDates.push(fromDateTime.slice(0, 10));
+        const legDates = new Set(strict.legs.map((leg) => leg.operationalDate));
+        const confirmedZeroFlightDates = affectedDates.filter((date) => !legDates.has(date));
+        if (confirmedZeroFlightDates.length > 0) {
+          const confirmed = await showConfirm({
+            title: 'Confirm zero flights',
+            message: `Replace all operational flights on ${confirmedZeroFlightDates.join(', ')} with an empty schedule? The import affects only ${affectedDates.join(', ')}.`,
+            tone: 'warning',
+          });
+          if (!confirmed) return;
+        }
+        const rawChecksum = await sha256Hex(buffer);
+        const canonicalChecksum = await sha256Hex(JSON.stringify(v2Legs));
+        const payloadV2: DailyImportStagePayloadV2 = {
+          contractVersion: 2,
+          requestId: crypto.randomUUID(),
+          fileName: file.name,
+          workbookProfile: selectedSheet.profile,
+          rawChecksum,
+          canonicalChecksum,
+          resourcePolicyHash: await sha256Hex(DAILY_RESOURCE_POLICY_VERSION),
+          affectedDates,
+          confirmedZeroFlightDates,
+          legs: v2Legs,
+          diagnostics: strict.diagnostics.map((item) => ({ ...item, sheetName: selectedSheet.sheetName })),
+        };
+        await stageOperationalImport(payloadV2);
+      } catch (err) {
+        void showAlert({ title: 'Daily Import V2 Failed', message: (err as Error).message, tone: 'error' });
+      } finally {
+        setDailyImporting(false);
+        if (dailyImportInputRef.current) dailyImportInputRef.current.value = '';
+      }
+      return;
+    }
     setDailyImporting(true);
     try {
       const buffer = await file.arrayBuffer();
@@ -948,7 +1225,7 @@ function DailyScheduleContent() {
       setDailyImporting(false);
       if (dailyImportInputRef.current) dailyImportInputRef.current.value = '';
     }
-  }, [dailyImporting, season, seasons, showAlert, syncPendingCount, syncWriteInProgress]);
+  }, [dailyImporting, fromDateTime, operationalWritePending, season, seasons, setDailyImporting, showAlert, showConfirm, stageOperationalImport, syncPendingCount, syncWriteInProgress]);
 
   const closeDailyImportPreview = useCallback(async () => {
     const current = dailyImportPreview;
@@ -971,7 +1248,7 @@ function DailyScheduleContent() {
     } finally {
       setDailyImporting(false);
     }
-  }, [dailyImportPreview, dailyImporting, showAlert]);
+  }, [dailyImportPreview, dailyImporting, setDailyImporting, showAlert]);
 
   const applyCommittedDailyImport = useCallback(async (receipt: NonNullable<DailyImportStageResultV1['result']>) => {
     setDailyImportPreview(null);
@@ -1014,8 +1291,7 @@ function DailyScheduleContent() {
         });
       }
     }
-    router.refresh();
-  }, [applyDailyNativeState, fromDateTime, router, season, seasons, toDateTime]);
+  }, [applyDailyNativeState, fromDateTime, season, seasons, toDateTime]);
 
   const refreshCommittedDailyImport = useCallback(async (receipt: DailyImportCommittedResultV1) => {
     const remember = (value: DailyImportCommittedResultV1 | null) => {
@@ -1040,6 +1316,25 @@ function DailyScheduleContent() {
     try { await refreshCommittedDailyImport(pendingImportRefresh); }
     finally { setDailyImportCommitting(false); }
   }, [dailyImportCommitting, pendingImportRefresh, refreshCommittedDailyImport]);
+  const handleRetryPendingMutation = useCallback(async () => {
+    setOperationalMutating(true);
+    try {
+      const outcome = await useOperationalScheduleStore.getState().retryPendingMutation();
+      if (outcome && 'refreshError' in outcome && outcome.refreshError) {
+        void showAlert({ title: 'Saved; refresh failed', message: outcome.refreshError, tone: 'warning' });
+      } else {
+        await refreshDailyWindow({ revalidate: true });
+      }
+    } catch (err) {
+      void showAlert({ title: 'Retry Failed', message: (err as Error).message, tone: 'error' });
+    } finally {
+      const remaining = useOperationalScheduleStore.getState().unresolvedAttempt;
+      if (!remaining) {
+        setOperationalMutating(false);
+      }
+    }
+  }, [refreshDailyWindow, setOperationalMutating, showAlert]);
+
 
   const commitDailyImportPreview = useCallback(async () => {
     if (!dailyImportPreview || dailyImportCommitting) return;
@@ -1070,6 +1365,53 @@ function DailyScheduleContent() {
   }, [refreshCommittedDailyImport, dailyImportCommitting, dailyImportPreview, showAlert, syncPendingCount]);
 
   const handleAddFlights = useCallback(async (mods: FlightModification[]) => {
+    if (isOperationalScheduleV1Enabled()) {
+      setOperationalMutating(true);
+      try {
+        const addedRecords = buildCanonicalAddedFlightRecords(mods);
+        if (addedRecords.length !== mods.length || addedRecords.length === 0) throw new Error('Added flight payload is missing leg data.');
+        const inputs = addedRecords.map((record) => ({
+          scheduledDate: record.scheduledDate ?? record.date,
+          scheduledTime: record.scheduledTime ?? record.schedule,
+          flightNumber: record.flightNumber, rawFlightNumber: record.rawFlightNumber,
+          side: record.type === 'A' ? 'ARR' : 'DEP',
+          airline: record.airline, route: record.route,
+          aircraftType: record.aircraft, flightCategory: record.category,
+          codeShares: record.codeShares, intDomInd: record.intDomInd,
+          pax: record.pax ?? null, gate: record.gate ?? null,
+          stand: record.stand ?? null, carousel: record.carousel ?? null,
+          mct: record.mct ?? null, bhs: record.bhs ?? null, ghs: record.ghs ?? null,
+          checkInStart: record.checkInStart ?? null, checkInEnd: record.checkInEnd ?? null,
+          checkInAllocationMode: record.checkInAllocationMode ?? null,
+          counters: flightCounterToDbCounters(record.counter),
+          checkin_windows: flightWindowsToDbWindows(record.checkInCounterWindows ?? undefined),
+          linkedIndex: addedRecords.findIndex((other) => other.id === record.linkedRecordId),
+          linkType: record.linkType ?? null, pairAnchorDate: record.pairAnchorDate ?? null,
+        }));
+        const signature = JSON.stringify(inputs);
+        if (pendingManualBatchRef.current?.signature !== signature) {
+          const ids = inputs.map(() => crypto.randomUUID());
+          const legs = inputs.map(({ linkedIndex, ...input }, index) => ({
+            ...input, id: ids[index],
+            linkedLegId: linkedIndex < 0 ? null : ids[linkedIndex],
+            turnaroundId: linkedIndex < 0 ? null : `TRN_OPS_${ids[Math.min(index, linkedIndex)]}`,
+          }));
+          pendingManualBatchRef.current = { signature, requestId: crypto.randomUUID(), legs };
+        }
+        const batch = pendingManualBatchRef.current;
+        const outcome = await useOperationalScheduleStore.getState().createFlightLegs(batch.legs, { requestId: batch.requestId });
+        pendingManualBatchRef.current = null;
+        setSelectedRowIds(new Set());
+        if (outcome.refreshError) {
+          void showAlert({ title: 'Flights created — refresh pending', message: outcome.refreshError, tone: 'warning' });
+        } else {
+          setFlightRecords(useOperationalScheduleStore.getState().records);
+        }
+      } finally {
+        setOperationalMutating(false);
+      }
+      return;
+    }
     if (!season || syncWriteInProgress) return;
     const seasonId = season.id;
     try {
@@ -1132,9 +1474,42 @@ function DailyScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Add Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, showAlert, syncWriteInProgress]);
+  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, setOperationalMutating, showAlert, syncWriteInProgress]);
 
   const handleDeleteSelected = useCallback(async () => {
+    if (isOperationalScheduleV1Enabled()) {
+      if (selectedRecordIds.length === 0) return;
+      const shouldDelete = await showConfirm({
+        title: 'Delete Selected Flights',
+        message: `Delete ${selectedRecordIds.length} selected flight occurrence(s)?`,
+        tone: 'warning',
+        confirmLabel: 'Delete',
+      });
+      if (!shouldDelete) return;
+      setOperationalMutating(true);
+      try {
+        const unlinked = unlinkFlightRecords(flightRecords, selectedRecordIds);
+        const affectedIds = new Set([...selectedRecordIds, ...unlinked.updatedRecords.map((record) => record.id)]);
+        const patches = flightRecords.filter((record) => affectedIds.has(record.id)).flatMap((record) => {
+          const patch = buildOperationalLegPatchAndPreimage(record, {
+            ...(selectedRecordIds.includes(record.id) ? { status: 'deleted', deletion_reason: 'manual_delete' } : {}),
+            linked_leg_id: null, turnaround_id: null, link_type: null, pair_anchor_date: null,
+          });
+          return patch ? [patch] : [];
+        });
+        if (patches.length > 0) {
+          const store = useOperationalScheduleStore.getState();
+          await store.applyMutations(patches);
+          await refreshDailyWindow({ revalidate: true });
+          setSelectedRowIds(new Set());
+        }
+      } catch (err) {
+        void showAlert({ title: 'Delete Failed', message: (err as Error).message, tone: 'error' });
+      } finally {
+        setOperationalMutating(false);
+      }
+      return;
+    }
     if (!season || syncWriteInProgress || selectedRecordIds.length === 0) return;
     const shouldDelete = await showConfirm({
       title: 'Delete Selected Flights',
@@ -1188,10 +1563,10 @@ function DailyScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Delete Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, selectedRecordIds, showAlert, showConfirm, syncWriteInProgress]);
+  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, refreshDailyWindow, season, selectedRecordIds, setOperationalMutating, showAlert, showConfirm, syncWriteInProgress]);
 
   useEffect(() => {
-    if (!season) return undefined;
+    if (!isOperationalScheduleV1Enabled() && !season) return undefined;
     const handleDeleteShortcut = async (event: KeyboardEvent) => {
       if (
         event.key !== 'Delete' ||
@@ -1219,6 +1594,51 @@ function DailyScheduleContent() {
   }, [actionsDisabled, handleDeleteSelected, hasSelectedRecords, season]);
 
   const handleLinkSelected = useCallback(async () => {
+    if (isOperationalScheduleV1Enabled()) {
+      if (selectedRecordIds.length === 0) return;
+      setOperationalMutating(true);
+      try {
+        const selected = selectedRecordIds
+          .map((id) => flightRecords.find((record) => record.id === id))
+          .filter((record): record is FlightRecord => record != null && record.status === 'active');
+        const arrivals = selected.filter((record) => record.type === 'A');
+        const departures = selected.filter((record) => record.type === 'D');
+        if (arrivals.length === 0 || departures.length === 0 || arrivals.length !== departures.length) {
+          throw new Error('Linking requires equal nonzero ARR and DEP selections.');
+        }
+        const linkType = inferDailyLinkType(arrivals, departures);
+        const result = linkFlightRecordPairs(
+          flightRecords,
+          arrivals.map((record) => record.id),
+          departures.map((record) => record.id),
+          linkType
+        );
+        const patches: OperationalLegChangeInput[] = [];
+        for (const updated of result.updatedRecords) {
+          const orig = flightRecords.find((r) => r.id === updated.id);
+          if (orig) {
+            const patch = buildOperationalLegPatchAndPreimage(orig, {
+              turnaround_id: updated.turnaroundId ?? null,
+              linked_leg_id: updated.linkedRecordId ?? null,
+              link_type: updated.linkType ?? null,
+              pair_anchor_date: updated.pairAnchorDate ?? null,
+            });
+            if (patch) patches.push(patch);
+          }
+        }
+        if (patches.length > 0) {
+          const store = useOperationalScheduleStore.getState();
+          await store.applyMutations(patches);
+          await refreshDailyWindow({ revalidate: true });
+          setSelectedRowIds(new Set());
+        }
+      } catch (err) {
+        void showAlert({ title: 'Link Failed', message: (err as Error).message, tone: 'error' });
+      } finally {
+        setOperationalMutating(false);
+      }
+      return;
+    }
     if (!season || syncWriteInProgress || selectedRecordIds.length === 0) return;
     const seasonId = season.id;
     const ids = [...selectedRecordIds];
@@ -1279,9 +1699,47 @@ function DailyScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Link Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, selectedRecordIds, showAlert, syncWriteInProgress]);
+  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, refreshDailyWindow, season, selectedRecordIds, setOperationalMutating, showAlert, syncWriteInProgress]);
 
   const handleUnlinkSelected = useCallback(async () => {
+    if (isOperationalScheduleV1Enabled()) {
+      if (selectedRecordIds.length === 0) return;
+      const shouldUnlink = await showConfirm({
+        title: 'Unlink Selected Flights',
+        message: `Unlink ${selectedRecordIds.length} selected flight occurrence(s)?`,
+        tone: 'warning',
+        confirmLabel: 'Unlink',
+      });
+      if (!shouldUnlink) return;
+      setOperationalMutating(true);
+      try {
+        const result = unlinkFlightRecords(flightRecords, [...selectedRecordIds]);
+        const patches: OperationalLegChangeInput[] = [];
+        for (const updated of result.updatedRecords) {
+          const orig = flightRecords.find((r) => r.id === updated.id);
+          if (orig) {
+            const patch = buildOperationalLegPatchAndPreimage(orig, {
+              turnaround_id: null,
+              linked_leg_id: null,
+              link_type: null,
+              pair_anchor_date: null,
+            });
+            if (patch) patches.push(patch);
+          }
+        }
+        if (patches.length > 0) {
+          const store = useOperationalScheduleStore.getState();
+          await store.applyMutations(patches);
+          await refreshDailyWindow({ revalidate: true });
+          setSelectedRowIds(new Set());
+        }
+      } catch (err) {
+        void showAlert({ title: 'Unlink Failed', message: (err as Error).message, tone: 'error' });
+      } finally {
+        setOperationalMutating(false);
+      }
+      return;
+    }
     if (!season || syncWriteInProgress || selectedRecordIds.length === 0) return;
     const shouldUnlink = await showConfirm({
       title: 'Unlink Selected Flights',
@@ -1334,7 +1792,7 @@ function DailyScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Unlink Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, selectedRecordIds, showAlert, showConfirm, syncWriteInProgress]);
+  }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, refreshDailyWindow, season, selectedRecordIds, setOperationalMutating, showAlert, showConfirm, syncWriteInProgress]);
 
   const handleSync = useCallback(async () => {
     if (!season || syncInProgress) return;
@@ -1349,6 +1807,10 @@ function DailyScheduleContent() {
   }, [season, showAlert, syncInProgress, syncNow]);
 
   const fetchServerData = useCallback(async () => {
+    if (isOperationalScheduleV1Enabled()) {
+      await refreshDailyWindow({ revalidate: true });
+      return;
+    }
     if (!season || fetchingServerData || syncInProgress) return;
     const windowKey = buildDailyWindowKey(fromDateTime, toDateTime);
     const requestId = ++fetchServerDataRequestRef.current;
@@ -1398,7 +1860,7 @@ function DailyScheduleContent() {
     } finally {
       setFetchingServerData(false);
     }
-  }, [applyDailyNativeState, fetchingServerData, fromDateTime, season, showAlert, syncInProgress, toDateTime]);
+  }, [applyDailyNativeState, fetchingServerData, fromDateTime, refreshDailyWindow, season, showAlert, syncInProgress, toDateTime]);
 
   return (
     <div className="flex h-dvh bg-surface text-on-surface overflow-hidden font-sans">
@@ -1406,21 +1868,25 @@ function DailyScheduleContent() {
         <header className="flex-none flex items-center justify-between px-6 py-3 w-full bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 shadow-sm z-30">
           <div>
             <h1 className="font-h3 text-h3 text-on-surface">Daily Schedule</h1>
-            <p className="font-body-sm text-body-sm text-on-surface-variant">{season ? buildSeasonDisplayLabel(season) : 'No season selected'}</p>
+            <p className="font-body-sm text-body-sm text-on-surface-variant">
+              {isOperationalScheduleV1Enabled() ? 'Operational Turns' : (season ? buildSeasonDisplayLabel(season) : 'No season selected')}
+            </p>
           </div>
           <div className="flex items-center gap-3">
-            <select
-              value={season?.id ?? ''}
-              onChange={(event) => router.push(`/daily?season=${event.target.value}`)}
-              disabled={seasons.length === 0 || syncing}
-              className="px-3 py-2 bg-surface-container-low hover:bg-surface-container-high border border-outline-variant text-on-surface font-label-caps text-sm font-medium rounded-lg focus:outline-none focus:ring-2 focus:ring-primary transition-colors cursor-pointer shadow-sm min-w-[200px]"
-            >
-              {seasons.length === 0 ? (
-                <option value="">No seasons</option>
-              ) : seasons.map((item) => (
-                <option key={item.id} value={item.id}>{buildSeasonDisplayLabel(item)}</option>
-              ))}
-            </select>
+            {!isOperationalScheduleV1Enabled() && (
+              <select
+                value={season?.id ?? ''}
+                onChange={(event) => router.push(`/daily?season=${event.target.value}`)}
+                disabled={seasons.length === 0 || syncing}
+                className="px-3 py-2 bg-surface-container-low hover:bg-surface-container-high border border-outline-variant text-on-surface font-label-caps text-sm font-medium rounded-lg focus:outline-none focus:ring-2 focus:ring-primary transition-colors cursor-pointer shadow-sm min-w-[200px]"
+              >
+                {seasons.length === 0 ? (
+                  <option value="">No seasons</option>
+                ) : seasons.map((item) => (
+                  <option key={item.id} value={item.id}>{buildSeasonDisplayLabel(item)}</option>
+                ))}
+              </select>
+            )}
             {season && (
               <>
                 <span className={`px-2 py-1 rounded-full text-xs font-semibold border ${
@@ -1450,6 +1916,24 @@ function DailyScheduleContent() {
             )}
           </div>
         </header>
+        {operationalUnresolvedAttempt && (
+          <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-warning/30 bg-warning/10 px-6 py-2.5 text-sm text-on-surface">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-[18px] text-warning">warning</span>
+              <p className="text-pretty">
+                Có thao tác operational chưa xác nhận trên server (Yêu cầu {operationalUnresolvedAttempt.requestId.slice(0, 8)}…). Các thao tác khác đang bị tạm khóa.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={operationalMutating}
+              onClick={() => void handleRetryPendingMutation()}
+              className="rounded border border-primary bg-primary px-3 py-1.5 font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {operationalMutating ? 'Đang gửi lại…' : 'Gửi lại yêu cầu'}
+            </button>
+          </div>
+        )}
         {pendingImportRefresh && (
           <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-outline-variant bg-surface-container-high px-6 py-3 text-sm">
             <p className="text-pretty">Batch {pendingImportRefresh.batchId} đã commit. Dữ liệu hiển thị chưa được tải lại.</p>
@@ -1462,7 +1946,7 @@ function DailyScheduleContent() {
         <main className="flex-1 min-h-0 overflow-hidden p-4 flex flex-col gap-3">
           <section className="flex-none rounded-lg border border-surface-variant bg-surface-container-lowest shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-surface-variant">
-              <div className="flex flex-wrap items-center gap-3">
+              <fieldset disabled={isOperationalScheduleV1Enabled() && operationalWritePending} className="flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-xs font-label-caps text-on-surface-variant">
                   From
                   <input
@@ -1485,22 +1969,60 @@ function DailyScheduleContent() {
                     className="bg-surface-container border border-outline-variant rounded px-2 py-1.5 text-sm text-on-surface"
                   />
                 </label>
-                <button onClick={handleToday} className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface hover:bg-surface-container-high transition-colors">
-                  <span className="material-symbols-outlined text-[16px]">today</span>
-                  Today
-                </button>
-                {[1, 2, 7].map((days) => (
-                  <button
-                    key={days}
-                    onClick={() => handleQuickRange(days)}
-                    className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant hover:bg-surface-container-high transition-colors"
-                  >
-                    {days}D
-                  </button>
-                ))}
+                {isOperationalScheduleV1Enabled() ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        const range = buildOperationalDateRange('today');
+                        setFromDateTime(`${range.startDate}T05:00`);
+                        setToDateTime(`${shiftVietnamIsoDate(range.endDate, 1)}T05:00`);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface hover:bg-surface-container-high transition-colors"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">today</span>
+                      Today
+                    </button>
+                    <button
+                      onClick={() => {
+                        const range = buildOperationalDateRange('tomorrow');
+                        setFromDateTime(`${range.startDate}T05:00`);
+                        setToDateTime(`${shiftVietnamIsoDate(range.endDate, 1)}T05:00`);
+                      }}
+                      className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant hover:bg-surface-container-high transition-colors"
+                    >
+                      Tomorrow
+                    </button>
+                    <button
+                      onClick={() => {
+                        const range = buildOperationalDateRange('next7days');
+                        setFromDateTime(`${range.startDate}T05:00`);
+                        setToDateTime(`${shiftVietnamIsoDate(range.endDate, 1)}T05:00`);
+                      }}
+                      className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant hover:bg-surface-container-high transition-colors"
+                    >
+                      7 Days
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={handleToday} className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface hover:bg-surface-container-high transition-colors">
+                      <span className="material-symbols-outlined text-[16px]">today</span>
+                      Today
+                    </button>
+                    {[1, 2, 7].map((days) => (
+                      <button
+                        key={days}
+                        onClick={() => handleQuickRange(days)}
+                        className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant hover:bg-surface-container-high transition-colors"
+                      >
+                        {days}D
+                      </button>
+                    ))}
+                  </>
+                )}
                 <button
                   onClick={() => handleAllocationNavigation('/checkin')}
-                  disabled={!season}
+                  disabled={!isOperationalScheduleV1Enabled() && !season}
                   title="Open Check-in Allocation for current day range"
                   aria-label="Open Check-in Allocation for current day range"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
@@ -1509,14 +2031,14 @@ function DailyScheduleContent() {
                 </button>
                 <button
                   onClick={() => handleAllocationNavigation('/gate')}
-                  disabled={!season}
+                  disabled={!isOperationalScheduleV1Enabled() && !season}
                   title="Open Gate Allocation for current day range"
                   aria-label="Open Gate Allocation for current day range"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <PbbIcon className="h-[19px] w-[19px]" />
                 </button>
-              </div>
+              </fieldset>
               <div className="flex items-center gap-2">
                 <span className="rounded-full bg-primary-container px-3 py-1 text-xs font-bold text-on-primary-container">ARR {summary.arr}</span>
                 <span className="rounded-full bg-secondary-container px-3 py-1 text-xs font-bold text-on-secondary-container">DEP {summary.dep}</span>
@@ -1548,7 +2070,7 @@ function DailyScheduleContent() {
                 </button>
                 <button
                   onClick={() => void handleExportDailyExcel()}
-                  disabled={!season || exportingExcel || sortedRows.length === 0}
+                  disabled={(!isOperationalScheduleV1Enabled() && !season) || exportingExcel || sortedRows.length === 0}
                   title="Export visible Daily schedule to Excel"
                   className="inline-flex h-9 items-center justify-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -1628,7 +2150,7 @@ function DailyScheduleContent() {
                   />
                 )}
               </div>
-            ) : !season ? (
+            ) : !isOperationalScheduleV1Enabled() && !season ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-on-surface-variant">
                 <div>No season selected. Import an OperationalTurns file to create one.</div>
                 {syncSeasonId && (
@@ -1756,9 +2278,7 @@ function DailyScheduleContent() {
         prefill={null}
         prefillLinked={null}
         prefillDateSelection={newFlightDateSelection}
-        onSubmitDetailed={(mods) => {
-          void handleAddFlights(mods);
-        }}
+        onSubmitDetailed={handleAddFlights}
       />
       {dailyImportPreview && (
         <DailyImportPreviewDialog
@@ -1769,6 +2289,77 @@ function DailyScheduleContent() {
           onCancel={() => { void closeDailyImportPreview(); }}
           onCommit={() => { void commitDailyImportPreview(); }}
           onConfirmZeroFlightDates={(datesBySeasonId) => { void confirmDailyZeroFlightDates(datesBySeasonId); }}
+        />
+      )}
+      {dailyImportPreviewV2 && (
+        <DailyImportPreviewDialogV2
+          result={dailyImportPreviewV2}
+          commitEnabled={!operationalWritePending}
+          committing={dailyImporting}
+          onCancel={() => {
+            if (useOperationalScheduleStore.getState().importing) return;
+            const batchId = dailyImportPreviewV2.batchId;
+            setDailyImportPreviewV2(null);
+            if (dailyImportPreviewV2.status !== 'committed') {
+              void cancelDailyScheduleImportV2(batchId).catch((error) => {
+                void showAlert({ title: 'Cancel not confirmed', message: error.message, tone: 'warning' });
+              });
+            }
+          }}
+          onCommit={async () => {
+            const pending = useOperationalScheduleStore.getState();
+            if (pending.importing || pending.mutating || dailyImportPreviewV2.status !== 'validated') return;
+            setDailyImporting(true);
+            try {
+              let receipt;
+              try {
+                const committed = await commitDailyScheduleImportV2({
+                  batchId: dailyImportPreviewV2.batchId,
+                  previewHash: dailyImportPreviewV2.previewHash,
+                });
+                if (committed.status !== 'committed' || !committed.result) throw new Error('Commit receipt is unavailable; check batch status before retrying.');
+                receipt = committed.result;
+              } catch (error) {
+                const recovered = await getDailyScheduleImportV2Status(dailyImportPreviewV2.requestId).catch(() => null);
+                if (recovered) setDailyImportPreviewV2(recovered);
+                if (recovered?.status !== 'committed' || !recovered.result) throw error;
+                receipt = recovered.result;
+              }
+              setDailyImportPreviewV2({ ...dailyImportPreviewV2, status: 'committed', result: receipt });
+              useOperationalScheduleStore.setState({ snapshot: { revision: receipt.revision, token: '' } });
+              setSelectedRowIds(new Set());
+              try {
+                await refreshDailyWindow({ revalidate: true });
+              } catch (refreshError) {
+                void showAlert({
+                  title: 'Import committed — refresh pending',
+                  message: `Batch ${receipt.batchId} was committed. Reload the window; do not import again. ${(refreshError as Error).message}`,
+                  tone: 'warning',
+                });
+              }
+            } catch (commitErr) {
+              void showAlert({ title: 'Import V2 Commit Failed', message: (commitErr as Error).message, tone: 'error' });
+            } finally {
+              setDailyImporting(false);
+            }
+          }}
+          onConfirmZeroFlightDates={async (dates) => {
+            if (!lastStagedV2PayloadRef.current || useOperationalScheduleStore.getState().importing) return;
+            setDailyImporting(true);
+            try {
+              await cancelDailyScheduleImportV2(dailyImportPreviewV2.batchId);
+              const payloadWithZero: DailyImportStagePayloadV2 = {
+                ...lastStagedV2PayloadRef.current,
+                confirmedZeroFlightDates: dates,
+                requestId: crypto.randomUUID(),
+              };
+              await stageOperationalImport(payloadWithZero);
+            } catch (err) {
+              void showAlert({ title: 'Re-staging Failed', message: (err as Error).message, tone: 'error' });
+            } finally {
+              setDailyImporting(false);
+            }
+          }}
         />
       )}
       {dialogNode}

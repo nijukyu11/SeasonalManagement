@@ -180,6 +180,23 @@ export function parseSeasonalSchedule(workbook: XLSX.WorkBook): ParseResult {
       depIntDomInd: r['DEPIntDomInd'],
     };
 
+    const rawOvernightLink = r['OvernightLinkRow'] ?? r['OvernightLinkRowIndex'] ?? r['LinkRow'] ?? r['Link Row'];
+    const rawLinkType = r['LinkType'] ?? r['Link Type'];
+    let overnightLinkRowIndex: number | undefined;
+    if (rawOvernightLink != null && String(rawOvernightLink).trim() !== '') {
+      const parsedLink = parseInt(String(rawOvernightLink).trim(), 10);
+      if (Number.isSafeInteger(parsedLink) && parsedLink > 0) {
+        overnightLinkRowIndex = parsedLink;
+      }
+    }
+    let linkType: 'overnight' | 'sameday' | undefined;
+    if (rawLinkType != null && String(rawLinkType).trim() !== '') {
+      const parsedType = String(rawLinkType).trim().toLowerCase();
+      if (parsedType === 'overnight' || parsedType === 'sameday') {
+        linkType = parsedType;
+      }
+    }
+
     const rowIssues = validateSeasonalSourceRow(candidate, date1904);
     issues.push(...rowIssues);
     if (rowIssues.length > 0) continue;
@@ -209,6 +226,8 @@ export function parseSeasonalSchedule(workbook: XLSX.WorkBook): ParseResult {
       depFlightCategory: upperOrNull(candidate.depFlightCategory),
       depCodeShares: upperOrNull(candidate.depCodeShares),
       depIntDomInd: upperOrNull(candidate.depIntDomInd),
+      ...(overnightLinkRowIndex != null ? { overnightLinkRowIndex } : {}),
+      ...(linkType != null ? { linkType } : {}),
     };
     rows.push(row);
   }
@@ -293,8 +312,22 @@ export function expandToFlightLegs(rows: ParsedRow[]): FlightLeg[] {
         // Content-based stable IDs (independent of row order / filtering)
         const arrRaw = String(row.arrFlight ?? '');
         const depRaw = String(row.depFlight ?? '');
+        const arrMin = row.sta ? timeToMinutes(row.sta) : null;
+        const depMin = row.std ? timeToMinutes(row.std) : null;
+        const isSameRowOvernight = hasArrival && hasDeparture && arrMin != null && depMin != null && depMin < arrMin;
+        const sameRowLinkType = isSameRowOvernight ? 'overnight' : 'sameday';
+
+        let depDateStr = dateStr;
+        let depDayOfWeek = dayOfWeek;
+        if (isSameRowOvernight) {
+          const nextDay = new Date(current);
+          nextDay.setDate(nextDay.getDate() + 1);
+          depDateStr = formatDate(nextDay);
+          depDayOfWeek = nextDay.getDay();
+        }
+
         const arrId = `${row.airline}_${arrRaw}_${dateStr}_A`;
-        const depId = `${row.airline}_${depRaw}_${dateStr}_D`;
+        const depId = `${row.airline}_${depRaw}_${depDateStr}_D`;
 
         // Compute linkId based on link type:
         // - overnight ARR: includes paired DEP flight, uses own date
@@ -334,13 +367,13 @@ export function expandToFlightLegs(rows: ParsedRow[]): FlightLeg[] {
         if (hasArrival && hasDeparture) {
           arrPairMeta = {
             turnaroundId: linkId,
-            linkType: 'sameday',
+            linkType: sameRowLinkType,
             pairAnchorDate: dateStr,
             linkedRecordId: depId,
           };
           depPairMeta = {
             turnaroundId: linkId,
-            linkType: 'sameday',
+            linkType: sameRowLinkType,
             pairAnchorDate: dateStr,
             linkedRecordId: arrId,
           };
@@ -428,8 +461,8 @@ export function expandToFlightLegs(rows: ParsedRow[]): FlightLeg[] {
             lb: null,
             bhs: null,
             ghs: null,
-            date: dateStr,
-            dayOfWeek,
+            date: hasArrival ? depDateStr : dateStr,
+            dayOfWeek: hasArrival ? depDayOfWeek : dayOfWeek,
             action: null,
             sourceRowIndex: row.rowIndex,
             ...depLinkMeta,

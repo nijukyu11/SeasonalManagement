@@ -1,12 +1,21 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/cn';
-import { getOperationalSettings, getSeasons, loadSeasonWorkspaceWindow } from '@/lib/remoteStore';
+import { getOperationalScheduleAllocationWindowV1, getOperationalSettings, getSeasons, loadSeasonWorkspaceWindow } from '@/lib/remoteStore';
 import { revalidateSeasonWorkspaceWindow } from '@/lib/seasonWorkspaceWindowCoordinator';
 import { publishSeasonWorkspaceChanged } from '@/lib/seasonDataCache';
 import { buildSeasonDisplayLabel } from '@/lib/importSeasonRules';
+import {
+  buildOperationalDateRange,
+  getOperationalDayVietnamIso,
+  isOperationalScheduleV1Enabled,
+  loadFullOperationalScheduleWindow,
+  subscribeToOperationalChanges,
+} from '@/lib/operationalScheduleContract';
+import { useOperationalScheduleStore } from '@/lib/operationalScheduleAdapter';
+import { getSupabaseClient } from '@/lib/supabase';
 import {
   buildDashboardOverview,
   buildDashboardComparison,
@@ -239,6 +248,7 @@ function buildDashboardWindowKey(scope: 'operations' | 'ai-workspace' = 'operati
 }
 
 function readInitialDashboardRouteState(targetSeasonId: string | null): DashboardRouteState | null {
+  if (isOperationalScheduleV1Enabled()) return null;
   const storeState = useSeasonWorkspaceStore.getState();
   const cachedSeasons = getCachedSeasons() ?? storeState.seasons;
   if (!cachedSeasons || cachedSeasons.length === 0) return null;
@@ -320,6 +330,9 @@ function monthBounds(month: string): { from: string; to: string } {
 }
 
 function todayLocalIso(): string {
+  if (isOperationalScheduleV1Enabled()) {
+    return getOperationalDayVietnamIso();
+  }
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -837,11 +850,46 @@ function dimensionValue(
 
 function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/dashboard' }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const isRouteActive = pathname === '/' || pathname === '/dashboard';
   const dashboardRoute = routeBase;
   const searchParams = useCachedRouteSearchParams();
   const { notifyExportCompleted } = useExportNotifications();
   const targetSeasonId = searchParams.get('season');
   const initialDashboardRouteState = readInitialDashboardRouteState(targetSeasonId);
+
+  const requestedDate = searchParams.get('date');
+  const requestedFrom = searchParams.get('from') || searchParams.get('startDate');
+  const requestedTo = searchParams.get('to') || searchParams.get('endDate');
+
+  const initialRange = useMemo(() => {
+    if (requestedFrom && requestedTo) {
+      return { start: requestedFrom.slice(0, 10), end: requestedTo.slice(0, 10) };
+    }
+    if (requestedDate) {
+      const d = requestedDate.slice(0, 10);
+      return { start: d, end: d };
+    }
+    const today = todayLocalIso();
+    return { start: today, end: today };
+  }, [requestedDate, requestedFrom, requestedTo]);
+
+  const [operationalStartDate, setOperationalStartDate] = useState(initialRange.start);
+  const [operationalEndDate, setOperationalEndDate] = useState(initialRange.end);
+  const operationalRequestIdRef = useRef(0);
+  const operationalRangeRef = useRef({ start: initialRange.start, end: initialRange.end });
+  const pendingRevalidateOnSettleRef = useRef(false);
+  const operationalWritePending = useOperationalScheduleStore((state) => state.mutating || state.importing);
+  const operationalMutating = useOperationalScheduleStore((state) => state.mutating);
+  const operationalMutatingRef = useRef(false);
+
+  useEffect(() => {
+    operationalRangeRef.current = { start: operationalStartDate, end: operationalEndDate };
+  }, [operationalEndDate, operationalStartDate]);
+
+  useEffect(() => {
+    operationalMutatingRef.current = operationalMutating || operationalWritePending;
+  }, [operationalMutating, operationalWritePending]);
 
   const [seasons, setSeasons] = useState<Season[]>(() => initialDashboardRouteState?.seasons ?? []);
   const [season, setSeason] = useState<Season | null>(() => initialDashboardRouteState?.season ?? null);
@@ -910,7 +958,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   });
   useSessionScrollRestoration('dashboard:scroll', dashboardScrollRef);
   const routeCountries = operationalSettings?.routeCountries;
-  const syncSeasonId = season?.id ?? targetSeasonId;
+  const syncSeasonId = isOperationalScheduleV1Enabled() ? null : (season?.id ?? targetSeasonId);
   const { status: syncStatus, syncNow } = useSeasonSync(syncSeasonId, 'dashboard');
   const [fetchingServerData, setFetchingServerData] = useState(false);
   const syncInProgress = syncStatus.status === 'syncing';
@@ -946,7 +994,37 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     return cachedState.freshness;
   }, [targetSeasonId]);
 
+  const refreshDashboardOperationalWindow = useCallback(async () => {
+    const requestId = ++operationalRequestIdRef.current;
+    const requestedRange = { start: operationalStartDate, end: operationalEndDate };
+
+    const operationalResult = await loadFullOperationalScheduleWindow({
+      startDate: requestedRange.start,
+      endDate: requestedRange.end,
+      resourceType: 'all',
+      fetchWindowFn: (p) => getOperationalScheduleAllocationWindowV1(p),
+    });
+
+    if (
+      operationalRequestIdRef.current !== requestId ||
+      !isRouteActive ||
+      operationalRangeRef.current.start !== requestedRange.start ||
+      operationalRangeRef.current.end !== requestedRange.end
+    ) {
+      return null;
+    }
+
+    setRecords(operationalResult.records);
+    setModifications(new Map());
+    setDataSource('server');
+    loadedWindowKeyRef.current = `operational:${requestedRange.start}:${requestedRange.end}`;
+    return operationalResult;
+  }, [isRouteActive, operationalEndDate, operationalStartDate]);
+
   const refreshDashboardWindow = useCallback(async (options: { revalidate?: boolean } = {}) => {
+    if (isOperationalScheduleV1Enabled()) {
+      return refreshDashboardOperationalWindow();
+    }
     if (!season?.id) return null;
     const windowKey = buildDashboardWindowKey('operations');
     if (options.revalidate) {
@@ -970,10 +1048,10 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     });
     loadedWindowKeyRef.current = windowKey;
     return snapshot;
-  }, [season]);
+  }, [refreshDashboardOperationalWindow, season]);
 
   useSeasonWorkspaceRefresh({
-    seasonId: season?.id ?? targetSeasonId,
+    seasonId: isOperationalScheduleV1Enabled() ? null : (season?.id ?? targetSeasonId),
     policy: 'on-activation',
     source: 'dashboard',
     onRefresh: async (event) => {
@@ -1003,6 +1081,21 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   }, [syncInProgress, syncNow, syncSeasonId]);
 
   const fetchServerData = useCallback(async () => {
+    if (isOperationalScheduleV1Enabled()) {
+      setFetchingServerData(true);
+      setError(null);
+      setFetchUpdateNotice(null);
+      try {
+        await refreshDashboardOperationalWindow();
+      } catch (err) {
+        const message = err instanceof Error && err.message ? err.message : 'Could not fetch dashboard data from the server.';
+        setError(message);
+        setFetchUpdateNotice({ title: 'Fetch data failed', message, tone: 'error' });
+      } finally {
+        setFetchingServerData(false);
+      }
+      return;
+    }
     if (!season || fetchingServerData || syncInProgress) return;
     const overviewWindowKey = buildDashboardWindowKey('operations');
     const requestId = ++fetchServerDataRequestRef.current;
@@ -1063,7 +1156,48 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     } finally {
       setFetchingServerData(false);
     }
-  }, [fetchingServerData, season, syncInProgress]);
+  }, [fetchingServerData, refreshDashboardOperationalWindow, season, syncInProgress]);
+
+  useEffect(() => {
+    if (!isOperationalScheduleV1Enabled() || !isRouteActive) return;
+    const client = getSupabaseClient();
+    const sub = subscribeToOperationalChanges(client, {
+      onDateInvalidated: () => {
+        const storeState = useOperationalScheduleStore.getState();
+        if (storeState.mutating || storeState.importing || operationalMutatingRef.current) {
+          pendingRevalidateOnSettleRef.current = true;
+          return;
+        }
+        void refreshDashboardOperationalWindow().catch((err) => {
+          setError(err instanceof Error ? err.message : String(err));
+        });
+      },
+      onReconnect: () => {
+        const storeState = useOperationalScheduleStore.getState();
+        if (storeState.mutating || storeState.importing || operationalMutatingRef.current) {
+          pendingRevalidateOnSettleRef.current = true;
+          return;
+        }
+        void refreshDashboardOperationalWindow().catch((err) => {
+          setError(err instanceof Error ? err.message : String(err));
+        });
+      },
+    });
+    return () => {
+      sub.unsubscribe();
+    };
+  }, [isRouteActive, refreshDashboardOperationalWindow]);
+
+  useEffect(() => {
+    if (!isOperationalScheduleV1Enabled() || !isRouteActive) return;
+    if (operationalMutating || operationalWritePending) return;
+    if (pendingRevalidateOnSettleRef.current) {
+      pendingRevalidateOnSettleRef.current = false;
+      void refreshDashboardOperationalWindow().catch((err) => {
+        setError(err instanceof Error ? err.message : String(err));
+      });
+    }
+  }, [isRouteActive, operationalMutating, operationalWritePending, refreshDashboardOperationalWindow]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1087,6 +1221,61 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     let cancelled = false;
 
     async function loadDashboardData() {
+      if (isOperationalScheduleV1Enabled()) {
+        operationalRangeRef.current = { start: operationalStartDate, end: operationalEndDate };
+        setLoading(true);
+        setError(null);
+        setLoadProgress(buildLoadProgress('Loading operational schedule', 20, `${operationalStartDate}..${operationalEndDate}`));
+
+        // Load seasons in background for optional analytical scope; season failure must not block operations
+        const cachedSeasons = getCachedSeasons();
+        if (cachedSeasons) {
+          setSeasons(cachedSeasons);
+          useSeasonWorkspaceStore.getState().setSeasons(cachedSeasons);
+          const targetSeason = targetSeasonId
+            ? cachedSeasons.find((item) => item.id === targetSeasonId) ?? null
+            : null;
+          setSeason(targetSeason);
+        } else {
+          void getSeasons()
+            .then((nextSeasons) => {
+              if (cancelled) return;
+              setCachedSeasons(nextSeasons);
+              setSeasons(nextSeasons);
+              useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
+              const targetSeason = targetSeasonId
+                ? nextSeasons.find((item) => item.id === targetSeasonId) ?? null
+                : null;
+              setSeason(targetSeason);
+            })
+            .catch(() => {
+              // Season service failure must not block independent Operations
+            });
+        }
+
+        try {
+          const operationalResult = await loadFullOperationalScheduleWindow({
+            startDate: operationalStartDate,
+            endDate: operationalEndDate,
+            resourceType: 'all',
+            fetchWindowFn: (p) => getOperationalScheduleAllocationWindowV1(p),
+          });
+          if (cancelled) return;
+
+          loadedWindowKeyRef.current = `operational:${operationalStartDate}:${operationalEndDate}`;
+          setRecords(operationalResult.records);
+          setModifications(new Map());
+          setDataSource('server');
+          setSyncMeta(null);
+          setFetchUpdateNotice(null);
+        } catch (err) {
+          if (!cancelled) setError((err as Error).message);
+        } finally {
+          if (!cancelled) setLoading(false);
+        }
+        return;
+      }
+
       const cachedState = tryApplyCachedDashboardRouteWindow();
       if (cachedState === 'fresh') return;
       setLoading(cachedState !== 'stale');
@@ -1114,7 +1303,6 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         if (!targetSeasonId || targetSeasonId !== targetSeason.id) {
           router.replace(`${dashboardRoute}?season=${targetSeason.id}`);
         }
-
         setSeason(targetSeason);
         const overviewWindowKey = buildDashboardWindowKey('operations');
         const workspace = useSeasonWorkspaceStore.getState().workspaces[targetSeason.id];
@@ -1186,7 +1374,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     return () => {
       cancelled = true;
     };
-  }, [dashboardRoute, router, targetSeasonId, tryApplyCachedDashboardRouteWindow]);
+  }, [dashboardRoute, operationalEndDate, operationalStartDate, router, targetSeasonId, tryApplyCachedDashboardRouteWindow]);
 
   const effectiveRecords = useMemo(() => (
     buildEffectiveDashboardRecords(records, modifications)
@@ -1204,7 +1392,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           records,
           modifications,
           effectiveRecords,
-          dataSource: 'active',
+          dataSource: isOperationalScheduleV1Enabled() ? 'server' : 'active',
           syncMeta: syncMeta ?? undefined,
           total: records.length,
           truncated: false,
@@ -1218,6 +1406,24 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   }, [effectiveRecords, modifications, records, season, syncMeta]);
 
   const loadAiWorkspaceSeason = useCallback(async (targetSeason: Season): Promise<DashboardAiWorkspaceSeasonData> => {
+    if (isOperationalScheduleV1Enabled()) {
+      const operationalResult = await loadFullOperationalScheduleWindow({
+        startDate: targetSeason.effectiveStart,
+        endDate: targetSeason.effectiveEnd,
+        resourceType: 'all',
+        fetchWindowFn: (p) => getOperationalScheduleAllocationWindowV1(p),
+      });
+      return {
+        season: targetSeason,
+        records: operationalResult.records,
+        modifications: new Map(),
+        effectiveRecords: operationalResult.records,
+        dataSource: 'server',
+        syncMeta: undefined,
+        total: operationalResult.records.length,
+        truncated: false,
+      };
+    }
     const result = await loadSeasonWorkspaceWindow({
       seasonId: targetSeason.id,
       resourceType: 'schedule',
@@ -1254,12 +1460,16 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     season?.id ? [season.id] : []
   ), [season]);
 
-  const requestedSeasonDataIds = useMemo(() => (
-    normalizeDashboardAiWorkspaceSeasonIds([
-      ...activeAiSeasonIds,
-      ...yoySeasonIds,
-    ])
-  ), [activeAiSeasonIds, yoySeasonIds]);
+  const requestedSeasonDataIds = useMemo(() => {
+    const ids: string[] = [];
+    if (dashboardView === 'ai-workspace') {
+      ids.push(...activeAiSeasonIds);
+    }
+    if (dashboardView === 'comparison' && comparisonMode === 'yoy') {
+      ids.push(...yoySeasonIds);
+    }
+    return normalizeDashboardAiWorkspaceSeasonIds(ids);
+  }, [activeAiSeasonIds, comparisonMode, dashboardView, yoySeasonIds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1358,11 +1568,12 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         .map((record) => getDashboardOperationalDate(record))
           .filter(Boolean),
         todayOperationalDate,
+        ...(isOperationalScheduleV1Enabled() ? [operationalStartDate, operationalEndDate, operationalDate].filter(Boolean) : []),
       ]
     ))
       .sort()
       .map((date) => ({ key: date, label: date }))
-  ), [dashboardRecords, todayOperationalDate]);
+  ), [dashboardRecords, operationalDate, operationalEndDate, operationalStartDate, todayOperationalDate]);
   const operationalMonthOptions = useMemo(() => (
     Array.from(new Set(
       dashboardRecords
@@ -1373,7 +1584,9 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       .sort()
       .map((month) => ({ key: month, label: periodLabel(month, 'mom') }))
   ), [dashboardRecords]);
-  const defaultOperationalDate = todayOperationalDate;
+  const defaultOperationalDate = isOperationalScheduleV1Enabled()
+    ? (operationalStartDate || todayOperationalDate)
+    : todayOperationalDate;
   const activeOperationalDate = operationalDateOptions.some((item) => item.key === operationalDate)
     ? operationalDate
     : defaultOperationalDate;
@@ -1393,6 +1606,26 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       settings: dashboardAlertSettings,
     })
   ), [activeOperationalDate, dashboardAlertSettings, dashboardRecords, operationalBucketSize, timeBasis]);
+
+  const handleOperationalDateChange = useCallback((newDate: string) => {
+    if (!newDate) return;
+    setOperationalDate(newDate);
+    if (newDate < operationalStartDate) {
+      operationalRangeRef.current = { start: newDate, end: operationalEndDate };
+      setOperationalStartDate(newDate);
+    } else if (newDate > operationalEndDate) {
+      operationalRangeRef.current = { start: operationalStartDate, end: newDate };
+      setOperationalEndDate(newDate);
+    }
+  }, [operationalEndDate, operationalStartDate, setOperationalDate]);
+
+  const handleSelectPresetDate = useCallback((preset: 'today' | 'tomorrow' | 'next7days') => {
+    const range = buildOperationalDateRange(preset);
+    operationalRangeRef.current = { start: range.startDate, end: range.endDate };
+    setOperationalStartDate(range.startDate);
+    setOperationalEndDate(range.endDate);
+    setOperationalDate(range.startDate);
+  }, [setOperationalDate]);
   const peakDayHeatmap = useMemo(() => (
     buildPeakDayHeatmap({
       records: dashboardRecords,
@@ -1671,8 +1904,14 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     : 'Chưa có date range cho mùa chung';
 
   const currentQueryScope = useMemo<DashboardAiQueryScope>(() => {
-    const effectiveDateFrom = aiQueryScopeSourcePreset === 'selected-season' ? aiSelectedSeasonDateRange.from : aiQueryScopeDateFrom;
-    const effectiveDateTo = aiQueryScopeSourcePreset === 'selected-season' ? aiSelectedSeasonDateRange.to : aiQueryScopeDateTo;
+    const fallbackFrom = isOperationalScheduleV1Enabled() ? operationalStartDate : '';
+    const fallbackTo = isOperationalScheduleV1Enabled() ? operationalEndDate : '';
+    const effectiveDateFrom = aiQueryScopeSourcePreset === 'selected-season'
+      ? (aiSelectedSeasonDateRange.from || fallbackFrom)
+      : aiQueryScopeDateFrom;
+    const effectiveDateTo = aiQueryScopeSourcePreset === 'selected-season'
+      ? (aiSelectedSeasonDateRange.to || fallbackTo)
+      : aiQueryScopeDateTo;
     const normalizedRange = normalizeAiWorkspaceDateRange(effectiveDateFrom, effectiveDateTo);
     const selectedSeasonPreset = aiQueryScopeSourcePreset === 'selected-season';
     const iataSeasonCodes = selectedSeasonPreset
@@ -1687,7 +1926,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       ...(selectedSeasonPreset && iataSeasonCodes.length ? { iataSeasonCodes } : {}),
       sourcePreset: aiQueryScopeSourcePreset,
     };
-  }, [aiQueryScopeDateFrom, aiQueryScopeDateTo, aiQueryScopeSourcePreset, aiScopeSeasonIds, aiSelectedSeasonDateRange.from, aiSelectedSeasonDateRange.to, seasons]);
+  }, [aiQueryScopeDateFrom, aiQueryScopeDateTo, aiQueryScopeSourcePreset, aiScopeSeasonIds, aiSelectedSeasonDateRange.from, aiSelectedSeasonDateRange.to, operationalEndDate, operationalStartDate, seasons]);
   const currentQueryScopeLabel = useMemo(() => {
     const seasonLabel = season?.seasonCode || 'Chưa chọn mùa';
     const rangeLabel = currentQueryScope.dateFrom || currentQueryScope.dateTo
@@ -1740,12 +1979,12 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   const dashboardAiAvailableTools = useMemo(() => resolveDashboardAiAvailableTools({
     aiConfigured,
     operatorAuthorized: true,
-    hasSelectedSeason: Boolean(season),
-    hasLocalRecords: Boolean(season),
+    hasSelectedSeason: isOperationalScheduleV1Enabled() || Boolean(season),
+    hasLocalRecords: effectiveRecords.length > 0,
     selectedSeasonCount: activeAiSeasonIds.length,
     exportEnabled: effectiveRecords.length > 0,
   }), [activeAiSeasonIds.length, aiConfigured, effectiveRecords.length, season]);
-  const aiNotebookStorageKey = `dashboard:aiNotebook:${season?.id || targetSeasonId || 'global'}`;
+  const aiNotebookStorageKey = `dashboard:aiNotebook:${season?.id || 'global'}`;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1793,19 +2032,20 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
     const latestAiAnswer = aiNotesOverride ??
       [...(aiNotebook?.cells ?? [])].reverse().find((cell) => cell.assistantText)?.assistantText ??
       null;
+    const seasonCode = season?.seasonCode ?? (isOperationalScheduleV1Enabled() ? 'OP' : undefined);
     const workbook = templateId === 'mom-wow-analysis'
       ? buildMomWowAnalysisWorkbook({
         context: dashboardAiQueryOnlyContext,
         aiNotes: latestAiAnswer,
-        seasonCode: season?.seasonCode,
+        seasonCode,
       })
       : buildSanLuongSummaryWorkbook({
         records: effectiveRecords,
         routeCountries,
-        seasonCode: season?.seasonCode,
+        seasonCode,
         timeBasis,
-    });
-    const result = await downloadDashboardWorkbook(workbook, buildDashboardReportFileName(templateId, season?.seasonCode));
+      });
+    const result = await downloadDashboardWorkbook(workbook, buildDashboardReportFileName(templateId, seasonCode));
     notifyExportCompleted(result);
   }, [aiNotebook, dashboardAiQueryOnlyContext, effectiveRecords, notifyExportCompleted, routeCountries, season?.seasonCode, timeBasis]);
 
@@ -1814,8 +2054,9 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       await downloadDashboardReport(exportAction.templateId);
       return;
     }
+    const seasonCode = season?.seasonCode ?? (isOperationalScheduleV1Enabled() ? 'OP' : undefined);
     const workbook = buildCustomDashboardWorkbook(exportAction.workbookSpec, {
-      seasonCode: season?.seasonCode,
+      seasonCode,
     });
     const result = await downloadDashboardWorkbook(workbook, exportAction.fileName);
     notifyExportCompleted(result);
@@ -2283,7 +2524,7 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
         notes: `Block AI Workspace: ${block.source}`,
       }],
     }, {
-      seasonCode: season?.seasonCode,
+      seasonCode: season?.seasonCode ?? (isOperationalScheduleV1Enabled() ? 'OP' : undefined),
     });
     const safeName = `${block.title.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'ai_workspace_block'}.xlsx`;
     const result = await downloadDashboardWorkbook(workbook, safeName);
@@ -2361,7 +2602,12 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   })), [enabledAiModels]);
 
   function handleDailyTrendDoubleClick(date: string) {
-    if (!season || !date) return;
+    if (!date) return;
+    if (isOperationalScheduleV1Enabled()) {
+      router.push(`/daily?date=${encodeURIComponent(date)}`);
+      return;
+    }
+    if (!season) return;
     const params = new URLSearchParams();
     params.set('season', season.id);
     params.set('date', date);
@@ -2369,6 +2615,14 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
   }
 
   const routeToSeason = (path: string) => {
+    if (isOperationalScheduleV1Enabled()) {
+      if (path === '/daily' && activeOperationalDate) {
+        router.push(`${path}?date=${encodeURIComponent(activeOperationalDate)}`);
+        return;
+      }
+      router.push(path);
+      return;
+    }
     router.push(season ? `${path}?season=${season.id}` : path);
   };
 
@@ -2381,26 +2635,43 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
       <div className="flex h-dvh min-w-0 flex-1 flex-col bg-surface">
         <header className="z-30 flex flex-none items-center justify-between border-b border-slate-200 bg-white/80 px-6 py-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
           <div>
-            <h1 className="font-h3 text-h3 text-on-surface">Seasonal Dashboard</h1>
-            <p className="font-body-sm text-body-sm text-on-surface-variant">{season ? buildSeasonDisplayLabel(season) : 'Chưa chọn mùa bay'}</p> 
+            <h1 className="font-h3 text-h3 text-on-surface">
+              {isOperationalScheduleV1Enabled() ? 'Operational Dashboard' : 'Seasonal Dashboard'}
+            </h1>
+            <p className="font-body-sm text-body-sm text-on-surface-variant">
+              {isOperationalScheduleV1Enabled()
+                ? `Vận hành ${operationalStartDate === operationalEndDate ? operationalStartDate : `${operationalStartDate} — ${operationalEndDate}`}`
+                : season ? buildSeasonDisplayLabel(season) : 'Chưa chọn mùa bay'}
+            </p> 
           </div>
           <div className="flex items-center gap-3">
             <select
               value={season?.id ?? ''}
-              onChange={(event) => router.push(`${dashboardRoute}?season=${event.target.value}`)}
+              onChange={(event) => {
+                if (isOperationalScheduleV1Enabled()) {
+                  setSeason(seasons.find((item) => item.id === event.target.value) ?? null);
+                  return;
+                }
+                router.push(`${dashboardRoute}?season=${event.target.value}`);
+              }}
               disabled={seasons.length === 0}
               className="min-w-[200px] rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface"
             >
               {seasons.length === 0 ? (
                 <option value="">Không có mùa bay</option>
-              ) : seasons.map((item) => (
-                <option key={item.id} value={item.id}>{buildSeasonDisplayLabel(item)}</option> 
-              ))}
+              ) : (
+                <>
+                  {isOperationalScheduleV1Enabled() && <option value="">Toàn bộ / Không lọc mùa</option>}
+                  {seasons.map((item) => (
+                    <option key={item.id} value={item.id}>{buildSeasonDisplayLabel(item)}</option> 
+                  ))}
+                </>
+              )}
             </select>
             <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
               {dataSource ?? 'chưa có'}
             </span>
-            {season && (
+            {(season || isOperationalScheduleV1Enabled()) && (
               <>
                 <FetchServerUpdatesButton
                   fetching={fetchingServerData}
@@ -2408,12 +2679,14 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
                   disabled={syncInProgress || loading}
                   onFetch={fetchServerData}
                 />
-                <SyncActionButton
-                  syncing={syncInProgress}
-                  pendingCount={syncPendingCount}
-                  progress={syncProgress}
-                  onSync={handleSync}
-                />
+                {!isOperationalScheduleV1Enabled() && season && (
+                  <SyncActionButton
+                    syncing={syncInProgress}
+                    pendingCount={syncPendingCount}
+                    progress={syncProgress}
+                    onSync={handleSync}
+                  />
+                )}
               </>
             )}
           </div>
@@ -2480,7 +2753,11 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
                 </div>
               </div>
               <div className="text-left text-xs font-semibold text-on-surface-variant sm:text-right">
-                <div>{season?.seasonCode ?? 'Mùa bay'} ưu tiên vận hành</div>
+                <div>
+                  {isOperationalScheduleV1Enabled()
+                    ? `Khoảng ngày ${operationalStartDate === operationalEndDate ? operationalStartDate : `${operationalStartDate} — ${operationalEndDate}`}`
+                    : `${season?.seasonCode ?? 'Mùa bay'} ưu tiên vận hành`}
+                </div>
                 <div>{formatValue(overview.records.length)} chuyến sau lọc từ {formatValue(dashboardRecords.length)} bản ghi Dashboard</div>
               </div>
             </div>
@@ -2491,18 +2768,87 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
           {dashboardView === 'operations' && (
             <>
               <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-3 shadow-sm">
+                {isOperationalScheduleV1Enabled() ? (
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-surface-variant pb-2">
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs font-semibold uppercase text-on-surface-variant mr-1">Nhanh:</span>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectPresetDate('today')}
+                        className="rounded-md border border-outline-variant bg-surface px-2.5 py-1 text-xs font-medium hover:bg-surface-container"
+                      >
+                        Hôm nay
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectPresetDate('tomorrow')}
+                        className="rounded-md border border-outline-variant bg-surface px-2.5 py-1 text-xs font-medium hover:bg-surface-container"
+                      >
+                        Ngày mai
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectPresetDate('next7days')}
+                        className="rounded-md border border-outline-variant bg-surface px-2.5 py-1 text-xs font-medium hover:bg-surface-container"
+                      >
+                        7 ngày tới
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-on-surface-variant">Khoảng ngày:</span>
+                      <input
+                        type="date"
+                        value={operationalStartDate}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (!val) return;
+                          const nextEnd = val > operationalEndDate ? val : operationalEndDate;
+                          operationalRangeRef.current = { start: val, end: nextEnd };
+                          setOperationalStartDate(val);
+                          if (val > operationalEndDate) setOperationalEndDate(val);
+                          if (operationalDate < val) setOperationalDate(val);
+                        }}
+                        className="rounded border border-outline-variant bg-surface px-2 py-1 text-xs font-medium text-on-surface"
+                      />
+                      <span className="text-xs text-on-surface-variant">đến</span>
+                      <input
+                        type="date"
+                        value={operationalEndDate}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (!val) return;
+                          const nextStart = val < operationalStartDate ? val : operationalStartDate;
+                          operationalRangeRef.current = { start: nextStart, end: val };
+                          setOperationalEndDate(val);
+                          if (val < operationalStartDate) setOperationalStartDate(val);
+                          if (operationalDate > val) setOperationalDate(val);
+                        }}
+                        className="rounded border border-outline-variant bg-surface px-2 py-1 text-xs font-medium text-on-surface"
+                      />
+                    </div>
+                  </div>
+                ) : null}
                 <div className="grid gap-3 md:grid-cols-4">
                   <label className="text-xs font-semibold uppercase text-on-surface-variant">
                     Ngày vận hành
-                    <select
-                      value={activeOperationalDate}
-                      onChange={(event) => setOperationalDate(event.target.value)}
-                      className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case text-on-surface"
-                    >
-                      {operationalDateOptions.length === 0
-                        ? <option value="">Không có ngày</option>
-                        : operationalDateOptions.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-                    </select>
+                    {isOperationalScheduleV1Enabled() ? (
+                      <input
+                        type="date"
+                        value={activeOperationalDate}
+                        onChange={(event) => handleOperationalDateChange(event.target.value)}
+                        className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case text-on-surface"
+                      />
+                    ) : (
+                      <select
+                        value={activeOperationalDate}
+                        onChange={(event) => setOperationalDate(event.target.value)}
+                        className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-medium normal-case text-on-surface"
+                      >
+                        {operationalDateOptions.length === 0
+                          ? <option value="">Không có ngày</option>
+                          : operationalDateOptions.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                      </select>
+                    )}
                   </label>
                   <label className="text-xs font-semibold uppercase text-on-surface-variant">
                     Bucket
@@ -3147,11 +3493,11 @@ function DashboardContent({ routeBase = '/dashboard' }: { routeBase?: '/' | '/da
                     <div className="mt-1 text-xs text-on-surface-variant">{typeFilter === 'all' ? 'Toàn bộ lưu lượng' : typeFilter === 'A' ? 'Chỉ ARR' : 'Chỉ DEP'} | {timeBasis === 'local' ? 'Local +7' : 'UTC'}</div>
                   </div>
                   <div className="grid gap-2">
-                    <button type="button" onClick={() => routeToSeason('/detailed')} disabled={!season} className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-on-primary disabled:opacity-50">
+                    <button type="button" onClick={() => routeToSeason('/detailed')} disabled={!season && !isOperationalScheduleV1Enabled()} className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-on-primary disabled:opacity-50">
                       <span className="material-symbols-outlined text-[18px]">open_in_new</span>
                       Lịch chi tiết
                     </button>
-                    <button type="button" onClick={() => routeToSeason('/daily')} disabled={!season} className="inline-flex items-center justify-center gap-2 rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-semibold text-on-surface disabled:opacity-50">
+                    <button type="button" onClick={() => routeToSeason('/daily')} disabled={!season && !isOperationalScheduleV1Enabled()} className="inline-flex items-center justify-center gap-2 rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm font-semibold text-on-surface disabled:opacity-50">
                       <span className="material-symbols-outlined text-[18px]">open_in_new</span>
                       Lịch ngày
                     </button>

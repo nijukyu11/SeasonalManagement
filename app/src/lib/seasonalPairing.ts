@@ -97,8 +97,13 @@ function addToGroup(index: Map<string, FlightLeg[]>, key: string, leg: FlightLeg
   index.set(key, group);
 }
 
+function isTurnaroundId(turnaroundId?: string | null): boolean {
+  if (!turnaroundId) return false;
+  return !turnaroundId.includes('|ARR|') && !turnaroundId.includes('|DEP|');
+}
+
 function hasPairingIntent(leg: FlightLeg): boolean {
-  return !!leg.linkedRecordId || !!leg.turnaroundId || !!leg.linkType || !!leg.pairAnchorDate;
+  return !!leg.linkedRecordId || isTurnaroundId(leg.turnaroundId) || !!leg.linkType || !!leg.pairAnchorDate;
 }
 
 export function resolveSeasonalPairs(legs: FlightLeg[]): SeasonalPairResolution {
@@ -216,8 +221,8 @@ export function resolveSeasonalPairs(legs: FlightLeg[]): SeasonalPairResolution 
 
   const turnaroundGroups = new Map<string, FlightLeg[]>();
   for (const leg of eligibleLegs) {
-    if (!processed.has(leg.id) && !blocked.has(leg.id) && leg.turnaroundId) {
-      addToGroup(turnaroundGroups, leg.turnaroundId, leg);
+    if (!processed.has(leg.id) && !blocked.has(leg.id) && isTurnaroundId(leg.turnaroundId)) {
+      addToGroup(turnaroundGroups, leg.turnaroundId!, leg);
     }
   }
   for (const [turnaroundId, group] of turnaroundGroups) {

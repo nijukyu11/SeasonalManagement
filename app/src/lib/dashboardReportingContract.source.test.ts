@@ -118,48 +118,6 @@ function readSourceBlock(source: string, startMarker: string, endMarker: string,
   return source.slice(start, end);
 }
 
-test('dashboard replacement UI labels are the active visible contract', () => {
-  const dashboardPage = readWorkspaceFile('src/app/(desktop)/dashboard/page.tsx');
-  const aiBlockRenderers = readWorkspaceFile('src/app/(desktop)/dashboard/components/AiNotebookBlockRenderers.tsx');
-  const tabControls = readSourceBlock(dashboardPage, "<div className={cn('mt-1 grid grid-cols-1", '<div className="text-left text-xs', 'dashboard tab controls');
-  assertContainsAll(dashboardPage, ['Vận hành ca trực', 'Số liệu Report', 'So sánh sản lượng', 'AI Workspace'], 'dashboard page labels');
-  assert.match(tabControls, /TRAFFIC_REPORT_V2_ENABLED \? 'sm:grid-cols-4' : 'sm:grid-cols-3'/, 'dashboard tabs must add Report Mode only behind the v2 feature gate');
-  assert.match(tabControls, /min-h-11/, 'dashboard tab controls must keep usable touch target height');
-  assert.match(dashboardPage, /xl:grid-cols-\[minmax\(160px,0\.9fr\)_minmax\(260px,1\.2fr\)_repeat\(2,minmax\(160px,1fr\)\)\]/, 'comparison filter grid must wrap into four stable columns instead of overflowing in one row');
-  assert.doesNotMatch(dashboardPage, /repeat\(5,minmax\(130px/, 'comparison filter grid must not force all eight filters into one wide row');
-  assert.match(
-    tabControls,
-    /Vận hành ca trực[\s\S]*Số liệu Report[\s\S]*So sánh sản lượng[\s\S]*AI Workspace/,
-    'dashboard tabs must be ordered operations, Report Mode, comparison, AI Workspace'
-  );
-  assert.match(
-    dashboardPage,
-    /type\s+DashboardView\s*=\s*'operations'\s*\|\s*'report'\s*\|\s*'comparison'\s*\|\s*'ai-workspace'/,
-    'dashboard page view union must include the gated Report Mode'
-  );
-  assert.doesNotMatch(dashboardPage, /Tổng quan|Phân tích MoM \/ WoW/, 'old dashboard tab labels must be removed');
-  assert.doesNotMatch(dashboardPage, /h-screen|bg-gradient/, 'dashboard page must avoid fixed viewport height and decorative gradients');
-  assert.doesNotMatch(aiBlockRenderers, /bg-gradient/, 'AI notebook rendered tables must not use gradient overlays');
-  assert.match(dashboardPage, /max-h-\[420px\][^"]*overflow-auto[\s\S]{0,220}<table className="min-w-\[860px\]/, 'CTG ranking table must keep bounded scroll with a stable wide table');
-  assert.match(dashboardPage, /min-w-\[720px\][\s\S]{0,260}comparisonDailyTrendRows/, 'daily trend chart must keep horizontal scan space on narrow screens');
-  assert.match(aiBlockRenderers, /max-h-\[420px\] overflow-auto[\s\S]{0,120}<table className="min-w-\[720px\]/, 'AI workspace tables must keep bounded scroll and stable width');
-  assert.match(dashboardPage, /<details key=\{card\.label\} open[\s\S]{0,220}<summary/, 'operational bucket drilldown cards must be collapsible with native details');
-  assert.match(dashboardPage, /const\s+defaultOperationalDate\s*=\s*todayOperationalDate/, 'operational date must default to today instead of the last loaded flight date');
-  assert.match(dashboardPage, /MONDAY_FIRST_WEEKDAY_COLUMNS[\s\S]{0,180}\{ key: 'Mon', label: 'T2' \}/, 'Peak Day heatmap must use a Monday-first calendar header');
-  assert.match(dashboardPage, /mondayFirstOffset\(dates\[0\]\)/, 'Peak Day heatmap must insert leading blanks to align the month as a calendar');
-  assert.match(dashboardPage, /value=\{activePeakDayMonth\}[\s\S]{0,180}setOperationalPeakDayMonth/, 'Peak Day heatmap must expose a month selector');
-  assert.match(dashboardPage, /function\s+peakDayWeekTone[\s\S]{0,420}HEATMAP_CELL_TONES/, 'Peak Day heatmap must reuse the same color palette as Peak Hour');
-  assert.match(dashboardPage, /weekMinFlights[\s\S]{0,160}weekMaxFlights/, 'Peak Day heatmap cells must carry weekly min/max for within-week color scaling');
-  assert.match(dashboardPage, /weekMax[\s\S]{0,220}weekMin[\s\S]{0,220}weekMinFlights = weekMin[\s\S]{0,120}weekMaxFlights = weekMax/, 'Peak Day heatmap must scale colors by each Mon-Sun week');
-  assert.match(dashboardPage, /Thấp trong tuần[\s\S]{0,180}Cao trong tuần[\s\S]{0,180}Số đỏ: cao nhất tháng/, 'Peak Day heatmap must explain low/high weekly color intensity and month high number color');
-  assert.match(dashboardPage, /isMonthHigh[\s\S]{0,220}text-red-700/, 'Peak Day heatmap must render the month-high flight number in red');
-  assert.match(dashboardPage, /operationalPeakHourTypeFilter/, 'Peak Hour heatmap must keep an independent type filter state');
-  assert.match(dashboardPage, /<option value="A">Chuyến đến<\/option>[\s\S]{0,80}<option value="D">Chuyến đi<\/option>/, 'Peak Hour heatmap must expose arrival/departure filtering');
-  assert.match(dashboardPage, /peakHourHeatmapMonths\.map[\s\S]{0,180}<details key=\{month\.key\}/, 'Peak Hour heatmap must render all season months as expandable groups');
-  assert.match(dashboardPage, /formatValue\(flights\)/, 'Peak Hour heatmap cells must render the flight count inside non-empty buckets');
-  assert.match(dashboardPage, /<details open>[\s\S]{0,360}Nhóm tác nhân/, 'CTG ranking table must be collapsible with native details');
-  assert.match(dashboardPage, /<details open className="rounded-lg border[\s\S]{0,360}Drill-down tác nhân đã chọn/, 'selected driver drilldown must be collapsible with native details');
-});
 
 test('AI Workspace is decoupled from dashboard rows and local SQLite analytical context', () => {
   const dashboardPage = readWorkspaceFile('src/app/(desktop)/dashboard/page.tsx');

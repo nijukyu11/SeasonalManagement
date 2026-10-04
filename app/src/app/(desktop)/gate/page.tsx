@@ -3,6 +3,8 @@
 import { Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  applyOperationalResourceChangesV1,
+  getOperationalScheduleAllocationWindowV1,
   getOperationalSettings,
   getSeasons,
   loadSeasonWorkspaceWindow,
@@ -42,6 +44,26 @@ import {
   findLatestSequencedModificationPatch,
   ganttInteractionArbiter,
 } from '@/lib/ganttInteractionArbiter';
+import {
+  buildOperationalDateRange,
+  buildOperationalLegPatchAndPreimage,
+  getOperationalDayVietnamIso,
+  isOperationalScheduleV1Enabled,
+  loadFullOperationalScheduleWindow,
+  shiftVietnamIsoDate,
+  subscribeToOperationalChanges,
+  type OperationalWindowSnapshot,
+  type OperationalMutationReceipt,
+} from '@/lib/operationalScheduleContract';
+import {
+  useOperationalScheduleStore,
+  isRecentOperationalMutationRequestId,
+  rememberOperationalMutationRequestId,
+  getPendingOperationalMutation,
+  setPendingOperationalMutation,
+  clearPendingOperationalMutation,
+} from '@/lib/operationalScheduleAdapter';
+import { getSupabaseClient } from '@/lib/supabase';
 import type { SeasonChangeEvent } from '@/lib/seasonChangeEvents';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
@@ -113,12 +135,13 @@ function readInitialGateRouteState(input: {
   fromDateTime: string;
   toDateTime: string;
 }): GateRouteState | null {
+  if (isOperationalScheduleV1Enabled()) return null;
   const storeState = useSeasonWorkspaceStore.getState();
   const cachedSeasons = getCachedSeasons() ?? storeState.seasons;
   if (!cachedSeasons || cachedSeasons.length === 0) return null;
 
-  const targetSeason = cachedSeasons.find((item) => item.id === input.targetSeasonId) ?? cachedSeasons[0];
-  if (!input.targetSeasonId || input.targetSeasonId !== targetSeason.id) return null;
+  const targetSeason = (input.targetSeasonId ? cachedSeasons.find((item) => item.id === input.targetSeasonId) : null) ?? cachedSeasons[0];
+  if (input.targetSeasonId && input.targetSeasonId !== targetSeason.id) return null;
 
   const windowKey = buildGateWindowKey(input.fromDateTime, input.toDateTime);
   const cachedWindow = readWorkspaceWindowSnapshot(storeState.workspaces[targetSeason.id], windowKey);
@@ -135,6 +158,9 @@ function readInitialGateRouteState(input: {
 }
 
 function todayIso(): string {
+  if (isOperationalScheduleV1Enabled()) {
+    return getOperationalDayVietnamIso();
+  }
   return new Date().toISOString().slice(0, 10);
 }
 
@@ -500,6 +526,17 @@ function GateAllocationContent() {
     seasonId: initialGateRouteState?.season.id ?? null,
     windowKey: initialGateRouteState?.windowKey ?? '',
   });
+  const operationalSnapshotRef = useRef<OperationalWindowSnapshot | null>(null);
+  const [operationalMutating, setOperationalMutatingState] = useState(false);
+  const operationalMutatingRef = useRef(false);
+  const setOperationalMutating = useCallback((value: boolean) => {
+    operationalMutatingRef.current = value;
+    setOperationalMutatingState(value);
+  }, []);
+  const pendingRevalidateOnSettleRef = useRef(false);
+  const operationalRequestIdRef = useRef(0);
+  const operationalStoreMutating = useOperationalScheduleStore((s) => s.mutating || s.importing);
+  const unresolvedAttempt = useOperationalScheduleStore((s) => s.unresolvedAttempt);
   const historySeqRef = useRef(0);
   const appliedRangeQueryRef = useRef<string | null>(null);
   useSessionScrollRestoration('gate:gantt-scroll', ganttScrollRef);
@@ -509,6 +546,9 @@ function GateAllocationContent() {
   const syncInProgress = syncStatus.status === 'syncing';
   const syncing = syncInProgress && syncStatus.mode === 'manual';
   const syncWriteInProgress = syncInProgress || fetchingServerData;
+  const isWriteInProgress = isOperationalScheduleV1Enabled()
+    ? (operationalMutating || operationalStoreMutating)
+    : syncWriteInProgress;
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' ? syncStatus.message : null);
   const fetchProgress = fetchingServerData ? 'Fetching server data' : syncStatus.message;
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, 0);
@@ -597,6 +637,30 @@ function GateAllocationContent() {
   }, []);
 
   const refreshGateWindow = useCallback(async (options: { revalidate?: boolean } = {}) => {
+    if (isOperationalScheduleV1Enabled()) {
+      clearOptimisticGateAllocationView();
+      const requestId = ++operationalRequestIdRef.current;
+      const startDate = fromDateTime.slice(0, 10);
+      const endDate = toDateTime.slice(0, 10);
+      const requestedRangeKey = `${startDate}:${endDate}`;
+      const operationalResult = await loadFullOperationalScheduleWindow({
+        startDate,
+        endDate,
+        resourceType: 'gate',
+        fetchWindowFn: (p) => getOperationalScheduleAllocationWindowV1(p),
+      });
+      if (
+        operationalRequestIdRef.current !== requestId ||
+        !isRouteActive ||
+        `${fromDateTime.slice(0, 10)}:${toDateTime.slice(0, 10)}` !== requestedRangeKey
+      ) {
+        return null;
+      }
+      operationalSnapshotRef.current = operationalResult.snapshot;
+      setFlightRecords(operationalResult.records);
+      replaceGateModifications(new Map());
+      return operationalResult;
+    }
     if (!season) return;
     const windowKey = buildGateWindowKey(fromDateTime, toDateTime);
     if (options.revalidate) {
@@ -619,7 +683,7 @@ function GateAllocationContent() {
     });
     loadedWindowKeyRef.current = windowKey;
     return snapshot;
-  }, [clearOptimisticGateAllocationView, fromDateTime, replaceGateModifications, season, toDateTime]);
+  }, [clearOptimisticGateAllocationView, fromDateTime, isRouteActive, replaceGateModifications, season, toDateTime]);
 
   const tryApplyCachedGateRouteWindow = useCallback((): false | 'fresh' | 'stale' => {
     const storeState = useSeasonWorkspaceStore.getState();
@@ -627,8 +691,8 @@ function GateAllocationContent() {
     const cachedSettings = storeState.operationalSettings;
     if (!cachedSeasons || !cachedSettings || cachedSeasons.length === 0) return false;
 
-    const targetSeason = cachedSeasons.find((item) => item.id === targetSeasonId) ?? cachedSeasons[0];
-    if (!targetSeasonId || targetSeasonId !== targetSeason.id) return false;
+    const targetSeason = (targetSeasonId ? cachedSeasons.find((item) => item.id === targetSeasonId) : null) ?? cachedSeasons[0];
+    if (targetSeasonId && targetSeasonId !== targetSeason.id) return false;
 
     const windowKey = buildGateWindowKey(fromDateTime, toDateTime);
     const freshWindow = readCachedWorkspaceWindow(storeState.workspaces[targetSeason.id], windowKey);
@@ -659,6 +723,52 @@ function GateAllocationContent() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      if (isOperationalScheduleV1Enabled()) {
+        if (!isRouteActive) return;
+        setLoading(true);
+        setLoadError(null);
+        const requestId = ++operationalRequestIdRef.current;
+        const startDate = fromDateTime.slice(0, 10);
+        const endDate = toDateTime.slice(0, 10);
+        const requestedRangeKey = `${startDate}:${endDate}`;
+        try {
+          const loadedSettings = await getOperationalSettings().catch(() => null);
+          if (cancelled || operationalRequestIdRef.current !== requestId || !isRouteActive) return;
+          if (loadedSettings) setSettings(loadedSettings);
+          setLoadProgress(buildLoadProgress('Loading operational gate window', 40, `${startDate}..${endDate}`));
+          const operationalResult = await loadFullOperationalScheduleWindow({
+            startDate,
+            endDate,
+            resourceType: 'gate',
+            fetchWindowFn: (p) => getOperationalScheduleAllocationWindowV1(p),
+          });
+          if (
+            cancelled ||
+            operationalRequestIdRef.current !== requestId ||
+            !isRouteActive ||
+            `${fromDateTime.slice(0, 10)}:${toDateTime.slice(0, 10)}` !== requestedRangeKey
+          ) {
+            return;
+          }
+          operationalSnapshotRef.current = operationalResult.snapshot;
+          setFlightRecords(operationalResult.records);
+          replaceGateModifications(new Map());
+          setLoading(false);
+          return;
+        } catch (err) {
+          console.error('Error loading operational gate schedule', err);
+          if (!cancelled && operationalRequestIdRef.current === requestId && isRouteActive) {
+            const message = err instanceof Error && err.message ? err.message : 'Could not load operational gate schedule.';
+            setLoadError(message);
+            void showAlert({ title: 'Load Failed', message, tone: 'error' });
+          }
+          return;
+        } finally {
+          if (!cancelled && operationalRequestIdRef.current === requestId) {
+            setLoading(false);
+          }
+        }
+      }
       const cachedState = tryApplyCachedGateRouteWindow();
       if (cachedState === 'fresh') return;
       setLoading(cachedState !== 'stale');
@@ -686,8 +796,8 @@ function GateAllocationContent() {
           setModifications(emptyModifications);
           return;
         }
-        const targetSeason = nextSeasons.find((item) => item.id === targetSeasonId) ?? nextSeasons[0];
-        if (!targetSeasonId || targetSeasonId !== targetSeason.id) {
+        const targetSeason = (targetSeasonId ? nextSeasons.find((item) => item.id === targetSeasonId) : null) ?? nextSeasons[0];
+        if (targetSeasonId && targetSeasonId !== targetSeason.id) {
           router.replace(`/gate?season=${targetSeason.id}`);
           return;
         }
@@ -754,7 +864,49 @@ function GateAllocationContent() {
     return () => {
       cancelled = true;
     };
-  }, [clearOptimisticGateAllocationView, fromDateTime, replaceGateModifications, router, showAlert, targetSeasonId, toDateTime, tryApplyCachedGateRouteWindow]);
+  }, [clearOptimisticGateAllocationView, fromDateTime, isRouteActive, replaceGateModifications, router, showAlert, targetSeasonId, toDateTime, tryApplyCachedGateRouteWindow]);
+  useEffect(() => {
+    if (!isOperationalScheduleV1Enabled() || !isRouteActive) return;
+    const client = getSupabaseClient();
+    const sub = subscribeToOperationalChanges(client, {
+      onDateInvalidated: (_dates, event) => {
+        const requestId = event && typeof event === 'object' && typeof event.request_id === 'string'
+          ? event.request_id
+          : undefined;
+        if (requestId && isRecentOperationalMutationRequestId(requestId)) {
+          return;
+        }
+        // The mutation revision is global: a write on any date, visible or not, stales the snapshot token.
+        const storeState = useOperationalScheduleStore.getState();
+        if (operationalMutatingRef.current || storeState.mutating || storeState.importing) {
+          pendingRevalidateOnSettleRef.current = true;
+          return;
+        }
+
+        void refreshGateWindow({ revalidate: true });
+      },
+      onReconnect: () => {
+        const storeState = useOperationalScheduleStore.getState();
+        if (operationalMutatingRef.current || storeState.mutating || storeState.importing) {
+          pendingRevalidateOnSettleRef.current = true;
+          return;
+        }
+        void refreshGateWindow({ revalidate: true });
+      },
+    });
+    return () => {
+      sub.unsubscribe();
+    };
+  }, [isRouteActive, refreshGateWindow]);
+
+  useEffect(() => {
+    if (!isOperationalScheduleV1Enabled() || !isRouteActive) return;
+    if (operationalMutating || operationalStoreMutating) return;
+    if (pendingRevalidateOnSettleRef.current) {
+      pendingRevalidateOnSettleRef.current = false;
+      void refreshGateWindow({ revalidate: true });
+    }
+  }, [isRouteActive, operationalMutating, operationalStoreMutating, refreshGateWindow]);
 
   const allocationResult = useMemo(() => {
     if (!settings) return { view: null, error: null };
@@ -1229,8 +1381,181 @@ function GateAllocationContent() {
       }
     }, GATE_COMMIT_DEBOUNCE_MS);
   }, [flushAccumulatedGateCommit, mergePendingGateCommit, season]);
+  const handleRetryPendingMutation = useCallback(async () => {
+    setOperationalMutating(true);
+    try {
+      const outcome = await useOperationalScheduleStore.getState().retryPendingMutation();
+      if (outcome && 'refreshError' in outcome && outcome.refreshError) {
+        void showAlert({ title: 'Saved; refresh failed', message: outcome.refreshError, tone: 'warning' });
+      } else {
+        await refreshGateWindow({ revalidate: true });
+      }
+    } catch (err) {
+      void showAlert({ title: 'Retry Failed', message: (err as Error).message, tone: 'error' });
+    } finally {
+      const remaining = useOperationalScheduleStore.getState().unresolvedAttempt;
+      if (!remaining) {
+        setOperationalMutating(false);
+      }
+    }
+  }, [refreshGateWindow, setOperationalMutating, showAlert]);
+
 
   const commitGateModificationBatch = useCallback(async (mods: FlightModification[], description: string) => {
+    if (isOperationalScheduleV1Enabled()) {
+      if (mods.length === 0) return;
+      if (operationalMutatingRef.current || useOperationalScheduleStore.getState().mutating || useOperationalScheduleStore.getState().importing) {
+        return;
+      }
+      const patches = mods
+        .map((mod) => {
+          const rec = recordById.get(mod.legId);
+          return rec ? buildOperationalLegPatchAndPreimage(rec, {
+            ...(mod.gate !== undefined ? { gate: mod.gate } : {}),
+            ...(mod.stand !== undefined ? { stand: mod.stand } : {}),
+          }) : null;
+        })
+        .filter((p): p is NonNullable<typeof p> => p !== null);
+
+      if (patches.length === 0) return;
+      const currentPayload = JSON.stringify(patches);
+      let requestId = crypto.randomUUID();
+      let expectedRevision = operationalSnapshotRef.current?.revision ?? '0';
+
+      const pending = getPendingOperationalMutation();
+      if (pending && pending.kind === 'apply_resource' && pending.serializedPayload === currentPayload) {
+        requestId = pending.requestId;
+        expectedRevision = pending.expectedRevision;
+      } else if (pending) {
+        throw new Error('The previous operational write is unconfirmed. Retry that write unchanged before submitting another.');
+      } else {
+        setPendingOperationalMutation({
+          kind: 'apply_resource',
+          requestId,
+          expectedRevision,
+          serializedPayload: currentPayload,
+        });
+      }
+
+      operationalMutatingRef.current = true;
+      setOperationalMutating(true);
+      useOperationalScheduleStore.setState({ mutating: true });
+
+      const previousModifications = new Map(latestGateModificationsRef.current);
+      for (const mod of mods) {
+        const previousOptimisticMod = latestGateModificationsRef.current.get(mod.legId) ?? null;
+        const mergedMod = {
+          ...previousOptimisticMod,
+          ...mod,
+          legId: mod.legId,
+          action: 'modified' as const,
+        };
+        applyOptimisticGateModification(mergedMod);
+      }
+
+      try {
+        let receipt: OperationalMutationReceipt;
+        try {
+          const request = {
+            requestId,
+            expectedRevision,
+            changes: patches,
+          };
+          rememberOperationalMutationRequestId(request.requestId);
+          let unknownFailureCount = 0;
+          while (true) {
+            try {
+              receipt = await applyOperationalResourceChangesV1(request);
+              break;
+            } catch (error) {
+              const rawCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+                ? error.code.trim().toUpperCase()
+                : null;
+              const isAuthoritativeSql = rawCode !== null
+                && /^[0-9A-Z]{5}$/.test(rawCode)
+                && !rawCode.startsWith('08')
+                && !rawCode.startsWith('57');
+
+              if (isAuthoritativeSql) {
+                throw error;
+              }
+
+              unknownFailureCount += 1;
+              if (unknownFailureCount > 1) {
+                const message = error instanceof Error ? error.message : String(error);
+                await showAlert({
+                  title: 'Gate Update Status Unknown',
+                  message: `A connection error occurred while saving gate changes (${message}). The outcome on the server is unknown. Select OK to retry confirming the changes.`,
+                  tone: 'warning',
+                });
+              }
+            }
+          }
+        } catch (rpcErr) {
+          const rawCode = rpcErr && typeof rpcErr === 'object' && 'code' in rpcErr && typeof rpcErr.code === 'string'
+            ? rpcErr.code.trim().toUpperCase()
+            : null;
+          const isAuthoritativeSql = rawCode !== null
+            && /^[0-9A-Z]{5}$/.test(rawCode)
+            && !rawCode.startsWith('08')
+            && !rawCode.startsWith('57');
+          if (isAuthoritativeSql) {
+            clearPendingOperationalMutation(requestId);
+          }
+          latestGateModificationsRef.current = previousModifications;
+          setModifications(previousModifications);
+          clearOptimisticGateAllocationView();
+          void refreshGateWindow().catch(() => undefined);
+          void showAlert({
+            title: 'Gate Update Failed',
+            message: (rpcErr as Error).message,
+            tone: 'error',
+          });
+          return;
+        }
+
+        if (receipt.status !== 'committed') {
+          clearPendingOperationalMutation(requestId);
+          latestGateModificationsRef.current = previousModifications;
+          setModifications(previousModifications);
+          clearOptimisticGateAllocationView();
+          void refreshGateWindow().catch(() => undefined);
+          void showAlert({
+            title: 'Gate Update Failed',
+            message: receipt.message || `Mutation ${receipt.status}`,
+            tone: 'error',
+          });
+          return;
+        }
+
+        clearPendingOperationalMutation(requestId);
+        if (receipt.revision) {
+          operationalSnapshotRef.current = {
+            revision: receipt.revision,
+            token: operationalSnapshotRef.current?.token ?? '',
+          };
+        }
+
+        try {
+          await refreshGateWindow({ revalidate: true });
+        } catch (refreshErr) {
+          console.error('Failed to refresh gate window after commit', refreshErr);
+          void showAlert({
+            title: 'Refresh Failed',
+            message: `Changes were saved (revision ${receipt.revision}), but the gate display could not be refreshed: ${(refreshErr as Error).message}`,
+            tone: 'warning',
+          });
+        }
+      } finally {
+        const remainingPending = getPendingOperationalMutation();
+        if (!remainingPending) {
+          operationalMutatingRef.current = false;
+          setOperationalMutating(false);
+          useOperationalScheduleStore.setState({ mutating: false });
+        }
+      }
+      return;
+    }
     if (!season) throw new Error('No season selected for gate allocation');
     if (mods.length === 0) return;
     for (const mod of mods) {
@@ -1248,24 +1573,11 @@ function GateAllocationContent() {
       mods,
       description,
     });
-  }, [applyOptimisticGateModification, scheduleAccumulatedGateCommit, season]);
+  }, [applyOptimisticGateModification, clearOptimisticGateAllocationView, recordById, refreshGateWindow, scheduleAccumulatedGateCommit, season, setOperationalMutating, showAlert]);
 
   const commitGateModification = useCallback(async (mod: FlightModification, description: string) => {
-    if (!season) throw new Error('No season selected for gate allocation');
-    const previousOptimisticMod = latestGateModificationsRef.current.get(mod.legId) ?? null;
-    const mergedMod = {
-      ...previousOptimisticMod,
-      ...mod,
-      legId: mod.legId,
-      action: 'modified' as const,
-    };
-    applyOptimisticGateModification(mergedMod);
-    scheduleAccumulatedGateCommit({
-      legIds: [mod.legId],
-      mods: [mod],
-      description,
-    });
-  }, [applyOptimisticGateModification, scheduleAccumulatedGateCommit, season]);
+    return commitGateModificationBatch([mod], description);
+  }, [commitGateModificationBatch]);
 
   const clearGateDragState = useCallback(() => {
     setPointerDragState(null);
@@ -1328,7 +1640,8 @@ function GateAllocationContent() {
     event: ReactPointerEvent<HTMLElement>,
     source: { kind: 'unallocated'; record: FlightRecord } | { kind: 'allocated'; bar: GateResourceBar }
   ) => {
-    if (!isRouteActive || syncWriteInProgress || event.button !== 0) return;
+    if (!isRouteActive || isWriteInProgress || event.button !== 0) return;
+    if ((event.target as HTMLElement).closest('[data-gate-bar-action="true"]')) return;
     if ((event.target as HTMLElement).closest('[data-gate-bar-action="true"]')) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1380,7 +1693,7 @@ function GateAllocationContent() {
       { clientX: event.clientX, clientY: event.clientY },
       drag.kind === 'allocated' ? 'vertical' : 'both',
     );
-  }, [isRouteActive, recordById, season, settings, startGateDragScroll, syncWriteInProgress, updateGatePointerPreview]);
+  }, [isRouteActive, isWriteInProgress, recordById, season, settings, startGateDragScroll, updateGatePointerPreview]);
 
   const handleGatePointerMove = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     if (!isRouteActive) return;
@@ -1407,7 +1720,7 @@ function GateAllocationContent() {
     pointerDragStateRef.current = null;
     clearGateDragState();
     const record = recordById.get(drag.recordId);
-    if (!record || syncWriteInProgress) {
+    if (!record || isWriteInProgress) {
       releaseGateInteraction(drag.recordId);
       return;
     }
@@ -1439,7 +1752,7 @@ function GateAllocationContent() {
       return;
     }
     releaseGateInteraction(drag.recordId);
-  }, [clearGateDragState, commitGateModification, isRouteActive, pointerDragState, recordById, releaseGateInteraction, resolveGatePointerDrop, showAlert, stopGateDragScroll, syncWriteInProgress, view]);
+  }, [clearGateDragState, commitGateModification, isRouteActive, isWriteInProgress, pointerDragState, recordById, releaseGateInteraction, resolveGatePointerDrop, showAlert, stopGateDragScroll, view]);
 
   const handleGatePointerCancel = useCallback(() => {
     const drag = pointerDragStateRef.current;
@@ -1537,6 +1850,11 @@ function GateAllocationContent() {
   };
 
   const fetchServerData = useCallback(async () => {
+    if (isWriteInProgress) return;
+    if (isOperationalScheduleV1Enabled()) {
+      await refreshGateWindow({ revalidate: true });
+      return;
+    }
     if (!season || fetchingServerData || syncInProgress) return;
     const windowKey = buildGateWindowKey(fromDateTime, toDateTime);
     if (gateCommitAccumulatorRef.current || gateCommitFlushTimerRef.current != null) {
@@ -1600,7 +1918,7 @@ function GateAllocationContent() {
     } finally {
       setFetchingServerData(false);
     }
-  }, [clearOptimisticGateAllocationView, fetchingServerData, fromDateTime, replaceGateModifications, season, showAlert, syncInProgress, toDateTime]);
+  }, [clearOptimisticGateAllocationView, fetchingServerData, fromDateTime, isWriteInProgress, refreshGateWindow, replaceGateModifications, season, showAlert, syncInProgress, toDateTime]);
 
   const handleOpenExportDialog = useCallback(() => {
     promoteLatestGateModificationsForView();
@@ -1622,7 +1940,7 @@ function GateAllocationContent() {
   }, [flightRecords, fromDateTime, promoteLatestGateModificationsForView, settings, toDateTime]);
 
   const handleExportGatePdf = useCallback(async () => {
-    if (!season || !settings || !exportDraft) return;
+    if ((!isOperationalScheduleV1Enabled() && !season) || !settings || !exportDraft) return;
     if (!isValidGateExportRange(exportDraft)) {
       void showAlert({
         title: 'Export PDF Failed',
@@ -1647,8 +1965,8 @@ function GateAllocationContent() {
         settings,
         range: exportDraft,
         selectedGroupIds: exportDraft.selectedGroupIds,
-        seasonCode: season.seasonCode,
-        fileName: buildGatePdfFileName(season.seasonCode, exportDraft),
+        seasonCode: season?.seasonCode ?? 'OPS',
+        fileName: buildGatePdfFileName(season?.seasonCode ?? 'OPS', exportDraft),
       });
       notifyExportCompleted(result.saveResult);
       setExportDraft(null);
@@ -1660,6 +1978,7 @@ function GateAllocationContent() {
   }, [exportDraft, flightRecords, notifyExportCompleted, season, settings, showAlert]);
 
   const handleUnallocateAllGatesInPeriod = useCallback(async () => {
+    if (isWriteInProgress) return;
     const currentView = view;
     if (!currentView) return;
     const visibleRecordIds = Array.from(new Set(currentView.resourceBars.map((bar) => bar.recordId)));
@@ -1676,7 +1995,7 @@ function GateAllocationContent() {
     } catch (err) {
       void showAlert({ title: 'Unallocate All Failed', message: (err as Error).message, tone: 'error' });
     }
-  }, [commitGateModificationBatch, fromDateTime, getEffectiveGateRecord, showAlert, toDateTime, view]);
+  }, [commitGateModificationBatch, fromDateTime, getEffectiveGateRecord, isWriteInProgress, showAlert, toDateTime, view]);
 
   const renderUnallocatedBar = (item: GatePackedItem) => {
     const label = formatGateFlightLabel(item.record);
@@ -1738,7 +2057,7 @@ function GateAllocationContent() {
         onPointerMove={handleGatePointerMove}
         onPointerUp={handleGatePointerUp}
         onPointerCancel={handleGatePointerCancel}
-        className={`absolute z-10 flex touch-none items-center overflow-hidden rounded-[4px] border border-white px-2 text-[11px] font-bold ${syncWriteInProgress ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'} ${draggedRecordId === bar.recordId ? 'ring-2 ring-primary/60 ring-offset-1 ring-offset-surface-container-lowest' : ''}`}
+        className={`absolute z-10 flex touch-none items-center overflow-hidden rounded-[4px] border border-white px-2 text-[11px] font-bold ${isWriteInProgress ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'} ${draggedRecordId === bar.recordId ? 'ring-2 ring-primary/60 ring-offset-1 ring-offset-surface-container-lowest' : ''}`}
         style={{
           left,
           top: 6 + bar.stackIndex * (BAR_HEIGHT + 4),
@@ -1764,7 +2083,7 @@ function GateAllocationContent() {
               event.stopPropagation();
               void commitGateModification(unallocateGate(record), `Unallocated gate for ${bar.flightNumber}`);
             }}
-            disabled={syncWriteInProgress}
+            disabled={isWriteInProgress}
             className="ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded bg-white/25 text-[10px] disabled:opacity-50"
             aria-label={`Unallocate ${bar.flightNumber}`}
             title="Unallocate"
@@ -1782,12 +2101,16 @@ function GateAllocationContent() {
         <header className="z-30 flex flex-none items-center justify-between border-b border-slate-200 bg-white/80 px-6 py-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
           <div>
             <h1 className="font-h3 text-h3 text-on-surface">Gate Allocation</h1>
-            <p className="font-body-sm text-body-sm text-on-surface-variant">{season ? buildSeasonDisplayLabel(season) : 'No season selected'}</p> 
+            <p className="font-body-sm text-body-sm text-on-surface-variant">
+              {isOperationalScheduleV1Enabled() ? 'Operational Turns' : (season ? buildSeasonDisplayLabel(season) : 'No season selected')}
+            </p> 
           </div>
           <div className="flex items-center gap-3">
-            <select value={season?.id ?? ''} onChange={(event) => router.push(`/gate?season=${event.target.value}`)} disabled={seasons.length === 0 || syncing} className="min-w-[200px] rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface">
-              {seasons.length === 0 ? <option value="">No seasons</option> : seasons.map((item) => <option key={item.id} value={item.id}>{buildSeasonDisplayLabel(item)}</option>)} 
-            </select>
+            {!isOperationalScheduleV1Enabled() && (
+              <select value={season?.id ?? ''} onChange={(event) => router.push(`/gate?season=${event.target.value}`)} disabled={seasons.length === 0 || syncing} className="min-w-[200px] rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface">
+                {seasons.length === 0 ? <option value="">No seasons</option> : seasons.map((item) => <option key={item.id} value={item.id}>{buildSeasonDisplayLabel(item)}</option>)} 
+              </select>
+            )}
             {season && (
               <>
                 <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${
@@ -1817,11 +2140,29 @@ function GateAllocationContent() {
             )}
           </div>
         </header>
+        {unresolvedAttempt && (
+          <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-warning/30 bg-warning/10 px-6 py-2.5 text-sm text-on-surface">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-[18px] text-warning">warning</span>
+              <p className="text-pretty">
+                Có thao tác gate chưa xác nhận trên server (Yêu cầu {unresolvedAttempt.requestId.slice(0, 8)}…). Các thao tác khác đang bị tạm khóa.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={operationalMutating}
+              onClick={() => void handleRetryPendingMutation()}
+              className="rounded border border-primary bg-primary px-3 py-1.5 font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {operationalMutating ? 'Đang gửi lại…' : 'Gửi lại yêu cầu'}
+            </button>
+          </div>
+        )}
 
         <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-4">
           <section className="flex-none rounded-lg border border-surface-variant bg-surface-container-lowest shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-surface-variant px-4 py-3">
-              <div className="flex flex-wrap items-center gap-3">
+              <fieldset disabled={isOperationalScheduleV1Enabled() && isWriteInProgress} className="flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-xs font-label-caps text-on-surface-variant">
                   From
                   <input
@@ -1848,16 +2189,57 @@ function GateAllocationContent() {
                     className="rounded border border-outline-variant bg-surface-container px-2 py-1.5 text-sm text-on-surface"
                   />
                 </label>
-                <button onClick={() => { promoteLatestGateModificationsForView(); const next = buildDefaultDailyDateRange(todayIso()); setFromDateTime(next.from); setToDateTime(next.to); }} className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface">
-                  <span className="material-symbols-outlined text-[16px]">today</span>
-                  Today
-                </button>
-                {[1, 2, 3].map((days) => (
-                  <button key={days} onClick={() => { promoteLatestGateModificationsForView(); setToDateTime(addDaysToLocalDateTime(fromDateTime, days)); }} className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant">
-                    {days}D
-                  </button>
-                ))}
-              </div>
+                {isOperationalScheduleV1Enabled() ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        promoteLatestGateModificationsForView();
+                        const range = buildOperationalDateRange('today');
+                        setFromDateTime(`${range.startDate}T05:00`);
+                        setToDateTime(`${shiftVietnamIsoDate(range.endDate, 1)}T05:00`);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">today</span>
+                      Today
+                    </button>
+                    <button
+                      onClick={() => {
+                        promoteLatestGateModificationsForView();
+                        const range = buildOperationalDateRange('tomorrow');
+                        setFromDateTime(`${range.startDate}T05:00`);
+                        setToDateTime(`${shiftVietnamIsoDate(range.endDate, 1)}T05:00`);
+                      }}
+                      className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant"
+                    >
+                      Tomorrow
+                    </button>
+                    <button
+                      onClick={() => {
+                        promoteLatestGateModificationsForView();
+                        const range = buildOperationalDateRange('next7days');
+                        setFromDateTime(`${range.startDate}T05:00`);
+                        setToDateTime(`${shiftVietnamIsoDate(range.endDate, 1)}T05:00`);
+                      }}
+                      className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant"
+                    >
+                      7 Days
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={() => { promoteLatestGateModificationsForView(); const next = buildDefaultDailyDateRange(todayIso()); setFromDateTime(next.from); setToDateTime(next.to); }} className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface">
+                      <span className="material-symbols-outlined text-[16px]">today</span>
+                      Today
+                    </button>
+                    {[1, 2, 3].map((days) => (
+                      <button key={days} onClick={() => { promoteLatestGateModificationsForView(); setToDateTime(addDaysToLocalDateTime(fromDateTime, days)); }} className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant">
+                        {days}D
+                      </button>
+                    ))}
+                  </>
+                )}
+              </fieldset>
               <div className="flex items-center gap-2">
                 <span className="rounded-full bg-primary-container px-3 py-1 text-xs font-bold text-on-primary-container">UNALLOC {summary.unallocated}</span>
                 <span className="rounded-full bg-secondary-container px-3 py-1 text-xs font-bold text-on-secondary-container">ALLOC {summary.allocatedFlights}</span>
@@ -1888,7 +2270,7 @@ function GateAllocationContent() {
                       event.stopPropagation();
                       void handleUnallocateAllGatesInPeriod();
                     }}
-                    disabled={syncWriteInProgress || summary.gateBlocks === 0}
+                    disabled={isWriteInProgress || summary.gateBlocks === 0}
                     className="flex h-7 items-center gap-1.5 rounded border border-outline-variant bg-surface-container-lowest px-2 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
                     aria-label="Unallocate all gates in selected period"
                     title="Unallocate all gates in selected period"
@@ -1902,7 +2284,7 @@ function GateAllocationContent() {
                       event.stopPropagation();
                       handleOpenExportDialog();
                     }}
-                    disabled={!season || !settings || loading || exportingPdf}
+                    disabled={(!isOperationalScheduleV1Enabled() && !season) || !settings || loading || exportingPdf || isWriteInProgress}
                     className="flex h-7 items-center gap-1.5 rounded border border-outline-variant bg-surface-container-lowest px-2 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
                     aria-label="Export PDF"
                     title="Export PDF"
@@ -1966,7 +2348,7 @@ function GateAllocationContent() {
                       />
                     )}
                   </div>
-                ) : !season ? (
+                ) : !isOperationalScheduleV1Enabled() && !season ? (
                   <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-on-surface-variant">
                     <div>No season data.</div>
                     {syncSeasonId && (
@@ -2162,7 +2544,7 @@ function GateAllocationContent() {
                         />
                       </label>
                       <div className="min-w-0 truncate rounded border border-surface-variant bg-surface-container-low px-3 py-2 font-data-tabular text-[11px] text-on-surface-variant">
-                        {season ? buildGatePdfFileName(season.seasonCode, exportDraft) : 'Gate_Allocation_Season.pdf'}
+                        {buildGatePdfFileName(season?.seasonCode ?? 'OPS', exportDraft)}
                       </div>
                     </section>
                     <section className="grid min-w-0 gap-3">
@@ -2219,7 +2601,7 @@ function GateAllocationContent() {
                     error={exportPreviewError}
                     preview={exportPreview}
                     records={flightRecords}
-                    seasonCode={season?.seasonCode ?? 'Season'}
+                    seasonCode={season?.seasonCode ?? 'OPS'}
                   />
                 </div>
                 <div className="flex justify-end gap-2 border-t border-surface-variant px-4 py-3">

@@ -463,11 +463,11 @@ export function downloadSeasonalExcel(groups: PatternGroup[], seasonCode: string
 /**
  * Convert ISO date "2026-03-29" to Excel format "29-Mar-26"
  */
-function formatExcelDate(isoDate: string): string {
-  const d = new Date(isoDate);
-  const day = d.getDate();
+export function formatExcelDate(isoDate: string): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  const day = d.getUTCDate();
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const month = months[d.getMonth()];
-  const year = String(d.getFullYear()).slice(-2);
+  const month = months[d.getUTCMonth()];
+  const year = String(d.getUTCFullYear()).slice(-2);
   return `${day}-${month}-${year}`;
 }
