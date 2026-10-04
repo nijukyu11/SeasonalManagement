@@ -141,6 +141,7 @@ export interface FlightRecord extends FlightLeg {
   turnaroundId?: string;
   pairAnchorDate?: string;
   linkedRecordId?: string;
+  draftId?: string;
 }
 
 /** Modification record stored in Firestore */
@@ -197,6 +198,7 @@ export interface ModHistoryEntry {
 export interface Season {
   id: string;
   seasonCode: string;         // e.g., "S26", "W26" — from sheet name
+  code?: string;
   name: string;
   fileName: string;
   uploadedAt: number;

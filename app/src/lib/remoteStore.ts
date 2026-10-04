@@ -9,6 +9,16 @@ import type {
 import type { AuditDeltaChunk, AuditLogEntry, AuditSession } from './auditLog';
 import type { LocalEntityVersionMap, LocalPendingOp, LocalSyncMeta } from './localSeasonStore';
 import type { SeasonChangeEvent } from './seasonChangeEvents';
+import type {
+  SeasonalDraftWindowResult,
+  SeasonalDraftChangeInput,
+  SeasonalDraftMutationReceipt,
+  SeasonalDraftExportSnapshotResult,
+  SeasonalPublishPreviewResult,
+  SeasonalPublishCommitResult,
+  SeasonalPublishVersionsPageResult,
+  SeasonalPublishedDiffPageResult,
+} from './seasonalPlanningContract';
 import { isSupabaseConfigured } from './supabase';
 import { getCachedOperationalSettings, setCachedOperationalSettings } from './seasonDataCache';
 import { isTauriRuntime } from './nativeRuntime';
@@ -22,6 +32,13 @@ import type {
   SeasonalImportV3StageResult,
 } from './seasonalImportV3Contract';
 import type { DailyImportCommittedResultV1, DailyImportStagePayloadV1, DailyImportStageResultV1 } from './dailyImportRpcContract';
+import type {
+  OperationalWindowResult,
+  OperationalLegChangeInput,
+  OperationalMutationReceipt,
+  DailyImportStagePayloadV2,
+  DailyImportStageResultV2,
+} from './operationalScheduleContract';
 import {
   createOperatorSessionAbortError,
   getOperatorSessionEpoch,
@@ -252,6 +269,100 @@ export interface RemoteStore {
     onEvent: (event: SeasonChangeEvent) => void,
     options?: { onStatus?: (status: string) => void },
   ): Promise<() => void> | (() => void);
+
+  getSeasonalDraftWindowV1?(input: {
+    seasonId: string;
+    pageSize?: number;
+    afterDraftId?: string | null;
+    expectedEpoch?: string | null;
+    expectedRevision?: string | number | null;
+  }): Promise<SeasonalDraftWindowResult>;
+  applySeasonalDraftChangesV1?(input: {
+    seasonId: string;
+    requestId: string;
+    expectedRevision: string | number;
+    changes: SeasonalDraftChangeInput[];
+  }): Promise<SeasonalDraftMutationReceipt>;
+  getSeasonalDraftExportSnapshotV1?(input: {
+    seasonId: string;
+    expectedEpoch: string;
+    expectedRevision: string | number;
+  }): Promise<SeasonalDraftExportSnapshotResult>;
+  stageSeasonalDraftImportV1?(input: unknown): Promise<unknown>;
+  commitSeasonalDraftImportV1?(input: {
+    batchId: string;
+    previewHash: string;
+  }): Promise<unknown>;
+  getSeasonalDraftImportStatusV1?(requestId: string): Promise<unknown>;
+  cancelSeasonalDraftImportV1?(batchId: string): Promise<unknown>;
+  previewSeasonalPublishV1?(input: {
+    seasonId: string;
+    requestId: string;
+    publishedOn?: string;
+  }): Promise<SeasonalPublishPreviewResult>;
+  getSeasonalPublishPreviewPageV1?(input: {
+    previewId: string;
+    previewHash: string;
+    afterIndex?: string | number;
+    pageSize?: number;
+  }): Promise<SeasonalPublishedDiffPageResult>;
+  commitSeasonalPublishV1?(input: {
+    seasonId: string;
+    previewId: string;
+    previewHash: string;
+    notes?: string;
+  }): Promise<SeasonalPublishCommitResult>;
+  getSeasonalPublishVersionsV1?(input: {
+    seasonId: string;
+    afterSequence?: string | number | null;
+    pageSize?: number;
+  }): Promise<SeasonalPublishVersionsPageResult>;
+  getSeasonalPublishedDiffPageV1?(input: {
+    versionId: string;
+    afterIndex?: string | number;
+    pageSize?: number;
+  }): Promise<SeasonalPublishedDiffPageResult>;
+  getOperationalScheduleAllocationWindowV1?(input: {
+    startDate: string;
+    endDate: string;
+    resourceType?: string;
+    pageSize?: number;
+    afterOperationalDate?: string | null;
+    afterScheduledTime?: string | null;
+    afterLegId?: string | null;
+    expectedSnapshot?: string | null;
+  }): Promise<OperationalWindowResult>;
+  applyOperationalResourceChangesV1?(input: {
+    requestId: string;
+    expectedRevision: string | number;
+    changes: OperationalLegChangeInput[];
+  }): Promise<OperationalMutationReceipt>;
+  applyOperationalFlightScheduleChangesV1?(input: {
+    requestId: string;
+    expectedRevision: string | number;
+    changes: OperationalLegChangeInput[];
+  }): Promise<OperationalMutationReceipt>;
+  createOperationalFlightLegsV1?(input: {
+    requestId: string;
+    expectedRevision: string | number;
+    legs: Array<Record<string, unknown>>;
+  }): Promise<OperationalMutationReceipt>;
+  stageDailyScheduleImportV2?(
+    input: DailyImportStagePayloadV2,
+    options?: OperatorSessionCheckpointOptions,
+  ): Promise<DailyImportStageResultV2>;
+  commitDailyScheduleImportV2?(
+    input: { batchId: string; previewHash: string },
+    options?: OperatorSessionCheckpointOptions,
+  ): Promise<DailyImportStageResultV2>;
+  getDailyScheduleImportV2Status?(
+    requestId: string,
+    options?: OperatorSessionCheckpointOptions,
+  ): Promise<DailyImportStageResultV2>;
+  cancelDailyScheduleImportV2?(
+    batchId: string,
+    options?: OperatorSessionCheckpointOptions,
+  ): Promise<DailyImportStageResultV2>;
   getCurrentRemoteActor(): Promise<RemoteActor | null>;
 }
 
@@ -766,5 +877,360 @@ export function getCurrentRemoteActor(
     operatorSessionEpoch: options.operatorSessionEpoch,
     acquire: getRemoteStore,
     execute: (store) => store.getCurrentRemoteActor(),
+  });
+}
+
+export function getSeasonalDraftWindowV1(
+  input: {
+    seasonId: string;
+    pageSize?: number;
+    afterDraftId?: string | null;
+    expectedEpoch?: string | null;
+    expectedRevision?: string | number | null;
+  },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<SeasonalDraftWindowResult> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.getSeasonalDraftWindowV1) throw new Error('getSeasonalDraftWindowV1 is unavailable in current store');
+      return store.getSeasonalDraftWindowV1(input);
+    },
+  });
+}
+
+export function applySeasonalDraftChangesV1(
+  input: {
+    seasonId: string;
+    requestId: string;
+    expectedRevision: string | number;
+    changes: SeasonalDraftChangeInput[];
+  },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<SeasonalDraftMutationReceipt> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.applySeasonalDraftChangesV1) throw new Error('applySeasonalDraftChangesV1 is unavailable in current store');
+      return store.applySeasonalDraftChangesV1(input);
+    },
+  });
+}
+
+export function getSeasonalDraftExportSnapshotV1(
+  input: {
+    seasonId: string;
+    expectedEpoch: string;
+    expectedRevision: string | number;
+  },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<SeasonalDraftExportSnapshotResult> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.getSeasonalDraftExportSnapshotV1) throw new Error('getSeasonalDraftExportSnapshotV1 is unavailable in current store');
+      return store.getSeasonalDraftExportSnapshotV1(input);
+    },
+  });
+}
+
+export function stageSeasonalDraftImportV1(
+  input: unknown,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<unknown> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.stageSeasonalDraftImportV1) throw new Error('stageSeasonalDraftImportV1 is unavailable in current store');
+      return store.stageSeasonalDraftImportV1(input);
+    },
+  });
+}
+
+export function commitSeasonalDraftImportV1(
+  input: { batchId: string; previewHash: string },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<unknown> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.commitSeasonalDraftImportV1) throw new Error('commitSeasonalDraftImportV1 is unavailable in current store');
+      return store.commitSeasonalDraftImportV1(input);
+    },
+  });
+}
+
+export function getSeasonalDraftImportStatusV1(
+  requestId: string,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<unknown> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.getSeasonalDraftImportStatusV1) throw new Error('getSeasonalDraftImportStatusV1 is unavailable in current store');
+      return store.getSeasonalDraftImportStatusV1(requestId);
+    },
+  });
+}
+
+export function cancelSeasonalDraftImportV1(
+  batchId: string,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<unknown> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.cancelSeasonalDraftImportV1) throw new Error('cancelSeasonalDraftImportV1 is unavailable in current store');
+      return store.cancelSeasonalDraftImportV1(batchId);
+    },
+  });
+}
+
+export function previewSeasonalPublishV1(
+  input: { seasonId: string; requestId: string; publishedOn?: string },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<SeasonalPublishPreviewResult> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.previewSeasonalPublishV1) throw new Error('previewSeasonalPublishV1 is unavailable in current store');
+      return store.previewSeasonalPublishV1(input);
+    },
+  });
+}
+
+export function getSeasonalPublishPreviewPageV1(
+  input: { previewId: string; previewHash: string; afterIndex?: string | number; pageSize?: number },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<SeasonalPublishedDiffPageResult> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.getSeasonalPublishPreviewPageV1) throw new Error('getSeasonalPublishPreviewPageV1 is unavailable in current store');
+      return store.getSeasonalPublishPreviewPageV1(input);
+    },
+  });
+}
+
+export function commitSeasonalPublishV1(
+  input: { seasonId: string; previewId: string; previewHash: string; notes?: string },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<SeasonalPublishCommitResult> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.commitSeasonalPublishV1) throw new Error('commitSeasonalPublishV1 is unavailable in current store');
+      return store.commitSeasonalPublishV1(input);
+    },
+  });
+}
+
+export function getSeasonalPublishVersionsV1(
+  input: { seasonId: string; afterSequence?: string | number | null; pageSize?: number },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<SeasonalPublishVersionsPageResult> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.getSeasonalPublishVersionsV1) throw new Error('getSeasonalPublishVersionsV1 is unavailable in current store');
+      return store.getSeasonalPublishVersionsV1(input);
+    },
+  });
+}
+
+export function getSeasonalPublishedDiffPageV1(
+  input: { versionId: string; afterIndex?: string | number; pageSize?: number },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<SeasonalPublishedDiffPageResult> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.getSeasonalPublishedDiffPageV1) throw new Error('getSeasonalPublishedDiffPageV1 is unavailable in current store');
+      return store.getSeasonalPublishedDiffPageV1(input);
+    },
+  });
+}
+
+export function getOperationalScheduleAllocationWindowV1(
+  input: {
+    startDate: string;
+    endDate: string;
+    resourceType?: string;
+    pageSize?: number;
+    afterOperationalDate?: string | null;
+    afterScheduledTime?: string | null;
+    afterLegId?: string | null;
+    expectedSnapshot?: string | null;
+  },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<OperationalWindowResult> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.getOperationalScheduleAllocationWindowV1) {
+        throw new Error('getOperationalScheduleAllocationWindowV1 is unavailable in current store');
+      }
+      return store.getOperationalScheduleAllocationWindowV1(input);
+    },
+  });
+}
+
+export function applyOperationalResourceChangesV1(
+  input: {
+    requestId: string;
+    expectedRevision: string | number;
+    changes: OperationalLegChangeInput[];
+  },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<OperationalMutationReceipt> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.applyOperationalResourceChangesV1) {
+        throw new Error('applyOperationalResourceChangesV1 is unavailable in current store');
+      }
+      return store.applyOperationalResourceChangesV1(input);
+    },
+  });
+}
+export function applyOperationalFlightScheduleChangesV1(
+  input: {
+    requestId: string;
+    expectedRevision: string | number;
+    changes: OperationalLegChangeInput[];
+  },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<OperationalMutationReceipt> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.applyOperationalFlightScheduleChangesV1) {
+        throw new Error('applyOperationalFlightScheduleChangesV1 is unavailable in current store');
+      }
+      return store.applyOperationalFlightScheduleChangesV1(input);
+    },
+  });
+}
+
+export function createOperationalFlightLegsV1(
+  input: {
+    requestId: string;
+    expectedRevision: string | number;
+    legs: Array<Record<string, unknown>>;
+  },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<OperationalMutationReceipt> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.createOperationalFlightLegsV1) {
+        throw new Error('createOperationalFlightLegsV1 is unavailable in current store');
+      }
+      return store.createOperationalFlightLegsV1(input);
+    },
+  });
+}
+
+export function stageDailyScheduleImportV2(
+  input: DailyImportStagePayloadV2,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<DailyImportStageResultV2> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.stageDailyScheduleImportV2) {
+        throw new Error('stageDailyScheduleImportV2 is unavailable in current store');
+      }
+      return store.stageDailyScheduleImportV2(input, {
+        assertOperatorSessionCurrent: () => {
+          if (!isOperatorSessionEpochCurrent(options.operatorSessionEpoch)) {
+            throw createOperatorSessionAbortError();
+          }
+        },
+      });
+    },
+  });
+}
+
+export function commitDailyScheduleImportV2(
+  input: { batchId: string; previewHash: string },
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<DailyImportStageResultV2> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.commitDailyScheduleImportV2) {
+        throw new Error('commitDailyScheduleImportV2 is unavailable in current store');
+      }
+      return store.commitDailyScheduleImportV2(input, {
+        assertOperatorSessionCurrent: () => {
+          if (!isOperatorSessionEpochCurrent(options.operatorSessionEpoch)) {
+            throw createOperatorSessionAbortError();
+          }
+        },
+      });
+    },
+  });
+}
+
+export function getDailyScheduleImportV2Status(
+  requestId: string,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<DailyImportStageResultV2> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.getDailyScheduleImportV2Status) {
+        throw new Error('getDailyScheduleImportV2Status is unavailable in current store');
+      }
+      return store.getDailyScheduleImportV2Status(requestId, {
+        assertOperatorSessionCurrent: () => {
+          if (!isOperatorSessionEpochCurrent(options.operatorSessionEpoch)) {
+            throw createOperatorSessionAbortError();
+          }
+        },
+      });
+    },
+  });
+}
+
+export function cancelDailyScheduleImportV2(
+  batchId: string,
+  options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
+): Promise<DailyImportStageResultV2> {
+  return runOperatorSessionResourceOperation({
+    operatorSessionEpoch: options.operatorSessionEpoch,
+    acquire: getRemoteStore,
+    execute: (store) => {
+      if (!store.cancelDailyScheduleImportV2) {
+        throw new Error('cancelDailyScheduleImportV2 is unavailable in current store');
+      }
+      return store.cancelDailyScheduleImportV2(batchId, {
+        assertOperatorSessionCurrent: () => {
+          if (!isOperatorSessionEpochCurrent(options.operatorSessionEpoch)) {
+            throw createOperatorSessionAbortError();
+          }
+        },
+      });
+    },
   });
 }

@@ -1,3 +1,23 @@
+import type {
+  SeasonalDraftWindowResult,
+  SeasonalDraftChangeInput,
+  SeasonalDraftMutationReceipt,
+  SeasonalDraftExportSnapshotResult,
+  SeasonalPublishPreviewResult,
+  SeasonalPublishCommitResult,
+  SeasonalPublishVersionsPageResult,
+  SeasonalPublishedDiffPageResult,
+} from './seasonalPlanningContract';
+import type {
+  OperationalWindowResult,
+  OperationalLegChangeInput,
+  OperationalMutationReceipt,
+  DailyImportStagePayloadV2,
+  DailyImportStageResultV2,
+} from './operationalScheduleContract';
+import {
+  parseDailyImportStageResultV2,
+} from './operationalScheduleContract';
 import { getSupabaseClient, invokeSupabaseFunction } from './supabase';
 import type {
   RemoteStore,
@@ -214,7 +234,19 @@ function stripUndefinedDeep<T>(value: T): T {
 }
 
 function assertOk<T>(result: SupabaseResult<T>, action: string): T {
-  if (result.error) throw new Error(`${action}: ${result.error.message}`);
+  if (result.error) {
+    const err = new Error(`${action}: ${result.error.message}`) as Error & { code?: string; details?: string; hint?: string };
+    if ('code' in result.error && result.error.code) {
+      err.code = String(result.error.code);
+    }
+    if ('details' in result.error && result.error.details) {
+      err.details = String(result.error.details);
+    }
+    if ('hint' in result.error && result.error.hint) {
+      err.hint = String(result.error.hint);
+    }
+    throw err;
+  }
   return result.data as T;
 }
 
@@ -1608,7 +1640,6 @@ export const supabaseStore: RemoteStore = {
       void client().removeChannel(channel);
     };
   },
-
   async getCurrentRemoteActor(): Promise<RemoteActor | null> {
     const { data } = await getSupabaseClient().auth.getUser();
     const user = data.user;
@@ -1632,5 +1663,257 @@ export const supabaseStore: RemoteStore = {
       displayName,
       isAnonymous: user.is_anonymous ?? false,
     };
+  },
+  async getSeasonalDraftWindowV1(input: {
+    seasonId: string;
+    pageSize?: number;
+    afterDraftId?: string | null;
+    expectedEpoch?: string | null;
+    expectedRevision?: string | number | null;
+  }): Promise<SeasonalDraftWindowResult> {
+    const response = await client().rpc('get_seasonal_draft_window_v1', {
+      p_season_id: input.seasonId,
+      p_page_size: input.pageSize ?? 500,
+      p_after_draft_id: input.afterDraftId ?? null,
+      p_expected_epoch: input.expectedEpoch ?? null,
+      p_expected_revision: input.expectedRevision !== null && input.expectedRevision !== undefined
+        ? Number(input.expectedRevision)
+        : null,
+    });
+    return assertOk(response, 'get seasonal draft window V1') as SeasonalDraftWindowResult;
+  },
+
+  async applySeasonalDraftChangesV1(input: {
+    seasonId: string;
+    requestId: string;
+    expectedRevision: string | number;
+    changes: SeasonalDraftChangeInput[];
+  }): Promise<SeasonalDraftMutationReceipt> {
+    const response = await client().rpc('apply_seasonal_draft_changes_v1', {
+      p_season_id: input.seasonId,
+      p_request_id: input.requestId,
+      p_expected_revision: Number(input.expectedRevision),
+      p_changes: input.changes,
+    });
+    return assertOk(response, 'apply seasonal draft changes V1') as SeasonalDraftMutationReceipt;
+  },
+
+  async getSeasonalDraftExportSnapshotV1(input: {
+    seasonId: string;
+    expectedEpoch: string;
+    expectedRevision: string | number;
+  }): Promise<SeasonalDraftExportSnapshotResult> {
+    const response = await client().rpc('get_seasonal_draft_export_snapshot_v1', {
+      p_season_id: input.seasonId,
+      p_expected_epoch: input.expectedEpoch,
+      p_expected_revision: Number(input.expectedRevision),
+    });
+    return assertOk(response, 'get seasonal draft export snapshot V1') as SeasonalDraftExportSnapshotResult;
+  },
+
+  async stageSeasonalDraftImportV1(input: unknown): Promise<unknown> {
+    const response = await client().rpc('stage_seasonal_draft_import_v1', {
+      p_import: input,
+    });
+    return assertOk(response, 'stage seasonal draft import V1');
+  },
+
+  async commitSeasonalDraftImportV1(input: {
+    batchId: string;
+    previewHash: string;
+  }): Promise<unknown> {
+    const response = await client().rpc('commit_seasonal_draft_import_v1', {
+      p_batch_id: input.batchId,
+      p_preview_hash: input.previewHash,
+    });
+    return assertOk(response, 'commit seasonal draft import V1');
+  },
+
+  async getSeasonalDraftImportStatusV1(requestId: string): Promise<unknown> {
+    const response = await client().rpc('get_seasonal_draft_import_status_v1', {
+      p_request_id: requestId,
+    });
+    return assertOk(response, 'get seasonal draft import status V1');
+  },
+
+  async cancelSeasonalDraftImportV1(batchId: string): Promise<unknown> {
+    const response = await client().rpc('cancel_seasonal_draft_import_v1', {
+      p_batch_id: batchId,
+    });
+    return assertOk(response, 'cancel seasonal draft import V1');
+  },
+
+  async previewSeasonalPublishV1(input: {
+    seasonId: string;
+    requestId: string;
+    publishedOn?: string;
+  }): Promise<SeasonalPublishPreviewResult> {
+    const params: Record<string, unknown> = {
+      p_season_id: input.seasonId,
+      p_request_id: input.requestId,
+    };
+    if (input.publishedOn) params.p_published_on = input.publishedOn;
+    const response = await client().rpc('preview_seasonal_publish_v1', params);
+    return assertOk(response, 'preview seasonal publish V1') as SeasonalPublishPreviewResult;
+  },
+
+  async getSeasonalPublishPreviewPageV1(input: {
+    previewId: string;
+    previewHash: string;
+    afterIndex?: string | number;
+    pageSize?: number;
+  }): Promise<SeasonalPublishedDiffPageResult> {
+    const response = await client().rpc('get_seasonal_publish_preview_page_v1', {
+      p_preview_id: input.previewId,
+      p_preview_hash: input.previewHash,
+      p_after_index: input.afterIndex !== undefined ? Number(input.afterIndex) : 0,
+      p_page_size: input.pageSize ?? 100,
+    });
+    return assertOk(response, 'get seasonal publish preview page V1') as SeasonalPublishedDiffPageResult;
+  },
+
+  async commitSeasonalPublishV1(input: {
+    seasonId: string;
+    previewId: string;
+    previewHash: string;
+    notes?: string;
+  }): Promise<SeasonalPublishCommitResult> {
+    const response = await client().rpc('commit_seasonal_publish_v1', {
+      p_season_id: input.seasonId,
+      p_preview_id: input.previewId,
+      p_preview_hash: input.previewHash,
+      p_notes: input.notes ?? '',
+    });
+    return assertOk(response, 'commit seasonal publish V1') as SeasonalPublishCommitResult;
+  },
+
+  async getSeasonalPublishVersionsV1(input: {
+    seasonId: string;
+    afterSequence?: string | number | null;
+    pageSize?: number;
+  }): Promise<SeasonalPublishVersionsPageResult> {
+    const response = await client().rpc('get_seasonal_publish_versions_v1', {
+      p_season_id: input.seasonId,
+      p_after_sequence: input.afterSequence !== null && input.afterSequence !== undefined ? Number(input.afterSequence) : null,
+      p_page_size: input.pageSize ?? 50,
+    });
+    return assertOk(response, 'get seasonal publish versions V1') as SeasonalPublishVersionsPageResult;
+  },
+
+  async getSeasonalPublishedDiffPageV1(input: {
+    versionId: string;
+    afterIndex?: string | number;
+    pageSize?: number;
+  }): Promise<SeasonalPublishedDiffPageResult> {
+    const response = await client().rpc('get_seasonal_published_diff_page_v1', {
+      p_version_id: input.versionId,
+      p_after_index: input.afterIndex !== undefined ? Number(input.afterIndex) : 0,
+      p_page_size: input.pageSize ?? 100,
+    });
+    return assertOk(response, 'get seasonal published diff page V1') as SeasonalPublishedDiffPageResult;
+  },
+
+  async getOperationalScheduleAllocationWindowV1(input: {
+    startDate: string;
+    endDate: string;
+    resourceType?: string;
+    pageSize?: number;
+    afterOperationalDate?: string | null;
+    afterScheduledTime?: string | null;
+    afterLegId?: string | null;
+    expectedSnapshot?: string | null;
+  }): Promise<OperationalWindowResult> {
+    const response = await client().rpc('get_operational_schedule_allocation_window_v1', {
+      p_start_date: input.startDate,
+      p_end_date: input.endDate,
+      p_resource_type: input.resourceType ?? 'all',
+      p_page_size: input.pageSize ?? 500,
+      p_after_operational_date: input.afterOperationalDate ?? null,
+      p_after_scheduled_time: input.afterScheduledTime ?? null,
+      p_after_leg_id: input.afterLegId ?? null,
+      p_expected_snapshot: input.expectedSnapshot ?? null,
+    });
+    return assertOk(response, 'get operational schedule allocation window V1') as OperationalWindowResult;
+  },
+
+  async applyOperationalResourceChangesV1(input: {
+    requestId: string;
+    expectedRevision: string | number;
+    changes: OperationalLegChangeInput[];
+  }): Promise<OperationalMutationReceipt> {
+    const response = await client().rpc('apply_operational_resource_changes_v1', {
+      p_request_id: input.requestId,
+      p_expected_revision: Number(input.expectedRevision),
+      p_changes: input.changes,
+    });
+    return assertOk(response, 'apply operational resource changes V1') as OperationalMutationReceipt;
+  },
+  async applyOperationalFlightScheduleChangesV1(input: {
+    requestId: string;
+    expectedRevision: string | number;
+    changes: OperationalLegChangeInput[];
+  }): Promise<OperationalMutationReceipt> {
+    const response = await client().rpc('apply_operational_flight_schedule_changes_v1', {
+      p_request_id: input.requestId,
+      p_expected_revision: Number(input.expectedRevision),
+      p_changes: input.changes,
+    });
+    return assertOk(response, 'apply operational flight schedule changes V1') as OperationalMutationReceipt;
+  },
+
+  async createOperationalFlightLegsV1(input: {
+    requestId: string;
+    expectedRevision: string | number;
+    legs: Array<Record<string, unknown>>;
+  }): Promise<OperationalMutationReceipt> {
+    const response = await client().rpc('create_operational_flight_legs_v1', {
+      p_request_id: input.requestId,
+      p_expected_revision: Number(input.expectedRevision),
+      p_legs: input.legs,
+    });
+    return assertOk(response, 'create operational flight legs V1') as OperationalMutationReceipt;
+  },
+
+  async stageDailyScheduleImportV2(
+    input: DailyImportStagePayloadV2,
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<DailyImportStageResultV2> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('stage_daily_schedule_import_v2', { p_import: input });
+    options.assertOperatorSessionCurrent();
+    return parseDailyImportStageResultV2(assertDailyImportRpcOk(response, 'stage Daily Schedule import V2'));
+  },
+
+  async commitDailyScheduleImportV2(
+    input: { batchId: string; previewHash: string },
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<DailyImportStageResultV2> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('commit_daily_schedule_import_v2', {
+      p_batch_id: input.batchId,
+      p_preview_hash: input.previewHash,
+    });
+    options.assertOperatorSessionCurrent();
+    return parseDailyImportStageResultV2(assertDailyImportRpcOk(response, 'commit Daily Schedule import V2'));
+  },
+
+  async getDailyScheduleImportV2Status(
+    requestId: string,
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<DailyImportStageResultV2> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('get_daily_schedule_import_v2_status', { p_request_id: requestId });
+    options.assertOperatorSessionCurrent();
+    return parseDailyImportStageResultV2(assertDailyImportRpcOk(response, 'get Daily Schedule import V2 status'));
+  },
+
+  async cancelDailyScheduleImportV2(
+    batchId: string,
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<DailyImportStageResultV2> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('cancel_daily_schedule_import_v2', { p_batch_id: batchId });
+    options.assertOperatorSessionCurrent();
+    return parseDailyImportStageResultV2(assertDailyImportRpcOk(response, 'cancel Daily Schedule import V2'));
   },
 };

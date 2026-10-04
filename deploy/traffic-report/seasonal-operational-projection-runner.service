@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh the operational flight-leg shadow projection while it is stale
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/seasonal-operational-projection-runner run
+TimeoutStartSec=300
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full

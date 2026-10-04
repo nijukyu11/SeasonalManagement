@@ -1,0 +1,18 @@
+[Unit]
+Description=Wake the operational projection runner after a seasonal publish, daily commit or leg mutation
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/sbin/seasonal-operational-projection-runner listen
+Restart=always
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

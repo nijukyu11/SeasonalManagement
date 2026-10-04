@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# M3.4 operational projection runner.
+#
+# run    one-shot: refresh the shadow projection while it is stale, retry while a
+#        writer keeps racing the refresh, and never claim freshness on its own.
+# listen long-lived: LISTEN on the writer wake channel and start the one-shot
+#        service. The timer unit is the fallback for a notification that never
+#        arrives, so a lost NOTIFY delays the projection, it never loses it.
+set -euo pipefail
+
+mode="${1:-run}"
+database_container="${OPERATIONAL_PROJECTION_DB_CONTAINER:-opsdata-supabase-db}"
+database_name="${OPERATIONAL_PROJECTION_DB_NAME:-postgres}"
+runner_service="${OPERATIONAL_PROJECTION_RUNNER_SERVICE:-seasonal-operational-projection-runner.service}"
+wake_channel="${OPERATIONAL_PROJECTION_WAKE_CHANNEL:-operational_projection_wake}"
+lock_file="${OPERATIONAL_PROJECTION_LOCK_FILE:-/run/lock/seasonal-operational-projection-runner.lock}"
+alert_adapter="${OPERATIONAL_PROJECTION_ALERT_ADAPTER:-/usr/local/sbin/seasonal-traffic-dashboard-alert}"
+max_attempts="${OPERATIONAL_PROJECTION_MAX_ATTEMPTS:-3}"
+psql=(/usr/bin/docker exec -i "$database_container" psql -X -q -t -A -v ON_ERROR_STOP=1 -U supabase_admin -d "$database_name")
+
+log() {
+  local level="$1" code="$2" message="$3"
+  printf 'level=%s code=%s %s\n' "$level" "$code" "$message"
+  /usr/bin/logger -t seasonal-operational-projection-runner -p "daemon.$level" -- "code=$code $message" || true
+}
+
+emit_alert() {
+  local level="$1" code="$2" message="$3"
+  log "$level" "$code" "$message"
+  if [[ -x "$alert_adapter" ]]; then
+    "$alert_adapter" "$level" "$code" "$message" || log err alert_adapter_failed "adapter=$alert_adapter code=$code"
+  fi
+}
+
+json_field() {
+  local payload="$1" field="$2"
+  /usr/bin/python3 -c 'import json,sys
+value=json.loads(sys.argv[1]).get(sys.argv[2])
+if value is True: print("true")
+elif value is False: print("false")
+elif value is not None: print(value)' "$payload" "$field"
+}
+
+projection_status() {
+  "${psql[@]}" -Atc "select to_jsonb(status) from reporting.operational_projection_status_v1() status"
+}
+
+wake_runner() {
+  log info projection_wake "operational store write notification received"
+  if ! /usr/bin/systemctl start --no-block "$runner_service"; then
+    emit_alert err runner_wake_failed "service=$runner_service"
+  fi
+}
+
+listen_forever() {
+  log info listener_started "channel=$wake_channel"
+  while true; do
+    set +e
+    {
+      printf 'listen %s;\n' "$wake_channel" || exit 1
+      while /usr/bin/sleep 2; do printf 'select 1 where false;\n' || break; done
+    } | "${psql[@]}" 2>&1 | while IFS= read -r line; do
+      if [[ "$line" == *"Asynchronous notification \"$wake_channel\""* ]]; then
+        wake_runner
+      elif [[ -n "$line" && "$line" != 'LISTEN' ]]; then
+        log warning listener_output "message=${line//$'\n'/ }"
+      fi
+    done
+    local listener_status=${PIPESTATUS[1]}
+    set -e
+    emit_alert warning listener_reconnecting "psql_status=$listener_status"
+    /usr/bin/sleep 5
+  done
+}
+
+refresh_until_fresh() {
+  local attempt status is_fresh source_watermark observed_watermark
+  for attempt in $(/usr/bin/seq 1 "$max_attempts"); do
+    status="$(projection_status)"
+    if [[ -z "$status" ]]; then
+      emit_alert err projection_status_unavailable "attempt=$attempt"
+      return 1
+    fi
+    is_fresh="$(json_field "$status" is_fresh)"
+    if [[ "$is_fresh" == "true" ]]; then
+      log info projection_fresh "attempt=$attempt source_watermark=$(json_field "$status" source_watermark)"
+      return 0
+    fi
+
+    log info projection_stale "attempt=$attempt source_watermark=$(json_field "$status" source_watermark) current_watermark=$(json_field "$status" current_watermark)"
+    if ! "${psql[@]}" -Atc 'select reporting.refresh_operational_canonical_legs_v1()' >/dev/null; then
+      emit_alert err projection_refresh_failed "attempt=$attempt"
+      return 1
+    fi
+
+    status="$(projection_status)"
+    is_fresh="$(json_field "$status" is_fresh)"
+    source_watermark="$(json_field "$status" source_watermark)"
+    observed_watermark="$(json_field "$status" observed_watermark)"
+    if [[ "$is_fresh" == "true" ]]; then
+      log info projection_refreshed "attempt=$attempt source_watermark=$source_watermark observed_watermark=$observed_watermark"
+      return 0
+    fi
+    if [[ "$source_watermark" != "$observed_watermark" ]]; then
+      # A writer committed while the rows were being written: the refresh claimed
+      # only what it saw before reading, so run it again instead of lying.
+      log warning projection_raced_by_writer "attempt=$attempt source_watermark=$source_watermark observed_watermark=$observed_watermark"
+      continue
+    fi
+    # Operations has its own revision: legacy watermarks can remain equal while
+    # a resource/Pax mutation races the refresh. Trust the freshness gate and
+    # retry every stale result within the same bounded budget.
+    log warning projection_stale_after_refresh "attempt=$attempt source_watermark=$source_watermark current_watermark=$(json_field "$status" current_watermark)"
+  done
+  emit_alert err projection_race_retries_exhausted "attempts=$max_attempts"
+  return 1
+}
+
+run_once() {
+  /usr/bin/mkdir -p "$(/usr/bin/dirname "$lock_file")"
+  exec 9>"$lock_file"
+  if ! /usr/bin/flock -n 9; then
+    log info single_flight_skip "another runner owns lock=$lock_file"
+    return 0
+  fi
+  refresh_until_fresh
+}
+
+case "$mode" in
+  run) run_once ;;
+  listen) listen_forever ;;
+  *) echo "usage: $0 [run|listen]" >&2; exit 64 ;;
+esac
