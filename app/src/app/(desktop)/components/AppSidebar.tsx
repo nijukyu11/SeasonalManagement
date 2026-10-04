@@ -108,7 +108,7 @@ export default function AppSidebar() {
   const searchParams = useSearchParams();
   const operatorAuth = useOperatorAuth();
   const currentSearch = searchParams.toString();
-  const operationalWritePending = useOperationalScheduleStore((state) => state.mutating || state.importing);
+  const operationalWritePending = useOperationalScheduleStore((state) => state.mutating || state.importing || Boolean(state.unresolvedAttempt));
   const navigationBlocked = isOperationalScheduleV1Enabled() && operationalWritePending;
   useEffect(() => {
     if (!navigationBlocked) return;
@@ -150,7 +150,7 @@ export default function AppSidebar() {
 
   const navigateTo = useCallback((href: string) => {
     const pending = useOperationalScheduleStore.getState();
-    if (isOperationalScheduleV1Enabled() && (pending.mutating || pending.importing)) return;
+    if (isOperationalScheduleV1Enabled() && (pending.mutating || pending.importing || pending.unresolvedAttempt)) return;
     router.push(href);
   }, [router]);
 

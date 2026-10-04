@@ -409,7 +409,7 @@ function DailyScheduleContent() {
   const searchParams = useCachedRouteSearchParams();
   const { dialogNode, showAlert, showConfirm } = useAppDialog();
   const { notifyExportCompleted } = useExportNotifications();
-  const operationalWritePending = useOperationalScheduleStore((state) => state.mutating || state.importing);
+  const operationalWritePending = useOperationalScheduleStore((state) => state.mutating || state.importing || Boolean(state.unresolvedAttempt));
   const operationalUnresolvedAttempt = useOperationalScheduleStore((state) => state.unresolvedAttempt);
   const targetSeasonId = searchParams.get('season');
   const requestedRange = readDailyDateRangeQuery(searchParams);
@@ -979,7 +979,7 @@ function DailyScheduleContent() {
   const handleCellCommit = useCallback(async (recordId: string, field: DailyCellField, value: string) => {
     if (isOperationalScheduleV1Enabled()) {
       const pending = useOperationalScheduleStore.getState();
-      if (pending.mutating || pending.importing) throw new Error('Wait for the pending operational write.');
+      if (pending.mutating || pending.importing || pending.unresolvedAttempt) throw new Error('Wait for the pending operational write.');
       const canonicalRecord = flightRecords.find((record) => record.id === recordId);
       if (!canonicalRecord) throw new Error(`Daily record ${recordId} was not found`);
       const validation = validateDailyCellEdit({
@@ -1328,10 +1328,7 @@ function DailyScheduleContent() {
     } catch (err) {
       void showAlert({ title: 'Retry Failed', message: (err as Error).message, tone: 'error' });
     } finally {
-      const remaining = useOperationalScheduleStore.getState().unresolvedAttempt;
-      if (!remaining) {
-        setOperationalMutating(false);
-      }
+      setOperationalMutating(false);
     }
   }, [refreshDailyWindow, setOperationalMutating, showAlert]);
 
@@ -2308,7 +2305,7 @@ function DailyScheduleContent() {
           }}
           onCommit={async () => {
             const pending = useOperationalScheduleStore.getState();
-            if (pending.importing || pending.mutating || dailyImportPreviewV2.status !== 'validated') return;
+            if (pending.importing || pending.mutating || pending.unresolvedAttempt || dailyImportPreviewV2.status !== 'validated') return;
             setDailyImporting(true);
             try {
               let receipt;

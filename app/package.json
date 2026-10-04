@@ -59,6 +59,7 @@
     "test:seasonal-operational-m3-projection": "node supabase/tests/seasonal_operational_separation_m3_projection_pglite.mjs",
     "test:seasonal-operational-m4-window": "node supabase/tests/seasonal_operational_separation_m4_window_pglite.mjs",
     "test:seasonal-operational-m4-mutations": "node supabase/tests/seasonal_operational_separation_m4_mutations_pglite.mjs",
+    "test:seasonal-operational-m4-recovery": "node supabase/tests/seasonal_operational_separation_m4_recovery_pglite.mjs",
     "test:seasonal-operational-m5-daily": "node supabase/tests/seasonal_operational_separation_m5_daily_pglite.mjs",
     "test:seasonal-operational-m6-planning": "node supabase/tests/seasonal_operational_separation_m6_planning_pglite.mjs",
     "test:seasonal-operational-m6-undo": "node --experimental-strip-types supabase/tests/seasonal_operational_separation_m6_undo_pglite.mjs",

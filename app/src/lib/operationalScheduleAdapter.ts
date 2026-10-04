@@ -203,12 +203,13 @@ export function getPendingOperationalMutation(expectedOperatorId?: string | null
 
   if (unresolvedAttempt) {
     if (unresolvedAttempt.ownerUserId && unresolvedAttempt.ownerUserId !== currentOperatorId) {
-      unresolvedAttempt = null;
-      return readStoredUnresolvedMutationAttempt(currentOperatorId);
+      unresolvedAttempt = readStoredUnresolvedMutationAttempt(currentOperatorId);
+      return unresolvedAttempt;
     }
     return unresolvedAttempt;
   }
-  return readStoredUnresolvedMutationAttempt(currentOperatorId);
+  unresolvedAttempt = readStoredUnresolvedMutationAttempt(currentOperatorId);
+  return unresolvedAttempt;
 }
 
 export function setPendingOperationalMutation(attempt: Omit<UnresolvedMutationAttempt, 'timestamp' | 'ownerUserId'> & { timestamp?: number; ownerUserId?: string | null }): void {
@@ -226,7 +227,6 @@ export function setPendingOperationalMutation(attempt: Omit<UnresolvedMutationAt
   rememberMutationRequestId(fullAttempt.requestId);
   useOperationalScheduleStore.setState({
     unresolvedAttempt: fullAttempt,
-    mutating: true,
   });
 }
 
@@ -260,7 +260,7 @@ export const useOperationalScheduleStore = create<OperationalScheduleWindowState
   resources: {},
   snapshot: { revision: '0', token: '' },
   loading: false,
-  mutating: Boolean(initialUnresolvedAttempt),
+  mutating: false,
   importing: false,
   error: null,
   lastLoadedAt: null,
@@ -334,7 +334,7 @@ export const useOperationalScheduleStore = create<OperationalScheduleWindowState
 
     requestGeneration += 1;
     const targetGen = requestGeneration;
-    set({ loading: true, error: null, generation: targetGen });
+    set({ loading: true, error: null, generation: targetGen, unresolvedAttempt: getPendingOperationalMutation() });
 
     try {
       const res = await loadFullOperationalScheduleWindow({
@@ -380,6 +380,7 @@ export const useOperationalScheduleStore = create<OperationalScheduleWindowState
 
     const currentPayload = JSON.stringify(changes);
     const explicitRequestId = options?.requestId;
+    getPendingOperationalMutation();
 
     if (explicitRequestId && unresolvedAttempt && unresolvedAttempt.requestId === explicitRequestId) {
       if (unresolvedAttempt.serializedPayload !== currentPayload) {
@@ -500,6 +501,7 @@ export const useOperationalScheduleStore = create<OperationalScheduleWindowState
 
     const currentPayload = JSON.stringify(legs);
     const explicitRequestId = options?.requestId;
+    getPendingOperationalMutation();
 
     if (explicitRequestId && unresolvedAttempt && unresolvedAttempt.requestId === explicitRequestId) {
       if (unresolvedAttempt.serializedPayload !== currentPayload) {
@@ -637,6 +639,7 @@ export const useOperationalScheduleStore = create<OperationalScheduleWindowState
       loading: false,
       mutating: false,
       importing: false,
+      unresolvedAttempt: null,
       error: null,
       lastLoadedAt: null,
       generation: currentGen,

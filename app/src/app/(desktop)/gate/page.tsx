@@ -535,7 +535,7 @@ function GateAllocationContent() {
   }, []);
   const pendingRevalidateOnSettleRef = useRef(false);
   const operationalRequestIdRef = useRef(0);
-  const operationalStoreMutating = useOperationalScheduleStore((s) => s.mutating || s.importing);
+  const operationalStoreMutating = useOperationalScheduleStore((s) => s.mutating || s.importing || Boolean(s.unresolvedAttempt));
   const unresolvedAttempt = useOperationalScheduleStore((s) => s.unresolvedAttempt);
   const historySeqRef = useRef(0);
   const appliedRangeQueryRef = useRef<string | null>(null);
@@ -1393,10 +1393,7 @@ function GateAllocationContent() {
     } catch (err) {
       void showAlert({ title: 'Retry Failed', message: (err as Error).message, tone: 'error' });
     } finally {
-      const remaining = useOperationalScheduleStore.getState().unresolvedAttempt;
-      if (!remaining) {
-        setOperationalMutating(false);
-      }
+      setOperationalMutating(false);
     }
   }, [refreshGateWindow, setOperationalMutating, showAlert]);
 
@@ -1547,12 +1544,8 @@ function GateAllocationContent() {
           });
         }
       } finally {
-        const remainingPending = getPendingOperationalMutation();
-        if (!remainingPending) {
-          operationalMutatingRef.current = false;
-          setOperationalMutating(false);
-          useOperationalScheduleStore.setState({ mutating: false });
-        }
+        setOperationalMutating(false);
+        useOperationalScheduleStore.setState({ mutating: false });
       }
       return;
     }

@@ -992,7 +992,7 @@ function CheckInAllocationContent() {
   }, []);
   const pendingRevalidateOnSettleRef = useRef(false);
   const operationalRequestIdRef = useRef(0);
-  const operationalStoreMutating = useOperationalScheduleStore((s) => s.mutating || s.importing);
+  const operationalStoreMutating = useOperationalScheduleStore((s) => s.mutating || s.importing || Boolean(s.unresolvedAttempt));
   const unresolvedAttempt = useOperationalScheduleStore((s) => s.unresolvedAttempt);
   useSessionScrollRestoration('checkin:gantt-scroll', ganttScrollRef);
   const syncSeasonId = season?.id ?? targetSeasonId;
@@ -2182,10 +2182,7 @@ function CheckInAllocationContent() {
     } catch (err) {
       void showAlert({ title: 'Retry Failed', message: (err as Error).message, tone: 'error' });
     } finally {
-      const remaining = useOperationalScheduleStore.getState().unresolvedAttempt;
-      if (!remaining) {
-        setOperationalMutating(false);
-      }
+      setOperationalMutating(false);
     }
   }, [refreshCheckInWindow, setOperationalMutating, showAlert]);
 
@@ -2333,12 +2330,8 @@ function CheckInAllocationContent() {
           });
         }
       } finally {
-        const remainingPending = getPendingOperationalMutation();
-        if (!remainingPending) {
-          operationalMutatingRef.current = false;
-          setOperationalMutating(false);
-          useOperationalScheduleStore.setState({ mutating: false });
-        }
+        setOperationalMutating(false);
+        useOperationalScheduleStore.setState({ mutating: false });
       }
       return;
     }
