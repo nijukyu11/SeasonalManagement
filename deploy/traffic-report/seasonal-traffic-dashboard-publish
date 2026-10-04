@@ -31,7 +31,21 @@ if (( ${#idempotency_key} < 8 || ${#idempotency_key} > 200 )); then
 fi
 
 psql=(/usr/bin/docker exec -i "$database_container" psql -X -v ON_ERROR_STOP=1 -U supabase_admin -d "$database_name")
-actual_watermark="$("${psql[@]}" -At -c "select coalesce(max(server_seq), 0)::bigint from public.season_change_events")"
+has_cutover="$("${psql[@]}" -At -c "select to_regproc('reporting.is_operational_reader_cutover_active_v1') is not null")"
+if [[ "$has_cutover" == "t" || "$has_cutover" == "true" ]]; then
+  actual_watermark="$("${psql[@]}" -At -c "
+select case
+  when reporting.is_operational_reader_cutover_active_v1() then
+    (select coalesce(status.source_watermark, 0)::bigint + coalesce(rev.revision, 0)::bigint
+     from reporting.operational_projection_status_v1() status
+     cross join (select revision from public.operational_workspace_revision where singleton) rev)
+  else
+    (select coalesce(max(server_seq), 0)::bigint from public.season_change_events)
+end;
+")"
+else
+  actual_watermark="$("${psql[@]}" -At -c "select coalesce(max(server_seq), 0)::bigint from public.season_change_events")"
+fi
 if [[ "$actual_watermark" != "$expected_watermark" ]]; then
   echo "ERROR: source watermark changed before publication expected=$expected_watermark actual=$actual_watermark" >&2
   exit 75

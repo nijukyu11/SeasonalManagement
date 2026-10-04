@@ -70,6 +70,7 @@ try {
     applied.includes(MIGRATION_NAME),
     `the migration chain applies ${MIGRATION_NAME} (applied tail: ${applied.slice(-3).join(', ')})`
   );
+  await db.exec(await readFile(new URL('../migrations/20260929120000_seasonal_operational_reader_cutover_v1.rollback.sql',import.meta.url),'utf8'));
   for (const name of ['20260928210000_seasonal_publish_v1.rollback.sql','20260928200000_seasonal_draft_import_v1.rollback.sql','20260928190000_seasonal_planning_v1.rollback.sql','20260928180000_operational_daily_import_v2.rollback.sql','20260928170000_operational_mutations_v1.rollback.sql','20260928160000_operational_window_v1.rollback.sql']) {
     await db.exec(await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8'));
   }

@@ -9,6 +9,8 @@ public_base_url="${DASHBOARD_PUBLIC_BASE_URL:-https://report.ahtops.xyz}"
 lock_file="${DASHBOARD_RUNNER_LOCK_FILE:-/run/lock/seasonal-traffic-dashboard-runner.lock}"
 alert_adapter="${DASHBOARD_ALERT_ADAPTER:-/usr/local/sbin/seasonal-traffic-dashboard-alert}"
 verify_public_cache_enabled="${DASHBOARD_VERIFY_PUBLIC_CACHE:-true}"
+publisher_bin="${DASHBOARD_PUBLISHER_BIN:-/usr/local/sbin/seasonal-traffic-dashboard-publish}"
+retry_prefix="${DASHBOARD_RETRY_UNIT_PREFIX:-seasonal-traffic-dashboard-retry}"
 psql=(/usr/bin/docker exec -i "$database_container" psql -X -q -t -A -v ON_ERROR_STOP=1 -U supabase_admin -d "$database_name")
 
 log() {
@@ -38,7 +40,7 @@ schedule_retries() {
   local stamp delay unit
   stamp="$(/usr/bin/date +%s%N)"
   for delay in 2m 5m 15m; do
-    unit="seasonal-traffic-dashboard-retry-${delay%m}-${stamp}"
+    unit="${retry_prefix}-${delay%m}-${stamp}"
     if ! /usr/bin/systemd-run --quiet --unit="$unit" --on-active="$delay" \
       /usr/bin/systemctl start "$runner_service"; then
       emit_alert warning retry_schedule_failed "service=$runner_service delay=$delay"
@@ -201,7 +203,7 @@ run_once() {
   [[ "$candidate_year" =~ ^[0-9]{4}$ ]] || { emit_alert err candidate_year_invalid "value=$candidate_year"; return 1; }
 
   set +e
-  publisher_output="$(/usr/local/sbin/seasonal-traffic-dashboard-publish \
+  publisher_output="$("$publisher_bin" \
     "$business_date" "$source_watermark" "$trigger_kind" \
     "$publish_reason" "$idempotency_key" 2>&1)"
   local publisher_exit=$?
