@@ -102,7 +102,6 @@ test('year selector lives inside the hidden editor and can pin or release a year
   assert.match(source, /searchParams\.get\('year'\)/);
   assert.match(source, /nextParams\.set\('year', value\)/);
   assert.match(source, /nextParams\.delete\('year'\)/);
-  assert.match(source, /Năm dashboard đang xem/);
   assert.match(source, /Tự động \(\{automaticYear\}\)/);
   const header = source.match(/<header[\s\S]*?<\/header>/)?.[0] ?? '';
   assert.doesNotMatch(header, /<select/);

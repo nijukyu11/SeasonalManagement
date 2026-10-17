@@ -6,10 +6,16 @@ import {
   TrafficReportSyncingError,
   TrafficReportVersionChangedError,
   buildTrafficReportV2DimensionUrl,
+  buildTrafficReportV2DimensionShareUrl,
   buildTrafficReportV2ExportUrl,
+  buildTrafficReportV2MonthDetailUrl,
+  buildTrafficReportV2MonthlyTimelineUrl,
   buildTrafficReportV2OverviewUrl,
   fetchTrafficReportV2Bundle,
   fetchTrafficReportV2DimensionPage,
+  fetchTrafficReportV2DimensionShare,
+  fetchTrafficReportV2MonthDetail,
+  fetchTrafficReportV2MonthlyTimeline,
   fetchTrafficReportV2TimelinePage,
   toTrafficReportPresentationBundle,
 } from './trafficReportDataAdapter.ts';
@@ -68,9 +74,12 @@ function report(): TrafficV2ApiEnvelope['report'] {
       peak_hour_monthly: [],
       day_of_week: Array.from({ length: 7 }, (_, index) => ({
         day_index: (index + 1) as 1 | 2 | 3 | 4 | 5 | 6 | 7,
-        calendar_days: 0, total_flights: 0, average_flights: 0, min_flights: 0,
-        max_flights: 0, arrivals: 0, departures: 0, suppressed: false,
+        calendar_days: 0, complete_day_count: 0, total_flights: null, average_flights: null, min_flights: null,
+        max_flights: null, arrivals: null, average_arrivals: null, min_arrivals: null, max_arrivals: null,
+        departures: null, average_departures: null, min_departures: null, max_departures: null,
+        status: 'missing' as const, suppressed: false,
       })),
+      day_of_week_monthly: [],
     },
   };
 }
@@ -127,6 +136,41 @@ test('adapter builds one canonical v2 URL without credentials', () => {
     buildTrafficReportV2DimensionUrl(filter, 'route', 'A', 'reported_pax', 2, 50, 51, 'rv1.dGVzdA.c2ln', true),
     /\/v2\/dimension-export\?.*type=A.*dimension=route.*sort=reported_pax.*page=2.*page_size=50.*expected_watermark=51.*read_version=rv1/u,
   );
+  assert.match(buildTrafficReportV2MonthlyTimelineUrl(filter, 'all', 51, 'rv1.dGVzdA.c2ln'), /granularity=month.*page_size=732.*expected_watermark=51/u);
+  assert.match(buildTrafficReportV2MonthDetailUrl(filter, 'all', '2026-08', 51, 'rv1.dGVzdA.c2ln'), /month=2026-08.*page_size=62.*expected_watermark=51/u);
+  assert.match(buildTrafficReportV2DimensionShareUrl(filter, 'country', 'all', 'reported_pax', 51, 'rv1.dGVzdA.c2ln'), /dimension=country.*metric=reported_pax.*limit=10.*expected_watermark=51/u);
+  assert.match(buildTrafficReportV2DimensionShareUrl(filter, 'airline', 'all', 'flights', 51, 'rv1.dGVzdA.c2ln'), /dimension=airline.*metric=flights.*limit=10.*expected_watermark=51/u);
+});
+
+test('adapter reads monthly timeline, month detail, and independent dimension share resources', async () => {
+  const fetchImpl = (async (input) => {
+    const url = String(input);
+    const version = { contract_version: 'traffic-report-v2', source_watermark: 51, read_version_token: 'rv1.dGVzdA.c2ln' };
+    if (url.includes('dimension-share')) return Response.json({
+      ...version, dimension: 'route', metric: 'reported_pax', type: 'all', limit: 10, total_value: 100,
+      top_rows: [{ key: 'HAN', label: 'HAN', value: 80, share: 0.8 }],
+      other: { label: 'Khác', value: 20, share: 0.2 },
+    });
+    if (url.includes('granularity=month')) return Response.json({ ...version, timeline: [{
+      month: '2026-08', from: '2026-08-01', to: '2026-08-31', selected_day_count: 31,
+      complete_day_count: 31, partial_day_count: 0, missing_day_count: 0,
+      flights: 10, arrivals: 5, departures: 5, reported_pax: null, reported_legs: 0,
+      due_legs: 10, missing_due_legs: 10, true_zero_reported_legs: 0,
+      period_status: 'complete', status: 'complete',
+    }] });
+    return Response.json({ ...version, timeline: [{
+      ops_date: '2026-08-01', flights: 1, arrivals: 1, departures: 0,
+      reported_pax: null, reported_legs: 0, due_legs: 1, missing_due_legs: 1,
+      true_zero_reported_legs: 0, status: 'complete',
+    }] });
+  }) as typeof fetch;
+  const months = await fetchTrafficReportV2MonthlyTimeline(filter, 'all', 51, 'rv1.dGVzdA.c2ln', { fetchImpl });
+  const days = await fetchTrafficReportV2MonthDetail(filter, 'all', '2026-08', 51, 'rv1.dGVzdA.c2ln', { fetchImpl });
+  const share = await fetchTrafficReportV2DimensionShare(filter, 'route', 'all', 'reported_pax', 51, 'rv1.dGVzdA.c2ln', { fetchImpl });
+  assert.equal(months[0].reported_pax, null);
+  assert.equal(months[0].period_status, 'complete');
+  assert.equal(days[0].reported_pax, null);
+  assert.equal(share.other?.label, 'Khác');
 });
 
 test('versioned timeline and dimension reads preserve null Pax and require the pinned watermark', async () => {
@@ -187,6 +231,7 @@ test('adapter maps live v2 to the existing Report presentation without losing tr
   assert.equal(reportBundle.metadata.projection?.source_watermark, 51);
   assert.equal(reportBundle.breakdowns.peak_hour.length, 24);
   assert.deepEqual(reportBundle.kpis.coverage_counts, { routes: 1, airlines: 1, countries: 1 });
+  assert.deepEqual(reportBundle.breakdowns.day_of_week_monthly, []);
 });
 
 test('adapter replaces the full bundle once after a pinned watermark changes', async () => {
@@ -293,4 +338,33 @@ test('adapter exhausts bounded sync retries and retains failure after bound', as
   );
   assert.equal(calls, 3);
   assert.deepEqual(syncStatuses, [true, true, false]);
+});
+
+test('toTrafficReportPresentationBundle preserves flight_category breakdown', () => {
+  const input = payload();
+  input.report.breakdowns.flight_category = [
+    { key: 'scheduled', code: 'J', label: 'Thường lệ', flights: 10, arrivals: 5, departures: 5, reported_pax: 1500, share: 0.8, suppressed: false },
+    { key: 'charter', code: 'C', label: 'Không thường lệ', flights: 2, arrivals: 1, departures: 1, reported_pax: 300, share: 0.2, suppressed: false },
+  ];
+  const live = decodeTrafficV2ApiEnvelope(input);
+  const bundle = toTrafficReportPresentationBundle(live);
+  assert.equal(bundle.breakdowns.flight_category?.length, 2);
+  assert.equal(bundle.breakdowns.flight_category?.[0].code, 'J');
+  assert.equal(bundle.breakdowns.flight_category?.[1].code, 'C');
+});
+
+test('adapter maps future null flight rows to completeness: missing', () => {
+  const input = payload();
+  input.normalized_filter.to = '2026-09-01';
+  input.timeline.push({
+    ops_date: '2026-09-01', flights: null, arrivals: null, departures: null,
+    reported_pax: null, reported_legs: null, due_legs: null,
+    missing_due_legs: null, true_zero_reported_legs: null, status: 'future',
+  });
+  const live = decodeTrafficV2ApiEnvelope(input);
+  const bundle = toTrafficReportPresentationBundle(live);
+  const futurePoint = bundle.timeline.find((p) => p.ops_date === '2026-09-01');
+  assert.equal(futurePoint?.completeness, 'missing');
+  assert.equal(futurePoint?.flights, null);
+  assert.equal(futurePoint?.status, 'future');
 });

@@ -1,7 +1,11 @@
 import {
   TRAFFIC_REPORT_V2_API_BASE,
   decodeTrafficV2ApiEnvelope,
+  isTrafficDimensionShareResponse,
+  isTrafficV2ApiMonthlyTimelinePoint,
+  type TrafficDimensionShareResponse,
   type TrafficV2ApiDimensionRow,
+  type TrafficV2ApiMonthlyTimelinePoint,
   type TrafficV2ApiTimelinePoint,
   type TrafficV2Bundle,
 } from './trafficReportV2Contract.ts';
@@ -124,6 +128,35 @@ export function buildTrafficReportV2TimelineUrl(
   return `${TRAFFIC_REPORT_V2_API_BASE}/timeline?${query.toString()}`;
 }
 
+export function buildTrafficReportV2MonthlyTimelineUrl(
+  filter: TrafficReportFilter,
+  scope: TrafficType,
+  expectedWatermark: number,
+  readVersionToken: string,
+): string {
+  const query = toTrafficReportSearchParams({ ...filter, type: scope });
+  query.set('granularity', 'month');
+  query.set('page_size', '732');
+  appendExpectedWatermark(query, expectedWatermark);
+  appendReadVersion(query, readVersionToken);
+  return `${TRAFFIC_REPORT_V2_API_BASE}/timeline?${query.toString()}`;
+}
+
+export function buildTrafficReportV2MonthDetailUrl(
+  filter: TrafficReportFilter,
+  scope: TrafficType,
+  month: string,
+  expectedWatermark: number,
+  readVersionToken: string,
+): string {
+  if (!/^\d{4}-\d{2}$/u.test(month)) throw new Error('Tháng cần xem không hợp lệ.');
+  const query = toTrafficReportSearchParams({ ...filter, type: scope });
+  query.set('month', month);
+  query.set('page_size', '62');
+  appendExpectedWatermark(query, expectedWatermark);
+  appendReadVersion(query, readVersionToken);
+  return `${TRAFFIC_REPORT_V2_API_BASE}/timeline?${query.toString()}`;
+}
 export function buildTrafficReportV2DimensionUrl(
   filter: TrafficReportFilter,
   dimension: TrafficDimension,
@@ -145,6 +178,22 @@ export function buildTrafficReportV2DimensionUrl(
   return `${TRAFFIC_REPORT_V2_API_BASE}/${exportAll ? 'dimension-export' : 'dimension'}?${query.toString()}`;
 }
 
+export function buildTrafficReportV2DimensionShareUrl(
+  filter: TrafficReportFilter,
+  dimension: TrafficDimension,
+  scope: TrafficType,
+  metric: 'flights' | 'reported_pax',
+  expectedWatermark: number,
+  readVersionToken: string,
+): string {
+  const query = toTrafficReportSearchParams({ ...filter, type: scope });
+  query.set('dimension', dimension);
+  query.set('metric', metric);
+  query.set('limit', '10');
+  appendExpectedWatermark(query, expectedWatermark);
+  appendReadVersion(query, readVersionToken);
+  return `${TRAFFIC_REPORT_V2_API_BASE}/dimension-share?${query.toString()}`;
+}
 export function buildTrafficReportV2ExportUrl(
   filter: TrafficReportFilter,
   expectedWatermark: number,
@@ -352,6 +401,66 @@ export async function fetchTrafficReportV2TimelinePage(
   };
 }
 
+export async function fetchTrafficReportV2MonthlyTimeline(
+  filter: TrafficReportFilter,
+  scope: TrafficType,
+  expectedWatermark: number,
+  readVersionToken: string,
+  options: Pick<TrafficReportFetchOptions, 'signal' | 'fetchImpl'> = {},
+): Promise<TrafficV2ApiMonthlyTimelinePoint[]> {
+  const response = await (options.fetchImpl ?? fetch)(
+    buildTrafficReportV2MonthlyTimelineUrl(filter, scope, expectedWatermark, readVersionToken),
+    { credentials: 'omit', headers: { Accept: 'application/json' }, signal: options.signal },
+  );
+  const payload = await v2ResourcePayload(response, expectedWatermark, readVersionToken);
+  if (payload.source_watermark !== expectedWatermark || !Array.isArray(payload.timeline)) {
+    throw new TrafficReportVersionChangedError(expectedWatermark, asSafeWatermark(payload.source_watermark));
+  }
+  if (!payload.timeline.every(isTrafficV2ApiMonthlyTimelinePoint)) {
+    throw new Error('Dữ liệu xu hướng theo tháng chưa sẵn sàng.');
+  }
+  return payload.timeline;
+}
+
+export async function fetchTrafficReportV2MonthDetail(
+  filter: TrafficReportFilter,
+  scope: TrafficType,
+  month: string,
+  expectedWatermark: number,
+  readVersionToken: string,
+  options: Pick<TrafficReportFetchOptions, 'signal' | 'fetchImpl'> = {},
+): Promise<TrafficTimelinePoint[]> {
+  const response = await (options.fetchImpl ?? fetch)(
+    buildTrafficReportV2MonthDetailUrl(filter, scope, month, expectedWatermark, readVersionToken),
+    { credentials: 'omit', headers: { Accept: 'application/json' }, signal: options.signal },
+  );
+  const payload = await v2ResourcePayload(response, expectedWatermark, readVersionToken);
+  if (payload.source_watermark !== expectedWatermark || !Array.isArray(payload.timeline)) {
+    throw new TrafficReportVersionChangedError(expectedWatermark, asSafeWatermark(payload.source_watermark));
+  }
+  return (payload.timeline as TrafficV2ApiTimelinePoint[]).map(apiTimelinePoint);
+}
+
+export async function fetchTrafficReportV2DimensionShare(
+  filter: TrafficReportFilter,
+  dimension: TrafficDimension,
+  scope: TrafficType,
+  metric: 'flights' | 'reported_pax',
+  expectedWatermark: number,
+  readVersionToken: string,
+  options: Pick<TrafficReportFetchOptions, 'signal' | 'fetchImpl'> = {},
+): Promise<TrafficDimensionShareResponse> {
+  const response = await (options.fetchImpl ?? fetch)(
+    buildTrafficReportV2DimensionShareUrl(filter, dimension, scope, metric, expectedWatermark, readVersionToken),
+    { credentials: 'omit', headers: { Accept: 'application/json' }, signal: options.signal },
+  );
+  const payload = await v2ResourcePayload(response, expectedWatermark, readVersionToken);
+  if (payload.source_watermark !== expectedWatermark) {
+    throw new TrafficReportVersionChangedError(expectedWatermark, asSafeWatermark(payload.source_watermark));
+  }
+  if (!isTrafficDimensionShareResponse(payload)) throw new Error('Dữ liệu tỷ trọng chưa sẵn sàng.');
+  return payload;
+}
 function apiDimensionRow(row: TrafficV2ApiDimensionRow) {
   return {
     key: row.key,
@@ -484,6 +593,7 @@ export function toTrafficReportPresentationBundle(bundle: TrafficV2Bundle): Traf
       peak_hour: report.breakdowns.peak_hour,
       peak_hour_monthly: report.breakdowns.peak_hour_monthly,
       day_of_week: report.breakdowns.day_of_week,
+      day_of_week_monthly: report.breakdowns.day_of_week_monthly,
       flight_category: report.breakdowns.flight_category ?? [],
     },
     quality: {

@@ -2,12 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/cn';
-import type { TrafficBreakdownRow, TrafficDayOfWeekRow, TrafficFlightCategoryRow, TrafficMonthlyPeakRow, TrafficPeakHourRow, TrafficRegularFlight, TrafficTimeBasis, TrafficType } from '@/lib/trafficReportContract';
+import type { NormalizedTrafficReportFilter, TrafficBreakdownRow, TrafficDayOfWeekRow, TrafficFlightCategoryRow, TrafficMonthlyDayOfWeekRow, TrafficMonthlyPeakRow, TrafficPeakHourRow, TrafficRegularFlight, TrafficTimeBasis, TrafficType } from '@/lib/trafficReportContract';
 import {
   getAverageFlightsPerSelectedDay,
   getSelectedDayCountForMonth,
   orderTrafficPeakHours,
 } from '@/lib/trafficReportOperationalHours';
+import { TrafficMonthlyDayOfWeekHeatmap } from './TrafficMonthlyDayOfWeekHeatmap';
+import { TrafficPeakHourHeatmap } from './TrafficPeakHourHeatmap';
 
 const numberFormat = new Intl.NumberFormat('vi-VN');
 const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
@@ -18,6 +20,7 @@ const flightCategoryColors: Record<string, string> = {
   charter: '#d97706',
   other: '#64748b',
 };
+
 
 function formatFleetGroupLabel(label: string): string {
   const trimmed = label.trim();
@@ -57,9 +60,10 @@ const peakHourScopeLabels: Record<TrafficType, string> = {
   D: 'Chuyến bay đi',
 };
 
-export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, fromDate, toDate, onTimeBasisChange }: {
+export function PeakHourChart({ rows, monthlyRows, filter, timeBasis, selectedDayCount, fromDate, toDate, onTimeBasisChange }: {
   rows: TrafficPeakHourRow[];
   monthlyRows: TrafficMonthlyPeakRow[];
+  filter: NormalizedTrafficReportFilter;
   timeBasis: TrafficTimeBasis;
   selectedDayCount: number;
   fromDate: string;
@@ -67,6 +71,7 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
   onTimeBasisChange: (basis: TrafficTimeBasis) => void;
 }) {
   const [scope, setScope] = useState<TrafficType>('all');
+  const [viewMode, setViewMode] = useState<'chart' | 'heatmap'>('chart');
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const chartRef = useRef<HTMLDivElement>(null);
@@ -83,16 +88,18 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
   const peakDeparture = [...orderedRows]
     .filter((row) => !row.suppressed && row.averageDepartures != null)
     .sort((left, right) => (right.averageDepartures ?? 0) - (left.averageDepartures ?? 0))[0];
-  const activeKey = hoveredKey ?? selectedKey;
-  const [activeHour, activeType] = activeKey?.split('|') ?? [];
-  const activeRow = activeHour ? orderedRows.find((row) => row.hour_bucket === activeHour) ?? null : null;
-  const activeAverage = activeRow ? (activeType === 'A' ? activeRow.averageArrivals : activeRow.averageDepartures) : null;
-  const activeTotal = activeRow ? (activeType === 'A' ? activeRow.arrivals : activeRow.departures) : null;
-  const activeRegularFlights = activeRow
-    ? activeType === 'A'
-      ? activeRow.regular_flights?.arrivals ?? []
-      : activeRow.regular_flights?.departures ?? []
+  const [selectedHour, selectedType] = selectedKey?.split('|') ?? [];
+  const selectedRow = selectedHour ? orderedRows.find((row) => row.hour_bucket === selectedHour) ?? null : null;
+  const selectedAverage = selectedRow ? (selectedType === 'A' ? selectedRow.averageArrivals : selectedRow.averageDepartures) : null;
+  const selectedTotal = selectedRow ? (selectedType === 'A' ? selectedRow.arrivals : selectedRow.departures) : null;
+  const selectedRegularFlights = selectedRow
+    ? selectedType === 'A'
+      ? selectedRow.regular_flights?.arrivals ?? []
+      : selectedRow.regular_flights?.departures ?? []
     : [];
+
+  const [hoveredHour, hoveredType] = hoveredKey?.split('|') ?? [];
+  const hoveredRow = hoveredHour ? orderedRows.find((row) => row.hour_bucket === hoveredHour) ?? null : null;
 
   useEffect(() => {
     const closeOnOutsidePointer = (event: PointerEvent) => {
@@ -104,7 +111,6 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
   }, []);
 
   const closeDetails = () => {
-    setHoveredKey(null);
     setSelectedKey(null);
   };
 
@@ -125,6 +131,23 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
           <p className="mt-2 max-w-2xl text-pretty text-sm leading-6 text-slate-600">Trung bình số chuyến trong từng khung giờ trên mỗi ngày của {numberFormat.format(selectedDayCount)} ngày đã chọn. {peakSummary}</p>
         </div>
         <div className="flex flex-wrap items-start gap-4">
+          <fieldset>
+            <legend className="mb-1 text-xs font-semibold text-slate-600">Kiểu hiển thị</legend>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className={cn('report-focus min-h-11 rounded-lg border px-3 text-sm font-bold', viewMode === 'chart' ? 'border-blue-900 bg-blue-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-blue-700')}
+                aria-pressed={viewMode === 'chart'}
+                onClick={() => setViewMode('chart')}
+              >Biểu đồ 24h</button>
+              <button
+                type="button"
+                className={cn('report-focus min-h-11 rounded-lg border px-3 text-sm font-bold', viewMode === 'heatmap' ? 'border-blue-900 bg-blue-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-blue-700')}
+                aria-pressed={viewMode === 'heatmap'}
+                onClick={() => setViewMode('heatmap')}
+              >Ma trận nhiệt</button>
+            </div>
+          </fieldset>
           <fieldset>
             <legend className="mb-1 text-xs font-semibold text-slate-600">Phạm vi chuyến bay</legend>
             <div className="flex flex-wrap gap-2">{(['all', 'A', 'D'] as const).map((type) => <button
@@ -148,7 +171,8 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
         </div>
       </div>
 
-      <p id="peak-hour-scroll-cue" className="mt-5 text-pretty text-xs leading-5 text-slate-500 sm:hidden">Vuốt ngang để xem đủ 24 khung giờ của ngày khai thác.</p>
+      {viewMode === 'chart' ? <>
+        <p id="peak-hour-scroll-cue" className="mt-5 text-pretty text-xs leading-5 text-slate-500 sm:hidden">Vuốt ngang để xem đủ 24 khung giờ của ngày khai thác.</p>
       <div ref={chartRef} onPointerLeave={() => setHoveredKey(null)} onKeyDown={(event) => { if (event.key === 'Escape') closeDetails(); }}>
         <div
           className="report-focus mt-2 w-full overflow-x-auto overscroll-x-contain rounded-lg pb-2 sm:mt-6"
@@ -157,8 +181,30 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
           aria-label="Biểu đồ 24 khung giờ khai thác, có thể cuộn ngang trên màn hình nhỏ"
           aria-describedby="peak-hour-scroll-cue"
         >
-          <div className="relative flex h-72 w-full min-w-[960px] items-end gap-1 border-b border-slate-300 px-2 pt-6">
-            {orderedRows.map((row) => <div key={row.hour_bucket} className="flex h-full min-w-0 flex-1 flex-col justify-end">
+          <div className="relative flex h-80 w-full min-w-[960px] items-end gap-1 border-b border-slate-300 px-2 pt-14">
+            {orderedRows.map((row, colIndex) => <div key={row.hour_bucket} className="relative flex h-full min-w-0 flex-1 flex-col justify-end">
+              {hoveredKey?.startsWith(`${row.hour_bucket}|`) && hoveredRow ? (
+                <div
+                  role="tooltip"
+                  className={cn(
+                    'pointer-events-none absolute top-0 z-30 w-44 rounded-lg bg-slate-900/95 p-2 text-left text-xs text-white shadow-xl backdrop-blur-sm',
+                    colIndex < 3 ? 'left-0' : colIndex > 20 ? 'right-0' : 'left-1/2 -translate-x-1/2'
+                  )}
+                >
+                  <p className="font-bold text-slate-100">
+                    {row.hour_bucket}–{`${String((Number(row.hour_bucket.slice(0, 2)) + 1) % 24).padStart(2, '0')}:00`} · {hoveredType === 'A' ? 'Chuyến bay đến' : 'Chuyến bay đi'}
+                  </p>
+                  <p className="mt-1 text-slate-300">
+                    TB: <strong className="text-white">{averageOrDash(hoveredType === 'A' ? hoveredRow.averageArrivals : hoveredRow.averageDepartures)}</strong> chuyến/ngày
+                  </p>
+                  <p className="text-slate-300">
+                    Tổng: <strong className="text-white">{valueOrDash(hoveredType === 'A' ? hoveredRow.arrivals : hoveredRow.departures)}</strong> chuyến
+                  </p>
+                  <p className="mt-1 text-[10px] font-medium text-cyan-300">
+                    {selectedKey === hoveredKey ? 'Đang ghim chi tiết · Nhấp để đóng' : 'Nhấp vào cột để ghim chi tiết'}
+                  </p>
+                </div>
+              ) : null}
               {row.suppressed ? <div className="mb-1 flex min-h-8 items-center justify-center rounded-t border border-dashed border-slate-400 bg-slate-50 text-xs font-bold text-slate-500">—</div> : <div className="flex h-full items-end justify-center gap-1">
                 {visibleTypes.map((type) => {
                   const value = type === 'A' ? row.averageArrivals ?? 0 : row.averageDepartures ?? 0;
@@ -170,11 +216,13 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
                     type="button"
                     aria-label={`${row.hour_bucket}, ${direction}, trung bình ${averageOrDash(value)} chuyến mỗi ngày`}
                     aria-pressed={selectedKey === key}
-                    onFocus={() => setSelectedKey(key)}
+                    onFocus={() => setHoveredKey(key)}
+                    onBlur={() => setHoveredKey((current) => current === key ? null : current)}
                     onPointerEnter={(event) => { if (event.pointerType !== 'touch') setHoveredKey(key); }}
+                    onPointerLeave={() => setHoveredKey((current) => current === key ? null : current)}
                     onClick={() => setSelectedKey((current) => current === key ? null : key)}
                   ><span
-                    className={cn('pointer-events-none block w-full max-w-5 rounded-t', type === 'A' ? 'bg-blue-900' : 'border-x-2 border-t-2 border-cyan-700 bg-white', activeKey === key && 'ring-2 ring-slate-950 ring-offset-1')}
+                    className={cn('pointer-events-none block w-full max-w-5 rounded-t transition-shadow duration-150', type === 'A' ? 'bg-blue-900' : 'border-x-2 border-t-2 border-cyan-700 bg-white', selectedKey === key ? 'ring-2 ring-amber-500 ring-offset-2' : hoveredKey === key ? 'ring-2 ring-slate-900 ring-offset-1' : '')}
                     style={{ height: `${value === 0 ? 0 : Math.max(1, (value / maxFlights) * 100)}%` }}
                     aria-hidden="true"
                   /></button>;
@@ -184,20 +232,24 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
             </div>)}
           </div>
         </div>
-        {activeRow && (activeType === 'A' || activeType === 'D') ? <section className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4" aria-live="polite" aria-label="Thông tin khung giờ đang chọn">
+        {selectedRow && (selectedType === 'A' || selectedType === 'D') ? <section className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4" aria-live="polite" aria-label="Thông tin khung giờ đang chọn">
           <div className="flex items-start justify-between gap-4">
-            <div><p className="text-balance font-bold text-slate-950">{activeRow.hour_bucket}–{`${String((Number(activeRow.hour_bucket.slice(0, 2)) + 1) % 24).padStart(2, '0')}:00`} · {peakHourScopeLabels[activeType]}</p><p className="mt-1 text-sm tabular-nums text-slate-700">Trung bình <strong>{averageOrDash(activeAverage)} chuyến/ngày</strong> · Tổng trong kỳ <strong>{valueOrDash(activeTotal)} chuyến</strong></p></div>
-            {selectedKey ? <button className="report-focus min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700" type="button" onClick={closeDetails}>Đóng</button> : null}
+            <div><p className="text-balance font-bold text-slate-950">{selectedRow.hour_bucket}–{`${String((Number(selectedRow.hour_bucket.slice(0, 2)) + 1) % 24).padStart(2, '0')}:00`} · {peakHourScopeLabels[selectedType]}</p><p className="mt-1 text-sm tabular-nums text-slate-700">Trung bình <strong>{averageOrDash(selectedAverage)} chuyến/ngày</strong> · Tổng trong kỳ <strong>{valueOrDash(selectedTotal)} chuyến</strong></p></div>
+            <button className="report-focus min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 hover:bg-slate-100" type="button" onClick={closeDetails}>Đóng</button>
           </div>
           <h4 className="mt-4 text-sm font-bold text-blue-950">Các chuyến bay thường lệ trong khung giờ</h4>
-          {activeRegularFlights.length > 0 ? <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto pr-1">{activeRegularFlights.map((flight) => <li key={`${flight.airline}-${flight.flight_number}-${flight.route}`} className="grid gap-1 rounded-lg bg-white px-3 py-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+          {selectedRegularFlights.length > 0 ? <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto pr-1">{selectedRegularFlights.map((flight) => <li key={`${flight.airline}-${flight.flight_number}-${flight.route}`} className="grid gap-1 rounded-lg bg-white px-3 py-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
             <span className="font-bold text-slate-900">{regularFlightCode(flight)} · {flight.route || 'Chưa xác định'}</span>
             <span className="text-slate-600 sm:text-right">{operatingPattern(flight.operating_days)} · thường lúc <span className="font-semibold tabular-nums">{flight.typical_time}</span></span>
           </li>)}</ul> : <p className="mt-2 text-pretty text-sm text-slate-600">Không ghi nhận lịch bay lặp ổn định trong kỳ. Chọn khung giờ khác để xem lịch thường lệ.</p>}
         </section> : null}
       </div>
-      <div className="mt-3 flex flex-wrap gap-4 text-xs font-semibold text-slate-600">{visibleTypes.map((type) => <span key={type} className="inline-flex items-center gap-2"><span className={cn('h-2 w-5 rounded-sm', type === 'A' ? 'bg-blue-900' : 'border-2 border-cyan-700 bg-white')} />{peakHourScopeLabels[type]}</span>)}</div>
-
+        <div className="mt-3 flex flex-wrap gap-4 text-xs font-semibold text-slate-600">{visibleTypes.map((type) => <span key={type} className="inline-flex items-center gap-2"><span className={cn('h-2 w-5 rounded-sm', type === 'A' ? 'bg-blue-900' : 'border-2 border-cyan-700 bg-white')} />{peakHourScopeLabels[type]}</span>)}</div>
+      </> : (
+        <div className="mt-4">
+          <TrafficPeakHourHeatmap filter={filter} scope={scope} timeBasis={timeBasis} />
+        </div>
+      )}
       <details className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
         <summary className="report-focus cursor-pointer rounded-sm font-semibold text-[#234093]">Bảng dữ liệu 24 khung giờ</summary>
         <div className="report-focus mt-4 overflow-x-auto overscroll-x-contain rounded-lg" role="region" tabIndex={0} aria-label="Bảng dữ liệu 24 khung giờ, có thể cuộn ngang"><table className="w-full min-w-[720px] text-left text-sm"><thead><tr className="border-b border-slate-300"><th className="p-2">Giờ</th>{scope !== 'D' ? <><th className="p-2 text-right">TB chuyến bay đến/ngày</th><th className="p-2 text-right">Tổng chuyến bay đến trong kỳ</th></> : null}{scope !== 'A' ? <><th className="p-2 text-right">TB chuyến bay đi/ngày</th><th className="p-2 text-right">Tổng chuyến bay đi trong kỳ</th></> : null}</tr></thead><tbody>{orderedRows.map((row) => <tr key={row.hour_bucket} className="border-b border-slate-200"><td className="p-2 tabular-nums">{row.hour_bucket}</td>{scope !== 'D' ? <><td className="p-2 text-right tabular-nums">{averageOrDash(row.averageArrivals)}</td><td className="p-2 text-right tabular-nums">{valueOrDash(row.arrivals)}</td></> : null}{scope !== 'A' ? <><td className="p-2 text-right tabular-nums">{averageOrDash(row.averageDepartures)}</td><td className="p-2 text-right tabular-nums">{valueOrDash(row.departures)}</td></> : null}</tr>)}</tbody></table></div>
@@ -216,26 +268,82 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
   );
 }
 
-export function DayOfWeekChart({ rows }: { rows: TrafficDayOfWeekRow[] }) {
-  const maxValue = Math.max(1, ...rows.map((row) => row.max_flights ?? 0));
+function weekdayMetric(row: TrafficDayOfWeekRow, scope: TrafficType, kind: 'average' | 'min' | 'max'): number | null {
+  if (scope === 'A') return row[`${kind}_arrivals` as const] ?? null;
+  if (scope === 'D') return row[`${kind}_departures` as const] ?? null;
+  return row[`${kind}_flights` as const] ?? null;
+}
+
+export function DayOfWeekChart({ rows, monthlyRows }: { rows: TrafficDayOfWeekRow[]; monthlyRows: TrafficMonthlyDayOfWeekRow[] }) {
+  const [scope, setScope] = useState<TrafficType>('all');
+  const [viewMode, setViewMode] = useState<'chart' | 'heatmap'>('chart');
+  const normalizedRows = useMemo(() => Array.from({ length: 7 }, (_, offset) => {
+    const dayIndex = (offset + 1) as TrafficDayOfWeekRow['day_index'];
+    return rows.find((row) => row.day_index === dayIndex) ?? {
+      day_index: dayIndex,
+      calendar_days: null,
+      complete_day_count: 0,
+      total_flights: null,
+      average_flights: null,
+      min_flights: null,
+      max_flights: null,
+      arrivals: null,
+      average_arrivals: null,
+      min_arrivals: null,
+      max_arrivals: null,
+      departures: null,
+      average_departures: null,
+      min_departures: null,
+      max_departures: null,
+      status: 'missing' as const,
+      suppressed: false,
+    };
+  }), [rows]);
+  const maxValue = Math.max(1, ...normalizedRows.map((row) => weekdayMetric(row, scope, 'max') ?? 0));
   return (
     <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
-      <p className="text-sm font-bold text-blue-900">Mẫu khai thác theo tuần</p>
-      <h3 className="mt-2 text-balance text-2xl font-bold text-[#102033]">Chu kỳ Thứ trong tuần</h3>
-      <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">Chiều cao cột là số chuyến trung bình; vạch dọc biểu diễn khoảng thấp nhất–cao nhất của từng Thứ trong kỳ.</p>
+      <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-sm font-bold text-blue-900">Mẫu khai thác theo tuần</p>
+        <h3 className="mt-2 text-balance text-2xl font-bold text-[#102033]">Cao điểm theo thứ trong tuần</h3>
+        <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">Chiều cao cột là số chuyến trung bình; vạch dọc biểu diễn khoảng thấp nhất–cao nhất của từng Thứ trong kỳ.</p></div>
+        <div className="flex flex-wrap items-start gap-4">
+          <fieldset>
+            <legend className="mb-1 text-xs font-semibold text-slate-600">Kiểu hiển thị</legend>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                aria-pressed={viewMode === 'chart'}
+                className={cn('report-focus min-h-11 rounded-lg border px-3 text-sm font-bold', viewMode === 'chart' ? 'border-blue-900 bg-blue-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-blue-700')}
+                onClick={() => setViewMode('chart')}
+              >Chu kỳ 7 Thứ</button>
+              <button
+                type="button"
+                aria-pressed={viewMode === 'heatmap'}
+                className={cn('report-focus min-h-11 rounded-lg border px-3 text-sm font-bold', viewMode === 'heatmap' ? 'border-blue-900 bg-blue-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-blue-700')}
+                onClick={() => setViewMode('heatmap')}
+              >Ma trận nhiệt</button>
+            </div>
+          </fieldset>
+          <fieldset><legend className="mb-1 text-xs font-semibold text-slate-600">Phạm vi chuyến bay</legend><div className="flex flex-wrap gap-2">{(['all', 'A', 'D'] as const).map((type) => <button key={type} type="button" aria-pressed={scope === type} className={cn('report-focus min-h-11 rounded-lg border px-3 text-sm font-bold', scope === type ? 'border-blue-900 bg-blue-900 text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-blue-700')} onClick={() => setScope(type)}>{peakHourScopeLabels[type]}</button>)}</div></fieldset>
+        </div>
+      </div>
+      {viewMode === 'chart' ? <>
       <div className="mt-6 grid h-72 grid-cols-7 gap-2 border-b border-slate-300" aria-hidden="true">
-        {rows.map((row) => {
-          const average = row.average_flights ?? 0;
-          const min = row.min_flights ?? 0;
-          const max = row.max_flights ?? 0;
+        {normalizedRows.map((row) => {
+          const average = weekdayMetric(row, scope, 'average');
+          const min = weekdayMetric(row, scope, 'min');
+          const max = weekdayMetric(row, scope, 'max');
+          const available = !row.suppressed && average !== null && min !== null && max !== null;
+          const averageValue = average ?? 0;
+          const minValue = min ?? 0;
+          const maxValueForDay = max ?? 0;
           return <div key={row.day_index} className="flex min-w-0 flex-col justify-end text-center">
             <div className="relative mx-auto h-56 w-full max-w-12">
-              {!row.suppressed ? <>
-                <span className="absolute left-1/2 w-px -translate-x-1/2 bg-slate-500" style={{ bottom: `${(min / maxValue) * 100}%`, height: `${((max - min) / maxValue) * 100}%` }} />
-                <span className="absolute left-1/2 h-px w-4 -translate-x-1/2 bg-slate-500" style={{ bottom: `${(min / maxValue) * 100}%` }} />
-                <span className="absolute left-1/2 h-px w-4 -translate-x-1/2 bg-slate-500" style={{ bottom: `${(max / maxValue) * 100}%` }} />
-                <span className="absolute inset-x-1 bottom-0 rounded-t bg-[#00b4d8]" style={{ height: `${(average / maxValue) * 100}%` }} />
-                <span className="absolute inset-x-0 text-xs font-bold tabular-nums text-[#102033]" style={{ bottom: `${Math.min(96, (average / maxValue) * 100 + 2)}%` }}>{averageOrDash(average)}</span>
+              {available ? <>
+                <span className="absolute left-1/2 w-px -translate-x-1/2 bg-slate-500" style={{ bottom: `${(minValue / maxValue) * 100}%`, height: `${((maxValueForDay - minValue) / maxValue) * 100}%` }} />
+                <span className="absolute left-1/2 h-px w-4 -translate-x-1/2 bg-slate-500" style={{ bottom: `${(minValue / maxValue) * 100}%` }} />
+                <span className="absolute left-1/2 h-px w-4 -translate-x-1/2 bg-slate-500" style={{ bottom: `${(maxValueForDay / maxValue) * 100}%` }} />
+                <span className="absolute inset-x-1 bottom-0 rounded-t bg-[#00b4d8]" style={{ height: `${(averageValue / maxValue) * 100}%` }} />
+                <span className="absolute inset-x-0 text-xs font-bold tabular-nums text-[#102033]" style={{ bottom: `${Math.min(96, (averageValue / maxValue) * 100 + 2)}%` }}>{averageOrDash(average)}</span>
               </> : <span className="absolute inset-x-0 bottom-2 rounded border border-dashed border-slate-400 bg-slate-50 py-2 text-xs font-bold text-slate-500">—</span>}
             </div>
             <span className="mt-2 min-h-9 text-xs font-semibold text-slate-600">{dayLabels[row.day_index - 1]}</span>
@@ -244,8 +352,13 @@ export function DayOfWeekChart({ rows }: { rows: TrafficDayOfWeekRow[] }) {
       </div>
       <details className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
         <summary className="report-focus cursor-pointer rounded-sm font-semibold text-[#234093]">Bảng dữ liệu theo Thứ</summary>
-        <div className="report-focus mt-4 overflow-x-auto overscroll-x-contain rounded-lg" role="region" tabIndex={0} aria-label="Bảng dữ liệu theo Thứ, có thể cuộn ngang"><table className="w-full min-w-[600px] text-left text-sm"><thead><tr className="border-b border-slate-300"><th className="p-2">Thứ</th><th className="p-2 text-right">Số ngày</th><th className="p-2 text-right">Trung bình số chuyến</th><th className="p-2 text-right">Thấp nhất</th><th className="p-2 text-right">Cao nhất</th></tr></thead><tbody>{rows.map((row) => <tr key={row.day_index} className="border-b border-slate-200"><td className="p-2">{dayLabels[row.day_index - 1]}</td><td className="p-2 text-right tabular-nums">{valueOrDash(row.calendar_days)}</td><td className="p-2 text-right tabular-nums">{averageOrDash(row.average_flights)}</td><td className="p-2 text-right tabular-nums">{valueOrDash(row.min_flights)}</td><td className="p-2 text-right tabular-nums">{valueOrDash(row.max_flights)}</td></tr>)}</tbody></table></div>
+        <div className="report-focus mt-4 overflow-x-auto overscroll-x-contain rounded-lg" role="region" tabIndex={0} aria-label="Bảng dữ liệu theo Thứ, có thể cuộn ngang"><table className="w-full min-w-[680px] text-left text-sm"><thead><tr className="border-b border-slate-300"><th className="p-2">Thứ</th><th className="p-2 text-right">Số ngày có số liệu</th><th className="p-2 text-right">Trung bình số chuyến</th><th className="p-2 text-right">Thấp nhất</th><th className="p-2 text-right">Cao nhất</th></tr></thead><tbody>{normalizedRows.map((row) => <tr key={row.day_index} className="border-b border-slate-200"><td className="p-2">{dayLabels[row.day_index - 1]}</td><td className="p-2 text-right tabular-nums">{row.complete_day_count == null ? valueOrDash(row.calendar_days) : `${row.complete_day_count}/${row.calendar_days}`}</td><td className="p-2 text-right tabular-nums">{valueOrDash(weekdayMetric(row, scope, 'average'))}</td><td className="p-2 text-right tabular-nums">{valueOrDash(weekdayMetric(row, scope, 'min'))}</td><td className="p-2 text-right tabular-nums">{valueOrDash(weekdayMetric(row, scope, 'max'))}</td></tr>)}</tbody></table></div>
       </details>
+      </> : (
+        <div className="mt-4">
+          <TrafficMonthlyDayOfWeekHeatmap rows={monthlyRows} scope={scope} />
+        </div>
+      )}
     </article>
   );
 }

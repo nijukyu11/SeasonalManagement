@@ -56,7 +56,12 @@ for (const reportLibrary of [
   'trafficReportDataAdapter.ts',
   'trafficReportExcelExport.ts',
   'trafficReportOperationalHours.ts',
+  'trafficReportTrendGranularity.ts',
   'trafficReportV2Contract.ts',
+  'trafficWorkbookExportContract.ts',
+  'trafficHtmlExportContract.ts',
+  'seasonalDiffFormatters.ts',
+  'uiDisplayText.ts',
 ]) {
   copy(join(appRoot, 'src', 'lib', reportLibrary), join(buildRoot, 'src', 'lib', reportLibrary));
 }
@@ -67,7 +72,10 @@ const build = spawnSync(process.execPath, [nextCli, 'build', buildRoot], {
   env: {
     ...process.env,
     NEXT_TELEMETRY_DISABLED: '1',
-    NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED: process.env.NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED,
+    NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED: process.env.NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENABLED ?? '1',
+    NEXT_PUBLIC_TRAFFIC_WORKBOOK_EXPORT_ENABLED: process.env.NEXT_PUBLIC_TRAFFIC_WORKBOOK_EXPORT_ENABLED ?? 'true',
+    NEXT_PUBLIC_TRAFFIC_HTML_EXPORT_ENABLED: process.env.NEXT_PUBLIC_TRAFFIC_HTML_EXPORT_ENABLED ?? 'true',
+    NEXT_PUBLIC_TRAFFIC_DASHBOARD_DAILY_PUBLICATION: process.env.NEXT_PUBLIC_TRAFFIC_DASHBOARD_DAILY_PUBLICATION ?? 'true',
   },
   encoding: 'utf8',
   stdio: 'inherit',

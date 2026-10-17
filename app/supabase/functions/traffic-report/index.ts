@@ -489,7 +489,7 @@ async function fetchWorkbookOverview(
     after = nextCursor;
     pageCount += 1;
   }
-  if (hasMore) throw new Error('workbook timeline exceeds resource budget');
+  if (hasMore) throw new Error('WORKBOOK_RESOURCE_BUDGET_EXCEEDED: workbook timeline');
   return { ...bundle, timeline, metadata: { ...metadata, timeline_has_more: false, timeline_next_cursor: null } };
 }
 
@@ -523,7 +523,7 @@ async function fetchWorkbookDimension(
     hasMore = Boolean(payload.has_more);
     page += 1;
   }
-  if (hasMore) throw new Error('workbook dimension exceeds resource budget');
+  if (hasMore) throw new Error('WORKBOOK_RESOURCE_BUDGET_EXCEEDED: workbook dimension');
   return rows;
 }
 
@@ -1032,8 +1032,10 @@ Deno.serve(async (request: Request) => {
         dataAsOf,
         filterHash,
       });
-      const etag = await sha256Etag({ endpoint, sourceWatermark, filterHash, dataAsOf, query: normalized.canonicalQuery });
-      if (request.headers.get('If-None-Match') === etag) {
+      const etag = endpoint === 'overview'
+        ? null
+        : await sha256Etag({ endpoint, sourceWatermark, filterHash, dataAsOf, query: normalized.canonicalQuery });
+      if (etag && request.headers.get('If-None-Match') === etag) {
         return new Response(null, { status: 304, headers: { ETag: etag, 'Cache-Control': 'public, max-age=0, s-maxage=30' } });
       }
       const version = {
@@ -1138,13 +1140,17 @@ Deno.serve(async (request: Request) => {
           });
         }
       }
-      return json(responsePayload, 200, {
-        ETag: etag,
-        'Cache-Control': 'public, max-age=0, s-maxage=30, stale-while-revalidate=15',
+      const cacheControl = endpoint === 'overview'
+        ? 'no-store'
+        : 'public, max-age=0, s-maxage=30, stale-while-revalidate=15';
+      const responseHeaders: Record<string, string> = {
+        'Cache-Control': cacheControl,
         'X-Report-Origin-Ms': String(Math.round(performance.now() - startedAt)),
         'X-Report-Source-Mode': String(bundle.source_mode ?? 'live'),
         Vary: 'Accept-Encoding',
-      });
+      };
+      if (etag) responseHeaders.ETag = etag;
+      return json(responsePayload, 200, responseHeaders);
     }
     const dataAsOf = new Date().toISOString();
     const canonicalRequestHash = await requestHash(normalized);
@@ -1179,7 +1185,7 @@ Deno.serve(async (request: Request) => {
           if (Array.isArray(next.rows)) rows.push(...next.rows);
           hasMore = Boolean(next.has_more);
         }
-        if (hasMore) throw new Error('dimension export exceeds resource budget');
+        if (hasMore) throw new Error('WORKBOOK_RESOURCE_BUDGET_EXCEEDED: dimension export');
         const csv = buildDimensionCsv({ ...dimensionPayload, rows });
         return new Response(csv, {
           headers: {
@@ -1241,6 +1247,7 @@ Deno.serve(async (request: Request) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'report request failed';
+    const errorName = error && typeof error === 'object' && 'name' in error ? String(error.name) : '';
     if (message === 'REPORT_VERSION_CHANGED') {
       return json({
         error_code: 'REPORT_VERSION_CHANGED',
@@ -1259,7 +1266,7 @@ Deno.serve(async (request: Request) => {
         error: 'Một hoặc nhiều cùng kỳ không nằm trọn trong dữ liệu hiện có.',
       }, 400, { 'Cache-Control': 'no-store' });
     }
-    if (message === 'WORKBOOK_RESOURCE_BUDGET_EXCEEDED') {
+    if (message.startsWith('WORKBOOK_RESOURCE_BUDGET_EXCEEDED')) {
       return json({
         error_code: 'WORKBOOK_RESOURCE_BUDGET_EXCEEDED',
         error: 'Phạm vi báo cáo quá lớn. Hãy thu hẹp kỳ hoặc bộ lọc rồi thử lại.',
@@ -1299,6 +1306,16 @@ Deno.serve(async (request: Request) => {
         'Cache-Control': 'no-store',
         'Retry-After': '1',
       });
+    }
+    // A saturated PostgREST connection pool, a dropped upstream connection, or this
+    // function's own 8s upstream abort is a transient backend condition — not an invalid
+    // filter. Report it distinctly with Retry-After so clients back off instead of
+    // retrying on the same cadence that wedged the pool.
+    if (errorName === 'TimeoutError' || /timed out acquiring connection|too many clients|connection (refused|reset|closed)|terminating connection|error sending request|operation was aborted/i.test(message)) {
+      return json({
+        error_code: 'REPORT_BACKEND_BUSY',
+        error: 'Hệ thống dữ liệu đang bận. Vui lòng thử lại sau ít giây.',
+      }, 503, { 'Cache-Control': 'no-store', 'Retry-After': '5' });
     }
     const clientError = /invalid|unsupported|must|required|cardinality|outside|provided|exceed/i.test(message);
     return json({

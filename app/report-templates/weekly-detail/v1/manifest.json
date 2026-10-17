@@ -1,0 +1,23 @@
+{
+  "report_type": "WEEKLY_DETAIL",
+  "template_version": "weekly-detail-v1",
+  "renderer_compatibility": "traffic-workbook-renderer-v1",
+  "data_classification": "public-aggregate-only",
+  "context_policy": {
+    "selected_period": "user-selected inclusive Ops Date range",
+    "previous": "exactly 7 contiguous days before selected period",
+    "next": "exactly 7 contiguous days after selected period"
+  },
+  "sheets": [
+    "Tổng quan",
+    "Theo ngày",
+    "Theo tuần",
+    "Chi tiết Airline",
+    "Chi tiết Country",
+    "Chi tiết Route",
+    "AC Group",
+    "AC Type"
+  ],
+  "required_features": ["typed-date", "number-format", "percent-format", "freeze-pane", "dynamic-table", "print-area", "previous-7-days", "next-7-days"],
+  "forbidden_parts": ["raw-leg", "history", "deleted-row", "hidden-data-sheet", "external-link", "macro", "credential", "local-path"]
+}

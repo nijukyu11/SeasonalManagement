@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   decodeTrafficV2ApiEnvelope,
+  isTrafficDimensionShareResponse,
   isTrafficV2ApiEnvelope,
+  isTrafficV2ApiMonthlyTimelinePoint,
   type TrafficV2ApiEnvelope,
   type TrafficV2ApiMetricSet,
 } from './trafficReportV2Contract.ts';
@@ -50,14 +52,23 @@ function report(): TrafficV2ApiEnvelope['report'] {
       day_of_week: Array.from({ length: 7 }, (_, index) => ({
         day_index: (index + 1) as 1 | 2 | 3 | 4 | 5 | 6 | 7,
         calendar_days: 0,
-        total_flights: 0,
-        average_flights: 0,
-        min_flights: 0,
-        max_flights: 0,
-        arrivals: 0,
-        departures: 0,
+        complete_day_count: 0,
+        total_flights: null,
+        average_flights: null,
+        min_flights: null,
+        max_flights: null,
+        arrivals: null,
+        average_arrivals: null,
+        min_arrivals: null,
+        max_arrivals: null,
+        departures: null,
+        average_departures: null,
+        min_departures: null,
+        max_departures: null,
+        status: 'missing' as const,
         suppressed: false,
       })),
+      day_of_week_monthly: [],
     },
   };
 }
@@ -119,6 +130,19 @@ test('traffic-report-v2 preserves NULL, true zero, and future as different state
   assert.equal(decoded.timeline[1].trueZeroReportedLegs, 1);
   assert.equal(decoded.timeline[2].status, 'future');
 });
+test('traffic-report-v2 accepts future timeline points with null flights for unscheduled dates', () => {
+  const input = payload();
+  input.normalized_filter.to = '2026-09-01';
+  input.timeline.push({
+    ops_date: '2026-09-01', flights: null, arrivals: null, departures: null,
+    reported_pax: null, reported_legs: null, due_legs: null,
+    missing_due_legs: null, true_zero_reported_legs: null, status: 'future',
+  });
+  assert.equal(isTrafficV2ApiEnvelope(input), true);
+  const decoded = decodeTrafficV2ApiEnvelope(input);
+  assert.equal(decoded.timeline[3].flights, null);
+  assert.equal(decoded.timeline[3].status, 'future');
+});
 
 test('traffic-report-v2 rejects a fake zero when no Pax leg was reported', () => {
   const input = payload();
@@ -175,6 +199,33 @@ test('traffic-report-v2 exposes one immutable version envelope to every consumer
   });
 });
 
+test('traffic-report-v2 accepts an aggregate airline share response', () => {
+  assert.equal(isTrafficDimensionShareResponse({
+    contract_version: 'traffic-report-v2',
+    dimension: 'airline',
+    metric: 'flights',
+    type: 'all',
+    limit: 10,
+    total_value: 100,
+    top_rows: [{ key: 'VN', label: 'VN', value: 80, share: 0.8 }],
+    other: { label: 'Khác', value: 20, share: 0.2 },
+    source_watermark: 50_000,
+    read_version_token: 'rv1.dGVzdA.c2ln',
+  }), true);
+});
+
+test('traffic-report-v2 monthly point keeps period coverage separate from data status', () => {
+  const point = {
+    month: '2026-01', from: '2026-01-01', to: '2026-01-31', selected_day_count: 31,
+    complete_day_count: 30, partial_day_count: 1, missing_day_count: 0,
+    flights: 100, arrivals: 50, departures: 50, reported_pax: 10_000,
+    reported_legs: 99, due_legs: 100, missing_due_legs: 1, true_zero_reported_legs: 0,
+    period_status: 'complete', status: 'partial',
+  };
+
+  assert.equal(isTrafficV2ApiMonthlyTimelinePoint(point), true);
+  assert.equal(isTrafficV2ApiMonthlyTimelinePoint({ ...point, period_status: 'future' }), false);
+});
 test('traffic-report-v2 validates flight_category breakdown when present and allows omission', () => {
   const withoutCategory = payload();
   delete withoutCategory.report.breakdowns.flight_category;

@@ -1,0 +1,19 @@
+{
+  "report_type": "BAO_CAO_SAN_LUONG",
+  "template_version": "bao-cao-san-luong-v1",
+  "renderer_compatibility": "traffic-workbook-renderer-v1",
+  "data_classification": "public-aggregate-only",
+  "period_modes": ["season"],
+  "source_reference": {
+    "file": "docs/report_ref/BaoCaoSanLuong.xlsm",
+    "sha256": "E22F9B202524EC584C837B618744331E309593B228EFEB22585A4122C3B89672"
+  },
+  "compiled_public_asset": {
+    "file": "BaoCaoSanLuong-public-v1.xlsx",
+    "sha256": "089CEE27526FECFE5032700C365353CD741AB89C21BC20C02F660D4FE79BEF92"
+  },
+  "summer_sheets": ["TOTAL", "WEEKLY", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "Analysis_Airline", "Analysis_Country"],
+  "winter_sheets": ["TOTAL", "WEEKLY", "NOV", "DEC", "JAN", "FEB", "MAR", "Analysis_Airline", "Analysis_Country"],
+  "required_features": ["server-values", "typed-date", "number-format", "percent-format", "freeze-pane", "dynamic-table", "print-area", "friday-thursday-week"],
+  "forbidden_parts": ["Table1", "raw-leg", "history", "hidden-data-sheet", "external-link", "connection", "query-table", "DataMashup", "vbaProject", "macro", "credential", "local-path"]
+}

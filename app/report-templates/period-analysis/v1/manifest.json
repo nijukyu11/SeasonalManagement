@@ -1,0 +1,19 @@
+{
+  "report_type": "PERIOD_ANALYSIS",
+  "template_version": "period-analysis-v1",
+  "renderer_compatibility": "traffic-workbook-renderer-v1",
+  "data_classification": "public-aggregate-only",
+  "period_modes": ["month", "month_range", "season", "year", "custom"],
+  "comparison_policy": "zero or more server-resolved same-period years available in the canonical database",
+  "sheets": [
+    "Tổng quan",
+    "Theo thời gian",
+    "Chi tiết Airline",
+    "Chi tiết Country",
+    "Chi tiết Route",
+    "AC Group",
+    "AC Type"
+  ],
+  "required_features": ["typed-date", "number-format", "percent-format", "freeze-pane", "dynamic-table", "print-area", "outer-join-dimensions"],
+  "forbidden_parts": ["raw-leg", "history", "deleted-row", "hidden-data-sheet", "external-link", "connection", "query-table", "macro", "credential", "local-path"]
+}

@@ -5,10 +5,11 @@ import type {
   TrafficComparison,
   TrafficDayOfWeekRow,
   TrafficDimension,
-  TrafficFlightCategoryRow,
+  TrafficMonthlyDayOfWeekRow,
   TrafficMonthlyPeakRow,
   TrafficPeakHourRow,
   TrafficTimeBasis,
+  TrafficFlightCategoryRow,
   TrafficType,
 } from './trafficReportContract.ts';
 import { isTrafficFlightCategoryRow } from './trafficReportContract.ts';
@@ -113,6 +114,7 @@ export interface TrafficV2ReportParity {
     peak_hour: TrafficPeakHourRow[];
     peak_hour_monthly: TrafficMonthlyPeakRow[];
     day_of_week: TrafficDayOfWeekRow[];
+    day_of_week_monthly: TrafficMonthlyDayOfWeekRow[];
     flight_category?: TrafficFlightCategoryRow[];
   };
 }
@@ -199,6 +201,45 @@ export interface TrafficV2ApiDimensionRow extends TrafficV2ApiMetricSet {
   pax_share: number | null;
 }
 
+export interface TrafficV2ApiMonthlyTimelinePoint {
+  month: string;
+  from: string;
+  to: string;
+  selected_day_count: number;
+  complete_day_count: number;
+  partial_day_count: number;
+  missing_day_count: number;
+  flights: number | null;
+  arrivals: number | null;
+  departures: number | null;
+  reported_pax: number | null;
+  reported_legs: number;
+  due_legs: number;
+  missing_due_legs: number;
+  true_zero_reported_legs: number;
+  period_status?: 'complete' | 'partial';
+  status: TrafficV2MetricSet['status'];
+}
+
+export interface TrafficDimensionShareRow {
+  key?: string;
+  label: string;
+  value: number;
+  share: number;
+}
+
+export interface TrafficDimensionShareResponse {
+  contract_version: typeof TRAFFIC_REPORT_V2_CONTRACT_VERSION;
+  dimension: TrafficDimension;
+  metric: 'flights' | 'reported_pax';
+  type: TrafficType;
+  limit: 10;
+  total_value: number | null;
+  top_rows: TrafficDimensionShareRow[];
+  other: TrafficDimensionShareRow | null;
+  source_watermark: number;
+  read_version_token: string;
+}
 export type TrafficV2LoadState =
   | { status: 'idle' | 'loading' }
   | { status: 'ready'; bundle: TrafficV2Bundle }
@@ -265,6 +306,43 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
+function isNullableNonNegativeNumber(value: unknown): boolean {
+  return value === null || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
+}
+
+function isWeekdayRow(value: unknown): boolean {
+  if (!isObject(value)
+    || !Number.isInteger(value.day_index)
+    || Number(value.day_index) < 1
+    || Number(value.day_index) > 7
+    || !isNonNegativeInteger(value.calendar_days)
+    || !isNonNegativeInteger(value.complete_day_count)
+    || Number(value.complete_day_count) > Number(value.calendar_days)
+    || !['complete', 'partial', 'missing'].includes(String(value.status))) return false;
+  return [
+    'total_flights', 'average_flights', 'min_flights', 'max_flights',
+    'arrivals', 'average_arrivals', 'min_arrivals', 'max_arrivals',
+    'departures', 'average_departures', 'min_departures', 'max_departures',
+  ].every((field) => isNullableNonNegativeNumber(value[field]));
+}
+
+function isMonthlyWeekdayRow(value: unknown): boolean {
+  return isObject(value)
+    && /^\d{4}-\d{2}$/u.test(String(value.month))
+    && Number.isInteger(value.day_index)
+    && Number(value.day_index) >= 1
+    && Number(value.day_index) <= 7
+    && isNonNegativeInteger(value.selected_day_count)
+    && isNonNegativeInteger(value.complete_day_count)
+    && Number(value.complete_day_count) <= Number(value.selected_day_count)
+    && isNullableNonNegativeNumber(value.average_flights)
+    && isNullableNonNegativeNumber(value.average_arrivals)
+    && isNullableNonNegativeNumber(value.average_departures)
+    && ['complete', 'partial', 'missing'].includes(String(value.status))
+    && typeof value.is_peak_all === 'boolean'
+    && typeof value.is_peak_arrivals === 'boolean'
+    && typeof value.is_peak_departures === 'boolean';
+}
 function isNormalizedFilter(value: unknown): value is TrafficV2ApiEnvelope['normalized_filter'] {
   if (!isObject(value)) return false;
   return ISO_DATE.test(String(value.from))
@@ -311,12 +389,67 @@ function isApiReportParity(value: unknown): value is TrafficV2ApiReportParity {
     && Array.isArray(value.breakdowns.peak_hour_monthly)
     && Array.isArray(value.breakdowns.day_of_week)
     && value.breakdowns.day_of_week.length === 7
+    && value.breakdowns.day_of_week.every(isWeekdayRow)
+    && new Set(value.breakdowns.day_of_week.map((row) => String((row as Record<string, unknown>).day_index))).size === 7
+    && Array.isArray(value.breakdowns.day_of_week_monthly)
+    && value.breakdowns.day_of_week_monthly.every(isMonthlyWeekdayRow)
     && (value.breakdowns.flight_category === undefined || (
       Array.isArray(value.breakdowns.flight_category)
       && value.breakdowns.flight_category.every(isTrafficFlightCategoryRow)
     ));
 }
 
+export function isTrafficV2ApiMonthlyTimelinePoint(value: unknown): value is TrafficV2ApiMonthlyTimelinePoint {
+  if (!isObject(value)
+    || !/^\d{4}-\d{2}$/u.test(String(value.month))
+    || !ISO_DATE.test(String(value.from))
+    || !ISO_DATE.test(String(value.to))
+    || String(value.from) > String(value.to)
+    || !isNonNegativeInteger(value.selected_day_count)
+    || !isNonNegativeInteger(value.complete_day_count)
+    || !isNonNegativeInteger(value.partial_day_count)
+    || !isNonNegativeInteger(value.missing_day_count)
+    || !isNullableNonNegativeNumber(value.flights)
+    || !isNullableNonNegativeNumber(value.arrivals)
+    || !isNullableNonNegativeNumber(value.departures)
+    || !isNullableNonNegativeNumber(value.reported_pax)
+    || !isNonNegativeInteger(value.reported_legs)
+    || !isNonNegativeInteger(value.due_legs)
+    || !isNonNegativeInteger(value.missing_due_legs)
+    || !isNonNegativeInteger(value.true_zero_reported_legs)
+    || (value.period_status !== undefined && !['complete', 'partial'].includes(String(value.period_status)))
+    || !isMetricStatus(value.status)) return false;
+  return Number(value.complete_day_count) + Number(value.partial_day_count) + Number(value.missing_day_count)
+    <= Number(value.selected_day_count);
+}
+
+export function isTrafficDimensionShareResponse(value: unknown): value is TrafficDimensionShareResponse {
+  if (!isObject(value)
+    || value.contract_version !== TRAFFIC_REPORT_V2_CONTRACT_VERSION
+    || !['route', 'country', 'airline'].includes(String(value.dimension))
+    || !['flights', 'reported_pax'].includes(String(value.metric))
+    || !['all', 'A', 'D'].includes(String(value.type))
+    || value.limit !== 10
+    || !isNullableNonNegativeNumber(value.total_value)
+    || !Array.isArray(value.top_rows)
+    || value.top_rows.length > 10
+    || !isNonNegativeInteger(value.source_watermark)
+    || typeof value.read_version_token !== 'string') return false;
+  const rowValid = (row: unknown) => isObject(row)
+    && typeof row.label === 'string'
+    && typeof row.value === 'number'
+    && Number.isFinite(row.value)
+    && row.value >= 0
+    && typeof row.share === 'number'
+    && Number.isFinite(row.share)
+    && row.share >= 0
+    && row.share <= 1;
+  if (!value.top_rows.every(rowValid) || (value.other !== null && !rowValid(value.other))) return false;
+  if (value.total_value === null || value.total_value === 0) return value.top_rows.length === 0 && value.other === null;
+  const rows = [...value.top_rows, ...(value.other === null ? [] : [value.other])];
+  const share = rows.reduce((sum, row) => sum + Number((row as Record<string, unknown>).share), 0);
+  return Math.abs(share - 1) < 0.000001;
+}
 export function isTrafficV2ApiEnvelope(value: unknown): value is TrafficV2ApiEnvelope {
   if (!isObject(value)
     || value.contract_version !== TRAFFIC_REPORT_V2_CONTRACT_VERSION

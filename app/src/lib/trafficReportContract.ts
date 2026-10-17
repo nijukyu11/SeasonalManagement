@@ -149,8 +149,59 @@ export interface TrafficDayOfWeekRow {
   min_flights: number | null;
   max_flights: number | null;
   arrivals: number | null;
+  average_arrivals?: number | null;
+  min_arrivals?: number | null;
+  max_arrivals?: number | null;
   departures: number | null;
+  average_departures?: number | null;
+  min_departures?: number | null;
+  max_departures?: number | null;
+  complete_day_count?: number;
+  status?: 'complete' | 'partial' | 'missing';
   suppressed: boolean;
+}
+
+export interface TrafficMonthlyDayOfWeekRow {
+  month: string;
+  day_index: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  selected_day_count: number;
+  complete_day_count: number;
+  average_flights: number | null;
+  average_arrivals: number | null;
+  average_departures: number | null;
+  status: 'complete' | 'partial' | 'missing';
+  is_peak_all: boolean;
+  is_peak_arrivals: boolean;
+  is_peak_departures: boolean;
+}
+
+export interface TrafficPeakHourHeatmapBucket {
+  hour_bucket: string;
+  flights: number | null;
+}
+
+export interface TrafficPeakHourHeatmapDay {
+  ops_date: string;
+  status: 'complete' | 'partial' | 'missing';
+  total_flights: number | null;
+  is_month_peak: boolean;
+  buckets: TrafficPeakHourHeatmapBucket[];
+}
+
+export interface TrafficPeakHourHeatmapResponse {
+  contract_version: typeof TRAFFIC_REPORT_CONTRACT_VERSION;
+  request_hash: string;
+  data_as_of: string;
+  source_watermark: number | 'unknown';
+  month: string;
+  type: TrafficType;
+  time_basis: TrafficTimeBasis;
+  selected_day_count: number;
+  complete_day_count: number;
+  partial_day_count: number;
+  missing_day_count: number;
+  monthly_average: TrafficPeakHourHeatmapBucket[];
+  days: TrafficPeakHourHeatmapDay[];
 }
 
 export interface TrafficReportBundle {
@@ -217,6 +268,7 @@ export interface TrafficReportBundle {
     peak_hour: TrafficPeakHourRow[];
     peak_hour_monthly?: TrafficMonthlyPeakRow[];
     day_of_week: TrafficDayOfWeekRow[];
+    day_of_week_monthly?: TrafficMonthlyDayOfWeekRow[];
     flight_category?: TrafficFlightCategoryRow[];
   };
   quality: {
@@ -404,6 +456,16 @@ export function buildDimensionUrl(
   return `${TRAFFIC_REPORT_API_BASE}/${exportCsv ? 'dimension-export' : 'dimension'}?${query.toString()}`;
 }
 
+export function buildPeakHourHeatmapUrl(
+  filter: NormalizedTrafficReportFilter,
+  type: TrafficType,
+  from: string,
+  to: string,
+): string {
+  const query = toTrafficReportSearchParams({ ...filter, from, to, type, comp: 'none' });
+  return `${TRAFFIC_REPORT_API_BASE}/peak-hour-heatmap?${query.toString()}`;
+}
+
 function isNullableNumber(value: unknown): value is number | null {
   return value === null || typeof value === 'number';
 }
@@ -426,7 +488,7 @@ function isTrafficAircraftTypeBreakdownRow(value: unknown): value is TrafficAirc
 export function isTrafficFlightCategoryRow(value: unknown): value is TrafficFlightCategoryRow {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
-  return typeof row.key === 'string'
+  return ['scheduled', 'charter', 'other'].includes(String(row.key))
     && typeof row.code === 'string'
     && typeof row.label === 'string'
     && isNullableNumber(row.flights)
@@ -473,6 +535,41 @@ function isTrafficPeakHourRow(value: unknown): value is TrafficPeakHourRow {
     && typeof row.suppressed === 'boolean';
 }
 
+function isTrafficPeakHourHeatmapBucket(value: unknown): value is TrafficPeakHourHeatmapBucket {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return /^\d{2}:00$/.test(String(row.hour_bucket)) && isNullableNumber(row.flights);
+}
+
+export function isTrafficPeakHourHeatmapResponse(value: unknown): value is TrafficPeakHourHeatmapResponse {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const root = value as Record<string, unknown>;
+  return root.contract_version === TRAFFIC_REPORT_CONTRACT_VERSION
+    && typeof root.request_hash === 'string'
+    && typeof root.data_as_of === 'string'
+    && /^\d{4}-\d{2}$/.test(String(root.month))
+    && ['all', 'A', 'D'].includes(String(root.type))
+    && ['local', 'utc'].includes(String(root.time_basis))
+    && typeof root.selected_day_count === 'number'
+    && typeof root.complete_day_count === 'number'
+    && typeof root.partial_day_count === 'number'
+    && typeof root.missing_day_count === 'number'
+    && Array.isArray(root.monthly_average)
+    && root.monthly_average.length === 24
+    && root.monthly_average.every(isTrafficPeakHourHeatmapBucket)
+    && Array.isArray(root.days)
+    && root.days.every((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      const row = value as Record<string, unknown>;
+      return ISO_DATE.test(String(row.ops_date))
+        && ['complete', 'partial', 'missing'].includes(String(row.status))
+        && isNullableNumber(row.total_flights)
+        && typeof row.is_month_peak === 'boolean'
+        && Array.isArray(row.buckets)
+        && row.buckets.length === 24
+        && row.buckets.every(isTrafficPeakHourHeatmapBucket);
+    });
+}
 function isTrafficCoverageCounts(value: unknown): value is TrafficCoverageCounts {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const counts = value as Record<string, unknown>;

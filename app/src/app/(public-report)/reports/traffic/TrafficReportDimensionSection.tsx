@@ -15,10 +15,13 @@ import {
 import {
   buildTrafficReportV2DimensionUrl,
   fetchTrafficReportV2DimensionPage,
+  fetchTrafficReportV2DimensionShare,
   TrafficReportVersionChangedError,
 } from '@/lib/trafficReportDataAdapter';
+import type { TrafficDimensionShareResponse } from '@/lib/trafficReportV2Contract';
 import { formatUiError } from '@/lib/uiDisplayText';
 import { ScopeSelector } from './TrafficReportTrend';
+import { TrafficDimensionShareDonut } from './TrafficDimensionShareDonut';
 
 const numberFormat = new Intl.NumberFormat('vi-VN');
 const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
@@ -26,29 +29,45 @@ const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 
 function formatNumber(value: number | null): string {
   return value == null ? '—' : numberFormat.format(value);
 }
-
 function formatShare(value: number | null): string {
   return value == null ? '—' : `${percentFormat.format(value * 100)}%`;
 }
 
-function ShareMetric({ value, tone }: {
-  value: number | null;
-  tone: 'flights' | 'pax';
-}) {
-  const width = `${Math.max(0, Math.min(100, (value ?? 0) * 100))}%`;
-  return (
-    <div className="min-w-0">
-      {value == null ? <span className="block min-h-5 text-pretty text-xs font-medium text-slate-500">Chưa có số liệu</span> : <>
-        <span className="block h-2 w-full overflow-hidden rounded-sm bg-slate-100" aria-hidden="true">
-          <span
-            className={cn('block h-full rounded-sm', tone === 'flights' ? 'bg-blue-900' : 'border-2 border-cyan-700 bg-white')}
-            style={{ width }}
-          />
-        </span>
-        <strong className="mt-1 block text-right text-sm font-bold tabular-nums text-slate-800">{formatShare(value)}</strong>
-      </>}
-    </div>
-  );
+function legacyDimensionShare(
+  payload: TrafficDimensionResponse,
+  dimension: TrafficDimension,
+  metric: 'flights' | 'reported_pax',
+): TrafficDimensionShareResponse {
+  const shareField = metric === 'flights' ? 'flight_share' : 'pax_share';
+  const valueField = metric === 'flights' ? 'flights' : 'reported_pax';
+  const ranked = payload.rows
+    .flatMap((row) => row[valueField] == null || row[shareField] == null ? [] : [{
+      key: row.key,
+      label: row.label,
+      value: Number(row[valueField]),
+      share: Number(row[shareField]),
+    }])
+    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label, 'vi'));
+  const totalValue = ranked.length === 0
+    ? null
+    : ranked.reduce((sum, row) => sum + row.value, 0);
+  const topRows = ranked.slice(0, 10);
+  const topValue = topRows.reduce((sum, row) => sum + row.value, 0);
+  const otherValue = totalValue == null ? 0 : Math.max(0, totalValue - topValue);
+  return {
+    contract_version: 'traffic-report-v2',
+    dimension,
+    metric,
+    type: payload.type,
+    limit: 10,
+    total_value: totalValue,
+    top_rows: topRows,
+    other: totalValue != null && totalValue > 0 && otherValue > 0
+      ? { label: 'Khác', value: otherValue, share: otherValue / totalValue }
+      : null,
+    source_watermark: 0,
+    read_version_token: 'legacy-v1',
+  };
 }
 
 export function TrafficReportDimensionSection({ kind, filter, scope, marketDimension = 'route', readVersion = 'v1', expectedWatermark, readVersionToken, onScopeChange, onMarketDimensionChange, onVersionChanged }: {
@@ -67,13 +86,15 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
   const [sort, setSort] = useState<TrafficDimensionSort>('flights');
   const [page, setPage] = useState(1);
   const [data, setData] = useState<TrafficDimensionResponse | null>(null);
-  const [chartData, setChartData] = useState<TrafficDimensionResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [chartLoading, setChartLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [chartError, setChartError] = useState<string | null>(null);
+  const [flightShare, setFlightShare] = useState<TrafficDimensionShareResponse | null>(null);
+  const [paxShare, setPaxShare] = useState<TrafficDimensionShareResponse | null>(null);
+  const [shareLoading, setShareLoading] = useState(true);
+  const [flightShareError, setFlightShareError] = useState<string | null>(null);
+  const [paxShareError, setPaxShareError] = useState<string | null>(null);
   const tableControllerRef = useRef<AbortController | null>(null);
-  const chartControllerRef = useRef<AbortController | null>(null);
+  const shareControllerRef = useRef<AbortController | null>(null);
 
   const loadTable = useCallback(async () => {
     tableControllerRef.current?.abort();
@@ -85,9 +106,9 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
       const payload = readVersion === 'v2'
         ? expectedWatermark === undefined || !readVersionToken
           ? (() => { throw new Error('Phiên bản dữ liệu mới nhất chưa sẵn sàng.'); })()
-          : await fetchTrafficReportV2DimensionPage(filter, dimension, scope, sort, page, 50, expectedWatermark, readVersionToken, { signal: controller.signal })
+          : await fetchTrafficReportV2DimensionPage(filter, dimension, scope, sort, page, 20, expectedWatermark, readVersionToken, { signal: controller.signal })
         : await (async () => {
-          const response = await fetch(buildDimensionUrl(filter, dimension, scope, sort, page, 50), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+          const response = await fetch(buildDimensionUrl(filter, dimension, scope, sort, page, 20), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
           const result: unknown = await response.json().catch(() => null);
           if (!response.ok) throw new Error('Không thể tải bảng dữ liệu. Vui lòng thử lại.');
           if (!isTrafficDimensionResponse(result)) throw new Error('Bảng dữ liệu chưa sẵn sàng.');
@@ -104,33 +125,35 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     }
   }, [dimension, expectedWatermark, filter, onVersionChanged, page, readVersion, readVersionToken, scope, sort]);
 
-  const loadChart = useCallback(async () => {
-    chartControllerRef.current?.abort();
+  const loadShares = useCallback(async () => {
+    shareControllerRef.current?.abort();
     const controller = new AbortController();
-    chartControllerRef.current = controller;
-    setChartLoading(true);
-    setChartError(null);
-    try {
-      const payload = readVersion === 'v2'
-        ? expectedWatermark === undefined || !readVersionToken
-          ? (() => { throw new Error('Phiên bản dữ liệu mới nhất chưa sẵn sàng.'); })()
-          : await fetchTrafficReportV2DimensionPage(filter, dimension, scope, 'flights', 1, 50, expectedWatermark, readVersionToken, { signal: controller.signal })
-        : await (async () => {
-          const response = await fetch(buildDimensionUrl(filter, dimension, scope, 'flights', 1, 50), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
-          const result: unknown = await response.json().catch(() => null);
-          if (!response.ok) throw new Error('Không thể tải xếp hạng. Vui lòng thử lại.');
-          if (!isTrafficDimensionResponse(result)) throw new Error('Xếp hạng chưa sẵn sàng.');
-          return result;
-        })();
-      if (!controller.signal.aborted) setChartData(payload);
-    } catch (reason) {
-      if (!controller.signal.aborted) {
-        if (reason instanceof TrafficReportVersionChangedError) onVersionChanged?.();
-        setChartError(formatUiError(reason, 'Không thể tải xếp hạng.'));
+    shareControllerRef.current = controller;
+    setShareLoading(true);
+    setFlightShareError(null);
+    setPaxShareError(null);
+    const loadMetric = async (metric: 'flights' | 'reported_pax') => {
+      if (readVersion === 'v2') {
+        if (expectedWatermark === undefined || !readVersionToken) throw new Error('Phiên bản dữ liệu mới nhất chưa sẵn sàng.');
+        return fetchTrafficReportV2DimensionShare(filter, dimension, scope, metric, expectedWatermark, readVersionToken, { signal: controller.signal });
       }
-    } finally {
-      if (!controller.signal.aborted) setChartLoading(false);
-    }
+      const sortValue: TrafficDimensionSort = metric === 'flights' ? 'flights' : 'reported_pax';
+      const response = await fetch(buildDimensionUrl(filter, dimension, scope, sortValue, 1, 732), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+      const result: unknown = await response.json().catch(() => null);
+      if (!response.ok || !isTrafficDimensionResponse(result)) throw new Error('Dữ liệu tỷ trọng chưa sẵn sàng.');
+      return legacyDimensionShare(result, dimension, metric);
+    };
+    const [flightsResult, paxResult] = await Promise.allSettled([loadMetric('flights'), loadMetric('reported_pax')]);
+    if (controller.signal.aborted) return;
+    const handleVersion = (reason: unknown) => {
+      if (reason instanceof TrafficReportVersionChangedError) onVersionChanged?.();
+      return formatUiError(reason, 'Không thể tải dữ liệu tỷ trọng.');
+    };
+    if (flightsResult.status === 'fulfilled') setFlightShare(flightsResult.value);
+    else { setFlightShare(null); setFlightShareError(handleVersion(flightsResult.reason)); }
+    if (paxResult.status === 'fulfilled') setPaxShare(paxResult.value);
+    else { setPaxShare(null); setPaxShareError(handleVersion(paxResult.reason)); }
+    setShareLoading(false);
   }, [dimension, expectedWatermark, filter, onVersionChanged, readVersion, readVersionToken, scope]);
 
   useEffect(() => {
@@ -139,9 +162,9 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
   }, [loadTable]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void loadChart(), 0);
-    return () => { window.clearTimeout(timer); chartControllerRef.current?.abort(); };
-  }, [loadChart]);
+    const timer = window.setTimeout(() => void loadShares(), 0);
+    return () => { window.clearTimeout(timer); shareControllerRef.current?.abort(); };
+  }, [loadShares]);
 
   const title = kind === 'market' ? 'Sản lượng theo thị trường' : 'Sản lượng theo hãng hàng không';
   const description = kind === 'market'
@@ -149,7 +172,7 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     : 'Đối chiếu tỷ trọng chuyến bay và sản lượng khách giữa các hãng. Sản lượng khách chỉ tính số khách đã báo cáo.';
   const groupLabel = dimension === 'route' ? 'Chặng bay' : dimension === 'country' ? 'Quốc gia' : 'Hãng hàng không';
   const visibleRows = data?.rows ?? [];
-  const chartRows = chartData?.rows.slice(0, 10) ?? [];
+  const topTitle = dimension === 'route' ? 'Top 10 chặng bay' : dimension === 'country' ? 'Top 10 Quốc gia' : 'Top 10 hãng hàng không';
   const exportHref = readVersion === 'v2' && expectedWatermark !== undefined && readVersionToken
     ? buildTrafficReportV2DimensionUrl(filter, dimension, scope, sort, 1, 732, expectedWatermark, readVersionToken, true)
     : buildDimensionUrl(filter, dimension, scope, sort, 1, 732, true);
@@ -177,26 +200,15 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
         >{label}</button>)}
       </fieldset> : null}
 
-      <div className="mt-6 grid gap-5 xl:grid-cols-[0.9fr_1.4fr]">
-        <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="text-balance text-lg font-bold text-slate-950">Top 10 {groupLabel.toLocaleLowerCase('vi-VN')} theo số chuyến</h3>
-          <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 border-y border-slate-100 py-3 text-xs font-semibold text-slate-700" aria-label="Chú thích tỷ trọng">
-            <span className="inline-flex items-center gap-2"><span className="h-2 w-6 rounded-sm bg-blue-900" aria-hidden="true" />Tỷ trọng chuyến bay</span>
-            <span className="inline-flex items-center gap-2"><span className="h-2 w-6 rounded-sm border-2 border-cyan-700 bg-white" aria-hidden="true" />Tỷ trọng sản lượng khách</span>
+      <div className="mt-6 grid gap-5">
+        <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
+          <h3 className="text-balance text-xl font-bold text-slate-950">{topTitle}</h3>
+          <p className="mt-1 text-pretty text-sm leading-6 text-slate-600">Hai biểu đồ được xếp hạng độc lập để phản ánh đúng nhóm dẫn đầu của từng chỉ tiêu.</p>
+          <div className="mt-5 grid gap-4 xl:grid-cols-2">
+            <TrafficDimensionShareDonut title="Tỷ trọng số chuyến" data={flightShare} loading={shareLoading} error={flightShareError} onRetry={() => void loadShares()} />
+            <TrafficDimensionShareDonut title="Tỷ trọng sản lượng khách" data={paxShare} loading={shareLoading} error={paxShareError} onRetry={() => void loadShares()} />
           </div>
-          {chartLoading ? <div className="mt-5 space-y-3" role="status">{Array.from({ length: 6 }, (_, index) => <div key={index} className="h-9 animate-pulse rounded bg-slate-100" />)}<span className="sr-only">Đang tải biểu đồ {title.toLocaleLowerCase('vi-VN')}</span></div> : null}
-          {chartError ? <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900" role="alert"><p className="font-semibold">Không thể tải xếp hạng</p><p className="mt-1">{chartError}</p><button className="report-focus mt-3 min-h-11 rounded-lg bg-rose-800 px-4 font-bold text-white focus-visible:outline-blue-900 focus-visible:ring-2 focus-visible:ring-blue-900 focus-visible:ring-offset-2" type="button" onClick={() => void loadChart()}>Thử lại</button></div> : null}
-          {!chartLoading && !chartError && chartRows.length === 0 ? <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"><p className="font-semibold">Chưa có dữ liệu để xếp hạng.</p><p className="mt-1">Hãy chọn phạm vi khác.</p></div> : null}
-          {!chartLoading && !chartError && chartRows.length > 0 ? <ol className="mt-5 space-y-5">{chartRows.map((row) => {
-            const displayLabel = /^unknown$/i.test(row.label.trim()) ? 'Chưa xác định' : row.label;
-            return <li key={row.key} aria-label={`${displayLabel}: tỷ trọng chuyến bay ${formatShare(row.flight_share)}, tỷ trọng sản lượng khách ${formatShare(row.pax_share)}`}>
-              <div className="truncate text-sm font-semibold text-slate-800" title={displayLabel} aria-label={displayLabel}>{displayLabel}</div>
-              <div className="mt-2 grid grid-cols-2 gap-4" aria-hidden="true">
-                <ShareMetric value={row.flight_share} tone="flights" />
-                <ShareMetric value={row.pax_share} tone="pax" />
-              </div>
-            </li>;
-          })}</ol> : null}
+
         </article>
 
         <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
