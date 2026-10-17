@@ -71,6 +71,7 @@ assert.match(edge, /get_public_traffic_report_v2/);
 assert.match(edge, /TRAFFIC_REPORT_READ_VERSION_SECRET/);
 assert.match(edge, /READ_VERSION_CHANGED/);
 assert.doesNotMatch(edge, /filterHash !== readVersion\.filterHash/);
+assert.doesNotMatch(edge, /Number\(item\.expiresAt\) <= Math\.floor\(Date\.now\(\) \/ 1000\)/);
 assert.match(edge, /sourceWatermark !== readVersion\.sourceWatermark[\s\S]+?dataAsOf !== readVersion\.dataAsOf/);
 assert.match(edge, /read_version_token: readVersionToken/);
 assert.match(edge, /get_public_traffic_report_dimension_v2/);
