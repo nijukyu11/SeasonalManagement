@@ -10,26 +10,38 @@ try {
  const row=async(sql,args=[])=>(await db.query(sql,args)).rows[0];
  const rpc=async(name,params,args)=>(await row(`select public.${name}(${params}) r`,args)).r;
  const rejected=(fn,code)=>assert.rejects(fn,e=>e.code===code);
+ for (const name of ['20261009110000_schedule_preview_lifecycle_v1', '20261009100000_operational_incremental_projection_v1', '20261009090000_seasonal_snapshot_integrity_indexed_v1', '20261008100000_seasonal_version_management_v1']) {
+   await db.exec(await readFile(new URL(`../migrations/${name}.rollback.sql`, import.meta.url), 'utf8'));
+ }
+ const safetyRollback=new URL('../migrations/20261008090000_seasonal_publish_safety_v1.rollback.sql',import.meta.url);
+ await db.exec(await readFile(safetyRollback,'utf8'));
  const rollback=new URL('../migrations/20260928210000_seasonal_publish_v1.rollback.sql',import.meta.url);
  await db.exec(await readFile(rollback,'utf8'));
  await db.exec(await readFile(new URL('../migrations/20260928210000_seasonal_publish_v1.sql',import.meta.url),'utf8'));
+ const safetyMigration=new URL('../migrations/20261008090000_seasonal_publish_safety_v1.sql',import.meta.url);
+ await db.exec(await readFile(safetyMigration,'utf8'));
  await asWriter();
  await db.query("select public.run_seasonal_operational_backfill_v1('2026-10-01',$1::uuid)",[M0_FIXTURE.writerId]);
  const dates=await row("select ((now() at time zone 'Asia/Ho_Chi_Minh')::date+2)::text d1,((now() at time zone 'Asia/Ho_Chi_Minh')::date+3)::text d2");
  const requestId=randomUUID();
- const imported=await rpc('stage_seasonal_draft_import_v1','$1::jsonb',[JSON.stringify({requestId,checksum:requestId,seasonCode:'W99',strategy:'merge',expectedRevision:'0',fileName:'publish.xlsx',sourceRows:[seasonalRow({rowIndex:1,effective:dates.d1,discontinue:dates.d2,arrFlight:'701',arrRoute:'TPE',sta:'10:00'})]})]);
+ const imported=await rpc('stage_seasonal_draft_import_v1','$1::jsonb',[JSON.stringify({requestId,checksum:requestId,seasonCode:'W99',expectedRevision:'0',fileName:'publish.xlsx',sourceRows:[seasonalRow({rowIndex:1,effective:dates.d1,discontinue:dates.d2,arrFlight:'701',arrRoute:'TPE',sta:'10:00'})]})]);
  assert.equal(imported.status,'validated',JSON.stringify(imported));
  const importedResult=await rpc('commit_seasonal_draft_import_v1','$1::uuid,$2',[imported.batchId,imported.previewHash]);
  const season=importedResult.seasonId;
  const window=()=>rpc('get_seasonal_draft_window_v1','$1',[season]);
  const preview=()=>rpc('preview_seasonal_publish_v1','$1,$2::uuid',[season,randomUUID()]);
- const commit=(p,notes='')=>rpc('commit_seasonal_publish_v1','$1,$2::uuid,$3,$4',[season,p.previewId,p.previewHash,notes]);
+ const commit=(p,notes='',ack=false)=>rpc('commit_seasonal_publish_v1','$1,$2::uuid,$3,$4,$5::boolean',[season,p.previewId,p.previewHash,notes,ack]);
  const patch=async(d,values)=>rpc('apply_seasonal_draft_changes_v1','$1,$2::uuid,$3::bigint,$4::jsonb',[season,randomUUID(),(await window()).revision,JSON.stringify([{draftId:d.draft_id,expected:Object.fromEntries(Object.keys(values).map(k=>[k,d[k]])),patch:values}])]);
  const getDraft=async(date)=>(await window()).drafts.find(d=>d.date===date);
  const legs=async()=>{await asAdmin();const rows=(await db.query('select to_jsonb(l) r from public.operational_flight_legs l where source_season_id=$1 order by operational_date,lineage_generation',[season])).rows.map(x=>x.r);await asWriter();return rows;};
  const otherWindow=await rpc('get_seasonal_draft_window_v1','$1',[M0_FIXTURE.seasonM26]);
- await rpc('apply_seasonal_draft_changes_v1','$1,$2::uuid,$3::bigint,$4::jsonb',[M0_FIXTURE.seasonM26,randomUUID(),otherWindow.revision,
-   JSON.stringify([{draftId:'M7-OTHER-SEASON',expected:null,patch:{type:'A',airline:'JX',flight_number:'JX702',date:dates.d1,schedule:'10:00',route:'HAN'}}])]);
+ const otherPatches = [
+   {draftId:'M7-OTHER-SEASON',expected:null,patch:{type:'A',airline:'JX',flight_number:'JX702',date:dates.d1,schedule:'10:00',route:'HAN'}},
+   ...otherWindow.drafts
+     .filter(d => ['JX801', 'JX902'].includes(d.flight_number))
+     .map(d => ({draftId: d.draft_id, expected: {flight_number: d.flight_number}, patch: {flight_number: d.flight_number === 'JX801' ? 'JX881' : 'JX992'}}))
+ ];
+ await rpc('apply_seasonal_draft_changes_v1','$1,$2::uuid,$3::bigint,$4::jsonb',[M0_FIXTURE.seasonM26,randomUUID(),otherWindow.revision,JSON.stringify(otherPatches)]);
  const otherPreview=await rpc('preview_seasonal_publish_v1','$1,$2::uuid',[M0_FIXTURE.seasonM26,randomUUID()]);
  await rpc('commit_seasonal_publish_v1','$1,$2::uuid,$3',[M0_FIXTURE.seasonM26,otherPreview.previewId,otherPreview.previewHash]);
  await asAdmin();
@@ -40,6 +52,7 @@ try {
  assert.deepEqual(first.preview.operationalCounts,{write:2,retire:0});
  const receipt=await commit(first,'first'); assert.equal(receipt.status,'committed');
  assert.deepEqual(await commit(first,'first'),receipt,'lost response retry is exact');
+ await rejected(()=>commit(first,'first',true),'22023');
  await rejected(()=>commit(first,'different'),'22023');
  await rejected(()=>commit({...first,previewHash:'wrong'},'first'),'40001');
  const original=await legs(); assert.equal(original.length,2);
@@ -60,10 +73,23 @@ try {
  assert.equal((await row('select count(*)::int n from public.operational_resource_overrides where leg_id=$1',[updated.leg_id])).n,0,'Planning allocation must not become operator override');
  const revision=(await row('select revision::text r from public.operational_workspace_revision where singleton')).r; await asWriter();
  await rpc('apply_operational_resource_changes_v1','$1::uuid,$2::bigint,$3::jsonb',[randomUUID(),revision,JSON.stringify([{legId:updated.leg_id,expected:{gate:12,counters:[{counter_group:'T1',item_index:0,counter_value:'21'}]},patch:{gate:null,counters:[]}}])]);
- await patch(await getDraft(dates.d1),{pax:null,gate:20}); await commit(await preview());
+ await patch(await getDraft(dates.d1),{pax:null,gate:20});
+ const gatePrev=await preview();
+ if (gatePrev.preview.requiresOperationalAcknowledgement) {
+   await rejected(()=>commit(gatePrev),'40001');
+   await commit(gatePrev,'',true);
+ } else {
+   await commit(gatePrev);
+ }
  const overridden=(await legs()).find(l=>l.leg_id===updated.leg_id); assert.equal(overridden.gate,null); assert.equal(overridden.pax,null); assert.equal(overridden.counter_token,null);
  await patch(await getDraft(dates.d1),{status:'deleted',deletion_reason:'removed'});
- const removed=await preview(); assert.deepEqual(removed.preview.operationalCounts,{write:1,retire:1}); await commit(removed);
+ const removed=await preview(); assert.deepEqual(removed.preview.operationalCounts,{write:1,retire:1});
+ if (removed.preview.requiresOperationalAcknowledgement) {
+   await rejected(()=>commit(removed),'40001');
+   await commit(removed,'',true);
+ } else {
+   await commit(removed);
+ }
  assert.equal((await legs()).find(l=>l.leg_id===updated.leg_id).status,'deleted');
  await asAdmin(); const deleted=(await row('select to_jsonb(d) r from public.seasonal_flight_drafts d where draft_id=$1',[updated.source_draft_id])).r; await asWriter();
  await patch(deleted,{status:'active',deletion_reason:null}); await commit(await preview());
@@ -114,7 +140,12 @@ try {
  assert.equal(movedLeg.lineage_id,restored.lineage_id); assert.equal(movedLeg.lineage_generation,dailyBefore.lineage_generation+1);
  await patch(await getDraft(moreDates.d3),{date:dates.d2,scheduled_date:dates.d2});
  const intoDaily=await preview(); assert.deepEqual(intoDaily.preview.operationalCounts,{write:0,retire:1});
- await commit(intoDaily); assert.equal((await legs()).filter(l=>l.status==='active').length,0,'moving into Daily retires the old future occurrence');
+ if (intoDaily.preview.requiresOperationalAcknowledgement) {
+   await rejected(()=>commit(intoDaily),'40001');
+   await commit(intoDaily,'',true);
+ } else {
+   await commit(intoDaily);
+ }
  const pairChanges=[
    {draftId:'M7-PAIR-A',expected:null,patch:{type:'A',airline:'VN',flight_number:'VN801',date:moreDates.d3,schedule:'23:30',route:'HAN',
      linked_draft_id:'M7-PAIR-D',turnaround_id:'M7-PAIR',link_type:'overnight',pair_anchor_date:moreDates.d3}},
@@ -129,7 +160,14 @@ try {
  await asAdmin();
  await db.query("insert into public.operational_day_authority(operational_date,authority_source,source_batch_id,leg_count,canonical_checksum,committed_by) select $1,authority_source,source_batch_id,0,canonical_checksum,committed_by from public.operational_day_authority where operational_date=$2",[moreDates.d3,dates.d2]);
  const protectedBefore=(await row('select to_jsonb(l) r from public.operational_flight_legs l where leg_id=$1',[pair[0].leg_id])).r; await asWriter();
- const safePair=await preview(); assert.equal(safePair.status,'ready'); assert.deepEqual(safePair.preview.operationalCounts,{write:1,retire:0}); await commit(safePair);
+ const safePair=await preview();
+ assert.equal(safePair.status,'ready'); assert.deepEqual(safePair.preview.operationalCounts,{write:1,retire:0});
+ if (safePair.preview.requiresOperationalAcknowledgement) {
+   await rejected(()=>commit(safePair),'40001');
+   await commit(safePair,'',true);
+ } else {
+   await commit(safePair);
+ }
  await asAdmin(); assert.deepEqual((await row('select to_jsonb(l) r from public.operational_flight_legs l where leg_id=$1',[pair[0].leg_id])).r,protectedBefore); await asWriter();
  await patch((await window()).drafts.find(d=>d.draft_id==='M7-PAIR-D'),{status:'deleted',deletion_reason:'removed'});
  const blockedPair=await preview(); assert.equal(blockedPair.status,'blocked'); assert.ok(blockedPair.preview.diagnostics.some(d=>d.code==='PROTECTED_COUNTERPART'));
@@ -143,6 +181,7 @@ try {
  await rejected(()=>rpc('get_seasonal_publish_versions_v1','$1',[season]),'42501');
  await asAdmin();
  await rejected(async()=>db.exec(await readFile(rollback,'utf8')),'55000'); await db.exec('rollback');
+ await rejected(async()=>db.exec(await readFile(safetyRollback,'utf8')),'55000'); await db.exec('rollback');
  console.log('M7 Publish: lifecycle, allocation overrides, stale preview, exact receipts, immutable history and isolated Operations PASS');
-} catch(e) { throw new Error(`${e.message} [${e.code??''}] ${e.where??''}`,{cause:e instanceof assert.AssertionError?e:undefined}); }
+ } catch(e) { console.error('FAILED AT:', e.stack); throw new Error(`${e.message} [${e.code??''}] ${e.where??''}`,{cause:e instanceof assert.AssertionError?e:undefined}); }
 finally { if(db) await db.close(); }

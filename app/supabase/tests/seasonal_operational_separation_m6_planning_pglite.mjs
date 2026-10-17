@@ -13,6 +13,9 @@ const patch=(d,values)=>({draftId:d.draft_id,expected:Object.fromEntries(Object.
 const reject=(fn,code)=>assert.rejects(fn,e=>e.code===code);
 const rollback=new URL('../migrations/20260928190000_seasonal_planning_v1.rollback.sql',import.meta.url);
 try {
+  for (const name of ['20261016100000_operational_daily_full_import_v2', '20261016090000_seasonal_full_import_v1', '20261009110000_schedule_preview_lifecycle_v1', '20261009100000_operational_incremental_projection_v1', '20261009090000_seasonal_snapshot_integrity_indexed_v1', '20261008100000_seasonal_version_management_v1', '20261008090000_seasonal_publish_safety_v1']) {
+    await db.exec(await readFile(new URL(`../migrations/${name}.rollback.sql`, import.meta.url), 'utf8'));
+  }
   await db.exec(await readFile(new URL('../migrations/20260928210000_seasonal_publish_v1.rollback.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../migrations/20260928200000_seasonal_draft_import_v1.rollback.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(rollback,'utf8'));

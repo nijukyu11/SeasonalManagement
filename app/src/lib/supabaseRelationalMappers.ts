@@ -1,6 +1,5 @@
 import type {
   AircraftGroup,
-  AiAnalysisContextDocument,
   AirlineColorSetting,
   CheckInCounterGroup,
   CheckInCounterLock,
@@ -206,25 +205,14 @@ export type ModHistoryRecordChangeRelationalRow = {
 export type OperationalSettingsRow = {
   id: string;
   updated_at: number | null;
-  ai_enabled: boolean;
-  ai_active_model_id: string | null;
-  ai_updated_at: number | null;
+  ai_enabled?: boolean;
+  ai_active_model_id?: string | null;
+  ai_updated_at?: number | null;
   dashboard_arrival_bucket_flights?: number | null;
   dashboard_departure_bucket_flights?: number | null;
   dashboard_ad_gap_flights?: number | null;
   dashboard_ctg_abs_pct?: number | null;
   dashboard_pax_coverage_min_pct?: number | null;
-};
-
-export type OperationalAiContextDocumentRow = {
-  id: string;
-  kind: 'rule' | 'skill' | null;
-  title: string | null;
-  content_md: string | null;
-  enabled: boolean | null;
-  sort_order: number | null;
-  created_at: number | null;
-  updated_at: number | null;
 };
 
 const SINGLE_COUNTER_GROUP = '__single__';
@@ -244,12 +232,6 @@ function numberOrNull(value: unknown): number | null {
   if (value == null || value === '') return null;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
-}
-
-function textOrNull(value: unknown): string | null {
-  if (value == null) return null;
-  const text = String(value);
-  return text.length > 0 ? text : null;
 }
 
 function normalizeCounterValues(value: string | number | Array<string | number>): string[] {
@@ -705,9 +687,6 @@ export function toOperationalSettingsRow(settings: OperationalSettings): Operati
   return {
     id: 'operational',
     updated_at: normalized.updatedAt ?? Date.now(),
-    ai_enabled: normalized.aiAnalysis.enabled,
-    ai_active_model_id: normalized.aiAnalysis.activeModelId,
-    ai_updated_at: normalized.aiAnalysis.updatedAt,
     dashboard_arrival_bucket_flights: normalized.dashboardAlerts.arrivalBucketFlights,
     dashboard_departure_bucket_flights: normalized.dashboardAlerts.departureBucketFlights,
     dashboard_ad_gap_flights: normalized.dashboardAlerts.adGapFlights,
@@ -729,8 +708,6 @@ export function fromOperationalSettingsRows(input: {
   gateGroups: GateGroup[];
   gateLocks: GateLock[];
   standGateMappings: StandGateMapping[];
-  aiModels: OperationalSettings['aiAnalysis']['models'];
-  aiContextDocuments: AiAnalysisContextDocument[];
 }): OperationalSettings {
   return hydrateOperationalSettings({
     updatedAt: input.settingsRow?.updated_at ?? null,
@@ -751,13 +728,6 @@ export function fromOperationalSettingsRows(input: {
       adGapFlights: input.settingsRow?.dashboard_ad_gap_flights ?? null,
       ctgAbsPct: input.settingsRow?.dashboard_ctg_abs_pct ?? null,
       paxCoverageMinPct: input.settingsRow?.dashboard_pax_coverage_min_pct ?? null,
-    },
-    aiAnalysis: {
-      enabled: input.settingsRow?.ai_enabled ?? true,
-      activeModelId: input.settingsRow?.ai_active_model_id ?? input.aiModels.find((model) => model.enabled)?.id ?? input.aiModels[0]?.id ?? 'gemini-flash',
-      models: input.aiModels,
-      contextDocuments: input.aiContextDocuments,
-      updatedAt: input.settingsRow?.ai_updated_at ?? null,
     },
   });
 }
@@ -918,31 +888,6 @@ export function toStandGateMappingRows(settings: OperationalSettings): Array<{ i
   }));
 }
 
-export function toAiModelRows(settings: OperationalSettings): Array<{ id: string; label: string; provider: string; model: string; base_url: string | null; enabled: boolean; key_updated_at: number | null; sort_order: number }> {
-  return validateOperationalSettings(settings).aiAnalysis.models.map((model, index) => ({
-    id: model.id,
-    label: model.label,
-    provider: model.provider,
-    model: model.model,
-    base_url: model.baseUrl,
-    enabled: model.enabled,
-    key_updated_at: model.keyUpdatedAt,
-    sort_order: index,
-  }));
-}
-
-export function toAiContextDocumentRows(settings: OperationalSettings): OperationalAiContextDocumentRow[] {
-  return validateOperationalSettings(settings).aiAnalysis.contextDocuments.map((document, index) => ({
-    id: document.id,
-    kind: document.kind,
-    title: document.title,
-    content_md: document.contentMd,
-    enabled: document.enabled,
-    sort_order: document.sortOrder ?? index,
-    created_at: document.createdAt,
-    updated_at: document.updatedAt,
-  }));
-}
 
 export function fromSettingsTableRows(input: {
   settingsRow: OperationalSettingsRow | null;
@@ -974,8 +919,6 @@ export function fromSettingsTableRows(input: {
   gateLockRows: Array<{ id: string; name: string | null; start_time: string | null; end_time: string | null; reason: string | null; enabled: boolean | null; created_at: number | null; updated_at: number | null }>;
   gateLockMemberRows: Array<{ lock_id: string; gate_id: string | null; sort_order: number | null }>;
   standGateMappingRows: Array<{ id: string; stand: string | number | null; gate: number | null; sort_order: number | null; enabled: boolean | null; created_at: number | null; updated_at: number | null }>;
-  aiModelRows: Array<{ id: string; label: string | null; provider: string | null; model: string | null; base_url: string | null; enabled: boolean | null; key_updated_at: number | null; sort_order: number | null }>;
-  aiContextDocumentRows: OperationalAiContextDocumentRow[];
 }): OperationalSettings {
   const groupTypeMap = new Map<string, string[]>();
   for (const row of input.aircraftGroupTypeRows) {
@@ -1094,31 +1037,5 @@ export function fromSettingsTableRows(input: {
       createdAt: row.created_at ?? 0,
       updatedAt: row.updated_at ?? 0,
     })),
-    aiModels: input.aiModelRows
-      .sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0))
-      .map((row) => ({
-        id: row.id,
-        label: row.label ?? row.id,
-        provider: row.provider === 'openai-compatible' || row.provider === 'deepseek' ? row.provider : 'gemini',
-        model: row.model ?? '',
-        baseUrl: textOrNull(row.base_url),
-        enabled: row.enabled ?? true,
-        keyUpdatedAt: row.key_updated_at,
-      })),
-    aiContextDocuments: input.aiContextDocumentRows
-      .sort((a, b) =>
-        String(a.kind ?? '').localeCompare(String(b.kind ?? '')) ||
-        Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0)
-      )
-      .map((row) => ({
-        id: row.id,
-        kind: row.kind === 'skill' ? 'skill' : 'rule',
-        title: row.title ?? row.id,
-        contentMd: row.content_md ?? '',
-        enabled: row.enabled ?? true,
-        sortOrder: row.sort_order ?? 0,
-        createdAt: row.created_at ?? 0,
-        updatedAt: row.updated_at ?? 0,
-      })),
   });
 }

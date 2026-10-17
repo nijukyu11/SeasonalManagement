@@ -44,6 +44,7 @@ import {
   type AnnualKpiStatus,
   type AnnualPassengerKpiSnapshot,
 } from '@/lib/annualPassengerKpiContract';
+import { formatUiError } from '@/lib/uiDisplayText';
 
 const numberFormat = new Intl.NumberFormat('vi-VN');
 const decimalFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
@@ -385,7 +386,7 @@ function KpiAdminDialog({
       const payload = await response.json().catch(() => null) as { error?: string } | null;
       if (!response.ok) throw new Error(payload?.error ?? 'Không thể mở trình chỉnh sửa KPI.');
       setPin(''); setUnlocked(true); await loadConfigs();
-    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Không thể mở trình chỉnh sửa KPI.'); }
+    } catch (caught) { setError(formatUiError(caught, 'Không thể mở trình chỉnh sửa chỉ tiêu.')); }
     finally { setBusy(false); }
   };
   const save = async (event: FormEvent) => {
@@ -403,7 +404,7 @@ function KpiAdminDialog({
       setTarget(String(savedConfig.target_reported_pax));
       setMessage(`Đã lưu KPI năm ${year}.`);
       await onSaved(payload.snapshot);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Không thể lưu KPI.'); }
+    } catch (caught) { setError(formatUiError(caught, 'Không thể lưu chỉ tiêu.')); }
     finally { setBusy(false); }
   };
   const lock = async () => {
@@ -413,27 +414,27 @@ function KpiAdminDialog({
   return (
     <dialog ref={dialogRef} className="kpi-admin-dialog m-auto rounded-2xl border border-white/10 bg-[#0b1729] p-0 text-white shadow-2xl" aria-labelledby="kpi-admin-title" onCancel={(event) => { event.preventDefault(); close(); }}>
       <div className="p-5 sm:p-6">
-        <div className="flex items-start justify-between gap-4"><div><p className="metric-label text-cyan-300">Quản trị nội bộ</p><h2 id="kpi-admin-title" className="mt-2 text-balance text-xl font-semibold">Điều chỉnh KPI năm</h2></div><button className="report-focus min-h-11 rounded-lg px-4 text-sm font-semibold text-slate-300 hover:bg-slate-800" type="button" onClick={close}>Đóng</button></div>
+        <div className="flex items-start justify-between gap-4"><div><p className="metric-label text-cyan-300">Quản trị nội bộ</p><h2 id="kpi-admin-title" className="mt-2 text-balance text-xl font-semibold">Điều chỉnh chỉ tiêu KPI năm</h2></div><button className="report-focus min-h-11 rounded-lg px-4 text-sm font-semibold text-slate-300 hover:bg-slate-800" type="button" onClick={close}>Đóng</button></div>
         <label className="kpi-admin-year-control mt-5 block text-sm font-semibold text-slate-200">
-          Năm dashboard đang xem
-          <select aria-label="Năm dashboard đang xem" value={autoYear ? 'auto' : String(snapshot?.year ?? automaticYear)} onChange={(event) => onSelectYear(event.target.value)}>
+          Năm trên bảng theo dõi đang xem
+          <select aria-label="Năm trên bảng theo dõi đang xem" value={autoYear ? 'auto' : String(snapshot?.year ?? automaticYear)} onChange={(event) => onSelectYear(event.target.value)}>
             <option value="auto">Tự động ({automaticYear})</option>
             {availableYears.map((item) => <option key={item} value={item}>{item}</option>)}
           </select>
         </label>
         {!unlocked ? (
           <form className="mt-6" onSubmit={unlock}>
-            <label className="block text-sm font-semibold text-slate-200">PIN quản trị<input autoFocus className="report-focus mt-2 min-h-12 w-full rounded-lg border border-slate-600 bg-slate-950/50 px-4 text-lg text-white" type="password" inputMode="numeric" autoComplete="current-password" value={pin} onChange={(event) => setPin(event.target.value)} required /></label>
+            <label className="block text-sm font-semibold text-slate-200">Mã PIN quản trị<input autoFocus className="report-focus mt-2 min-h-12 w-full rounded-lg border border-slate-600 bg-slate-950/50 px-4 text-lg text-white" type="password" inputMode="numeric" autoComplete="current-password" value={pin} onChange={(event) => setPin(event.target.value)} required /></label>
             {error ? <p className="mt-3 text-sm font-semibold text-rose-300" role="alert">{error}</p> : null}
             <button className="report-focus mt-5 min-h-12 w-full rounded-lg bg-cyan-300 px-5 font-bold text-slate-950 disabled:opacity-50" type="submit" disabled={busy}>{busy ? 'Đang kiểm tra…' : 'Mở trình chỉnh sửa'}</button>
           </form>
         ) : (
           <form className="mt-6 space-y-5" onSubmit={save}>
-            <label className="block text-sm font-semibold text-slate-200">Năm KPI<input className="report-focus mt-2 min-h-12 w-full rounded-lg border border-slate-600 bg-slate-950/50 px-4 text-lg tabular-nums text-white" type="number" min="2000" max="2200" value={year} onChange={(event) => { const nextYear = Number(event.target.value); setYear(nextYear); const config = configs.find((item) => item.year === nextYear); setTarget(config ? String(config.target_reported_pax) : ''); }} required /></label>
-            <label className="block text-sm font-semibold text-slate-200">KPI sản lượng khách năm<input className="report-focus mt-2 min-h-12 w-full rounded-lg border border-slate-600 bg-slate-950/50 px-4 text-lg tabular-nums text-white" type="text" inputMode="numeric" value={target} onChange={(event) => setTarget(event.target.value)} placeholder="Ví dụ: 7500000" required /></label>
+            <label className="block text-sm font-semibold text-slate-200">Năm áp dụng chỉ tiêu<input className="report-focus mt-2 min-h-12 w-full rounded-lg border border-slate-600 bg-slate-950/50 px-4 text-lg tabular-nums text-white" type="number" min="2000" max="2200" value={year} onChange={(event) => { const nextYear = Number(event.target.value); setYear(nextYear); const config = configs.find((item) => item.year === nextYear); setTarget(config ? String(config.target_reported_pax) : ''); }} required /></label>
+            <label className="block text-sm font-semibold text-slate-200">Chỉ tiêu sản lượng khách năm<input className="report-focus mt-2 min-h-12 w-full rounded-lg border border-slate-600 bg-slate-950/50 px-4 text-lg tabular-nums text-white" type="text" inputMode="numeric" value={target} onChange={(event) => setTarget(event.target.value)} placeholder="Ví dụ: 7500000" required /></label>
             <div className="rounded-lg bg-slate-950/45 p-4 text-sm text-slate-300"><p>Giá trị đang áp dụng: <strong className="tabular-nums text-white">{displayNumber(selectedConfig?.target_reported_pax)}</strong></p><p className="mt-1">Cập nhật gần nhất: {displayUpdated(selectedConfig?.updated_at)}</p></div>
             {error ? <p className="text-sm font-semibold text-rose-300" role="alert">{error}</p> : null}{message ? <p className="text-sm font-semibold text-emerald-300" role="status">{message}</p> : null}
-            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between"><button className="report-focus min-h-12 rounded-lg border border-slate-600 px-5 font-semibold text-slate-200" type="button" disabled={busy} onClick={() => void lock()}>Khóa</button><button className="report-focus min-h-12 rounded-lg bg-cyan-300 px-6 font-bold text-slate-950 disabled:opacity-50" type="submit" disabled={busy}>{busy ? 'Đang lưu…' : 'Lưu KPI'}</button></div>
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between"><button className="report-focus min-h-12 rounded-lg border border-slate-600 px-5 font-semibold text-slate-200" type="button" disabled={busy} onClick={() => void lock()}>Khóa</button><button className="report-focus min-h-12 rounded-lg bg-cyan-300 px-6 font-bold text-slate-950 disabled:opacity-50" type="submit" disabled={busy}>{busy ? 'Đang lưu…' : 'Lưu chỉ tiêu'}</button></div>
           </form>
         )}
       </div>
@@ -442,7 +443,7 @@ function KpiAdminDialog({
 }
 
 function DashboardSkeleton() {
-  return <div className="grid gap-3" role="status" aria-label="Đang tải dashboard"><div className="hero-grid"><div className="hero-panel animate-pulse" /><div className="status-panel min-h-72 animate-pulse" /></div><div className="metrics-grid">{[1, 2, 3].map((item) => <div key={item} className="metric-card h-24 animate-pulse" />)}</div><div className="chart-panel h-64 animate-pulse" /></div>;
+  return <div className="grid gap-3" role="status" aria-label="Đang tải bảng theo dõi"><div className="hero-grid"><div className="hero-panel animate-pulse" /><div className="status-panel min-h-72 animate-pulse" /></div><div className="metrics-grid">{[1, 2, 3].map((item) => <div key={item} className="metric-card h-24 animate-pulse" />)}</div><div className="chart-panel h-64 animate-pulse" /></div>;
 }
 
 export default function AnnualPassengerKpiDashboard() {
@@ -473,13 +474,13 @@ export default function AnnualPassengerKpiDashboard() {
       const response = await fetch(snapshotUrl, { cache: 'no-store', credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
       const payload: unknown = await response.json().catch(() => null);
       const decoded = decodeAnnualPassengerDashboardSnapshot(payload);
-      if (!response.ok || !decoded) { const message = payload && typeof payload === 'object' && 'error' in payload ? String((payload as { error: unknown }).error) : 'Dashboard tạm thời chưa thể cập nhật.'; throw new Error(message); }
+      if (!response.ok || !decoded) { const message = payload && typeof payload === 'object' && 'error' in payload && payload.error ? String(payload.error) : 'Bảng theo dõi tạm thời chưa thể cập nhật.'; throw new Error(message); }
       setSnapshot(decoded);
       const versionResponse = await fetch(versionUrl, { cache: 'no-store', credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
       if (versionResponse.ok) versionEtagRef.current = versionResponse.headers.get('ETag');
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === 'AbortError') return;
-      setError(caught instanceof Error ? caught.message : 'Dashboard tạm thời chưa thể cập nhật.');
+      setError(formatUiError(caught, 'Bảng theo dõi tạm thời chưa thể cập nhật.'));
     } finally { if (!controller.signal.aborted) setLoading(false); }
   }, []);
   const checkVersion = useCallback(async () => {
@@ -531,7 +532,7 @@ export default function AnnualPassengerKpiDashboard() {
           </div>
         </header>
 
-        {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-pretty text-sm text-rose-900" role="alert"><strong>Không thể cập nhật dashboard.</strong> {error}<button className="report-focus ml-3 min-h-10 rounded-lg border border-rose-300 px-3 font-semibold" type="button" onClick={() => void loadSnapshot(year)}>Thử lại</button></div> : null}
+        {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-pretty text-sm text-rose-900" role="alert"><strong>Không thể cập nhật bảng theo dõi.</strong> {error}<button className="report-focus ml-3 min-h-10 rounded-lg border border-rose-300 px-3 font-semibold" type="button" onClick={() => void loadSnapshot(year)}>Thử lại</button></div> : null}
         {loading && !snapshot ? <DashboardSkeleton /> : null}
 
         {snapshot ? <>
@@ -590,7 +591,7 @@ export default function AnnualPassengerKpiDashboard() {
               <section className="bottom-grid"><TrendChart snapshot={snapshot} wallboard={wallboard} /></section>
             </div>
           </div>
-          <footer className="dashboard-footer flex items-center justify-between gap-4 border-t py-2 text-[10px] uppercase"><span>Dashboard KPI sản lượng khách năm</span><span className="lg:hidden">Cập nhật lúc {displayUpdated(snapshot.projection.refreshed_at)}</span><span className="hidden lg:inline">Cập nhật khi có dữ liệu mới</span></footer>
+          <footer className="dashboard-footer flex items-center justify-between gap-4 border-t py-2 text-[10px] uppercase"><span>Bảng theo dõi KPI sản lượng khách năm</span><span className="lg:hidden">Cập nhật lúc {displayUpdated(snapshot.projection.refreshed_at)}</span><span className="hidden lg:inline">Cập nhật khi có dữ liệu mới</span></footer>
         </> : null}
       </div>
       <KpiAdminDialog

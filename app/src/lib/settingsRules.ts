@@ -1,10 +1,5 @@
 import type {
   AircraftGroup,
-  AiAnalysisContextDocument,
-  AiAnalysisContextDocumentKind,
-  AiAnalysisModelSetting,
-  AiAnalysisProvider,
-  AiAnalysisSettings,
   AirlineColorSetting,
   CheckInCounterGroup,
   CheckInCounterLock,
@@ -38,330 +33,6 @@ const EMPTY_CONDITIONS: CounterRuleConditions = {
   airlineCodes: [],
 };
 
-const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
-export const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com'; 
-export const AI_CONTEXT_DOCUMENT_MAX_COUNT = 20; 
-export const AI_CONTEXT_DOCUMENT_MAX_CHARS = 64 * 1024; 
-
-export const AI_ANALYSIS_DEFAULT_CONTEXT_DOCUMENT_TEMPLATES: Array<Pick<AiAnalysisContextDocument, 'id' | 'kind' | 'title' | 'contentMd' | 'enabled' | 'sortOrder'>> = [
-  {
-    id: 'default-rule-schema-contract',
-    kind: 'rule',
-    title: 'Schema Contract',
-    contentMd: [
-      '# Schema Contract',
-      '',
-      '- Nguồn local chính cho AI là view `dashboard_ai_flight_operations`.',
-      '- Dùng `ops_date` cho ngày khai thác, `month` cho YYYY-MM, `iso_week` cho tuần ISO, `local_hour` cho khung giờ.',
-      '- Metric chuẩn: `flights = COUNT(*)`, `pax = SUM(pax)`, `arrivals = type = A`, `departures = type = D`.',
-      '- Dimension chuẩn: season, airline, route, country, aircraft, type, weekday, local_hour, ops_date, gate, stand.',
-      '- Không trả tổng cả mùa khi người dùng hỏi khoảng ngày, tháng, tuần hoặc mùa cụ thể.',
-    ].join('\n'),
-    enabled: true,
-    sortOrder: 0,
-  },
-  {
-    id: 'default-rule-validated-sql-analyst',
-    kind: 'rule',
-    title: 'Validated SQL Analyst',
-    contentMd: [
-      '# Validated SQL Analyst',
-      '',
-      '- Khi cần dữ liệu chi tiết trong desktop/local mode, sinh `sqlQueryPlans` thay vì trả lời chung chung.',
-      '- SQL chỉ được là một câu `SELECT` hoặc `WITH ... SELECT` đọc từ `dashboard_ai_flight_operations`.',
-      '- Luôn có `LIMIT`; dùng tham số `?` cho tháng/ngày/mùa/hãng/route thay vì nối chuỗi.',
-      '- Cấm INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, PRAGMA, ATTACH, DETACH, transaction và extension.',
-      '- Nếu field không có hoặc dữ liệu không đủ, nói rõ bằng tiếng Việt thay vì suy đoán.',
-    ].join('\n'),
-    enabled: true,
-    sortOrder: 1,
-  },
-  {
-    id: 'default-skill-eda-profile',
-    kind: 'skill',
-    title: 'EDA Profile',
-    contentMd: [
-      '# EDA Profile',
-      '',
-      'Workflow:',
-      '1. Xác định scope dữ liệu: mùa, tháng, tuần, khoảng ngày, loại ARR/DEP, hãng, route.',
-      '2. Query đúng scope.',
-      '3. Tóm tắt coverage, row count, null/missing, distinct values, min/max, top values.',
-      '4. Chỉ nêu insight có bằng chứng từ query result/profile.',
-      '',
-      'Dùng skill này cho prompt tổng quan, missing/null, outlier, phân phối dữ liệu, hoặc “EDA”.',
-    ].join('\n'),
-    enabled: true,
-    sortOrder: 2,
-  },
-  {
-    id: 'default-skill-data-quality-audit',
-    kind: 'skill',
-    title: 'Data Quality Audit',
-    contentMd: [
-      '# Data Quality Audit',
-      '',
-      '- Kiểm tra dữ liệu bị cap/truncated, khoảng ngày không đủ, field thiếu, PAX null/0 bất thường.',
-      '- Ghi chú rõ nguồn: SQLite local hoặc Supabase reporting.',
-      '- Nếu local có pending changes, ưu tiên SQLite local và báo “bao gồm thay đổi chưa đồng bộ”.',
-      '- Không trộn remote-safe với local pending changes nếu không ghi chú.',
-    ].join('\n'),
-    enabled: true,
-    sortOrder: 3,
-  },
-  {
-    id: 'default-skill-driver-decomposition',
-    kind: 'skill',
-    title: 'Driver Decomposition',
-    contentMd: [
-      '# Driver Decomposition',
-      '',
-      'Workflow cho biến động/ngày cao điểm:',
-      '1. Query tổng theo kỳ/ngày cần so sánh.',
-      '2. Drilldown theo airline, route, local_hour, type, country hoặc aircraft.',
-      '3. Tính delta/share khi có kỳ trước hoặc baseline.',
-      '4. Render bảng driver + biểu đồ phù hợp.',
-      '',
-      'Không dùng fallback airline nếu prompt hỏi route/country/hour.',
-    ].join('\n'),
-    enabled: true,
-    sortOrder: 4,
-  },
-  {
-    id: 'default-skill-visualization-grammar',
-    kind: 'skill',
-    title: 'Visualization Grammar',
-    contentMd: [
-      '# Visualization Grammar',
-      '',
-      '- Ranking/top N: table + bar chart.',
-      '- Trend theo ngày/tuần/tháng: line hoặc area chart.',
-      '- ARR/DEP mix: stacked bar hoặc KPI strip.',
-      '- Peak hour/weekday: heatmap nếu có 2 chiều, bar nếu chỉ có một chiều.',
-      '- Driver/delta: waterfall khi có baseline và delta.',
-      '- Luôn dùng schema chart/table declarative; không yêu cầu JavaScript tự do.',
-    ].join('\n'),
-    enabled: true,
-    sortOrder: 5,
-  },
-  {
-    id: 'default-rule-answer-verification',
-    kind: 'rule',
-    title: 'Answer Verification',
-    contentMd: [
-      '# Answer Verification',
-      '',
-      '- Không viết số liệu trong `assistantText` nếu số đó không xuất hiện trong query result hoặc profile.',
-      '- Nếu câu trả lời của provider mâu thuẫn query result, app sẽ ưu tiên query result và hiển thị cảnh báo.',
-      '- Khi đã query thành công, không trả lời “đang truy vấn” hoặc “cần thêm dữ liệu” nữa.',
-    ].join('\n'),
-    enabled: true,
-    sortOrder: 6,
-  },
-  {
-    id: 'default-rule-safe-rendering-policy',
-    kind: 'rule',
-    title: 'Safe Rendering Policy',
-    contentMd: [
-      '# Safe Rendering Policy',
-      '',
-      '- HTML chỉ được dùng trong block `html-preview` để app render trong iframe sandbox.',
-      '- HTML preview chỉ là HTML/CSS tĩnh.',
-      '- Cấm `<script>`, inline event handlers, form, nested iframe, object/embed, meta refresh, external script.',
-      '- Không yêu cầu Python, JavaScript runtime, filesystem, network hoặc quyền ghi.',
-    ].join('\n'),
-    enabled: true,
-    sortOrder: 7,
-  },
-  { 
-    id: 'default-rule-supabase-reporting-safety', 
-    kind: 'rule', 
-    title: 'Supabase Reporting Safety',
-    contentMd: [
-      '# Supabase Reporting Safety',
-      '',
-      '- Supabase reporting chỉ dùng khi dữ liệu đã sync/remote-safe.',
-      '- Edge Function không gọi trực tiếp schema reporting; mọi truy vấn remote đi qua public RPC allowlist.',
-      '- Không đưa provider key hoặc service role key ra frontend.',
-      '- Nếu RPC hoặc schema thiếu, trả lỗi dữ liệu rõ bằng tiếng Việt.',
-    ].join('\n'),
-    enabled: true, 
-    sortOrder: 8, 
-  }, 
-  {
-    id: 'default-rule-agent-role-and-source-priority',
-    kind: 'rule',
-    title: 'Agent Role and Source Priority',
-    contentMd: [
-      '# Agent Role and Source Priority',
-      '',
-      '- Vai trò của AI là Dashboard Data Analyst cho flight operations; không trả lời như general-purpose analyst ngoài dữ liệu dashboard.',
-      '- Luôn xác định scope trước khi query: mùa, tháng, tuần, khoảng ngày, ARR/DEP, hãng bay, đường bay, quốc gia, tàu bay, khung giờ.',
-      '- Desktop/local mode ưu tiên SQLite local vì phản ánh dữ liệu đang hiển thị và pending changes.',
-      '- Supabase reporting chỉ dùng khi dữ liệu đã sync/remote-safe hoặc khi context policy cho phép.',
-      '- Nếu người dùng hỏi ngoài scope dữ liệu hiện có, trả lời ngắn rằng cần chọn/thêm season hoặc date range; không fallback về tổng active season.',
-    ].join('\n'),
-    enabled: true,
-    sortOrder: 9,
-  },
-  {
-    id: 'default-rule-aviation-terms-and-synonyms',
-    kind: 'rule',
-    title: 'Aviation Terms and Synonyms',
-    contentMd: [
-      '# Aviation Terms and Synonyms',
-      '',
-      '- “sản lượng”, “tần suất”, “volume”, “số chuyến” = `flights`.',
-      '- “khách”, “hành khách”, “PAX” = `pax`.',
-      '- “ngày cao điểm”, “ngày nhiều chuyến nhất” = group by `ops_date`, order by `flights DESC`.',
-      '- “tháng 6” trong context S26 mặc định là `month = "2026-06"` nếu không có năm khác trong prompt.',
-      '- “tuần” = `iso_week`; “giờ cao điểm”, “peak hour” = `local_hour`.',
-      '- “hãng bay” = `airline`; “đường bay” = `route`; “quốc gia” = `country`; “tàu bay” = `aircraft`.',
-      '- ARR = `type = "A"`; DEP = `type = "D"`; nếu người dùng không nêu ARR/DEP thì dùng toàn bộ type.',
-    ].join('\n'),
-    enabled: true,
-    sortOrder: 10,
-  },
-  {
-    id: 'default-rule-query-examples-flight-operations',
-    kind: 'rule',
-    title: 'Query Examples for Flight Operations',
-    contentMd: [
-      '# Query Examples for Flight Operations',
-      '',
-      'Các ví dụ này là leading words để sinh SQL local read-only đúng scope.',
-      '',
-      '## Ngày cao điểm tháng 6',
-      '```sql',
-      'SELECT ops_date, COUNT(*) AS flights, SUM(pax) AS pax',
-      'FROM dashboard_ai_flight_operations',
-      'WHERE month = ? AND COALESCE(status, "active") != "deleted"',
-      'GROUP BY ops_date',
-      'ORDER BY flights DESC, ops_date ASC',
-      'LIMIT 31',
-      '```',
-      '',
-      '## Top route theo PAX tháng 3',
-      '```sql',
-      'SELECT route, COUNT(*) AS flights, SUM(pax) AS pax',
-      'FROM dashboard_ai_flight_operations',
-      'WHERE month = ? AND COALESCE(status, "active") != "deleted"',
-      'GROUP BY route',
-      'ORDER BY pax DESC',
-      'LIMIT 10',
-      '```',
-      '',
-      '## So sánh Vietnam Airlines giữa S25 và S26',
-      '```sql',
-      'SELECT season, airline, COUNT(*) AS flights, SUM(pax) AS pax',
-      'FROM dashboard_ai_flight_operations',
-      'WHERE season IN (?, ?) AND airline = ? AND COALESCE(status, "active") != "deleted"',
-      'GROUP BY season, airline',
-      'ORDER BY season ASC',
-      'LIMIT 20',
-      '```',
-      '',
-      '## Trend tuần của chuyến bay quốc tế',
-      '```sql',
-      'SELECT iso_week, COUNT(*) AS flights, SUM(pax) AS pax',
-      'FROM dashboard_ai_flight_operations',
-      'WHERE country IS NOT NULL AND country != "VN" AND COALESCE(status, "active") != "deleted"',
-      'GROUP BY iso_week',
-      'ORDER BY iso_week ASC',
-      'LIMIT 60',
-      '```',
-      '',
-      '## Peak hour 07-08',
-      '```sql',
-      'SELECT local_hour, airline, route, type, COUNT(*) AS flights, SUM(pax) AS pax',
-      'FROM dashboard_ai_flight_operations',
-      'WHERE local_hour >= ? AND local_hour < ? AND COALESCE(status, "active") != "deleted"',
-      'GROUP BY local_hour, airline, route, type',
-      'ORDER BY flights DESC',
-      'LIMIT 50',
-      '```',
-    ].join('\n'),
-    enabled: true,
-    sortOrder: 11,
-  },
-  {
-    id: 'default-rule-analysis-reasoning-contract',
-    kind: 'rule',
-    title: 'Analysis Reasoning Contract',
-    contentMd: [
-      '# Analysis Reasoning Contract',
-      '',
-      '- Câu trả lời cuối cùng phải dựa trên query result/profile đã có, không dựa vào payload cũ nếu query result mới tồn tại.',
-      '- Luôn nêu phạm vi dữ liệu đã dùng: mùa/tháng/khoảng ngày/filter chính.',
-      '- Khi query đã chạy thành công, không trả lời “đang truy vấn”, “cần truy xuất dữ liệu” hoặc lặp lại yêu cầu dữ liệu.',
-      '- Format ưu tiên: kết luận ngắn → bảng/biểu đồ → 2-4 nhận định → ghi chú dữ liệu.',
-      '- Nếu số liệu thiếu hoặc field không tồn tại, ghi rõ “không đủ dữ liệu để xác định” và chỉ rõ field/scope thiếu.',
-      '- Không nhắc tới code/tool nội bộ trừ khi hiển thị trong tool trace.',
-    ].join('\n'),
-    enabled: true,
-    sortOrder: 12,
-  },
-  {
-    id: 'default-rule-visualization-intent-router',
-    kind: 'rule',
-    title: 'Visualization Intent Router',
-    contentMd: [
-      '# Visualization Intent Router',
-      '',
-      '- Prompt có “vẽ”, “biểu đồ”, “chart”, “trend”, “heatmap”, “phân bổ” hoặc “so sánh” phải tạo chart block nếu có dữ liệu phù hợp.',
-      '- Prompt có “bảng”, “liệt kê”, “top N”, “chi tiết” phải tạo custom-table block.',
-      '- Prompt có “tại sao”, “điểm bất thường”, “driver”, “động lực” phải tạo table + insight-list; thêm waterfall nếu có baseline/delta.',
-      '- Ranking/top N dùng bar-ranking; chuỗi thời gian dùng line-trend/area; ARR/DEP mix dùng stacked-bar hoặc KPI strip; peak hour hai chiều dùng heatmap.',
-      '- Không tạo HTML/script để thay cho chart schema; HTML preview chỉ dùng cho report tĩnh.',
-    ].join('\n'),
-    enabled: true,
-    sortOrder: 13,
-  },
-]; 
-
-export function buildDefaultAiAnalysisContextDocuments(now = Date.now()): AiAnalysisContextDocument[] {
-  return AI_ANALYSIS_DEFAULT_CONTEXT_DOCUMENT_TEMPLATES.map((document) => ({
-    ...document,
-    createdAt: now,
-    updatedAt: now,
-  }));
-}
-
-export const DEFAULT_AI_ANALYSIS_SETTINGS: AiAnalysisSettings = {
-  enabled: true,
-  activeModelId: 'gemini-flash',
-  models: [
-    {
-      id: 'gemini-flash',
-      label: 'Gemini Flash',
-      provider: 'gemini',
-      model: 'gemini-3-flash-preview',
-      baseUrl: null,
-      enabled: true,
-      keyUpdatedAt: null,
-    },
-    {
-      id: 'qwen-plus',
-      label: 'Qwen Plus',
-      provider: 'openai-compatible',
-      model: 'qwen-plus',
-      baseUrl: DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
-      enabled: true,
-      keyUpdatedAt: null,
-    },
-    {
-      id: 'deepseek-v4-flash',
-      label: 'DeepSeek V4 Flash',
-      provider: 'deepseek',
-      model: 'deepseek-v4-flash',
-      baseUrl: DEFAULT_DEEPSEEK_BASE_URL,
-      enabled: true,
-      keyUpdatedAt: null,
-    },
-  ],
-  contextDocuments: [],
-  updatedAt: null,
-};
 
 export const DEFAULT_DASHBOARD_ALERT_SETTINGS: DashboardAlertSettings = {
   arrivalBucketFlights: null,
@@ -465,10 +136,6 @@ function normalizeName(value: unknown): string {
   return String(value ?? '').trim();
 }
 
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, '');
-}
-
 function normalizeUniqueCodes(values: unknown[] | undefined): string[] {
   const seen = new Set<string>();
   const normalized: string[] = [];
@@ -485,102 +152,6 @@ function normalizeHexColor(value: unknown): string {
   const color = String(value ?? '').trim().toUpperCase();
   const prefixed = color.startsWith('#') ? color : `#${color}`;
   return prefixed;
-}
-
-function normalizeAiProvider(value: unknown): AiAnalysisProvider {
-  if (value === 'openai-compatible' || value === 'deepseek') return value;
-  return 'gemini';
-}
-
-function normalizeAiModel(model: Partial<AiAnalysisModelSetting>, index: number): AiAnalysisModelSetting {
-  const provider = normalizeAiProvider(model.provider);
-  const fallback = DEFAULT_AI_ANALYSIS_SETTINGS.models[index] ?? DEFAULT_AI_ANALYSIS_SETTINGS.models[0];
-  return {
-    id: String(model.id ?? fallback.id).trim(),
-    label: normalizeName(model.label ?? fallback.label),
-    provider,
-    model: normalizeName(model.model ?? fallback.model),
-    baseUrl: provider === 'gemini'
-      ? null
-      : trimTrailingSlash(normalizeName(model.baseUrl ?? fallback.baseUrl ?? defaultBaseUrlForAiProvider(provider))),
-    enabled: model.enabled !== false,
-    keyUpdatedAt: model.keyUpdatedAt == null ? null : Number(model.keyUpdatedAt),
-  };
-}
-
-function normalizeAiContextDocumentKind(value: unknown): AiAnalysisContextDocumentKind {
-  return value === 'skill' ? 'skill' : 'rule';
-}
-
-function normalizeAiContextDocument(
-  document: Partial<AiAnalysisContextDocument>,
-  index: number
-): AiAnalysisContextDocument {
-  const kind = normalizeAiContextDocumentKind(document.kind);
-  const fallbackTitle = kind === 'skill' ? `Skill ${index + 1}` : `Rule ${index + 1}`;
-  const id = normalizeName(document.id ?? `ai-${kind}-${index + 1}`);
-  const title = normalizeName(document.title ?? fallbackTitle) || fallbackTitle;
-  const contentMd = String(document.contentMd ?? '')
-    .replace(/\u0000/g, '')
-    .slice(0, AI_CONTEXT_DOCUMENT_MAX_CHARS);
-  const sortOrder = Number(document.sortOrder ?? index);
-  const createdAt = Number(document.createdAt ?? 0);
-  const updatedAt = Number(document.updatedAt ?? createdAt);
-  return {
-    id,
-    kind,
-    title,
-    contentMd,
-    enabled: document.enabled !== false,
-    sortOrder: Number.isFinite(sortOrder) ? sortOrder : index,
-    createdAt: Number.isFinite(createdAt) ? createdAt : 0,
-    updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
-  };
-}
-
-function defaultBaseUrlForAiProvider(provider: AiAnalysisProvider): string {
-  return provider === 'deepseek' ? DEFAULT_DEEPSEEK_BASE_URL : DEFAULT_OPENAI_COMPATIBLE_BASE_URL;
-}
-
-function normalizeAiAnalysisSettings(settings: Partial<AiAnalysisSettings> | null | undefined): AiAnalysisSettings {
-  const sourceModels = Array.isArray(settings?.models) && settings.models.length > 0
-    ? settings.models
-    : DEFAULT_AI_ANALYSIS_SETTINGS.models;
-  const models = sourceModels.map((model, index) => normalizeAiModel(model, index));
-  const modelIds = new Set<string>();
-  for (const model of models) {
-    if (!model.id) throw new Error('AI model id is required.');
-    if (modelIds.has(model.id)) throw new Error(`Duplicate AI model id ${model.id}.`);
-    modelIds.add(model.id);
-    if (!model.label) throw new Error(`AI model ${model.id} label is required.`);
-    if (!model.model) throw new Error(`AI model ${model.id} provider model name is required.`);
-    if ((model.provider === 'openai-compatible' || model.provider === 'deepseek') && !model.baseUrl) {
-      throw new Error(`AI model ${model.id} requires a provider base URL.`);
-    }
-    if (model.keyUpdatedAt != null && !Number.isFinite(model.keyUpdatedAt)) {
-      throw new Error(`AI model ${model.id} key timestamp must be finite.`);
-    }
-  }
-  const requestedActiveModelId = String(settings?.activeModelId ?? DEFAULT_AI_ANALYSIS_SETTINGS.activeModelId).trim();
-  const fallbackActiveModelId = models.find((model) => model.enabled)?.id ?? models[0]?.id ?? '';
-  const sourceContextDocuments = Array.isArray(settings?.contextDocuments) ? settings.contextDocuments : [];
-  const contextDocuments = sourceContextDocuments
-    .slice(0, AI_CONTEXT_DOCUMENT_MAX_COUNT)
-    .map((document, index) => normalizeAiContextDocument(document, index));
-  const documentIds = new Set<string>();
-  for (const document of contextDocuments) {
-    if (!document.id) throw new Error('AI context document id is required.');
-    if (documentIds.has(document.id)) throw new Error(`Duplicate AI context document id ${document.id}.`);
-    documentIds.add(document.id);
-    if (!document.title) throw new Error(`AI context document ${document.id} title is required.`);
-  }
-  return {
-    enabled: settings?.enabled !== false,
-    activeModelId: models.some((model) => model.id === requestedActiveModelId) ? requestedActiveModelId : fallbackActiveModelId,
-    models,
-    contextDocuments,
-    updatedAt: settings?.updatedAt == null ? null : Number(settings.updatedAt),
-  };
 }
 
 function normalizeNullableNumber(value: unknown, min: number, max: number): number | null {
@@ -785,7 +356,6 @@ export function hydrateOperationalSettings(settings: SettingsInput): Operational
   return validateOperationalSettings({
     airlineColors: settings?.airlineColors ?? DEFAULT_AIRLINE_COLORS,
     routeCountries: settings?.routeCountries ?? listRouteCountries(),
-    aiAnalysis: settings?.aiAnalysis ?? DEFAULT_AI_ANALYSIS_SETTINGS,
     dashboardAlerts: settings?.dashboardAlerts ?? DEFAULT_DASHBOARD_ALERT_SETTINGS,
     aircraftGroups: settings?.aircraftGroups ?? [],
     counterAllocationRules: settings?.counterAllocationRules ?? [],
@@ -803,7 +373,6 @@ export function hydrateOperationalSettings(settings: SettingsInput): Operational
 export function validateOperationalSettings(settings: SettingsInput): OperationalSettings {
   const airlineColors = (settings?.airlineColors ?? []).map((setting) => normalizeAirlineColor(setting));
   const routeCountries = (settings?.routeCountries ?? []).map((setting) => normalizeRouteCountry(setting));
-  const aiAnalysis = normalizeAiAnalysisSettings(settings?.aiAnalysis);
   const dashboardAlerts = normalizeDashboardAlerts(settings?.dashboardAlerts);
   const groups = (settings?.aircraftGroups ?? []).map((group) => normalizeGroup(group));
   const rules = (settings?.counterAllocationRules ?? []).map((rule) => normalizeRule(rule));
@@ -1020,7 +589,6 @@ export function validateOperationalSettings(settings: SettingsInput): Operationa
   return {
     airlineColors,
     routeCountries,
-    aiAnalysis,
     dashboardAlerts,
     aircraftGroups: groups,
     counterAllocationRules: rules,
@@ -1113,7 +681,6 @@ export function removeAircraftGroupFromSettings(
     standGateMappings: normalized.standGateMappings,
     airlineColors: normalized.airlineColors,
     routeCountries: normalized.routeCountries,
-    aiAnalysis: normalized.aiAnalysis,
     dashboardAlerts: normalized.dashboardAlerts,
     updatedAt,
   });

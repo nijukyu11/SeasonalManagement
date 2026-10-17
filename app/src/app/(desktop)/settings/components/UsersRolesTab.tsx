@@ -1,5 +1,7 @@
 'use client';
 
+import { formatUiError } from '@/lib/uiDisplayText';
+
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { operatorUsernameToTechnicalEmail } from '@/lib/operatorAuthIdentity';
 import {
@@ -68,7 +70,7 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
     try {
       setOperators(sortOperators(await listOperatorUsers()));
     } catch (err) {
-      void showAlert({ title: 'Load Users Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Tải người dùng thất bại', message: formatUiError(err, 'Không thể tải danh sách người dùng'), tone: 'error' });
     } finally {
       setLoading(false);
     }
@@ -116,10 +118,10 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
       });
       setOperators((current) => sortOperators([created, ...current.filter((operator) => operator.userId !== created.userId)]));
       resetForm();
-      setStatus(`Created operator ${operatorLabel(created)}`);
+      setStatus(`Đã tạo người vận hành ${operatorLabel(created)}`);
       void reloadOperators();
     } catch (err) {
-      void showAlert({ title: 'Create User Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Tạo người dùng thất bại', message: formatUiError(err, 'Không thể tạo tài khoản người vận hành'), tone: 'error' });
     } finally {
       setCreating(false);
     }
@@ -139,14 +141,14 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
             <span className="material-symbols-outlined text-[22px]">person_add</span>
           </div>
           <div>
-            <h2 className="font-title-md text-title-md text-on-surface">Create User</h2>
-            <p className="mt-1 text-sm text-on-surface-variant">Initial operator account</p>
+            <h2 className="font-title-md text-title-md text-on-surface">Tạo người dùng</h2>
+            <p className="mt-1 text-sm text-on-surface-variant">Tài khoản người vận hành ban đầu</p>
           </div>
         </div>
 
         <div className="mt-4 grid gap-3">
           <label className="block text-sm font-semibold text-on-surface">
-            Username
+            Tên đăng nhập
             <input
               value={username}
               onChange={(event) => setUsername(event.target.value)}
@@ -156,17 +158,17 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
             />
           </label>
           <label className="block text-sm font-semibold text-on-surface">
-            Display name
+            Tên hiển thị
             <input
               value={displayName}
               onChange={(event) => setDisplayName(event.target.value)}
               autoComplete="name"
-              placeholder="Planning Admin"
+              placeholder="Quản trị kế hoạch"
               className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
             />
           </label>
           <label className="block text-sm font-semibold text-on-surface">
-            Password
+            Mật khẩu
             <input
               type="password"
               value={password}
@@ -176,7 +178,7 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
             />
           </label>
           <label className="block text-sm font-semibold text-on-surface">
-            Role
+            Vai trò
             <select
               value={effectiveRoleId}
               onChange={(event) => handleRoleChange(event.target.value as OperatorRoleId)}
@@ -188,12 +190,12 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
             </select>
           </label>
           <div className="rounded-lg border border-outline-variant bg-surface-container px-3 py-2 text-xs font-semibold text-on-surface-variant">
-            {technicalEmail || 'Technical email is derived after username is valid'}
+            {technicalEmail || 'Email kỹ thuật được tạo tự động khi tên đăng nhập hợp lệ'}
           </div>
         </div>
 
         <div className="mt-5">
-          <h3 className="text-sm font-semibold text-on-surface">Extra capabilities</h3>
+          <h3 className="text-sm font-semibold text-on-surface">Quyền hạn bổ sung</h3>
           <div className="mt-2 grid gap-2">
             {OPERATOR_EXTRA_CAPABILITY_OPTIONS.map((option) => {
               const includedByRole = rolePermissionSet.has(option.id);
@@ -209,7 +211,7 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
                   />
                   <span className="min-w-0">
                     <span className="block font-semibold">{option.label}</span>
-                    <span className="block text-xs text-on-surface-variant">{includedByRole ? 'Included by selected role' : option.id}</span>
+                    <span className="block text-xs text-on-surface-variant">{includedByRole ? 'Đã bao gồm trong vai trò đã chọn' : option.id}</span>
                   </span>
                 </label>
               );
@@ -223,15 +225,15 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
           className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-on-primary hover:bg-primary-container hover:text-on-primary-container disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span className={`material-symbols-outlined text-[18px] ${creating ? 'animate-spin' : ''}`}>{creating ? 'progress_activity' : 'person_add'}</span>
-          {creating ? 'Creating' : 'Create User'}
+          {creating ? 'Đang tạo' : 'Tạo người dùng'}
         </button>
       </form>
 
       <div className="rounded-lg border border-surface-variant bg-surface-container-lowest shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-surface-variant px-4 py-3">
           <div>
-            <h2 className="font-title-md text-title-md text-on-surface">Users & Roles</h2>
-            <p className="mt-1 text-sm text-on-surface-variant">{operators.length} operator account(s)</p>
+            <h2 className="font-title-md text-title-md text-on-surface">Người dùng & Vai trò</h2>
+            <p className="mt-1 text-sm text-on-surface-variant">{operators.length} tài khoản người vận hành</p>
           </div>
           <button
             type="button"
@@ -240,25 +242,25 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
             className="inline-flex items-center gap-2 rounded-lg border border-outline-variant px-3 py-2 text-sm font-semibold text-on-surface hover:bg-surface-container disabled:opacity-50"
           >
             <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>{loading ? 'progress_activity' : 'refresh'}</span>
-            Refresh
+            Làm mới
           </button>
         </div>
 
         <div className="hidden grid-cols-[160px_170px_minmax(170px,1fr)_170px_minmax(160px,1fr)] gap-3 border-b border-surface-variant bg-surface-container px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-on-surface-variant xl:grid">
-          <span>User</span>
-          <span>Username</span>
+          <span>Người dùng</span>
+          <span>Tên đăng nhập</span>
           <span>Email</span>
-          <span>Role</span>
-          <span>Capabilities</span>
+          <span>Vai trò</span>
+          <span>Quyền hạn</span>
         </div>
 
         {loading ? (
           <div className="flex items-center justify-center gap-2 px-4 py-10 text-sm text-on-surface-variant">
             <span className="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
-            Loading users
+            Đang tải người dùng
           </div>
         ) : operators.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-on-surface-variant">No operators found</div>
+          <div className="px-4 py-10 text-center text-sm text-on-surface-variant">Không tìm thấy người vận hành nào</div>
         ) : (
           <div className="divide-y divide-surface-variant">
             {operators.map((operator) => {
@@ -268,14 +270,14 @@ export default function UsersRolesTab({ canManageRoles, setStatus, showAlert }: 
               return (
                 <div key={operator.userId} className="grid gap-3 p-4 xl:grid-cols-[160px_170px_minmax(170px,1fr)_170px_minmax(160px,1fr)] xl:items-center">
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-on-surface">{operator.displayName ?? 'No display name'}</div>
+                    <div className="truncate text-sm font-semibold text-on-surface">{operator.displayName ?? 'Chưa đặt tên hiển thị'}</div>
                     <div className="truncate text-xs text-on-surface-variant">{operator.userId}</div>
                   </div>
                   <div className="truncate text-sm text-on-surface">{operator.username ?? '-'}</div>
                   <div className="truncate text-sm text-on-surface">{operator.email ?? '-'}</div>
                   <div className="flex flex-wrap gap-1">
                     {operator.roles.length === 0 ? (
-                      <span className="rounded-full border border-outline-variant px-2 py-1 text-xs font-semibold text-on-surface-variant">No role</span>
+                      <span className="rounded-full border border-outline-variant px-2 py-1 text-xs font-semibold text-on-surface-variant">Không có vai trò</span>
                     ) : operator.roles.map((role) => (
                       <span key={role} className="rounded-full border border-primary/30 bg-primary-container/30 px-2 py-1 text-xs font-semibold text-primary">
                         {roleLabel(role)}

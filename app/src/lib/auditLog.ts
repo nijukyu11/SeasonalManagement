@@ -197,10 +197,10 @@ function normalizeFlightNumber(value: string | null | undefined): string {
 }
 
 export function formatAuditFlightLabel(record: Partial<FlightRecord> | null | undefined): string {
-  if (!record) return 'Unknown flight';
+  if (!record) return 'Chuyến bay không xác định';
   const airline = String(record.airline ?? '').trim().toUpperCase();
   const flightNumber = normalizeFlightNumber(record.flightNumber ?? record.rawFlightNumber);
-  if (!airline && !flightNumber) return record.id ? `Flight ${record.id}` : 'Unknown flight';
+  if (!airline && !flightNumber) return record.id ? `Chuyến bay ${record.id}` : 'Chuyến bay không xác định';
   if (flightNumber.startsWith(airline)) return flightNumber;
   return `${airline}${flightNumber}`;
 }

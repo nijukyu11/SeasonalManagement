@@ -8,6 +8,7 @@ import {
   type SeasonalDraftWindowResult,
 } from './seasonalPlanningContract.ts';
 import type { FlightLeg, FlightModification, FlightRecord } from './types.ts';
+import { withOperationalFlightMetadata } from './iataSeason.ts';
 import {
   fromFlightRecordRows,
   type FlightRecordCounterRelationalRow,
@@ -153,6 +154,8 @@ export interface SaveSeasonalPlanningDraftInput {
   applyFn: SeasonalDraftApplyFn;
   changes?: SeasonalDraftChangeInput[];
 }
+
+
 export function applyModificationsToFlightRecords(
   records: FlightRecord[],
   modifications: FlightModification[] | Map<string, FlightModification>
@@ -172,10 +175,13 @@ export function applyModificationsToFlightRecords(
       };
     }
     if (mod.action === 'modified') {
-      return {
+      const updatedSchedule = mod.schedule ?? record.schedule;
+
+      const baseUpdated: FlightRecord = {
         ...record,
         action: 'modified' as const,
-        schedule: mod.schedule ?? record.schedule,
+        schedule: updatedSchedule,
+        scheduledTime: updatedSchedule,
         aircraft: mod.aircraft ?? record.aircraft,
         route: mod.route ?? record.route,
         codeShares: 'codeShares' in mod ? (mod.codeShares ?? null) : record.codeShares,
@@ -194,6 +200,8 @@ export function applyModificationsToFlightRecords(
         bhs: 'bhs' in mod ? (mod.bhs ?? null) : record.bhs,
         ghs: 'ghs' in mod ? (mod.ghs ?? null) : record.ghs,
       };
+
+      return withOperationalFlightMetadata(baseUpdated);
     }
     return record;
   });
@@ -508,7 +516,7 @@ export function buildAuthoritativeDraftUndoChanges(
       ? new Map(beforeRecords.map((r) => [r.id, r]))
       : new Map<string, FlightRecord>();
 
-  const changesByDraftId = new Map<string, SeasonalDraftChangeInput>();
+  const undoChanges: SeasonalDraftChangeInput[] = [];
 
   // Process receipts in reverse order (newest mutation first)
   for (let rIdx = receipts.length - 1; rIdx >= 0; rIdx--) {
@@ -570,53 +578,59 @@ export function buildAuthoritativeDraftUndoChanges(
 
       if (!singleUndo || Object.keys(singleUndo.patch).length === 0) continue;
 
-      const singleExpected = singleUndo.expected ?? {};
-      const existing = changesByDraftId.get(draftId);
-      if (!existing) {
-        changesByDraftId.set(draftId, {
-          draftId,
-          expected: { ...singleExpected },
-          patch: { ...singleUndo.patch },
-        });
-      } else {
-        // Multi-receipt consolidation:
-        // existing was seen earlier (newer mutation) -> its `expected` is from the latest DB state.
-        // singleUndo was seen later (older mutation) -> its `patch` contains the earliest desired state.
-        const existingExpected = (existing.expected ? { ...existing.expected } : {}) as Record<string, unknown>;
-        existing.expected = existingExpected;
-        for (const [key, val] of Object.entries(singleExpected)) {
-          if (!(key in existingExpected)) {
-            existingExpected[key] = val;
-          }
-        }
-        for (const [key, val] of Object.entries(singleUndo.patch)) {
-          existing.patch[key] = val;
-        }
-      }
+      undoChanges.push(singleUndo);
     }
   }
 
-  // Remove any no-op fields where patch equals expected after consolidation
-  const result: SeasonalDraftChangeInput[] = [];
-  for (const change of changesByDraftId.values()) {
-    const finalExpected: Record<string, unknown> = {};
-    const finalPatch: Record<string, unknown> = {};
-    const changeExpected = change.expected ?? {};
-    for (const [key, patchVal] of Object.entries(change.patch)) {
-      const expVal = changeExpected[key];
-      if (JSON.stringify(patchVal) !== JSON.stringify(expVal)) {
-        finalPatch[key] = patchVal;
-        finalExpected[key] = expVal;
-      }
+  return composeSeasonalDraftUndoChanges(undoChanges);
+}
+
+/** Merge newest-to-oldest undo changes using current preimages and earliest targets. */
+export function composeSeasonalDraftUndoChanges(
+  changes: readonly SeasonalDraftChangeInput[]
+): SeasonalDraftChangeInput[] {
+  const byId = new Map<string, SeasonalDraftChangeInput>();
+  for (const change of changes) {
+    const existing = byId.get(change.draftId);
+    if (!existing) {
+      byId.set(change.draftId, {
+        draftId: change.draftId,
+        expected: { ...change.expected },
+        patch: { ...change.patch },
+      });
+      continue;
     }
-    if (Object.keys(finalPatch).length > 0) {
+    const expected = existing.expected!;
+    for (const [field, value] of Object.entries(change.expected ?? {})) {
+      if (!(field in expected)) expected[field] = value;
+    }
+    Object.assign(existing.patch, change.patch);
+  }
+
+  const result: SeasonalDraftChangeInput[] = [];
+  for (const change of byId.values()) {
+    const expected = change.expected!;
+    // Undoing an insertion removes the row, not each intervening field edit.
+    if (change.patch.status === 'deleted') {
+      if (expected.status === 'deleted') continue;
       result.push({
         draftId: change.draftId,
-        expected: finalExpected,
-        patch: finalPatch,
+        expected: { status: expected.status, deletion_reason: expected.deletion_reason },
+        patch: { status: 'deleted', deletion_reason: change.patch.deletion_reason },
       });
+      continue;
+    }
+    const patch: Record<string, unknown> = {};
+    const preimage: Record<string, unknown> = {};
+    for (const [field, value] of Object.entries(change.patch)) {
+      if (JSON.stringify(value) !== JSON.stringify(expected[field])) {
+        patch[field] = value;
+        preimage[field] = expected[field];
+      }
+    }
+    if (Object.keys(patch).length > 0) {
+      result.push({ draftId: change.draftId, expected: preimage, patch });
     }
   }
-
   return result;
 }

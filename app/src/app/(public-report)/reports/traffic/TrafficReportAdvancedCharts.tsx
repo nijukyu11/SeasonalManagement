@@ -21,8 +21,8 @@ const flightCategoryColors: Record<string, string> = {
 
 function formatFleetGroupLabel(label: string): string {
   const trimmed = label.trim();
-  if (/^small$/i.test(trimmed) || /^narrowbody$/i.test(trimmed)) return 'Small - code C';
-  if (/^big$/i.test(trimmed) || /^widebody$/i.test(trimmed)) return 'Big - code D, E';
+  if (/^small$/i.test(trimmed) || /^narrowbody$/i.test(trimmed)) return 'Nhóm nhỏ (mã C)';
+  if (/^big$/i.test(trimmed) || /^widebody$/i.test(trimmed)) return 'Nhóm lớn (mã D, E)';
   return label;
 }
 type FleetMixRow = TrafficBreakdownRow & {
@@ -191,7 +191,7 @@ export function PeakHourChart({ rows, monthlyRows, timeBasis, selectedDayCount, 
           </div>
           <h4 className="mt-4 text-sm font-bold text-blue-950">Các chuyến bay thường lệ trong khung giờ</h4>
           {activeRegularFlights.length > 0 ? <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto pr-1">{activeRegularFlights.map((flight) => <li key={`${flight.airline}-${flight.flight_number}-${flight.route}`} className="grid gap-1 rounded-lg bg-white px-3 py-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-            <span className="font-bold text-slate-900">{regularFlightCode(flight)} · {flight.route || 'Unknown'}</span>
+            <span className="font-bold text-slate-900">{regularFlightCode(flight)} · {flight.route || 'Chưa xác định'}</span>
             <span className="text-slate-600 sm:text-right">{operatingPattern(flight.operating_days)} · thường lúc <span className="font-semibold tabular-nums">{flight.typical_time}</span></span>
           </li>)}</ul> : <p className="mt-2 text-pretty text-sm text-slate-600">Không ghi nhận lịch bay lặp ổn định trong kỳ. Chọn khung giờ khác để xem lịch thường lệ.</p>}
         </section> : null}
@@ -259,7 +259,7 @@ export function FleetMixChart({ rows }: { rows: FleetMixRow[] }) {
     <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
       <p className="text-sm font-bold text-blue-900">Loại tàu bay</p>
       <h3 className="mt-2 text-balance text-2xl font-bold text-[#102033]">Cơ cấu nhóm tàu bay</h3>
-      <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">So sánh tỷ trọng số chuyến giữa các nhóm tàu bay (Small - code C, Big - code D, E) trong phạm vi đang chọn. Mở từng nhóm để xem các loại tàu bay khi dữ liệu có sẵn.</p>
+      <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">So sánh tỷ trọng số chuyến giữa các nhóm tàu bay (Nhóm nhỏ (mã C), Nhóm lớn (mã D, E)) trong phạm vi đang chọn. Mở từng nhóm để xem các loại tàu bay khi dữ liệu có sẵn.</p>
       {visibleRows.length > 0 ? <>
         <div className="mt-6 flex h-10 overflow-hidden rounded-xl bg-slate-100" role="img" aria-label={ariaSummary}>
           {visibleRows.map((row, index) => <span key={row.key} className="block h-full border-r-2 border-white last:border-r-0" style={{ width: `${(row.share ?? 0) * 100}%`, backgroundColor: fleetColors[index % fleetColors.length] }} />)}

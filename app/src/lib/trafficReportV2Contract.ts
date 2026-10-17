@@ -249,7 +249,7 @@ function isApiMetric(value: unknown): value is TrafficV2ApiMetricSet {
 function isApiTimelinePoint(value: unknown): value is TrafficV2ApiTimelinePoint {
   if (!isObject(value) || !ISO_DATE.test(String(value.ops_date)) || !isMetricStatus(value.status)) return false;
   if (value.flights === null) {
-    return value.status === 'missing'
+    return (value.status === 'missing' || value.status === 'future')
       && value.arrivals === null
       && value.departures === null
       && value.reported_pax === null

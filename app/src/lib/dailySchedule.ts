@@ -398,14 +398,14 @@ export function buildDailyCellModification(
 export function validateDailyCellEdit(input: DailyCellValidationInput): DailyCellValidationResult {
   const timeValue = input.value.trim();
   if ((input.field === 'sta' || input.field === 'std') && !isValidTime(timeValue)) {
-    return { valid: false, message: 'Time must use HH:mm format' };
+    return { valid: false, message: 'Giờ phải theo định dạng HH:mm' };
   }
   if (
     (input.field === 'mcat' || input.field === 'mcdt' || input.field === 'mct') &&
     timeValue !== '' &&
     !isValidTime(timeValue)
   ) {
-    return { valid: false, message: 'Time must use HH:mm format' };
+    return { valid: false, message: 'Giờ phải theo định dạng HH:mm' };
   }
 
   if (
@@ -419,14 +419,14 @@ export function validateDailyCellEdit(input: DailyCellValidationInput): DailyCel
   ) {
     const value = input.value.trim();
     if (value !== '' && !Number.isFinite(Number(value))) {
-      return { valid: false, message: 'Value must be numeric' };
+      return { valid: false, message: 'Giá trị phải là số' };
     }
     if (
       value !== '' &&
       (input.field === 'gate' || input.field === 'stand' || input.field === 'arrStand' || input.field === 'carousel') &&
       (!Number.isInteger(Number(value)) || Number(value) <= 0)
     ) {
-      return { valid: false, message: 'Value must be a positive integer' };
+      return { valid: false, message: 'Giá trị phải là số nguyên dương' };
     }
   }
 
@@ -453,7 +453,7 @@ export function validateDailyCellEdit(input: DailyCellValidationInput): DailyCel
     if (violation) {
       return {
         valid: false,
-        message: `Duplicate flight number ${violation.flightNumber} on ${violation.date}`,
+        message: `Trùng số hiệu chuyến bay ${violation.flightNumber} vào ngày ${violation.date}`,
       };
     }
   }

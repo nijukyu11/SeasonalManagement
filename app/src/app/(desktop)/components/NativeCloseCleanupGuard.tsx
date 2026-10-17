@@ -4,23 +4,11 @@ import { useEffect, useRef, useState } from 'react';
 import { clearNativeAppSessionData } from '@/lib/appSessionCleanup';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
 import { NATIVE_CLOSE_CONFIRM_COPY } from '@/lib/nativeClosePolicy';
+import { formatUiError } from '@/lib/uiDisplayText';
 import { useAppDialog } from './AppDialog';
 import LoadingStatusPanel from './LoadingStatusPanel';
 
 const CLOSE_CLEANUP_TIMEOUT_MS = 7000;
-
-function getCleanupErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === 'string' && error.trim()) return error;
-  if (error && typeof error === 'object') {
-    const record = error as { name?: unknown; message?: unknown };
-    const name = typeof record.name === 'string' ? record.name : '';
-    const message = typeof record.message === 'string' ? record.message : '';
-    const detail = [name, message].filter(Boolean).join(': ');
-    if (detail) return detail;
-  }
-  return 'The app could not clear the UI session. The window will stay open.';
-}
 
 function timeoutAfter(ms: number): Promise<{ status: 'timeout' }> {
   return new Promise((resolve) => {
@@ -49,8 +37,8 @@ export default function NativeCloseCleanupGuard() {
 
         const confirmed = await showConfirm({
           ...NATIVE_CLOSE_CONFIRM_COPY,
+          cancelLabel: 'Hủy',
           tone: 'warning',
-          confirmLabel: 'Close App',
         });
         if (!confirmed) {
           event.preventDefault();
@@ -59,7 +47,7 @@ export default function NativeCloseCleanupGuard() {
 
         event.preventDefault();
         closingRef.current = true;
-        setCloseProgress(buildLoadProgress('Clearing session state...', 35, 'Server data is unchanged', { indeterminate: true }));
+        setCloseProgress(buildLoadProgress('Đang xóa dữ liệu phiên...', 35, 'Dữ liệu trên máy chủ không thay đổi', { indeterminate: true }));
         try {
           const cleanupResult = await Promise.race([
             clearNativeAppSessionData({
@@ -75,15 +63,15 @@ export default function NativeCloseCleanupGuard() {
           } else if (cleanupResult.status === 'failed') {
             console.warn('[native-close-cleanup] session cleanup failed; closing app', cleanupResult.error);
           }
-          setCloseProgress(buildLoadProgress('Closing app...', 100, 'Server data is unchanged'));
+          setCloseProgress(buildLoadProgress('Đang đóng ứng dụng...', 100, 'Dữ liệu trên máy chủ không thay đổi'));
           await appWindow.destroy();
         } catch (error) {
           closingRef.current = false;
           setCloseProgress(null);
           event.preventDefault();
           await showAlert({
-            title: 'Close cleanup failed',
-            message: getCleanupErrorMessage(error),
+            title: 'Không thể dọn dẹp khi đóng ứng dụng',
+            message: formatUiError(error, 'Ứng dụng không thể xóa phiên giao diện. Cửa sổ sẽ được giữ nguyên.'),
             tone: 'error',
           });
         }

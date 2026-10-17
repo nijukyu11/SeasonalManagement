@@ -171,15 +171,19 @@ function hydrateOperationalFields<T extends Partial<FlightLeg>>(leg: T): T & Ope
   };
 }
 
-export function serializeSourceRowForPersistence(row: ParsedRow): PersistedSourceRow {
-  const persisted = {
-    ...row,
+export function serializeSourceRowForPersistence(
+  row: ParsedRow & { pairReferences?: unknown }
+): PersistedSourceRow {
+  const { arrFlightType, depFlightType, pairReferences, ...rest } = row;
+  void arrFlightType;
+  void depFlightType;
+  void pairReferences;
+  const persisted: PersistedSourceRow = {
+    ...rest,
     sta: row.sta == null ? null : requireScheduleTime(row.sta, 'sta'),
     std: row.std == null ? null : requireScheduleTime(row.std, 'std'),
-  } as Partial<ParsedRow>;
-  delete persisted.arrFlightType;
-  delete persisted.depFlightType;
-  return stripUndefinedFields(persisted as PersistedSourceRow);
+  };
+  return stripUndefinedFields(persisted);
 }
 
 export function hydrateSourceRowFromPersistence(row: Partial<ParsedRow>): ParsedRow {

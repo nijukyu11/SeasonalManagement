@@ -2,9 +2,13 @@
 
 ## Boundary
 
-The public site is `https://report.ahtops.xyz/reports/traffic`. It is an anonymous, aggregate-only surface. The existing `https://supabase.ahtops.xyz` ingress remains the Supabase API authority and is not replaced.
+The public sites are `https://report.ahtops.xyz/reports/traffic` and `https://report.ahtops.xyz/reports/traffic/dashboard`. They are anonymous, aggregate-only surfaces. The existing `https://supabase.ahtops.xyz` ingress remains the Supabase API authority and is not replaced.
 
 Production publication is gated by user acceptance of staging. Do not point the production hostname at a new artifact before that acceptance is recorded.
+
+Before using the historical rollout sequences below, read `../current-implementation-status.md`. The active migration inventory is the complete timestamp-ordered lineage under `app/supabase/migrations`, not the older cutover subset named in one section of this runbook. In particular, local `main`, `origin/main`, branch-only migrations, database state and public-route flags are not currently identical.
+
+Public read-only verification on 2026-09-04 observed `traffic-report-v1` for both `/api/report/v1/overview` and `/api/report/v2/overview`, plus live `annual-passenger-kpi-v1` and working `/dashboard-version`; `/dashboard-publication` and `/dashboard-publication-version` returned `404`. This proves the available API contracts, not the static UI flag. Treat live-v2/Daily Publication/rolling-30 receipts as historical until Nginx, Edge, build flags, rendered DOM and publication head are reconciled again.
 
 ## Prerequisites and inventory
 
@@ -22,7 +26,7 @@ The repository workstation does not currently contain `nginx`, `cloudflared` or 
 ## Staging sequence
 
 1. Build and test the commit: `npm ci`, `npm run test:traffic-report-contract`, `npm run test:rules`, `npx tsc --noEmit --pretty false`, then `npm run build:traffic-report`. The report build must fail closed if a desktop route or desktop marker appears in `app/out-report`.
-2. Confirm `20260822090000_public_traffic_report_v1.sql` is already present and unchanged. After the main canonical cutover, apply the report migrations in timestamp order through `20260829210000_public_traffic_report_pax_presence_contract.sql`. Then apply the main-repository migration `20260830193000_public_traffic_aircraft_type_snapshot.sql` before the report-repository migration `20260830200000_public_traffic_report_aircraft_type_contract.sql`. Do not reverse these last two: the report contract fails closed unless the physical snapshot column exists. Run the report migration with `psql -1 -v ON_ERROR_STOP=1 -f ...` because the file intentionally relies on the caller-owned transaction. Validate the snapshot before applying that report transaction. Install the refresh runner, service and manual helper only after both migrations pass, but keep `seasonal-traffic-report-refresh.timer` disabled and inactive. Verify `anon` and `authenticated` cannot execute the reporting RPCs or select the reporting relations; verify the Edge service role can execute only the public wrappers used by the gateway.
+2. Confirm `20260822090000_public_traffic_report_v1.sql` is already present and unchanged. Apply every tracked main-repository migration in timestamp order through `20260902150000_public_dashboard_pax_correction.sql`; do not skip the canonical, live-v2, Daily Publication, Daily acceptance, stale-conflict or correction migrations between those endpoints. Preserve the cross-repository ordering where `20260830193000_public_traffic_aircraft_type_snapshot.sql` must precede the report-repository `20260830200000_public_traffic_report_aircraft_type_contract.sql`. Do not apply branch-only `20260904100000_public_dashboard_rolling_30_forecast.sql` or `20260904183000_daily_import_stage_indexed_ops_date.sql` from a production worktree until they have been reviewed and integrated into the approved code-of-record. Use `psql -v ON_ERROR_STOP=1` with each file's documented transaction ownership. Verify `anon` and `authenticated` cannot execute protected reporting/publication RPCs or select reporting relations; verify the Edge/service role has only the required wrappers.
 3. Deploy the isolated `traffic-report-edge` container from `deploy/traffic-report/docker-compose.yml`. Generate `/etc/seasonal-traffic-report/edge.env` from the existing Edge container without printing credentials and keep it root-only (`0600`). The container binds only `127.0.0.1:9001` and disables JWT verification only for this public aggregate gateway. Confirm a browser request does not send or require Cookie, Authorization or apikey.
 4. Copy only the immutable `app/out-report` artifact into a new timestamped staging release directory. Do not deploy `app/out`, because that full desktop export contains the Seasonal Management routes. Record the report-only artifact hash; do not overwrite the previous release. Point only `/srv/seasonal-traffic-report/staging-current` at this release; leave `/srv/seasonal-traffic-report/current` unchanged.
 5. Keep the production Nginx server on `127.0.0.1:8780`. Install the separate server block from `deploy/traffic-report/nginx-staging.conf`, which listens on `127.0.0.1:8781` and reads only `staging-current`. Do not duplicate the http-level `proxy_cache_path` or `limit_req_zone` declarations. Run `nginx -t`, reload, and prove that `8780` still serves the prior production artifact while `8781` serves the new staging artifact.
@@ -34,13 +38,20 @@ The repository workstation does not currently contain `nginx`, `cloudflared` or 
 
 Apply `app/supabase/migrations/20260831150000_public_annual_passenger_kpi.sql` after the public traffic migrations, followed by `app/supabase/migrations/20260831190000_annual_passenger_kpi_owner.sql`. The first migration creates the protected annual configuration table, seeds KPI 2026 at `7,500,000` only when that year is not already configured, and grants only `service_role` access through aggregate RPC wrappers. The owner migration aligns the protected table with its `postgres`-owned SECURITY DEFINER writer while preserving the direct-access revocations. Reload the PostgREST schema cache after applying both migrations.
 
-The dashboard is served at `/dashboard`. Add these values to the root-only Edge environment file; do not put them in a `NEXT_PUBLIC_*` variable or in the static artifact:
+The dashboard is served at `/reports/traffic/dashboard`. Add these values to the root-only Edge environment file; do not put them in a `NEXT_PUBLIC_*` variable or in the static artifact:
 
 - `ANNUAL_KPI_ADMIN_PIN_HASH`: PBKDF2-SHA256 encoded hash generated by `npm run generate:kpi-pin-hash` with `ANNUAL_KPI_PIN` supplied only to that process. In the Docker Compose `env_file`, escape every literal `$` in the encoded hash as `$$`, then verify the recreated container receives the normal single-dollar PBKDF2 format.
 - `ANNUAL_KPI_ADMIN_SESSION_SECRET`: at least 32 random characters, provisioned through the server secret workflow.
 - `ANNUAL_KPI_ADMIN_ALLOWED_ORIGINS`: comma-separated exact origins, including `https://report.ahtops.xyz` and the active staging origin when admin testing is required.
 
 The admin cookie is HttpOnly, Secure, SameSite=Strict and expires after 10 minutes. Confirm Nginx forwards cookies only for `/api/report/v1/kpi-admin/`, never caches that prefix, and still strips cookies from the remaining public report API.
+
+The static build selects one dashboard read mode:
+
+- `NEXT_PUBLIC_TRAFFIC_DASHBOARD_DAILY_PUBLICATION=true`: use `/dashboard-publication` plus `/dashboard-publication-version` and retain the last-known-good immutable publication;
+- flag absent/false: use live `/annual-kpi` plus `/dashboard-version`.
+
+Smoke the exact pair selected by the artifact before switching the production symlink. A successful historical publisher run does not make missing HTTP routes acceptable. The rolling-30 v2 migration and its receipt currently live on `codex/dashboard-rolling-30-forecast`, not on `main`; reconcile source, database and static artifact together before enabling that contract again.
 
 For production, install `seasonal-traffic-report-refresh-production.timer` as `/etc/systemd/system/seasonal-traffic-report-refresh.timer` and enable it only after staging acceptance. Its five-minute calendar schedule cannot fall into an elapsed state after being enabled. The refresh runner first compares the committed source watermark with the published projection watermark. It exits with `unchanged` without refreshing the materialized view when they match; a full refresh runs only after a committed import/change advances the watermark or when the projection is stale/failed. A failed import transaction does not advance the watermark and therefore cannot publish a new dashboard version. Keep the staging timer disabled and use the manual helper during acceptance.
 
@@ -97,7 +108,7 @@ from reporting.public_traffic_effective_pre_aircraft_type;
 
 Also reconcile total flights, arrivals + departures, Pax-known legs, reported Pax, min/max Ops Date and aircraft child totals against their parent groups. Confirm `anon`, `authenticated` and `service_role` have no direct `SELECT` on either MV, the canonical business-key index is unique, and the internal timeline/dimension base functions are not executable by the Edge role.
 
-The Phase 1 threshold/complementary-suppression policy is not formal differential privacy. The regression gate covers direct responses, representative `A`/`D`/`all` differencing, and stable decisions across pagination/export, but arbitrary sequences of overlapping route/airline/country filters can still create inference risk. Keep rate limits and aggregate-only access in place, record this accepted residual risk, and do not describe the public endpoint as immune to every differencing attack.
+Historical note: Phase 1 used threshold/complementary suppression. Migration `20260830213000_public_traffic_report_remove_suppression.sql` removed that threshold from the current aggregate contract; `Khác` now represents ranked overflow rather than privacy suppression. Keep rate limits and aggregate-only access in place, and do not describe the public endpoint as immune to differencing attacks merely because raw leg identity is not exposed.
 
 ## Manual staging refresh before acceptance
 
@@ -234,6 +245,63 @@ GET /api/report/v1/dashboard-publication-version?year=2026
 ```
 
 Verify publication id, Business Date, checksum, metrics version, source watermark, `freshness`, ETag and cache headers. A missing ready publication is an explicit `DASHBOARD_PUBLICATION_NOT_READY`; a newer failed attempt keeps the ready payload but reports stale freshness.
+
+## Operational projection runner (M3.4 — prepared, do not enable before the M10 cutover)
+
+The M3 shadow projection `reporting.operational_canonical_flight_legs` is written only by `reporting.refresh_operational_canonical_legs_v1()` and read by nothing yet. Its runner keeps it at the source watermark so the M10 slice swap can be verified against a projection that is already warm:
+
+```bash
+sudo install -o root -g root -m 0755 \
+  deploy/traffic-report/seasonal-operational-projection-runner \
+  /usr/local/sbin/seasonal-operational-projection-runner
+sudo install -o root -g root -m 0644 \
+  deploy/traffic-report/seasonal-operational-projection-runner.service \
+  /etc/systemd/system/seasonal-operational-projection-runner.service
+sudo install -o root -g root -m 0644 \
+  deploy/traffic-report/seasonal-operational-projection-runner.timer \
+  /etc/systemd/system/seasonal-operational-projection-runner.timer
+sudo install -o root -g root -m 0644 \
+  deploy/traffic-report/seasonal-operational-projection-wake-listener.service \
+  /etc/systemd/system/seasonal-operational-projection-wake-listener.service
+sudo systemctl daemon-reload
+```
+
+Keep the production units disabled until the approved M10 cutover window. Enable them earlier only on an isolated rehearsal clone. The timer checks freshness every two minutes; a fresh projection skips the full refresh. Enable with:
+
+```bash
+sudo systemctl enable --now seasonal-operational-projection-wake-listener.service
+sudo systemctl enable --now seasonal-operational-projection-runner.timer
+sudo systemctl start seasonal-operational-projection-runner.service
+```
+
+The M2 backfill and M4 `apply_operational_resource_changes_v1` emit `operational_projection_wake` in the writing transaction; PostgreSQL delivers it at commit. M5/M7 writers must keep this contract. The listener starts the oneshot; the two-minute timer recovers missed notifications. M4 freshness checks both legacy event high-water and the independent operational workspace revision.
+
+The runner Interface:
+
+- single-flight `flock`, so two triggers never interleave a truncate/insert;
+- reads `reporting.operational_projection_status_v1()` before refreshing and never treats a missing status as fresh;
+- refreshes only through `reporting.refresh_operational_canonical_legs_v1()` and never writes the projection or its state directly;
+- retries any stale result, including an operational revision change with unchanged legacy watermarks; warns during retries and alerts on `projection_race_retries_exhausted`, never claiming freshness locally;
+- `OPERATIONAL_PROJECTION_MAX_ATTEMPTS` bounds the retry loop.
+
+Rehearse on an isolated clone with the M4 migrations and units installed. Record these as separate acceptance checks; a self-NOTIFY in a psql session is not proof of the deployed listener:
+
+1. **Listener:** enable the listener, stop the fallback timer, commit a resource/Pax mutation through `apply_operational_resource_changes_v1` using a disposable fixture leg, its current revision/preimage, and a new request UUID. Verify the listener journal reports `projection_wake`, the oneshot runs, `is_fresh` becomes true, and the projected Pax equals the committed value.
+2. **Fallback:** stop the listener, enable the timer, commit another fixture mutation. Observe `is_fresh=false` before the scheduled run, then verify a timer-triggered run restores freshness and the correct projected value. Allow for timer accuracy and refresh duration, not a hard two-minute completion SLA. Restart the listener afterward.
+3. **Cost:** record wall time and the requested PostgreSQL query-plan/load evidence on representative data; fixture timings are not a production SLO.
+
+```bash
+sudo journalctl -u seasonal-operational-projection-wake-listener.service \
+  -u seasonal-operational-projection-runner.service --since '-10 min' --no-pager
+sudo docker exec -i opsdata-supabase-db psql -X -q -t -A -U supabase_admin -d postgres \
+  -c 'select to_jsonb(status) from reporting.operational_projection_status_v1() status'
+sudo docker exec -i opsdata-supabase-db psql -X -q -t -A -U supabase_admin -d postgres \
+  -c '\timing on' -c 'select reporting.refresh_operational_canonical_legs_v1()'
+```
+
+Local `npm run test:operational-projection-runner` executes the actual Bash script with isolated PostgreSQL/syslog/flock adapters. It proves refresh/retry/failure control flow, **not** live NOTIFY delivery, timer scheduling, or process-level flock exclusion.
+
+Warnings and failures go to stdout, journald and syslog, reusing the `/usr/local/sbin/seasonal-traffic-dashboard-alert` Adapter seam. Rollback is `systemctl disable --now` on all three units: the projection, its quarantine ledger and its state row are additive and stay unread until M10.
 
 ## Rollback
 

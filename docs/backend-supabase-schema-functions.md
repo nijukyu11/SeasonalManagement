@@ -19,7 +19,7 @@ Production has not adopted these contracts. M1–M9 are additive; M10 reader cut
 
 - Planning reads use `get_seasonal_draft_window_v1` keyset pages under one epoch/revision; export uses `get_seasonal_draft_export_snapshot_v1` with the same fences. Normal windows contain active drafts, not deleted tombstones.
 - `apply_seasonal_draft_changes_v1(season_id, request_id, expected_revision, changes)` accepts `{draftId, expected, patch}` with snake_case fields. `expected:null` is only for a genuinely new ID; an existing deleted draft still requires exact field preimages. Delete may unlink its survivor; consume **all** receipt events and their authoritative `after` values. Never infer that an empty active window means the draft ID no longer exists.
-- Native Seasonal import uses `stage_seasonal_draft_import_v1`, preview/status/cancel RPCs, and `commit_seasonal_draft_import_v1`; registry contract 4 cannot be committed through legacy V2/V3. It writes Planning only. Workbook export preserves the existing 25-column template and validates reciprocal/overnight pair identity.
+- Native Seasonal import uses `stage_seasonal_draft_import_v1`, preview/status/cancel RPCs, and `commit_seasonal_draft_import_v1`; registry contract 4 cannot be committed through legacy V2/V3. After `20261016090000_seasonal_full_import_v1.sql`, no caller strategy is accepted: the workbook is the full target-season draft snapshot. Absent active imported/manual drafts are tombstoned; uniquely matched allocation fields (including explicit 0/NULL) and reciprocal/overnight pairs are retained. All import RPCs require `seasonal.write`, not `season.repair`. Uncommitted old contract-4 previews are invalidated and cannot be committed. Import writes Planning only; Publish remains explicit. Workbook export preserves the existing 25-column template.
 - Publish uses persisted diff preview/hash/owner/expiry, then `commit_seasonal_publish_v1`; protect Daily-authority dates, past/today HCM and external counterparts. Version snapshots are immutable. A stale preview requires a new diff and operator confirmation.
 - Operations read `get_operational_schedule_allocation_window_v1` by inclusive date range and scope-bound snapshot token, without season ID. Resource/schedule mutations use stable leg IDs and field preimages; batch creation is atomic and request-idempotent. Daily V2 stage/preview/commit/status/cancel uses explicit affected dates, including zero-flight days.
 - Lost mutation responses are ambiguous, not proof of rollback. Retry the identical request ID/revision/payload; only a committed receipt or deterministic rejection releases the write guard. Operational pending journals use localStorage key `operational:pending-mutation:v2:${operatorId}` and survive a new browser session; anonymous/other-operator journals must not hydrate.
@@ -67,6 +67,13 @@ Reader flags, writer flags, fencing, high-water parity and worker health must pa
   or SQLite fallback.
 - Migration:
   `app/supabase/migrations/20260724090000_seasonal_partial_import_v3.sql`.
+
+### 2026-10-06 Seasonal V3 commit performance
+
+- Production applies `20261006093000_seasonal_commit_indexed_conflicts_v1.sql`: index the transaction-local incoming `occurrence_key` and replace the generated-ID conflict query's `ORDER BY ... LIMIT 1` with `MIN(record_id)`. The same lexicographically first conflict is reported; permissions, preview/version fences, repair warnings, lifecycle, pairing, overlays and Daily authority are unchanged.
+- W26 Ver2 isolated PostgreSQL rehearsal: 209 source rows / 22,945 imported occurrences; old commit 282.48s, new commit 21.12s. Full-row parity excludes only volatile lifecycle timestamps and event timestamp/sequence fields. Actual workbook stage 5.07s + commit 19.86s.
+- Production function digest is `5ac42483b1b974b30df9ce176ceb9d03`; RPC timeout remains 180s. The sibling rollback restores pre-digest `faefa36cab6c3f684ce17e0594ad0ef0` byte-exactly.
+- Authenticated production JX/NX pair, receipt replay/status and rollback probes passed in rolled-back transactions. This function deployment did not commit the pending W26 replacement or enable native Planning/Operations cutover.
 
 ## Current object counts
 

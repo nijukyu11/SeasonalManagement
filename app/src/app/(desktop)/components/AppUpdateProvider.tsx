@@ -10,6 +10,7 @@ import {
   type AppUpdateMetadata,
   type AppUpdaterCheckResult,
 } from '@/lib/appUpdater';
+import { formatUiError } from '@/lib/uiDisplayText';
 
 type AppUpdateContextValue = {
   currentVersion: string | null;
@@ -37,8 +38,11 @@ const initialProgress: AppUpdateDownloadState = {
 
 const AppUpdateContext = createContext<AppUpdateContextValue | null>(null);
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : String(error);
+function formatInstallResultMessage(message: string): string {
+  if (message.includes('Restart') || message.includes('Update installed')) {
+    return 'Đã cài đặt bản cập nhật. Khởi động lại ứng dụng để hoàn tất.';
+  }
+  return formatUiError(message, message);
 }
 
 export function useAppUpdate(): AppUpdateContextValue {
@@ -65,14 +69,14 @@ function AppUpdateBanner() {
     return (
       <div className="border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-950" role="status">
         <div className="mx-auto flex max-w-5xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <span className="font-medium">{installResult.message}</span>
+          <span className="font-medium">{formatInstallResultMessage(installResult.message)}</span>
           <button
             type="button"
             onClick={() => void relaunch()}
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800"
           >
             <span className="material-symbols-outlined text-[16px]">restart_alt</span>
-            Restart
+            Khởi động lại
           </button>
         </div>
       </div>
@@ -83,13 +87,13 @@ function AppUpdateBanner() {
     <div className="border-b border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-950" role="status" aria-live="polite">
       <div className="mx-auto flex max-w-5xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <span className="font-semibold">Update {availableUpdate.version} is available</span>
+          <span className="font-semibold">Đã có bản cập nhật {availableUpdate.version}</span>
           {availableUpdate.publishedAt && (
             <span className="ml-2 text-blue-800">{formatUpdateDate(availableUpdate.publishedAt)}</span>
           )}
           {installing && (
             <span className="ml-2 text-blue-800">
-              Downloading{progress.percent == null ? '...' : ` ${progress.percent}%`}
+              Đang tải{progress.percent == null ? '...' : ` ${progress.percent}%`}
             </span>
           )}
         </div>
@@ -103,7 +107,7 @@ function AppUpdateBanner() {
             <span className={`material-symbols-outlined text-[16px] ${installing ? 'animate-spin' : ''}`}>
               {installing ? 'progress_activity' : 'download'}
             </span>
-            {installing ? 'Installing' : 'Download'}
+            {installing ? 'Đang cài đặt' : 'Tải về'}
           </button>
           <button
             type="button"
@@ -112,8 +116,8 @@ function AppUpdateBanner() {
               dismissAvailableBanner();
             }}
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-blue-800 hover:bg-blue-100"
-            aria-label="Dismiss update banner"
-            title="Dismiss"
+            aria-label="Đóng thông báo cập nhật"
+            title="Đóng"
           >
             <span className="material-symbols-outlined text-[18px]">close</span>
           </button>
@@ -147,7 +151,7 @@ export default function AppUpdateProvider({ children }: { children: ReactNode })
         setBannerDismissed(false);
       }
     } catch (error) {
-      setError(errorMessage(error));
+      setError(formatUiError(error, 'Kiểm tra cập nhật thất bại.'));
     } finally {
       setChecking(false);
     }
@@ -182,7 +186,7 @@ export default function AppUpdateProvider({ children }: { children: ReactNode })
       const result = await client.downloadAndInstall(availableUpdate, setProgress);
       setInstallResult(result);
     } catch (error) {
-      setError(errorMessage(error));
+      setError(formatUiError(error, 'Cài đặt bản cập nhật thất bại.'));
     } finally {
       setInstalling(false);
     }
@@ -193,7 +197,7 @@ export default function AppUpdateProvider({ children }: { children: ReactNode })
     try {
       await client.relaunch();
     } catch (error) {
-      setError(errorMessage(error));
+      setError(formatUiError(error, 'Không thể khởi động lại ứng dụng.'));
     }
   }, [client]);
 

@@ -9,7 +9,7 @@ const routeFiles = [
   'src/app/(desktop)/daily/page.tsx',
   'src/app/(desktop)/checkin/page.tsx',
   'src/app/(desktop)/gate/page.tsx',
-  'src/app/(desktop)/dashboard/page.tsx',
+
 ];
 
 function extractBalancedBlock(source: string, openIndex: number): string {
@@ -147,7 +147,7 @@ test('remounted heavy routes seed initial route state from cached workspace befo
     ['src/app/(desktop)/daily/page.tsx', 'Daily', 'initialDailyRouteState'],
     ['src/app/(desktop)/checkin/page.tsx', 'CheckIn', 'initialCheckInRouteState'],
     ['src/app/(desktop)/gate/page.tsx', 'Gate', 'initialGateRouteState'],
-    ['src/app/(desktop)/dashboard/page.tsx', 'Dashboard', 'initialDashboardRouteState'],
+
   ] as const;
 
   for (const [file, routeName, stateName] of files) {
@@ -173,7 +173,7 @@ test('workspace activation refresh hydrates route state from shared store instea
     ['src/app/(desktop)/daily/page.tsx', 'refreshDailyWindow'],
     ['src/app/(desktop)/checkin/page.tsx', 'refreshCheckInWindow'],
     ['src/app/(desktop)/gate/page.tsx', 'refreshGateWindow'],
-    ['src/app/(desktop)/dashboard/page.tsx', 'refreshDashboardWindow'],
+
   ] as const;
 
   for (const [file, functionName] of refreshFunctions) {
@@ -244,7 +244,7 @@ test('manual Fetch failures do not replace already loaded route data with load e
     'src/app/(desktop)/detailed/page.tsx',
     'src/app/(desktop)/checkin/page.tsx',
     'src/app/(desktop)/gate/page.tsx',
-    'src/app/(desktop)/dashboard/page.tsx',
+
   ];
   for (const file of files) {
     const source = readFileSync(join(process.cwd(), file), 'utf8');

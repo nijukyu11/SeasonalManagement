@@ -21,6 +21,16 @@
 - `DAILY_LOOSE_IDENTITY_COLLISION` chỉ còn khi có từ hai row active trở lên cùng loose identity, hoặc khi không có row active nào mà tồn tại nhiều terminal generation khác occurrence key.
 - Vì vậy preview hợp lệ vẫn có thể có `effectiveAfterCount` nhỏ hơn `afterCount`: đó là các leg bị giữ cancelled theo deletion overlay (`reason = overlay_deleted`) mà operator đã xoá trước đó, không phải mất dữ liệu. Muốn cho chuyến bay trở lại, xoá modification deleted của row đó bằng flow canonical (không sửa row trực tiếp) rồi stage lại.
 
+## 2.2 Seasonal repair: timeout sau preview hợp lệ
+
+- `Failed to fetch` không chứng minh commit thất bại. Dùng Resume/Check với **cùng request ID**; không tạo import mới hoặc bấm Commit lặp khi chưa biết kết quả.
+- Nếu status trả `committed`, dùng Refresh để nhận snapshot mới, không commit lại. Nếu status trả `validated`, kiểm season version/preview rồi operator xác nhận Commit. Nếu preview expired/stale, stage lại theo flow của app.
+- Với W26 Ver2 ngày 2026-10-06, log production ghi Kong HTTP 499 ở 125 giây và PostgREST `57014` ở 180 giây; batch vẫn `validated`, season version 401. Stage đã chấp nhận 22.945 occurrences; duplicate/zero-generated warnings không phải nguyên nhân timeout.
+- Migration `20261006093000_seasonal_commit_indexed_conflicts_v1.sql` chỉ tối ưu generated-ID conflict lookup và index bảng tạm. Không thay rule repair, winner policy, Daily authority, overlay hoặc timeout. Workbook thật stage + commit trên bản sao mất khoảng 25 giây; không coi phép đo bản sao là bằng chứng production W26 đã được Replace.
+- Trước apply, đối chiếu preimage function digest và rehearsal. Sau apply, kiểm post digest `5ac42483b1b974b30df9ce176ceb9d03`, chạy authenticated stage/commit/status/replay với season thử trong transaction rollback và xác nhận request thật không đổi.
+- Rollback dùng `20261006093000_seasonal_commit_indexed_conflicts_v1.rollback.sql`; đã rehearsal byte-exact pre-digest `faefa36cab6c3f684ce17e0594ad0ef0`. Rollback hàm không đảo dữ liệu của một import đã commit.
+- Receipt và `SHA256SUMS` tại `/home/ops/seasonal-commit-indexed-conflicts-20261006/`; kiểm `sha256sum -c SHA256SUMS` trên ops trước khi dùng artifact.
+
 ## 3. Reconcile sau commit
 
 Chạy các truy vấn read-only trong artifact `2026-08-29-canonical-flight-leg-store-reconciliation.sql` tại cùng source version. So sánh:
@@ -44,6 +54,8 @@ Reset là repair có phá authority, không phải thao tác import bình thư�
 6. Retry cùng request UUID trả cùng receipt. Không tự update `reset_at` hay lifecycle columns.
 
 ## 5. Seasonal rebuild sau Daily
+
+**Phân biệt đường chạy:** phần 5 bên dưới mô tả hợp đồng canonical/V3 cũ. Client Planning sau migration `20261016090000_seasonal_full_import_v1.sql` chỉ nhập full-file vào Draft bằng native draft RPCs, không có Merge/Replace hoặc Repair trong Settings. Chuyến manual **trong Draft** vắng file sẽ bị loại; Daily/Manual **trong Operations** không đổi cho tới Publish riêng. Xem `../current-implementation-status.md` để phân biệt checkout local với trạng thái đã triển khai.
 
 - Chỉ dùng Seasonal V3. V2 commit cố ý bị chặn sau canonical cutover.
 - Merge/Full Replace không được đổi Daily/Manual checksum.

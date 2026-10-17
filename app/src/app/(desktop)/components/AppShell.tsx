@@ -18,13 +18,13 @@ function buildCatchUpProgressLabel(progress: string | null | undefined, message:
   percent: number;
   indeterminate: boolean;
 } {
-  const text = progress ?? message ?? 'Checking server changes';
+  const text = progress ?? message ?? 'Đang kiểm tra thay đổi từ máy chủ';
   const match = text.match(/(\d+)\s*\/\s*(\d+)/);
   if (match) {
     const written = Number(match[1]);
     const total = Number(match[2]);
     return {
-      label: 'Updating in background',
+      label: 'Đang cập nhật dưới nền',
       detail: text,
       percent: total > 0 ? Math.round((written / total) * 100) : 0,
       indeterminate: false,
@@ -32,22 +32,22 @@ function buildCatchUpProgressLabel(progress: string | null | undefined, message:
   }
   if (/snapshot/i.test(text)) {
     return {
-      label: 'Refreshing server snapshot',
-      detail: 'Loading latest server baseline',
+      label: 'Đang làm mới bản lưu máy chủ',
+      detail: 'Đang tải mốc dữ liệu máy chủ mới nhất',
       percent: 65,
       indeterminate: true,
     };
   }
   if (/failed/i.test(message ?? '')) {
     return {
-      label: 'Server sync failed',
-      detail: message ?? 'Remote changes could not be checked.',
+      label: 'Đồng bộ máy chủ thất bại',
+      detail: message ?? 'Không thể kiểm tra thay đổi từ máy chủ.',
       percent: 100,
       indeterminate: false,
     };
   }
   return {
-    label: 'Checking server changes',
+    label: 'Đang kiểm tra thay đổi từ máy chủ',
     detail: text,
     percent: 35,
     indeterminate: true,

@@ -9,7 +9,7 @@ const routeFiles = [
   'src/app/(desktop)/daily/page.tsx',
   'src/app/(desktop)/checkin/page.tsx',
   'src/app/(desktop)/gate/page.tsx',
-  'src/app/(desktop)/dashboard/page.tsx',
+
 ];
 
 function extractFunctionBody(source: string, functionName: string): string {

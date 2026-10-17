@@ -61,11 +61,11 @@ const toneStyles: Record<DialogTone, { icon: string; iconClass: string; confirmC
 function normalizeOptions(messageOrOptions: string | DialogOptions): Required<DialogOptions> {
   const options = typeof messageOrOptions === 'string' ? { message: messageOrOptions } : messageOrOptions;
   return {
-    title: options.title ?? 'Notice',
+    title: options.title ?? 'Thông báo',
     message: options.message,
     tone: options.tone ?? 'info',
-    confirmLabel: options.confirmLabel ?? 'OK',
-    cancelLabel: options.cancelLabel ?? 'Cancel',
+    confirmLabel: options.confirmLabel ?? 'Đồng ý',
+    cancelLabel: options.cancelLabel ?? 'Hủy',
   };
 }
 

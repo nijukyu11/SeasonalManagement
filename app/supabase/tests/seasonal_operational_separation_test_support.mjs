@@ -46,8 +46,10 @@ export function stripPsqlMetaCommands(sql) {
   return sql.replace(/^\s*\\[a-z]+.*$/gm, '');
 }
 
-export async function createSeasonalOperationalSeparationDb() {
-  const db = await createSupabasePGlite();
+// A supplied DB implements exec/query/close, allowing the same chain to prove
+// behavior against real PostgreSQL as well as the default isolated PGlite.
+export async function createSeasonalOperationalSeparationDb(db = null) {
+  db ??= await createSupabasePGlite();
   const migrationsUrl = new URL('../migrations/', import.meta.url);
   const applied = [];
   await db.exec(await readFile(new URL('../schema.sql', import.meta.url), 'utf8'));

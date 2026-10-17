@@ -16,7 +16,7 @@ interface HeaderActionMenuProps {
   className?: string;
 }
 
-export default function HeaderActionMenu({ items, label = 'More actions', className = '' }: HeaderActionMenuProps) {
+export default function HeaderActionMenu({ items, label = 'Thao tác khác', className = '' }: HeaderActionMenuProps) {
   const [open, setOpen] = useState(false);
 
   if (items.length === 0) return null;

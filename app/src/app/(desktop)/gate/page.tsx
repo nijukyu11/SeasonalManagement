@@ -77,6 +77,7 @@ import {
 } from '@/lib/gatePdfExport';
 import { appendAuditLogEntry, createFlightActionAuditFromHistory } from '@/lib/auditLog';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
+import { formatUiError } from '@/lib/uiDisplayText';
 import type { FlightModification, FlightRecord, OperationalSettings, Season } from '@/lib/types';
 import { useAppDialog } from '../components/AppDialog';
 import { useExportNotifications } from '../components/ExportNotificationProvider';
@@ -327,7 +328,7 @@ function GatePdfPreviewPanel({
   if (preview.pages.length === 0) {
     return (
       <div className="flex min-h-72 items-center justify-center rounded border border-surface-variant bg-surface-container-low p-6 text-center text-sm text-on-surface-variant">
-        Select at least one Gate Group to preview the final PDF pages.
+        Chọn ít nhất một Nhóm cửa để xem trước các trang PDF.
       </div>
     );
   }
@@ -336,9 +337,9 @@ function GatePdfPreviewPanel({
     <div className="grid min-h-0 min-w-0 gap-3">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-on-surface">PDF Preview</h3>
+          <h3 className="text-sm font-semibold text-on-surface">Xem trước PDF</h3>
           <p className="text-xs text-on-surface-variant">
-            {preview.pages.length} page{preview.pages.length === 1 ? '' : 's'} - A4 landscape - fit-to-page
+            {preview.pages.length} trang · A4 ngang · Khớp trang
           </p>
         </div>
         <span className="min-w-0 truncate rounded border border-surface-variant bg-surface-container px-2 py-1 text-xs font-semibold text-on-surface-variant">
@@ -350,10 +351,10 @@ function GatePdfPreviewPanel({
           <section key={`${page.sectionId}-${page.pageIndex}`} className="grid min-w-0 gap-2">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-on-surface-variant">
               <span className="font-semibold text-on-surface">
-                Page {page.pageIndex + 1}: {page.sectionName}
+                Trang {page.pageIndex + 1}: {page.sectionName}
               </span>
               <span>
-                {page.scaleMode === 'width' ? 'Width fit' : 'Height fit'} - bar text {page.barFontSizePt.toFixed(1)}pt
+                {page.scaleMode === 'width' ? 'Khớp chiều rộng' : 'Khớp chiều cao'} · Cỡ chữ vạch {page.barFontSizePt.toFixed(1)}pt
               </span>
             </div>
             {page.warning && (
@@ -490,7 +491,7 @@ function GateAllocationContent() {
   const [loading, setLoading] = useState(() => !initialGateRouteState);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
-    buildLoadProgress('Loading gate allocation...', 10, 'Preparing workspace')
+    buildLoadProgress('Đang tải phân bổ cửa...', 10, 'Đang chuẩn bị không gian làm việc')
   );
   const [draggedRecordId, setDraggedRecordId] = useState<string | null>(null);
   const [activeDropRowIndex, setActiveDropRowIndex] = useState<number | null>(null);
@@ -735,7 +736,7 @@ function GateAllocationContent() {
           const loadedSettings = await getOperationalSettings().catch(() => null);
           if (cancelled || operationalRequestIdRef.current !== requestId || !isRouteActive) return;
           if (loadedSettings) setSettings(loadedSettings);
-          setLoadProgress(buildLoadProgress('Loading operational gate window', 40, `${startDate}..${endDate}`));
+          setLoadProgress(buildLoadProgress('Đang tải khoảng ngày vận hành', 40, `${startDate}..${endDate}`));
           const operationalResult = await loadFullOperationalScheduleWindow({
             startDate,
             endDate,
@@ -758,9 +759,9 @@ function GateAllocationContent() {
         } catch (err) {
           console.error('Error loading operational gate schedule', err);
           if (!cancelled && operationalRequestIdRef.current === requestId && isRouteActive) {
-            const message = err instanceof Error && err.message ? err.message : 'Could not load operational gate schedule.';
+            const message = formatUiError(err, 'Không thể tải Lịch phân bổ cửa vận hành.');
             setLoadError(message);
-            void showAlert({ title: 'Load Failed', message, tone: 'error' });
+            void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
           }
           return;
         } finally {
@@ -773,7 +774,7 @@ function GateAllocationContent() {
       if (cachedState === 'fresh') return;
       setLoading(cachedState !== 'stale');
       setLoadError(null);
-      setLoadProgress(buildLoadProgress('Loading seasons and settings', 15, 'Preparing gate allocation'));
+      setLoadProgress(buildLoadProgress('Đang tải mùa bay và cấu hình', 15, 'Đang chuẩn bị Phân bổ cửa'));
       try {
         const cachedSeasons = getCachedSeasons();
         const [nextSeasons, loadedSettings] = await Promise.all([
@@ -814,7 +815,7 @@ function GateAllocationContent() {
           setLoading(false);
         }
 
-        setLoadProgress(buildLoadProgress('Loading server workspace', 35, targetSeason.seasonCode));
+        setLoadProgress(buildLoadProgress('Đang tải không gian làm việc máy chủ', 35, targetSeason.seasonCode));
         const serverWindow = await loadSeasonWorkspaceWindow({
           seasonId: targetSeason.id,
           dateFrom: fromDateTime.slice(0, 10),
@@ -835,9 +836,9 @@ function GateAllocationContent() {
             windowKey,
           });
           setLoadProgress(buildLoadProgress(
-            'Preparing gate allocation',
+            'Đang chuẩn bị phân bổ cửa',
             80,
-            `${serverWindow.records.length} records`
+            `${serverWindow.records.length} bản ghi`
           ));
           setFlightRecords(serverWindow.records);
           publishSeasonWorkspaceChanged({
@@ -853,9 +854,9 @@ function GateAllocationContent() {
       } catch (err) {
         console.error('Error loading gate allocation', err);
         if (!cancelled) {
-          const message = err instanceof Error && err.message ? err.message : 'Could not load gate data from the server.';
+          const message = formatUiError(err, 'Không thể tải Lịch phân bổ cửa từ máy chủ.');
           setLoadError(message);
-          void showAlert({ title: 'Load Failed', message, tone: 'error' });
+          void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -1273,8 +1274,8 @@ function GateAllocationContent() {
       publishWorkspaceChange(season.id, null, 'gate', queuedWinners.map((mod) => mod.legId), null, 'direct');
     }
     void showAlert({
-      title: 'Gate Update Failed',
-      message: error instanceof Error ? error.message : String(error),
+      title: 'Cập nhật phân bổ cửa thất bại',
+      message: formatUiError(error),
       tone: 'error',
     });
   }, [applyOptimisticGateModification, clearOptimisticGateAllocationView, fromDateTime, publishWorkspaceChange, replaceGateModifications, season, showAlert, toDateTime]);
@@ -1386,12 +1387,12 @@ function GateAllocationContent() {
     try {
       const outcome = await useOperationalScheduleStore.getState().retryPendingMutation();
       if (outcome && 'refreshError' in outcome && outcome.refreshError) {
-        void showAlert({ title: 'Saved; refresh failed', message: outcome.refreshError, tone: 'warning' });
+        void showAlert({ title: 'Đã lưu nhưng chưa tải lại được', message: formatUiError(outcome.refreshError), tone: 'warning' });
       } else {
         await refreshGateWindow({ revalidate: true });
       }
     } catch (err) {
-      void showAlert({ title: 'Retry Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Thử lại thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       setOperationalMutating(false);
     }
@@ -1424,7 +1425,7 @@ function GateAllocationContent() {
         requestId = pending.requestId;
         expectedRevision = pending.expectedRevision;
       } else if (pending) {
-        throw new Error('The previous operational write is unconfirmed. Retry that write unchanged before submitting another.');
+        throw new Error('Thao tác vận hành trước đó chưa được xác nhận. Hãy thử lại thao tác đó trước khi thực hiện thao tác mới.');
       } else {
         setPendingOperationalMutation({
           kind: 'apply_resource',
@@ -1479,10 +1480,10 @@ function GateAllocationContent() {
 
               unknownFailureCount += 1;
               if (unknownFailureCount > 1) {
-                const message = error instanceof Error ? error.message : String(error);
+                const message = formatUiError(error);
                 await showAlert({
-                  title: 'Gate Update Status Unknown',
-                  message: `A connection error occurred while saving gate changes (${message}). The outcome on the server is unknown. Select OK to retry confirming the changes.`,
+                  title: 'Chưa rõ trạng thái cập nhật cửa',
+                  message: `Đã xảy ra lỗi kết nối khi lưu thay đổi cửa (${message}). Không thể xác định kết quả trên máy chủ. Chọn OK để thử xác nhận lại thay đổi.`,
                   tone: 'warning',
                 });
               }
@@ -1504,8 +1505,8 @@ function GateAllocationContent() {
           clearOptimisticGateAllocationView();
           void refreshGateWindow().catch(() => undefined);
           void showAlert({
-            title: 'Gate Update Failed',
-            message: (rpcErr as Error).message,
+            title: 'Cập nhật phân bổ cửa thất bại',
+            message: formatUiError(rpcErr),
             tone: 'error',
           });
           return;
@@ -1518,8 +1519,8 @@ function GateAllocationContent() {
           clearOptimisticGateAllocationView();
           void refreshGateWindow().catch(() => undefined);
           void showAlert({
-            title: 'Gate Update Failed',
-            message: receipt.message || `Mutation ${receipt.status}`,
+            title: 'Cập nhật phân bổ cửa thất bại',
+            message: formatUiError(receipt.message || `Thao tác ${receipt.status}`),
             tone: 'error',
           });
           return;
@@ -1538,8 +1539,8 @@ function GateAllocationContent() {
         } catch (refreshErr) {
           console.error('Failed to refresh gate window after commit', refreshErr);
           void showAlert({
-            title: 'Refresh Failed',
-            message: `Changes were saved (revision ${receipt.revision}), but the gate display could not be refreshed: ${(refreshErr as Error).message}`,
+            title: 'Tải lại giao diện thất bại',
+            message: `Các thay đổi đã được lưu (phiên bản ${receipt.revision}), nhưng không thể tải lại màn hình phân bổ cửa: ${formatUiError(refreshErr)}`,
             tone: 'warning',
           });
         }
@@ -1731,7 +1732,7 @@ function GateAllocationContent() {
         allocateGate(record, resource.gate),
         `${drag.kind === 'allocated' ? 'Moved' : 'Allocated'} ${drag.flightNumber} to gate ${resource.label}`
       ).catch((err) => {
-        void showAlert({ title: 'Allocate Failed', message: (err as Error).message, tone: 'error' });
+        void showAlert({ title: 'Phân bổ thất bại', message: formatUiError(err), tone: 'error' });
       });
       return;
     }
@@ -1740,7 +1741,7 @@ function GateAllocationContent() {
         unallocateGate(record),
         `Unallocated gate for ${drag.flightNumber} by pool drop`
       ).catch((err) => {
-        void showAlert({ title: 'Unallocate Failed', message: (err as Error).message, tone: 'error' });
+        void showAlert({ title: 'Hủy phân bổ thất bại', message: formatUiError(err), tone: 'error' });
       });
       return;
     }
@@ -1818,7 +1819,7 @@ function GateAllocationContent() {
         await wrapper.requestFullscreen();
       }
     } catch (err) {
-      void showAlert({ title: 'Fullscreen Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Toàn màn hình thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [showAlert]);
 
@@ -1835,10 +1836,10 @@ function GateAllocationContent() {
     try {
       const result = await syncNow();
       if (result.status !== 'synced') {
-        void showAlert({ title: 'Save Failed', message: result.message ?? 'Save failed.', tone: 'error' });
+        void showAlert({ title: 'Lưu thất bại', message: formatUiError(result.message ?? 'Lưu thất bại.'), tone: 'error' });
       }
     } catch (err) {
-      void showAlert({ title: 'Save Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Lưu thất bại', message: formatUiError(err), tone: 'error' });
     }
   };
 
@@ -1852,8 +1853,8 @@ function GateAllocationContent() {
     const windowKey = buildGateWindowKey(fromDateTime, toDateTime);
     if (gateCommitAccumulatorRef.current || gateCommitFlushTimerRef.current != null) {
       void showAlert({
-        title: 'Fetch data blocked',
-        message: 'Save pending gate changes before fetching server data.',
+        title: 'Tải dữ liệu bị chặn',
+        message: 'Hãy lưu các thay đổi phân bổ cửa trước khi tải dữ liệu từ máy chủ.',
         tone: 'warning',
       });
       return;
@@ -1863,7 +1864,7 @@ function GateAllocationContent() {
     const hasRouteDataLoaded = loadedWindowKeyRef.current === windowKey;
     setFetchingServerData(true);
     if (!hasRouteDataLoaded) setLoadError(null);
-    setLoadProgress(buildLoadProgress('Loading server workspace', 35, season.seasonCode));
+    setLoadProgress(buildLoadProgress('Đang tải không gian làm việc máy chủ', 35, season.seasonCode));
     try {
       await currentMutationRef.current;
       await commitQueueRef.current;
@@ -1896,7 +1897,7 @@ function GateAllocationContent() {
         syncMeta: serverWindow.syncMeta,
         windowKey,
       });
-      setLoadProgress(buildLoadProgress('Preparing gate allocation', 80, `${serverWindow.records.length} records`));
+      setLoadProgress(buildLoadProgress('Đang chuẩn bị phân bổ cửa', 80, `${serverWindow.records.length} bản ghi`));
       setFlightRecords(serverWindow.records);
       publishSeasonWorkspaceChanged({
         seasonId: season.id,
@@ -1905,9 +1906,9 @@ function GateAllocationContent() {
         syncMeta: serverWindow.syncMeta,
       });
     } catch (err) {
-      const message = err instanceof Error && err.message ? err.message : 'Could not fetch gate data from the server.';
+      const message = formatUiError(err, 'Không thể tải Lịch phân bổ cửa từ máy chủ.');
       if (!hasRouteDataLoaded) setLoadError(message);
-      void showAlert({ title: 'Fetch data failed', message, tone: 'error' });
+      void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
     } finally {
       setFetchingServerData(false);
     }
@@ -1936,16 +1937,16 @@ function GateAllocationContent() {
     if ((!isOperationalScheduleV1Enabled() && !season) || !settings || !exportDraft) return;
     if (!isValidGateExportRange(exportDraft)) {
       void showAlert({
-        title: 'Export PDF Failed',
-        message: 'Choose a valid export range where To is later than From.',
+        title: 'Xuất PDF thất bại',
+        message: 'Hãy chọn khoảng thời gian hợp lệ với mốc Đến sau mốc Từ.',
         tone: 'error',
       });
       return;
     }
     if (exportDraft.selectedGroupIds.length === 0) {
       void showAlert({
-        title: 'Export PDF Failed',
-        message: 'Select at least one Gate Group before exporting.',
+        title: 'Xuất PDF thất bại',
+        message: 'Hãy chọn ít nhất một Nhóm cửa trước khi xuất.',
         tone: 'error',
       });
       return;
@@ -1964,7 +1965,7 @@ function GateAllocationContent() {
       notifyExportCompleted(result.saveResult);
       setExportDraft(null);
     } catch (err) {
-      void showAlert({ title: 'Export PDF Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Xuất PDF thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       setExportingPdf(false);
     }
@@ -1986,7 +1987,7 @@ function GateAllocationContent() {
         `Unallocated all gates from ${formatLocalDateTimeLabel(fromDateTime)} to ${formatLocalDateTimeLabel(toDateTime)}`
       );
     } catch (err) {
-      void showAlert({ title: 'Unallocate All Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Hủy phân bổ toàn bộ thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [commitGateModificationBatch, fromDateTime, getEffectiveGateRecord, isWriteInProgress, showAlert, toDateTime, view]);
 
@@ -2078,8 +2079,8 @@ function GateAllocationContent() {
             }}
             disabled={isWriteInProgress}
             className="ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded bg-white/25 text-[10px] disabled:opacity-50"
-            aria-label={`Unallocate ${bar.flightNumber}`}
-            title="Unallocate"
+            aria-label={`Hủy phân bổ cửa chuyến bay ${bar.flightNumber}`}
+            title="Hủy phân bổ cửa"
           >
             <span className="material-symbols-outlined text-[13px]">close</span>
           </button>
@@ -2093,15 +2094,15 @@ function GateAllocationContent() {
       <div className="flex h-dvh min-w-0 flex-1 flex-col bg-surface">
         <header className="z-30 flex flex-none items-center justify-between border-b border-slate-200 bg-white/80 px-6 py-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
           <div>
-            <h1 className="font-h3 text-h3 text-on-surface">Gate Allocation</h1>
+            <h1 className="font-h3 text-h3 text-on-surface">Phân bổ cửa</h1>
             <p className="font-body-sm text-body-sm text-on-surface-variant">
-              {isOperationalScheduleV1Enabled() ? 'Operational Turns' : (season ? buildSeasonDisplayLabel(season) : 'No season selected')}
-            </p> 
+              {isOperationalScheduleV1Enabled() ? 'Lịch ngày vận hành' : (season ? buildSeasonDisplayLabel(season) : 'Chưa chọn mùa bay')}
+            </p>
           </div>
           <div className="flex items-center gap-3">
             {!isOperationalScheduleV1Enabled() && (
               <select value={season?.id ?? ''} onChange={(event) => router.push(`/gate?season=${event.target.value}`)} disabled={seasons.length === 0 || syncing} className="min-w-[200px] rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface">
-                {seasons.length === 0 ? <option value="">No seasons</option> : seasons.map((item) => <option key={item.id} value={item.id}>{buildSeasonDisplayLabel(item)}</option>)} 
+                {seasons.length === 0 ? <option value="">Không có mùa bay</option> : seasons.map((item) => <option key={item.id} value={item.id}>{buildSeasonDisplayLabel(item)}</option>)}
               </select>
             )}
             {season && (
@@ -2157,7 +2158,7 @@ function GateAllocationContent() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-surface-variant px-4 py-3">
               <fieldset disabled={isOperationalScheduleV1Enabled() && isWriteInProgress} className="flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-xs font-label-caps text-on-surface-variant">
-                  From
+                  Từ
                   <input
                     type="datetime-local"
                     value={fromDateTime}
@@ -2171,7 +2172,7 @@ function GateAllocationContent() {
                   />
                 </label>
                 <label className="flex items-center gap-2 text-xs font-label-caps text-on-surface-variant">
-                  To
+                  Đến
                   <input
                     type="datetime-local"
                     value={toDateTime}
@@ -2194,7 +2195,7 @@ function GateAllocationContent() {
                       className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface"
                     >
                       <span className="material-symbols-outlined text-[16px]">today</span>
-                      Today
+                      Hôm nay
                     </button>
                     <button
                       onClick={() => {
@@ -2205,7 +2206,7 @@ function GateAllocationContent() {
                       }}
                       className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant"
                     >
-                      Tomorrow
+                      Ngày mai
                     </button>
                     <button
                       onClick={() => {
@@ -2216,27 +2217,27 @@ function GateAllocationContent() {
                       }}
                       className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant"
                     >
-                      7 Days
+                      7 ngày
                     </button>
                   </>
                 ) : (
                   <>
                     <button onClick={() => { promoteLatestGateModificationsForView(); const next = buildDefaultDailyDateRange(todayIso()); setFromDateTime(next.from); setToDateTime(next.to); }} className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface">
                       <span className="material-symbols-outlined text-[16px]">today</span>
-                      Today
+                      Hôm nay
                     </button>
                     {[1, 2, 3].map((days) => (
                       <button key={days} onClick={() => { promoteLatestGateModificationsForView(); setToDateTime(addDaysToLocalDateTime(fromDateTime, days)); }} className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant">
-                        {days}D
+                        {days}N
                       </button>
                     ))}
                   </>
                 )}
               </fieldset>
               <div className="flex items-center gap-2">
-                <span className="rounded-full bg-primary-container px-3 py-1 text-xs font-bold text-on-primary-container">UNALLOC {summary.unallocated}</span>
-                <span className="rounded-full bg-secondary-container px-3 py-1 text-xs font-bold text-on-secondary-container">ALLOC {summary.allocatedFlights}</span>
-                <span className="rounded-full bg-tertiary-container px-3 py-1 text-xs font-bold text-on-tertiary-container">BLOCKS {summary.gateBlocks}</span>
+                <span className="rounded-full bg-primary-container px-3 py-1 text-xs font-bold text-on-primary-container">CHƯA XẾP {summary.unallocated}</span>
+                <span className="rounded-full bg-secondary-container px-3 py-1 text-xs font-bold text-on-secondary-container">ĐÃ PHÂN BỔ {summary.allocatedFlights}</span>
+                <span className="rounded-full bg-tertiary-container px-3 py-1 text-xs font-bold text-on-tertiary-container">KHỐI CỬA {summary.gateBlocks}</span>
               </div>
             </div>
             {(allocationResult.error || timeline.error) && (
@@ -2254,7 +2255,7 @@ function GateAllocationContent() {
               <div className="flex h-10 flex-none items-center justify-between border-b border-surface-variant bg-surface-container-low px-3">
                 <div className="flex items-center gap-2 text-xs font-semibold text-on-surface">
                   <PbbIcon className="h-[18px] w-[18px]" />
-                  Gate Gantt
+                  Gantt phân bổ cửa
                 </div>
                 <div className="flex items-center gap-1">
                   <button
@@ -2265,11 +2266,11 @@ function GateAllocationContent() {
                     }}
                     disabled={isWriteInProgress || summary.gateBlocks === 0}
                     className="flex h-7 items-center gap-1.5 rounded border border-outline-variant bg-surface-container-lowest px-2 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label="Unallocate all gates in selected period"
-                    title="Unallocate all gates in selected period"
+                    aria-label="Hủy phân bổ toàn bộ cửa trong khoảng thời gian đã chọn"
+                    title="Hủy phân bổ toàn bộ cửa trong khoảng thời gian đã chọn"
                   >
                     <span className="material-symbols-outlined text-[18px]">playlist_remove</span>
-                    Unallocate All
+                    Hủy phân bổ tất cả
                   </button>
                   <button
                     type="button"
@@ -2279,11 +2280,11 @@ function GateAllocationContent() {
                     }}
                     disabled={(!isOperationalScheduleV1Enabled() && !season) || !settings || loading || exportingPdf || isWriteInProgress}
                     className="flex h-7 items-center gap-1.5 rounded border border-outline-variant bg-surface-container-lowest px-2 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label="Export PDF"
-                    title="Export PDF"
+                    aria-label="Xuất PDF"
+                    title="Xuất PDF"
                   >
                     <span className={`material-symbols-outlined text-[18px] ${exportingPdf ? 'animate-spin' : ''}`}>{exportingPdf ? 'sync' : 'picture_as_pdf'}</span>
-                    Export PDF
+                    Xuất PDF
                   </button>
                   <button
                     type="button"
@@ -2293,8 +2294,8 @@ function GateAllocationContent() {
                     }}
                     disabled={!canZoomOut}
                     className="flex h-7 w-7 items-center justify-center rounded border border-outline-variant bg-surface-container-lowest text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label="Zoom out timeline"
-                    title="Zoom out"
+                    aria-label="Thu nhỏ dòng thời gian"
+                    title="Thu nhỏ"
                   >
                     <span className="material-symbols-outlined text-[18px]">remove</span>
                   </button>
@@ -2306,8 +2307,8 @@ function GateAllocationContent() {
                     }}
                     disabled={!canZoomIn}
                     className="flex h-7 w-7 items-center justify-center rounded border border-outline-variant bg-surface-container-lowest text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label="Zoom in timeline"
-                    title="Zoom in"
+                    aria-label="Phóng to dòng thời gian"
+                    title="Phóng to"
                   >
                     <span className="material-symbols-outlined text-[18px]">add</span>
                   </button>
@@ -2318,8 +2319,8 @@ function GateAllocationContent() {
                       void handleGanttFullscreenToggle();
                     }}
                     className="flex h-7 w-7 items-center justify-center rounded border border-outline-variant bg-surface-container-lowest text-on-surface transition-colors hover:bg-surface-container-high"
-                    aria-label={isGanttFullscreen ? 'Exit Gantt fullscreen' : 'Enter Gantt fullscreen'}
-                    title={isGanttFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                    aria-label={isGanttFullscreen ? 'Thoát toàn màn hình Gantt' : 'Toàn màn hình Gantt'}
+                    title={isGanttFullscreen ? 'Thoát toàn màn hình' : 'Toàn màn hình'}
                   >
                     <span className="material-symbols-outlined text-[18px]">{isGanttFullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
                   </button>
@@ -2330,7 +2331,7 @@ function GateAllocationContent() {
                   <LoadingStatusPanel progress={loadProgress} className="h-full min-h-[320px]" />
                 ) : loadError ? (
                   <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 p-6 text-center">
-                    <div className="text-sm font-semibold text-error">Cannot load gate data</div>
+                    <div className="text-sm font-semibold text-error">Không thể tải dữ liệu phân bổ cửa</div>
                     <div className="max-w-xl text-sm text-on-surface-variant">{loadError}</div>
                     {syncSeasonId && (
                       <FetchServerUpdatesButton
@@ -2343,7 +2344,7 @@ function GateAllocationContent() {
                   </div>
                 ) : !isOperationalScheduleV1Enabled() && !season ? (
                   <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-on-surface-variant">
-                    <div>No season data.</div>
+                    <div>Không có dữ liệu mùa bay.</div>
                     {syncSeasonId && (
                       <FetchServerUpdatesButton
                         fetching={fetchingServerData}
@@ -2354,7 +2355,7 @@ function GateAllocationContent() {
                     )}
                   </div>
                 ) : !view || !timeline.ticks ? (
-                  <div className="flex h-full items-center justify-center text-sm text-error">{allocationResult.error ?? timeline.error ?? 'Gate allocation view is unavailable.'}</div>
+                  <div className="flex h-full items-center justify-center text-sm text-error">{allocationResult.error ?? timeline.error ?? 'Màn hình phân bổ cửa hiện không khả dụng.'}</div>
                 ) : (
                   <div ref={ganttScrollRef} className="h-full overflow-auto">
                     <div className="relative" style={{ minWidth: LABEL_COLUMN_WIDTH + timeline.width }}>
@@ -2367,10 +2368,10 @@ function GateAllocationContent() {
                         <div className="flex h-9 items-center border-b border-surface-variant bg-surface-container-low">
                           <div className="sticky left-0 z-30 flex h-full shrink-0 items-center gap-2 border-r border-surface-variant bg-surface-container-low px-3 text-xs font-semibold text-on-surface" style={{ width: LABEL_COLUMN_WIDTH }}>
                             <span className="material-symbols-outlined text-[17px]">inventory_2</span>
-                            Unallocated
+                            Chưa phân bổ
                           </div>
                           <div className="flex h-full shrink-0 items-center justify-between px-3 text-xs font-data-tabular text-on-surface-variant" style={{ width: timeline.width }}>
-                            <span>{summary.unallocated} departure flights | {packedUnallocated.laneCount} packed lane{packedUnallocated.laneCount === 1 ? '' : 's'}</span>
+                            <span>{summary.unallocated} chuyến bay đi | {packedUnallocated.laneCount} luồng xếp gọn</span>
                             <button
                               type="button"
                               onClick={(event) => {
@@ -2378,7 +2379,7 @@ function GateAllocationContent() {
                                 setPoolCollapsed((current) => !current);
                               }}
                               className="flex h-7 w-7 items-center justify-center rounded border border-outline-variant bg-surface-container-lowest text-on-surface hover:bg-surface-container-high"
-                              aria-label={poolCollapsed ? 'Expand unallocated pool' : 'Collapse unallocated pool'}
+                              aria-label={poolCollapsed ? 'Mở rộng khu vực chưa phân bổ' : 'Thu gọn khu vực chưa phân bổ'}
                             >
                               <span className="material-symbols-outlined text-[17px]">{poolCollapsed ? 'unfold_more' : 'unfold_less'}</span>
                             </button>
@@ -2387,7 +2388,7 @@ function GateAllocationContent() {
                         {poolCollapsed ? null : view.unallocated.length === 0 ? (
                           <div className="flex" style={{ height: poolBodyHeight, minWidth: LABEL_COLUMN_WIDTH + timeline.width }}>
                             <div className="sticky left-0 z-20 flex shrink-0 items-center border-r border-surface-variant bg-surface-container-lowest px-3 text-xs text-on-surface-variant" style={{ width: LABEL_COLUMN_WIDTH }}>
-                              Empty
+                              Trống
                             </div>
                             <div className="relative shrink-0" style={{ width: timeline.width, height: poolBodyHeight }}>
                               <TimelineGridBackground ticks={timeline.ticks} />
@@ -2396,7 +2397,7 @@ function GateAllocationContent() {
                         ) : (
                           <div className="flex" style={{ height: poolBodyHeight, minWidth: LABEL_COLUMN_WIDTH + timeline.width }}>
                             <div className="sticky left-0 z-20 flex shrink-0 items-center border-r border-surface-variant bg-surface-container-lowest px-3 text-xs text-on-surface-variant" style={{ width: LABEL_COLUMN_WIDTH }}>
-                              Pool
+                              Chờ phân bổ
                             </div>
                             <div className="relative shrink-0 overflow-y-auto" style={{ width: timeline.width, height: poolBodyHeight }}>
                               <div className="relative" style={{ height: Math.max(poolBodyHeight, packedPoolHeight) }}>
@@ -2409,7 +2410,7 @@ function GateAllocationContent() {
                         {!poolCollapsed && (
                           <button
                             type="button"
-                            aria-label="Resize unallocated pool"
+                            aria-label="Kéo đổi kích thước khu vực chưa phân bổ"
                             className="absolute bottom-0 left-0 right-0 z-40 h-2 cursor-ns-resize border-t border-outline-variant bg-surface-container-high hover:bg-primary-container"
                             onPointerDown={(event) => {
                               if (!isRouteActive) return;
@@ -2436,10 +2437,10 @@ function GateAllocationContent() {
                         <div className="flex h-9 items-center border-b border-surface-variant bg-surface-container-low">
                           <div className="sticky left-0 z-30 flex h-full shrink-0 items-center gap-2 border-r border-surface-variant bg-surface-container-low px-3 text-xs font-semibold text-on-surface" style={{ width: LABEL_COLUMN_WIDTH }}>
                             <PbbIcon className="h-[17px] w-[17px]" />
-                            Resource Grid
+                            Lưới cửa
                           </div>
                           <div className="flex h-full shrink-0 items-center px-3 text-xs font-data-tabular text-on-surface-variant" style={{ width: timeline.width }}>
-                            {view.resourceRows.length} gates
+                            {view.resourceRows.length} cửa
                           </div>
                         </div>
                         {view.resourceSections.map((section) => {
@@ -2496,15 +2497,15 @@ function GateAllocationContent() {
               >
                 <div className="flex items-center justify-between border-b border-surface-variant px-4 py-3">
                   <div>
-                    <h2 className="text-sm font-semibold text-on-surface">Export PDF</h2>
-                    <p className="text-xs text-on-surface-variant">A4 landscape, one gate group per page</p>
+                    <h2 className="text-sm font-semibold text-on-surface">Xuất PDF</h2>
+                    <p className="text-xs text-on-surface-variant">Khổ A4 ngang, mỗi nhóm cửa một trang</p>
                   </div>
                   <button
                     type="button"
                     onClick={() => setExportDraft(null)}
                     disabled={exportingPdf}
                     className="flex h-8 w-8 items-center justify-center rounded border border-outline-variant hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
-                    aria-label="Close export PDF"
+                    aria-label="Đóng xuất PDF"
                   >
                     <span className="material-symbols-outlined text-[18px]">close</span>
                   </button>
@@ -2513,11 +2514,11 @@ function GateAllocationContent() {
                   <div className="grid min-w-0 content-start gap-4 overflow-y-auto overflow-x-hidden pr-1">
                     <section className="grid min-w-0 gap-3">
                       <div className="min-w-0">
-                        <h3 className="text-sm font-semibold text-on-surface">Configuration</h3>
-                        <p className="text-xs text-on-surface-variant">Set an export-only gate allocation window.</p>
+                        <h3 className="text-sm font-semibold text-on-surface">Cấu hình</h3>
+                        <p className="text-xs text-on-surface-variant">Thiết lập khoảng thời gian phân bổ cửa chỉ dùng cho xuất tệp.</p>
                       </div>
                       <label className="grid min-w-0 gap-1 text-xs font-label-caps text-on-surface-variant">
-                        Start Datetime
+                        Thời gian bắt đầu
                         <input
                           type="datetime-local"
                           value={exportDraft.from}
@@ -2527,7 +2528,7 @@ function GateAllocationContent() {
                         />
                       </label>
                       <label className="grid min-w-0 gap-1 text-xs font-label-caps text-on-surface-variant">
-                        End Datetime
+                        Thời gian kết thúc
                         <input
                           type="datetime-local"
                           value={exportDraft.to}
@@ -2543,8 +2544,8 @@ function GateAllocationContent() {
                     <section className="grid min-w-0 gap-3">
                       <div className="flex min-w-0 items-center justify-between gap-2">
                         <div className="min-w-0">
-                          <h3 className="text-sm font-semibold text-on-surface">Gate Groups</h3>
-                          <p className="text-xs text-on-surface-variant">Each selected group renders as one PDF page.</p>
+                          <h3 className="text-sm font-semibold text-on-surface">Nhóm cửa</h3>
+                          <p className="text-xs text-on-surface-variant">Mỗi nhóm được chọn sẽ hiển thị trên một trang PDF.</p>
                         </div>
                         <div className="flex shrink-0 gap-1">
                           <button
@@ -2553,7 +2554,7 @@ function GateAllocationContent() {
                             disabled={exportingPdf || exportGroups.length === 0}
                             className="rounded border border-outline-variant px-2 py-1 text-xs font-semibold text-on-surface hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            All
+                            Tất cả
                           </button>
                           <button
                             type="button"
@@ -2561,13 +2562,13 @@ function GateAllocationContent() {
                             disabled={exportingPdf || exportGroups.length === 0}
                             className="rounded border border-outline-variant px-2 py-1 text-xs font-semibold text-on-surface hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            None
+                            Bỏ chọn
                           </button>
                         </div>
                       </div>
                       <div className="grid max-h-64 min-w-0 gap-2 overflow-y-auto overflow-x-hidden rounded border border-surface-variant bg-surface-container-low p-2">
                         {exportGroups.length === 0 ? (
-                          <p className="px-1 py-2 text-xs text-on-surface-variant">Choose a valid timeframe to load Gate Groups.</p>
+                          <p className="px-1 py-2 text-xs text-on-surface-variant">Chọn khoảng thời gian hợp lệ để tải Nhóm cửa.</p>
                         ) : exportGroups.map((group) => (
                           <label key={group.id} className="flex items-center gap-2 rounded border border-transparent px-2 py-1.5 text-sm text-on-surface hover:border-outline-variant hover:bg-surface-container">
                             <input
@@ -2584,7 +2585,7 @@ function GateAllocationContent() {
                               className="h-4 w-4 accent-primary"
                             />
                             <span className="min-w-0 flex-1 truncate font-semibold">{group.name}</span>
-                            <span className="shrink-0 font-data-tabular text-xs text-on-surface-variant">{group.rowCount} gates</span>
+                            <span className="shrink-0 font-data-tabular text-xs text-on-surface-variant">{group.rowCount} cửa</span>
                           </label>
                         ))}
                       </div>
@@ -2604,7 +2605,7 @@ function GateAllocationContent() {
                     disabled={exportingPdf}
                     className="rounded border border-outline-variant px-3 py-1.5 text-sm font-semibold text-on-surface hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    Cancel
+                    Hủy
                   </button>
                   <button
                     type="submit"
@@ -2612,7 +2613,7 @@ function GateAllocationContent() {
                     className="inline-flex items-center gap-2 rounded bg-primary px-3 py-1.5 text-sm font-semibold text-on-primary hover:bg-primary-container hover:text-on-primary-container disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <span className={`material-symbols-outlined text-[18px] ${exportingPdf ? 'animate-spin' : ''}`}>{exportingPdf ? 'sync' : 'download'}</span>
-                    {exportingPdf ? 'Exporting' : 'Export PDF'}
+                    {exportingPdf ? 'Đang xuất…' : 'Xuất PDF'}
                   </button>
                 </div>
               </form>
@@ -2630,7 +2631,7 @@ export default function GateAllocationPage() {
   return (
     <Suspense fallback={
       <LoadingStatusPanel
-        progress={buildLoadProgress('Loading gate allocation...', 20, 'Preparing route')}
+        progress={buildLoadProgress('Đang tải phân bổ cửa...', 20, 'Đang chuẩn bị giao diện')}
         mode="fullscreen"
       />
     }>

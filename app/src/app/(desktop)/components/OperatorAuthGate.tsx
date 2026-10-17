@@ -18,6 +18,7 @@ import {
   resolveOperatorLoginIdentity,
 } from '@/lib/operatorAuthIdentity';
 import { getSupabaseClient } from '@/lib/supabase';
+import { formatUiError } from '@/lib/uiDisplayText';
 import { clearOperatorScopedMemoryCaches } from '@/lib/appSessionCleanup';
 import {
   createOperatorVerificationSingleFlight,
@@ -65,9 +66,9 @@ export function useOperatorAuth(): OperatorAuthContextValue {
 function formatOperatorSignInErrorMessage(message: string): string {
   const normalized = message.toLowerCase();
   if (normalized.includes('invalid login credentials') || normalized.includes('email not confirmed')) {
-    return 'Username hoặc password không đúng.';
+    return 'Tên đăng nhập hoặc mật khẩu không chính xác.';
   }
-  return message || 'Không đăng nhập được. Vui lòng thử lại.';
+  return formatUiError(message, 'Không thể đăng nhập. Vui lòng thử lại.');
 }
 
 function OperatorAuthScreen({
@@ -98,8 +99,8 @@ function OperatorAuthScreen({
           <div className="mb-4 flex items-center gap-3">
             <span className="material-symbols-outlined text-[28px] text-cyan-300">flight_takeoff</span>
             <div>
-              <h1 className="text-lg font-semibold tracking-tight">Seasonal Management</h1>
-              <p className="text-sm text-slate-400">Checking operator session</p>
+              <h1 className="text-lg font-semibold tracking-tight">Quản lý lịch mùa</h1>
+              <p className="text-sm text-slate-400">Đang kiểm tra phiên điều hành</p>
             </div>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-slate-800">
@@ -117,9 +118,9 @@ function OperatorAuthScreen({
           <div className="mb-5 flex items-start gap-3">
             <span className="material-symbols-outlined mt-0.5 text-[26px] text-amber-300">lock</span>
             <div>
-              <h1 className="text-lg font-semibold tracking-tight">Operator access required</h1>
+              <h1 className="text-lg font-semibold tracking-tight">Yêu cầu quyền điều hành</h1>
               <p className="mt-1 text-sm leading-6 text-slate-300">
-                Operator access is not enabled for this account. Add this Auth user to public.app_operators with a username, then sign in again.
+                Tài khoản này chưa được cấp quyền điều hành. Vui lòng thêm người dùng vào danh sách điều hành viên và đăng nhập lại.
               </p>
             </div>
           </div>
@@ -135,7 +136,7 @@ function OperatorAuthScreen({
             disabled={busy}
           >
             <span className="material-symbols-outlined text-[19px]">logout</span>
-            Sign out
+            Đăng xuất
           </button>
         </section>
       </main>
@@ -149,13 +150,13 @@ function OperatorAuthScreen({
           <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-lg bg-cyan-300 text-slate-950">
             <span className="material-symbols-outlined text-[26px]">flight_takeoff</span>
           </div>
-          <h1 className="text-xl font-semibold tracking-tight">Seasonal Management</h1>
-          <p className="mt-1 text-sm text-slate-400">Sign in with your operator username</p>
+          <h1 className="text-xl font-semibold tracking-tight">Quản lý lịch mùa</h1>
+          <p className="mt-1 text-sm text-slate-400">Đăng nhập bằng tài khoản điều hành</p>
         </div>
 
         <form className="space-y-4" onSubmit={handleSubmit}>
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-slate-200">Username</span>
+            <span className="mb-1.5 block text-sm font-medium text-slate-200">Tên đăng nhập</span>
             <input
               type="text"
               value={username}
@@ -167,7 +168,7 @@ function OperatorAuthScreen({
             />
           </label>
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-slate-200">Password</span>
+            <span className="mb-1.5 block text-sm font-medium text-slate-200">Mật khẩu</span>
             <input
               type="password"
               value={password}
@@ -175,7 +176,7 @@ function OperatorAuthScreen({
               autoComplete="current-password"
               required
               className="operator-auth-control h-11 rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-white outline-none transition-colors placeholder:text-slate-600 focus:border-cyan-300"
-              placeholder="Password"
+              placeholder="Mật khẩu"
             />
           </label>
 
@@ -191,7 +192,7 @@ function OperatorAuthScreen({
             disabled={busy}
           >
             <span className="material-symbols-outlined text-[19px]">login</span>
-            {busy ? 'Signing in...' : 'Sign in'}
+            {busy ? 'Đang đăng nhập...' : 'Đăng nhập'}
           </button>
         </form>
       </section>
@@ -243,7 +244,7 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
 
     if (error) {
       if (!options.blocking && authorizedUserIdRef.current === session.user.id) {
-        setErrorMessage(error.message);
+        setErrorMessage(formatUiError(error, 'Lỗi kiểm tra phiên điều hành.'));
         return;
       }
       authorizedUserIdRef.current = null;
@@ -252,7 +253,7 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
         username: null,
         displayName: null,
       });
-      setErrorMessage(error.message);
+      setErrorMessage(formatUiError(error, 'Lỗi phân quyền điều hành.'));
       setStatus('unauthorized');
       return;
     }
@@ -310,7 +311,7 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
     supabase.auth.getSession().then(({ data, error }) => {
       if (!active) return;
       if (error) {
-        setErrorMessage(error.message);
+        setErrorMessage(formatUiError(error, 'Không thể tải phiên điều hành.'));
         setStatus('signedOut');
         return;
       }
@@ -347,7 +348,7 @@ export default function OperatorAuthGate({ children }: { children: ReactNode }) 
       }
       await verifySession(data.session, { blocking: true });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Không đăng nhập được. Vui lòng thử lại.');
+      setErrorMessage(formatUiError(error, 'Không thể đăng nhập. Vui lòng thử lại.'));
       setStatus('signedOut');
     } finally {
       setBusy(false);

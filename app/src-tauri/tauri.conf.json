@@ -5,7 +5,7 @@
   "identifier": "com.seasonalmanagement.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run python:agent:bundle && npm run build",
+    "beforeBuildCommand": "npm run build",
     "devUrl": "http://localhost:3000",
     "frontendDist": "../out"
   },
@@ -43,9 +43,6 @@
       "nsis"
     ],
     "createUpdaterArtifacts": true,
-    "externalBin": [
-      "binaries/dashboard-ai-agent"
-    ],
     "icon": []
   }
 }

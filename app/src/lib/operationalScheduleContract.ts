@@ -652,17 +652,16 @@ export interface DailyImportLegInputV2 {
   side: 'ARR' | 'DEP';
   airline: string;
   flightNumber: string;
+  rawFlightNumber?: string | null;
   route: string;
+  aircraft?: string | null;
+  category?: string | null;
+  flightType?: string | null;
+  requestStatusCode?: string | null;
   sheetName?: string;
   sourceRowNumber: number;
-  resources?: {
-    stand?: string | null;
-    gate?: number | null;
-    carousel?: number | null;
-    pax?: number | null;
-    checkInAllocationMode?: 'grouped' | 'broken' | null;
-    checkInCounterWindows?: Record<string, { start: string; end: string }> | null;
-  };
+  resources?: Record<string, unknown>;
+  rawResourceTokens?: Record<string, string | null>;
 }
 
 export interface DailyImportStagePayloadV2 {
@@ -697,8 +696,13 @@ export interface DailyImportPreviewV2 {
   confirmedZeroFlightDates: string[];
   sourceFingerprint: string;
   legCount: number;
-  rebaseCount: number;
-  replacedLegs: DailyImportReplacedLegV2[];
+  replacedCount?: number;
+  rebaseCount?: number;
+  replacedLegsCount?: number;
+  replacedLegsTruncated?: boolean;
+  replacedLegs?: DailyImportReplacedLegV2[];
+  rebasedOverridesCount?: number;
+  rebasedOverridesTruncated?: boolean;
   rebasedOverrides: Array<{
     occurrenceKey: string;
     matchedLegId: string | null;
@@ -706,6 +710,57 @@ export interface DailyImportPreviewV2 {
   }>;
   replacedBySource: Record<string, number>;
   inputHash: string;
+}
+
+export interface DailyImportUploadBeginResultV2 {
+  uploadId: string;
+  batchId: string;
+  requestId: string;
+  nextChunkIndex: number;
+  chunkCount: number;
+  totalChunks?: number;
+  legCount: number;
+  status: string;
+}
+
+export interface DailyImportUploadAppendResultV2 {
+  uploadId: string;
+  nextChunkIndex: number;
+  receivedChunks: number;
+  totalChunks: number;
+}
+
+export function parseDailyImportUploadBeginResultV2(value: unknown): DailyImportUploadBeginResultV2 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Daily import begin upload result must be an object');
+  }
+  const obj = value as Record<string, unknown>;
+  const uploadId = (obj.uploadId ?? obj.upload_id ?? obj.batchId ?? obj.batch_id) as string;
+  const batchId = (obj.batchId ?? obj.batch_id ?? uploadId) as string;
+  const requestId = (obj.requestId ?? obj.request_id) as string;
+  const nextChunkIndex = Number(obj.nextChunkIndex ?? obj.next_chunk_index ?? 0);
+  const chunkCount = Number(obj.chunkCount ?? obj.chunk_count ?? obj.totalChunks ?? obj.total_chunks ?? 0);
+  const legCount = Number(obj.legCount ?? obj.leg_count ?? 0);
+  const status = String(obj.status ?? 'uploading');
+  if (!uploadId || !requestId) {
+    throw new Error('Daily import begin upload result missing required fields');
+  }
+  return { uploadId, batchId, requestId, nextChunkIndex, chunkCount, totalChunks: chunkCount, legCount, status };
+}
+
+export function parseDailyImportUploadAppendResultV2(value: unknown): DailyImportUploadAppendResultV2 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Daily import append upload result must be an object');
+  }
+  const obj = value as Record<string, unknown>;
+  const uploadId = (obj.uploadId ?? obj.upload_id) as string;
+  const nextChunkIndex = Number(obj.nextChunkIndex ?? obj.next_chunk_index ?? 0);
+  const receivedChunks = Number(obj.receivedChunks ?? obj.received_chunks ?? 0);
+  const totalChunks = Number(obj.totalChunks ?? obj.total_chunks ?? 0);
+  if (!uploadId) {
+    throw new Error('Daily import append upload result missing required fields');
+  }
+  return { uploadId, nextChunkIndex, receivedChunks, totalChunks };
 }
 
 export interface DailyImportStageResultV2 {
@@ -732,44 +787,83 @@ export function parseDailyImportStageResultV2(value: unknown): DailyImportStageR
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Daily import stage result must be an object');
   }
-  const obj = value as Record<string, unknown>;
-  const preview = obj.preview;
+  const raw = value as Record<string, unknown>;
+  const batchId = (raw.batchId ?? raw.batch_id) as string;
+  const requestId = (raw.requestId ?? raw.request_id) as string;
+  const status = raw.status as DailyImportStageResultV2['status'];
+  const previewHash = (raw.previewHash ?? raw.preview_hash) as string;
+  const expiresAt = (raw.expiresAt ?? raw.expires_at ?? '') as string;
+  const preview = raw.preview as Record<string, unknown> | undefined;
+  const diagnostics = Array.isArray(raw.diagnostics) ? (raw.diagnostics as Array<Record<string, unknown>>) : [];
+  const result = raw.result ? parseDailyImportCommittedResultV2(raw.result) : null;
+
   if (
-    typeof obj.batchId !== 'string' ||
-    typeof obj.requestId !== 'string' ||
-    typeof obj.status !== 'string' ||
-    typeof obj.previewHash !== 'string' ||
+    typeof batchId !== 'string' ||
+    typeof requestId !== 'string' ||
+    typeof status !== 'string' ||
+    typeof previewHash !== 'string' ||
     !preview ||
-    typeof preview !== 'object' ||
-    !Array.isArray(obj.diagnostics)
+    typeof preview !== 'object'
   ) {
     throw new Error('Daily import stage result missing required SQL batch fields');
   }
-  return obj as unknown as DailyImportStageResultV2;
+
+  const normalizedPreview: DailyImportPreviewV2 = {
+    importGuardVersion: '2',
+    valid: Boolean(preview.valid),
+    affectedDates: Array.isArray(preview.affectedDates ?? preview.affected_dates) ? ((preview.affectedDates ?? preview.affected_dates) as string[]) : [],
+    confirmedZeroFlightDates: Array.isArray(preview.confirmedZeroFlightDates ?? preview.confirmed_zero_flight_dates) ? ((preview.confirmedZeroFlightDates ?? preview.confirmed_zero_flight_dates) as string[]) : [],
+    sourceFingerprint: String(preview.sourceFingerprint ?? preview.source_fingerprint ?? ''),
+    legCount: Number(preview.legCount ?? preview.leg_count ?? 0),
+    replacedCount: Number(preview.replacedCount ?? preview.replaced_count ?? preview.replacedLegsCount ?? preview.replaced_legs_count ?? 0),
+    rebaseCount: Number(preview.rebaseCount ?? preview.rebase_count ?? 0),
+    replacedLegsTruncated: preview.replacedLegsTruncated != null ? Boolean(preview.replacedLegsTruncated) : (preview.replaced_legs_truncated != null ? Boolean(preview.replaced_legs_truncated) : undefined),
+    replacedLegs: Array.isArray(preview.replacedLegs ?? preview.replaced_legs) ? ((preview.replacedLegs ?? preview.replaced_legs) as DailyImportReplacedLegV2[]) : [],
+    rebasedOverridesCount: preview.rebasedOverridesCount != null ? Number(preview.rebasedOverridesCount) : (preview.rebased_overrides_count != null ? Number(preview.rebased_overrides_count) : undefined),
+    rebasedOverridesTruncated: preview.rebasedOverridesTruncated != null ? Boolean(preview.rebasedOverridesTruncated) : (preview.rebased_overrides_truncated != null ? Boolean(preview.rebased_overrides_truncated) : undefined),
+    rebasedOverrides: Array.isArray(preview.rebasedOverrides ?? preview.rebased_overrides) ? ((preview.rebasedOverrides ?? preview.rebased_overrides) as DailyImportPreviewV2['rebasedOverrides']) : [],
+    replacedBySource: (preview.replacedBySource ?? preview.replaced_by_source ?? {}) as Record<string, number>,
+    inputHash: String(preview.inputHash ?? preview.input_hash ?? ''),
+  };
+
+  return {
+    batchId,
+    requestId,
+    status,
+    previewHash,
+    preview: normalizedPreview,
+    diagnostics,
+    expiresAt,
+    result,
+  };
 }
 
 export function parseDailyImportCommittedResultV2(value: unknown): DailyImportCommittedResultV2 {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Daily import commit receipt must be an object');
   }
-  const obj = value as Record<string, unknown>;
+  const raw = value as Record<string, unknown>;
+  const batchId = (raw.batchId ?? raw.batch_id) as string;
+  const status = raw.status as 'committed';
+  const revision = raw.revision != null ? String(raw.revision) : null;
+  const affectedDates = (raw.affectedDates ?? raw.affected_dates) as string[];
+  const insertedCount = Number(raw.insertedCount ?? raw.inserted_count ?? 0);
+  const replacedCount = Number(raw.replacedCount ?? raw.replaced_count ?? 0);
   if (
-    obj.status !== 'committed' ||
-    typeof obj.batchId !== 'string' ||
-    !Array.isArray(obj.affectedDates) ||
-    typeof obj.insertedCount !== 'number' ||
-    typeof obj.replacedCount !== 'number' ||
-    typeof obj.revision !== 'string'
+    status !== 'committed' ||
+    typeof batchId !== 'string' ||
+    revision == null ||
+    !Array.isArray(affectedDates)
   ) {
     throw new Error('Daily import commit receipt is missing required SQL receipt fields (status, batchId, affectedDates, insertedCount, replacedCount, revision)');
   }
   return {
     status: 'committed',
-    batchId: obj.batchId,
-    affectedDates: obj.affectedDates.map(String),
-    insertedCount: obj.insertedCount,
-    replacedCount: obj.replacedCount,
-    revision: obj.revision,
+    batchId,
+    affectedDates: affectedDates.map(String),
+    insertedCount,
+    replacedCount,
+    revision,
   };
 }
 

@@ -20,6 +20,7 @@ import {
   fetchTrafficReportV2TimelinePage,
   TrafficReportVersionChangedError,
 } from '@/lib/trafficReportDataAdapter';
+import { formatUiError } from '@/lib/uiDisplayText';
 
 const numberFormat = new Intl.NumberFormat('vi-VN');
 const dateFormat = new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -81,7 +82,7 @@ export function TrafficReportTrend({ filter, scope, readVersion = 'v1', expected
         let timeline: TrafficTimelinePoint[];
         let nextCursor: string | null;
         if (readVersion === 'v2') {
-          if (expectedWatermark === undefined || !readVersionToken) throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.');
+          if (expectedWatermark === undefined || !readVersionToken) throw new Error('Phiên bản dữ liệu mới nhất chưa sẵn sàng.');
           const payload = await fetchTrafficReportV2TimelinePage(filter, scope, after, expectedWatermark, readVersionToken, { signal: controller.signal });
           timeline = payload.timeline;
           hasMore = payload.hasMore;
@@ -105,7 +106,7 @@ export function TrafficReportTrend({ filter, scope, readVersion = 'v1', expected
     } catch (reason) {
       if (!controller.signal.aborted) {
         if (reason instanceof TrafficReportVersionChangedError) onVersionChanged?.();
-        setError(reason instanceof Error ? reason.message : 'Không thể tải xu hướng.');
+        setError(formatUiError(reason, 'Không thể tải xu hướng.'));
       }
     } finally {
       if (!controller.signal.aborted) setLoading(false);
@@ -234,7 +235,7 @@ export function TrafficReportTrend({ filter, scope, readVersion = 'v1', expected
     <section aria-labelledby="trend-title" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="max-w-3xl">
-          <p className="text-sm font-bold text-blue-900">Sản lượng Tổng quan</p>
+          <p className="text-sm font-bold text-blue-900">Tổng quan sản lượng</p>
           <h2 id="trend-title" className="mt-1 text-balance text-2xl font-bold text-slate-950" title="Xu hướng chuyến bay và sản lượng khách">Xu hướng chuyến bay và sản lượng khách</h2>
           <p className="mt-2 text-pretty text-sm leading-6 text-slate-600">Theo dõi tương quan giữa sản lượng chuyến bay và sản lượng khách trong cùng phạm vi. Sản lượng khách chỉ tính số khách đã báo cáo.</p>
         </div>

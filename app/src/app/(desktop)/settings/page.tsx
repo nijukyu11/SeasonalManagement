@@ -1,20 +1,12 @@
 'use client';
+import { formatUiError } from '@/lib/uiDisplayText';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { syncDashboardAiProviderKey } from '@/lib/dashboardAiAdmin';
 import { getCurrentOperatorAccess } from '@/lib/operatorUserManagement';
 import {
-  cancelSeasonalImportV3,
-  commitSeasonalImportV3,
-  findSeasonByCode,
-  getSeasons,
-  getSeasonalImportV3Status,
   saveOperationalSettings,
-  stageSeasonalImportV3,
 } from '@/lib/remoteStore';
-import { parseSeasonalSchedule } from '@/lib/parser';
-import { buildCanonicalSeasonalRows } from '@/lib/canonicalSeasonalRows';
 import { parseCheckInCounterInventoryInput } from '@/lib/checkInCounterSettings';
 import { mergeRouteCountryMappings, normalizeRouteCode, parseRouteCountryRows } from '@/lib/routeCountry';
 import {
@@ -27,50 +19,17 @@ import {
   toggleGateGroupMembership,
   toggleGateLockMembership,
 } from '@/lib/settingsPageActions';
-import { DEFAULT_DEEPSEEK_BASE_URL, hydrateOperationalSettings, removeAircraftGroupFromSettings, validateOperationalSettings } from '@/lib/settingsRules';
+import { hydrateOperationalSettings, removeAircraftGroupFromSettings, validateOperationalSettings } from '@/lib/settingsRules';
 import { appendAuditLogEntry, buildSettingsAuditDeltas } from '@/lib/auditLog';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
-import {
-  buildSeasonalImportCommittedRefreshFailure,
-} from '@/lib/seasonalImportRpcContract';
-import {
-  buildSeasonalImportStatusUnknownNotice,
-  checkSeasonalImportV3RecoveryStatusOnce,
-} from '@/lib/seasonalImportRecovery';
-import {
-  buildSeasonalImportV3RecoveryReceipt,
-  clearSeasonalImportV3RecoveryReceipt,
-  committedSeasonalImportV3FromRecoveryReceipt,
-  loadSeasonalImportV3RecoveryReceipt,
-  markSeasonalImportV3RecoveryCommitted,
-  persistSeasonalImportV3RecoveryReceipt,
-  type SeasonalImportV3RecoveryReceipt,
-} from '@/lib/seasonalImportReceipt';
-import {
-  prepareSeasonalImportV3Attempt,
-  type SeasonalImportV3CommittedResult,
-} from '@/lib/seasonalImportV3Contract';
-import {
-  canCommitSeasonalImportPreview,
-  type SeasonalImportPreviewState,
-} from '@/lib/seasonalImportPreview';
-import { getSeasonalRepairImportBlock } from '@/lib/seasonalRepairGuard';
-import { getSeasonalFileActionRuntimeState } from '@/lib/seasonalFileActionRuntimeState';
 import { resolveSettingsProtectedTab, type SettingsTab } from '@/lib/settingsAccessState';
-import {
-  setCachedSeasonData,
-  setCachedSeasons,
-} from '@/lib/seasonDataCache';
 import {
   commitOperationalSettingsSnapshot,
   readOperationalSettingsState,
   revalidateOperationalSettings,
 } from '@/lib/operationalSettingsReadModel';
 import { getOperatorSessionEpoch, isOperatorSessionEpochCurrent } from '@/lib/operatorSessionCacheRegistry';
-import { revalidateSeasonWorkspaceAfterMutation } from '@/lib/seasonWorkspaceWindowCoordinator';
 import type {
-  AiAnalysisModelSetting,
-  AiAnalysisProvider,
   AirlineColorSetting,
   CheckInCounterGroup,
   CheckInCounterLock,
@@ -85,10 +44,7 @@ import type {
   StandGateMapping,
 } from '@/lib/types';
 import { useAppDialog } from '../components/AppDialog';
-import { getSeasonSyncStateSnapshot } from '../components/SeasonSyncProvider';
-import { useCachedRouteSearchParams } from '../components/RouteCacheContext';
 import LoadingStatusPanel from '../components/LoadingStatusPanel';
-import SeasonalImportPreviewDialog from '../components/SeasonalImportPreviewDialog';
 import { useSessionScrollRestoration } from '../hooks/useSessionScrollRestoration';
 import { useSessionState } from '../hooks/useSessionState';
 import AcGroupTab from './components/AcGroupTab';
@@ -98,9 +54,7 @@ import GatesTab from './components/GatesTab';
 import LocksAndOutagesTab from './components/LocksAndOutagesTab';
 import RouteCountryTab from './components/RouteCountryTab';
 import AirlineColorsTab from './components/AirlineColorsTab';
-import AiAnalysisTab from './components/AiAnalysisTab';
 import DashboardAlertsTab from './components/DashboardAlertsTab';
-import SeasonRepairTab from './components/SeasonRepairTab';
 import UpdatesTab from './components/UpdatesTab';
 import UsersRolesTab from './components/UsersRolesTab';
 
@@ -141,30 +95,6 @@ function normalizeAirlineColorValue(value: string): string {
 
 function normalizeRouteCountryValue(value: string): string {
   return value.trim();
-}
-
-function normalizeAiModelId(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
-}
-
-function normalizeAiBaseUrl(value: string): string | null {
-  const trimmed = value.trim().replace(/\/+$/, '');
-  return trimmed || null;
-}
-
-function aiProviderLabel(provider: AiAnalysisProvider): string {
-  if (provider === 'deepseek') return 'DeepSeek';
-  return provider === 'openai-compatible' ? 'OpenAI-compatible' : 'Gemini';
-}
-
-function defaultBaseUrlForAiProvider(provider: AiAnalysisProvider): string {
-  if (provider === 'deepseek') return DEFAULT_DEEPSEEK_BASE_URL;
-  return provider === 'openai-compatible' ? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1' : '';
-}
-
-function defaultModelNameForAiProvider(provider: AiAnalysisProvider): string {
-  if (provider === 'deepseek') return 'deepseek-v4-flash';
-  return provider === 'openai-compatible' ? 'qwen-plus' : 'gemini-3-flash-preview';
 }
 
 function orderedRouteCountries(routeCountries: RouteCountryMapping[]): RouteCountryMapping[] {
@@ -226,25 +156,24 @@ function updateConditions(
 
 function conditionSummary(rule: CounterAllocationRule, settings: OperationalSettings): string {
   const parts: string[] = [];
-  if (rule.conditions.aircraftTypes.length > 0) parts.push(`Aircraft: ${joinCodes(rule.conditions.aircraftTypes)}`);
-  if (rule.conditions.airlineCodes.length > 0) parts.push(`Airline: ${joinCodes(rule.conditions.airlineCodes)}`);
+  if (rule.conditions.aircraftTypes.length > 0) parts.push(`Tàu bay: ${joinCodes(rule.conditions.aircraftTypes)}`);
+  if (rule.conditions.airlineCodes.length > 0) parts.push(`Hãng: ${joinCodes(rule.conditions.airlineCodes)}`);
   if (rule.conditions.aircraftGroups.length > 0) {
     const names = rule.conditions.aircraftGroups.map((id) => settings.aircraftGroups.find((group) => group.id === id)?.name ?? id);
-    parts.push(`A/C Group: ${names.join(', ')}`);
+    parts.push(`Nhóm tàu bay: ${names.join(', ')}`);
   }
-  return parts.join(' | ') || 'No conditions';
+  return parts.join(' | ') || 'Không có điều kiện';
 }
 
 export default function SettingsPage() {
   const initialSettingsState = readOperationalSettingsState();
-  const searchParams = useCachedRouteSearchParams();
   const { dialogNode, showAlert, showConfirm } = useAppDialog();
   const [activeTab, setActiveTab] = useSessionState<SettingsTab>('settings:activeTab', 'checkinCounters');
   const [settings, setSettings] = useState<OperationalSettings>(() => initialSettingsState.snapshot ?? emptySettings());
   const [savedSettings, setSavedSettings] = useState<OperationalSettings>(() => initialSettingsState.snapshot ?? emptySettings());
   const [loading, setLoading] = useState(initialSettingsState.snapshot === null);
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
-    buildLoadProgress('Loading settings...', 20, 'Preparing operational settings')
+    buildLoadProgress('Đang tải cài đặt...', 20, 'Đang chuẩn bị cài đặt vận hành')
   );
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -282,38 +211,16 @@ export default function SettingsPage() {
   const [standMappingGate, setStandMappingGate] = useState('7');
   const [airlineColorCode, setAirlineColorCode] = useState('');
   const [airlineColorValue, setAirlineColorValue] = useState('#1D4ED8');
-  const [aiModelLabel, setAiModelLabel] = useState('Gemini Flash');
-  const [aiModelProvider, setAiModelProvider] = useState<AiAnalysisProvider>('gemini');
-  const [aiModelName, setAiModelName] = useState('gemini-3-flash-preview');
-  const [aiModelBaseUrl, setAiModelBaseUrl] = useState('');
-  const [aiKeyProvider, setAiKeyProvider] = useState<AiAnalysisProvider>('gemini');
-  const [aiKeyValue, setAiKeyValue] = useState('');
-  const [aiKeyRotating, setAiKeyRotating] = useState(false);
-  const [canManageAi, setCanManageAi] = useState(false);
-  const [canUseAi, setCanUseAi] = useState(false);
   const [canManageUsers, setCanManageUsers] = useState(false);
   const [canManageRoles, setCanManageRoles] = useState(false);
-  const [canRepairSeason, setCanRepairSeason] = useState(false);
   const [accessLoading, setAccessLoading] = useState(true);
   const [routeCountryRoute, setRouteCountryRoute] = useState('');
   const [routeCountryCountry, setRouteCountryCountry] = useState('');
   const [routeCountrySearch, setRouteCountrySearch] = useState('');
   const [routeCountryImportStatus, setRouteCountryImportStatus] = useState<string | null>(null);
-  const [seasonRepairRunning, setSeasonRepairRunning] = useState(false);
-  const [seasonRepairStatus, setSeasonRepairStatus] = useState<string | null>(null);
-  const [seasonRepairReceipt, setSeasonRepairReceipt] = useState<SeasonalImportV3RecoveryReceipt | null>(null);
-  const [seasonRepairPreviewState, setSeasonRepairPreviewState] = useState<SeasonalImportPreviewState>({ kind: 'idle' });
   const settingsScrollRef = useRef<HTMLElement | null>(null);
   useSessionScrollRestoration('settings:scroll', settingsScrollRef);
 
-  const selectedSeasonId = useMemo(() => {
-    if (typeof window === 'undefined') return null;
-    const querySeasonId = searchParams.get('season');
-    const storedSeasonId = sessionStorage.getItem('activeSeasonId') || sessionStorage.getItem('detailed_season');
-    const resolvedSeasonId = querySeasonId || storedSeasonId || null;
-    if (resolvedSeasonId) sessionStorage.setItem('activeSeasonId', resolvedSeasonId);
-    return resolvedSeasonId;
-  }, [searchParams]);
 
   useEffect(() => {
     let cancelled = false;
@@ -331,17 +238,17 @@ export default function SettingsPage() {
         return;
       }
       try {
-        setLoadProgress(buildLoadProgress('Loading settings...', 45, 'Fetching operational settings', { indeterminate: true }));
+        setLoadProgress(buildLoadProgress('Đang tải cài đặt...', 45, 'Đang lấy cài đặt vận hành', { indeterminate: true }));
         const loaded = await revalidateOperationalSettings();
         if (!cancelled && isOperatorSessionEpochCurrent(operatorSessionEpoch)) {
-          setLoadProgress(buildLoadProgress('Rendering settings...', 90, 'Applying saved configuration'));
+          setLoadProgress(buildLoadProgress('Đang hiển thị cài đặt...', 90, 'Đang áp dụng cấu hình đã lưu'));
           setSettings(loaded);
           setSavedSettings(loaded);
         }
       } catch (err) {
         if (cancelled || !isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-        if (snapshotState.snapshot) setStatus(`Settings refresh failed: ${(err as Error).message}`);
-        else void showAlert({ title: 'Settings Load Failed', message: (err as Error).message, tone: 'error' });
+        if (snapshotState.snapshot) setStatus(`Làm mới cài đặt thất bại: ${formatUiError(err)}`);
+        else void showAlert({ title: 'Tải cài đặt thất bại', message: formatUiError(err, 'Không thể tải cài đặt vận hành'), tone: 'error' });
       } finally {
         if (!cancelled && isOperatorSessionEpochCurrent(operatorSessionEpoch)) setLoading(false);
       }
@@ -357,37 +264,13 @@ export default function SettingsPage() {
       try {
         const access = await getCurrentOperatorAccess();
         if (!cancelled) {
-          const canRepair = access.permissions.has('season.repair');
-          setCanManageAi(access.canManageAi);
-          setCanUseAi(access.canUseAi);
           setCanManageUsers(access.canManageUsers);
           setCanManageRoles(access.permissions.has('roles.manage'));
-          setCanRepairSeason(canRepair);
-          if (typeof window !== 'undefined') {
-            sessionStorage.removeItem('settings:seasonRepairPendingAttempt');
-            sessionStorage.removeItem('settings:seasonRepairCommittedImport');
-            const storedReceipt = loadSeasonalImportV3RecoveryReceipt(sessionStorage);
-            if (!canRepair && storedReceipt) clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-            setSeasonRepairReceipt(canRepair ? storedReceipt : null);
-            if (canRepair && storedReceipt?.status === 'committed') {
-              try {
-                const committed = committedSeasonalImportV3FromRecoveryReceipt(storedReceipt);
-                setSeasonRepairPreviewState({ kind: 'committed-refresh-pending', result: committed });
-              } catch {
-                clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-                setSeasonRepairReceipt(null);
-              }
-            }
-          }
         }
       } catch {
         if (!cancelled) {
-          setCanManageAi(false);
-          setCanUseAi(false);
           setCanManageUsers(false);
           setCanManageRoles(false);
-          setCanRepairSeason(false);
-          setSeasonRepairReceipt(null);
         }
       } finally {
         if (!cancelled) setAccessLoading(false);
@@ -403,25 +286,22 @@ export default function SettingsPage() {
       activeTab,
       accessLoading,
       canManageUsers,
-      canRepairSeason,
     });
     if (resolved !== activeTab) setActiveTab(resolved);
-  }, [accessLoading, activeTab, canManageUsers, canRepairSeason, setActiveTab]);
+  }, [accessLoading, activeTab, canManageUsers, setActiveTab]);
 
   const visibleTabs = useMemo(() => [
-    { id: 'checkinCounters' as const, label: 'Counters' },
-    { id: 'gateAllocation' as const, label: 'Gates & Stands' },
-    { id: 'locksAndOutages' as const, label: 'Locks / Outages' },
-    { id: 'groups' as const, label: 'A/C Groups' },
-    { id: 'rules' as const, label: 'Allocation Rules' },
-    { id: 'routeCountries' as const, label: 'Route-Country' },
-    { id: 'airlineColors' as const, label: 'Airline Colors' },
-    { id: 'dashboardAlerts' as const, label: 'Dashboard Alerts' },
-    { id: 'aiAnalysis' as const, label: 'AI Analysis' },
-    ...(canManageUsers ? [{ id: 'usersRoles' as const, label: 'Users & Roles' }] : []),
-    ...(canRepairSeason ? [{ id: 'seasonRepair' as const, label: 'Season Repair' }] : []),
-    { id: 'updates' as const, label: 'Updates' },
-  ], [canManageUsers, canRepairSeason]);
+    { id: 'checkinCounters' as const, label: 'Quầy' },
+    { id: 'gateAllocation' as const, label: 'Cửa & Vị trí đỗ' },
+    { id: 'locksAndOutages' as const, label: 'Khóa / Tạm dừng' },
+    { id: 'groups' as const, label: 'Nhóm tàu bay' },
+    { id: 'rules' as const, label: 'Quy tắc phân bổ' },
+    { id: 'routeCountries' as const, label: 'Chặng - quốc gia' },
+    { id: 'airlineColors' as const, label: 'Màu hãng bay' },
+    { id: 'dashboardAlerts' as const, label: 'Cảnh báo tổng quan' },
+    ...(canManageUsers ? [{ id: 'usersRoles' as const, label: 'Người dùng & Vai trò' }] : []),
+    { id: 'updates' as const, label: 'Cập nhật' },
+  ], [canManageUsers]);
 
   const isDirty = useMemo(() => JSON.stringify(settings) !== JSON.stringify(savedSettings), [savedSettings, settings]);
   const checkInCounters = useMemo(() => orderedCounters(settings.checkInCounters), [settings.checkInCounters]);
@@ -462,10 +342,10 @@ export default function SettingsPage() {
         deltas: buildSettingsAuditDeltas(savedSettings, normalized),
       }, { operatorSessionEpoch });
       if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      setStatus('Settings saved');
+      setStatus('Đã lưu cài đặt');
     } catch (err) {
       if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      void showAlert({ title: 'Settings Save Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Lưu cài đặt thất bại', message: formatUiError(err, 'Không thể lưu cài đặt vận hành'), tone: 'error' });
     } finally {
       if (isOperatorSessionEpochCurrent(operatorSessionEpoch)) setSaving(false);
     }
@@ -489,7 +369,7 @@ export default function SettingsPage() {
     }));
     setGroupName('');
     setGroupAircraftTypes('');
-    setStatus('Unsaved A/C group added');
+    setStatus('Đã thêm nhóm tàu bay (chưa lưu)');
   };
 
   const updateGroup = (id: string, patch: { name?: string; aircraftTypes?: string[] }) => {
@@ -501,23 +381,23 @@ export default function SettingsPage() {
       )),
       updatedAt: now,
     }));
-    setStatus('Unsaved A/C group change');
+    setStatus('Đã đổi nhóm tàu bay (chưa lưu)');
   };
 
   const deleteGroup = async (id: string) => {
     const group = settings.aircraftGroups.find((item) => item.id === id);
     const confirmed = await showConfirm({
-      title: 'Delete A/C Group',
-      message: `Delete ${group?.name ?? 'this group'}? Rules that only use this group will be disabled.`,
+      title: 'Xóa nhóm tàu bay',
+      message: `Xóa nhóm ${group?.name ?? 'này'}? Các quy tắc chỉ dùng nhóm này sẽ bị tắt.`,
       tone: 'warning',
-      confirmLabel: 'Delete',
+      confirmLabel: 'Xóa',
     });
     if (!confirmed) return;
     try {
       setSettings((current) => removeAircraftGroupFromSettings(current, id, currentTimestamp()));
-      setStatus('Unsaved A/C group deletion');
+      setStatus('Đã xóa nhóm tàu bay (chưa lưu)');
     } catch (err) {
-      void showAlert({ title: 'Delete Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Xóa thất bại', message: formatUiError(err, 'Không thể xóa nhóm tàu bay'), tone: 'error' });
     }
   };
 
@@ -553,7 +433,7 @@ export default function SettingsPage() {
     setRulePriorityScore('0');
     setRuleSortOrder(String(settings.counterAllocationRules.length + 1));
     setRuleEnabled(true);
-    setStatus('Unsaved counter rule added');
+    setStatus('Đã thêm quy tắc quầy (chưa lưu)');
   };
 
   const updateRule = (id: string, patch: Partial<CounterAllocationRule>) => {
@@ -565,16 +445,16 @@ export default function SettingsPage() {
       )),
       updatedAt: now,
     }));
-    setStatus('Unsaved counter rule change');
+    setStatus('Đã đổi quy tắc quầy (chưa lưu)');
   };
 
   const deleteRule = async (id: string) => {
     const rule = settings.counterAllocationRules.find((item) => item.id === id);
     const confirmed = await showConfirm({
-      title: 'Delete Counter Rule',
-      message: `Delete ${rule?.name ?? 'this rule'}?`,
+      title: 'Xóa quy tắc quầy',
+      message: `Xóa quy tắc ${rule?.name ?? 'này'}?`,
       tone: 'warning',
-      confirmLabel: 'Delete',
+      confirmLabel: 'Xóa',
     });
     if (!confirmed) return;
     setSettings((current) => ({
@@ -582,7 +462,7 @@ export default function SettingsPage() {
       counterAllocationRules: current.counterAllocationRules.filter((item) => item.id !== id),
       updatedAt: currentTimestamp(),
     }));
-    setStatus('Unsaved counter rule deletion');
+    setStatus('Đã xóa quy tắc quầy (chưa lưu)');
   };
 
   const toggleDraftGroup = (groupId: string) => {
@@ -620,7 +500,7 @@ export default function SettingsPage() {
       .map((counter) => counter.label.trim())
       .filter((label) => label && !existingLabels.has(label.toLowerCase()));
     if (newLabels.length === 0) {
-      void showAlert({ title: 'No Counters Added', message: 'Enter at least one new check-in counter label.', tone: 'warning' });
+      void showAlert({ title: 'Chưa thêm quầy', message: 'Vui lòng nhập ít nhất một nhãn quầy làm thủ tục mới.', tone: 'warning' });
       return;
     }
     const now = currentTimestamp();
@@ -640,7 +520,7 @@ export default function SettingsPage() {
       ],
       updatedAt: now,
     }));
-    setStatus(`Unsaved ${newLabels.length} check-in counter${newLabels.length === 1 ? '' : 's'} added`);
+    setStatus(`Đã thêm ${newLabels.length} quầy thủ tục (chưa lưu)`);
   };
 
   const updateCheckInCounter = (id: string, patch: Partial<CheckInCounterResource>) => {
@@ -652,7 +532,7 @@ export default function SettingsPage() {
       )),
       updatedAt: now,
     }));
-    setStatus('Unsaved check-in counter change');
+    setStatus('Đã đổi quầy thủ tục (chưa lưu)');
   };
 
   const confirmCheckInCounterLabelChange = async (counter: CheckInCounterResource, nextLabel: string) => {
@@ -667,21 +547,21 @@ export default function SettingsPage() {
     }
     if (!normalizedLabel) {
       setCounterLabelDrafts((current) => ({ ...current, [counter.id]: counter.label }));
-      void showAlert({ title: 'Counter Label Required', message: 'Check-in counter labels cannot be blank.', tone: 'warning' });
+      void showAlert({ title: 'Yêu cầu nhãn quầy', message: 'Nhãn quầy thủ tục không được để trống.', tone: 'warning' });
       return;
     }
     const confirmed = await showConfirm({
-      title: 'Rename Counter',
-      message: `Changing a counter label can affect existing groups, locks, and allocations. Rename ${counter.label} to ${normalizedLabel || 'blank'}?`,
+      title: 'Đổi tên quầy',
+      message: `Việc đổi nhãn quầy có thể ảnh hưởng đến nhóm, khóa và phân bổ hiện có. Đổi tên ${counter.label} thành ${normalizedLabel || 'trống'}?`,
       tone: 'warning',
-      confirmLabel: 'Rename',
+      confirmLabel: 'Đổi tên',
     });
     if (!confirmed) {
       setCounterLabelDrafts((current) => ({ ...current, [counter.id]: counter.label }));
       return;
     }
     setSettings((current) => renameCheckInCounterLabelInSettings(current, counter.id, normalizedLabel, currentTimestamp()));
-    setStatus('Unsaved check-in counter change');
+    setStatus('Đã đổi quầy thủ tục (chưa lưu)');
     setCounterLabelDrafts((current) => {
       const rest = { ...current };
       delete rest[counter.id];
@@ -692,17 +572,17 @@ export default function SettingsPage() {
   const deleteCheckInCounter = async (id: string) => {
     const counter = settings.checkInCounters.find((item) => item.id === id);
     const confirmed = await showConfirm({
-      title: 'Delete Counter',
-      message: `Delete counter ${counter?.label ?? 'this counter'}? It will be removed from counter groups and locks.`,
+      title: 'Xóa quầy',
+      message: `Xóa quầy ${counter?.label ?? 'này'}? Quầy sẽ bị xóa khỏi các nhóm quầy và khóa quầy.`,
       tone: 'warning',
-      confirmLabel: 'Delete',
+      confirmLabel: 'Xóa',
     });
     if (!confirmed) return;
     const now = currentTimestamp();
     setSettings((current) => deleteCheckInCounterFromSettings(current, id, now));
     setCounterGroupCounterIds((current) => current.filter((counterId) => counterId !== id));
     setLockCounterIds((current) => current.filter((counterId) => counterId !== id));
-    setStatus('Unsaved check-in counter deletion');
+    setStatus('Đã xóa quầy thủ tục (chưa lưu)');
   };
 
   const addCheckInCounterGroup = () => {
@@ -732,7 +612,7 @@ export default function SettingsPage() {
     setCounterGroupName('');
     setCounterGroupBhs('');
     setCounterGroupCounterIds([]);
-    setStatus('Unsaved counter group added');
+    setStatus('Đã thêm nhóm quầy (chưa lưu)');
   };
 
   const updateCheckInCounterGroup = (id: string, patch: Partial<CheckInCounterGroup>) => {
@@ -744,22 +624,22 @@ export default function SettingsPage() {
       )),
       updatedAt: now,
     }));
-    setStatus('Unsaved counter group change');
+    setStatus('Đã đổi nhóm quầy (chưa lưu)');
   };
 
   const toggleCheckInCounterGroupCounter = (groupId: string, counterId: string) => {
     const now = currentTimestamp();
     setSettings((current) => toggleCheckInCounterGroupMembership(current, groupId, counterId, now));
-    setStatus('Unsaved counter group membership change');
+    setStatus('Đã đổi thành viên nhóm quầy (chưa lưu)');
   };
 
   const deleteCheckInCounterGroup = async (id: string) => {
     const group = settings.checkInCounterGroups.find((item) => item.id === id);
     const confirmed = await showConfirm({
-      title: 'Delete Counter Group',
-      message: `Delete ${group?.name ?? 'this counter group'}? Counter inventory and locks will remain.`,
+      title: 'Xóa nhóm quầy',
+      message: `Xóa nhóm quầy ${group?.name ?? 'này'}? Danh sách quầy và các khóa quầy vẫn được giữ nguyên.`,
       tone: 'warning',
-      confirmLabel: 'Delete',
+      confirmLabel: 'Xóa',
     });
     if (!confirmed) return;
     setSettings((current) => ({
@@ -767,7 +647,7 @@ export default function SettingsPage() {
       checkInCounterGroups: current.checkInCounterGroups.filter((item) => item.id !== id),
       updatedAt: currentTimestamp(),
     }));
-    setStatus('Unsaved counter group deletion');
+    setStatus('Đã xóa nhóm quầy (chưa lưu)');
   };
 
   const addCheckInCounterLock = () => {
@@ -796,7 +676,7 @@ export default function SettingsPage() {
     setLockEnd('');
     setLockReason('');
     setLockEnabled(true);
-    setStatus('Unsaved counter lock added');
+    setStatus('Đã thêm khóa quầy (chưa lưu)');
   };
 
   const updateCheckInCounterLock = (id: string, patch: Partial<CheckInCounterLock>) => {
@@ -808,22 +688,22 @@ export default function SettingsPage() {
       )),
       updatedAt: now,
     }));
-    setStatus('Unsaved counter lock change');
+    setStatus('Đã đổi khóa quầy (chưa lưu)');
   };
 
   const toggleCheckInCounterLockCounter = (lock: CheckInCounterLock, counterId: string) => {
     const now = currentTimestamp();
     setSettings((current) => toggleCheckInCounterLockMembership(current, lock.id, counterId, now));
-    setStatus('Unsaved counter lock change');
+    setStatus('Đã đổi khóa quầy (chưa lưu)');
   };
 
   const deleteCheckInCounterLock = async (id: string) => {
     const lock = settings.checkInCounterLocks.find((item) => item.id === id);
     const confirmed = await showConfirm({
-      title: 'Delete Counter Lock',
-      message: `Delete ${lock?.name ?? 'this counter lock'}?`,
+      title: 'Xóa khóa quầy',
+      message: `Xóa khóa quầy ${lock?.name ?? 'này'}?`,
       tone: 'warning',
-      confirmLabel: 'Delete',
+      confirmLabel: 'Xóa',
     });
     if (!confirmed) return;
     setSettings((current) => ({
@@ -831,7 +711,7 @@ export default function SettingsPage() {
       checkInCounterLocks: current.checkInCounterLocks.filter((item) => item.id !== id),
       updatedAt: currentTimestamp(),
     }));
-    setStatus('Unsaved counter lock deletion');
+    setStatus('Đã xóa khóa quầy (chưa lưu)');
   };
 
   const updateGateResource = (id: string, patch: Partial<GateResource>) => {
@@ -843,17 +723,17 @@ export default function SettingsPage() {
       )),
       updatedAt: now,
     }));
-    setStatus('Unsaved gate change');
+    setStatus('Đã đổi cửa (chưa lưu)');
   };
 
   const addGateResource = () => {
     const label = gateLabel.trim();
     if (!label) {
-      void showAlert({ title: 'No Gate Added', message: 'Enter a gate label before adding.', tone: 'warning' });
+      void showAlert({ title: 'Chưa thêm cửa', message: 'Vui lòng nhập nhãn cửa trước khi thêm.', tone: 'warning' });
       return;
     }
     if (settings.gateResources.some((gate) => gate.label.trim().toLowerCase() === label.toLowerCase())) {
-      void showAlert({ title: 'No Gate Added', message: `Gate ${label} already exists.`, tone: 'warning' });
+      void showAlert({ title: 'Chưa thêm cửa', message: `Cửa ${label} đã tồn tại.`, tone: 'warning' });
       return;
     }
     const now = currentTimestamp();
@@ -873,23 +753,23 @@ export default function SettingsPage() {
       updatedAt: now,
     }));
     setGateLabel('');
-    setStatus(`Unsaved gate ${label} added`);
+    setStatus(`Đã thêm cửa ${label} (chưa lưu)`);
   };
 
   const deleteGateResource = async (id: string) => {
     const gate = settings.gateResources.find((item) => item.id === id);
     const confirmed = await showConfirm({
-      title: 'Delete Gate',
-      message: `Delete gate ${gate?.label ?? 'this gate'}? It will be removed from gate groups and gate locks.`,
+      title: 'Xóa cửa',
+      message: `Xóa cửa ${gate?.label ?? 'này'}? Cửa sẽ bị xóa khỏi các nhóm cửa và khóa cửa.`,
       tone: 'warning',
-      confirmLabel: 'Delete',
+      confirmLabel: 'Xóa',
     });
     if (!confirmed) return;
     const now = currentTimestamp();
     setSettings((current) => deleteGateFromSettings(current, id, now));
     setGateGroupGateIds((current) => current.filter((gateId) => gateId !== id));
     setGateLockGateIds((current) => current.filter((gateId) => gateId !== id));
-    setStatus('Unsaved gate deletion');
+    setStatus('Đã xóa cửa (chưa lưu)');
   };
 
   const updateGateGroup = (id: string, patch: Partial<GateGroup>) => {
@@ -901,7 +781,7 @@ export default function SettingsPage() {
       )),
       updatedAt: now,
     }));
-    setStatus('Unsaved gate group change');
+    setStatus('Đã đổi nhóm cửa (chưa lưu)');
   };
 
   const addGateGroup = () => {
@@ -928,13 +808,13 @@ export default function SettingsPage() {
     }));
     setGateGroupName('');
     setGateGroupGateIds([]);
-    setStatus('Unsaved gate group added');
+    setStatus('Đã thêm nhóm cửa (chưa lưu)');
   };
 
   const toggleGateGroupGate = (groupId: string, gateId: string) => {
     const now = currentTimestamp();
     setSettings((current) => toggleGateGroupMembership(current, groupId, gateId, now));
-    setStatus('Unsaved gate group membership change');
+    setStatus('Đã đổi thành viên nhóm cửa (chưa lưu)');
   };
 
   const addGateLock = () => {
@@ -963,7 +843,7 @@ export default function SettingsPage() {
     setGateLockEnd('');
     setGateLockReason('');
     setGateLockEnabled(true);
-    setStatus('Unsaved gate lock added');
+    setStatus('Đã thêm khóa cửa (chưa lưu)');
   };
 
   const updateGateLock = (id: string, patch: Partial<GateLock>) => {
@@ -975,22 +855,22 @@ export default function SettingsPage() {
       )),
       updatedAt: now,
     }));
-    setStatus('Unsaved gate lock change');
+    setStatus('Đã đổi khóa cửa (chưa lưu)');
   };
 
   const toggleGateLockGate = (lock: GateLock, gateId: string) => {
     const now = currentTimestamp();
     setSettings((current) => toggleGateLockMembership(current, lock.id, gateId, now));
-    setStatus('Unsaved gate lock change');
+    setStatus('Đã đổi khóa cửa (chưa lưu)');
   };
 
   const deleteGateLock = async (id: string) => {
     const lock = settings.gateLocks.find((item) => item.id === id);
     const confirmed = await showConfirm({
-      title: 'Delete Gate Lock',
-      message: `Delete ${lock?.name ?? 'this gate lock'}?`,
+      title: 'Xóa khóa cửa',
+      message: `Xóa khóa cửa ${lock?.name ?? 'này'}?`,
       tone: 'warning',
-      confirmLabel: 'Delete',
+      confirmLabel: 'Xóa',
     });
     if (!confirmed) return;
     setSettings((current) => ({
@@ -998,7 +878,7 @@ export default function SettingsPage() {
       gateLocks: current.gateLocks.filter((item) => item.id !== id),
       updatedAt: currentTimestamp(),
     }));
-    setStatus('Unsaved gate lock deletion');
+    setStatus('Đã xóa khóa cửa (chưa lưu)');
   };
 
   const addStandGateMapping = () => {
@@ -1019,7 +899,7 @@ export default function SettingsPage() {
       ],
       updatedAt: now,
     }));
-    setStatus('Unsaved stand-gate mapping added');
+    setStatus('Đã thêm liên kết vị trí đỗ - cửa (chưa lưu)');
   };
 
   const updateStandGateMapping = (id: string, patch: Partial<StandGateMapping>) => {
@@ -1031,7 +911,7 @@ export default function SettingsPage() {
       )),
       updatedAt: now,
     }));
-    setStatus('Unsaved stand-gate mapping change');
+    setStatus('Đã đổi liên kết vị trí đỗ - cửa (chưa lưu)');
   };
 
   const deleteStandGateMapping = (id: string) => {
@@ -1040,14 +920,14 @@ export default function SettingsPage() {
       standGateMappings: current.standGateMappings.filter((mapping) => mapping.id !== id),
       updatedAt: currentTimestamp(),
     }));
-    setStatus('Unsaved stand-gate mapping deletion');
+    setStatus('Đã xóa liên kết vị trí đỗ - cửa (chưa lưu)');
   };
 
   const addOrUpdateRouteCountry = () => {
     const route = normalizeRouteCode(routeCountryRoute);
     const country = normalizeRouteCountryValue(routeCountryCountry);
     if (!route || !country) {
-      void showAlert({ title: 'Route-Country Failed', message: 'Route and country are required.', tone: 'error' });
+      void showAlert({ title: 'Lỗi Chặng - quốc gia', message: 'Cần nhập đầy đủ chặng bay và quốc gia.', tone: 'error' });
       return;
     }
     const now = currentTimestamp();
@@ -1062,7 +942,7 @@ export default function SettingsPage() {
     setRouteCountryRoute('');
     setRouteCountryCountry('');
     setRouteCountryImportStatus(null);
-    setStatus('Unsaved route-country change');
+    setStatus('Đã đổi chặng - quốc gia (chưa lưu)');
   };
 
   const updateRouteCountry = (route: string, patch: Partial<RouteCountryMapping>) => {
@@ -1079,16 +959,15 @@ export default function SettingsPage() {
       )),
       updatedAt: now,
     }));
-    setRouteCountryImportStatus(null);
-    setStatus('Unsaved route-country change');
+    setStatus('Đã đổi chặng - quốc gia (chưa lưu)');
   };
 
   const deleteRouteCountry = async (route: string) => {
     const confirmed = await showConfirm({
-      title: 'Delete Route-Country',
-      message: `Delete country mapping for route ${route}? Dashboard rows for that route will become Unknown after saving.`,
+      title: 'Xóa Chặng - quốc gia',
+      message: `Xóa ánh xạ quốc gia cho chặng bay ${route}? Các dòng trên bảng tổng quan của chặng bay đó sẽ trở thành Không xác định sau khi lưu.`,
       tone: 'warning',
-      confirmLabel: 'Delete',
+      confirmLabel: 'Xóa',
     });
     if (!confirmed) return;
     setSettings((current) => ({
@@ -1097,7 +976,7 @@ export default function SettingsPage() {
       updatedAt: currentTimestamp(),
     }));
     setRouteCountryImportStatus(null);
-    setStatus('Unsaved route-country deletion');
+    setStatus('Đã xóa chặng - quốc gia (chưa lưu)');
   };
 
   const handleRouteCountryImport = useCallback(async (file: File | null) => {
@@ -1106,20 +985,20 @@ export default function SettingsPage() {
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
       const sheetName = workbook.SheetNames[0];
-      if (!sheetName) throw new Error('Import file does not contain a readable worksheet.');
+      if (!sheetName) throw new Error('Tệp nhập không chứa bảng tính hợp lệ.');
       const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheetName], { defval: '' });
       const parsed = parseRouteCountryRows(rows);
       if (parsed.entries.length === 0) {
-        throw new Error('No valid Route / Country rows found in the uploaded file.');
+        throw new Error('Không tìm thấy dòng Chặng bay / Quốc gia hợp lệ nào trong tệp tải lên.');
       }
       const existingRoutes = new Set(settings.routeCountries.map((item) => normalizeRouteCode(item.route)));
       const updatedRoutes = parsed.entries.filter((entry) => existingRoutes.has(entry.route)).length;
       const addedRoutes = parsed.entries.length - updatedRoutes;
       const confirmed = await showConfirm({
-        title: 'Update Route-Country Map',
-        message: `Update ${updatedRoutes} existing routes and add ${addedRoutes} new routes from ${file.name}? Routes not included in the file will be kept.`,
+        title: 'Cập nhật sơ đồ Chặng - quốc gia',
+        message: `Cập nhật ${updatedRoutes} chặng bay hiện có và thêm ${addedRoutes} chặng bay mới từ ${file.name}? Các chặng bay không có trong tệp sẽ được giữ nguyên.`,
         tone: 'warning',
-        confirmLabel: 'Update Map',
+        confirmLabel: 'Cập nhật sơ đồ',
       });
       if (!confirmed) return;
       const now = currentTimestamp();
@@ -1129,400 +1008,17 @@ export default function SettingsPage() {
         updatedAt: now,
       }));
       const importNotes = [
-        `${updatedRoutes} routes updated`,
-        `${addedRoutes} routes added`,
-        parsed.duplicateRoutes.length > 0 ? `${parsed.duplicateRoutes.length} duplicate routes replaced by last row` : null,
-        parsed.invalidRows.length > 0 ? `${parsed.invalidRows.length} invalid rows skipped` : null,
+        `${updatedRoutes} chặng bay được cập nhật`,
+        `${addedRoutes} chặng bay được thêm mới`,
+        parsed.duplicateRoutes.length > 0 ? `${parsed.duplicateRoutes.length} chặng bay trùng lặp được thay thế bằng dòng cuối` : null,
+        parsed.invalidRows.length > 0 ? `${parsed.invalidRows.length} dòng không hợp lệ bị bỏ qua` : null,
       ].filter(Boolean).join(' | ');
       setRouteCountryImportStatus(importNotes);
-      setStatus('Unsaved route-country import update');
+      setStatus('Đã nhập chặng - quốc gia (chưa lưu)');
     } catch (err) {
-      void showAlert({ title: 'Route-Country Import Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Nhập Chặng - quốc gia thất bại', message: formatUiError(err, 'Không thể nhập tệp chặng - quốc gia'), tone: 'error' });
     }
   }, [settings.routeCountries, showAlert, showConfirm]);
-
-  const getSeasonRepairBlockForTarget = useCallback((
-    targetSeasonId: string | null,
-    targetSeasonCode: string,
-    busy = seasonRepairRunning,
-  ) => {
-    const draftState = getSeasonalFileActionRuntimeState(targetSeasonId);
-    const syncState = targetSeasonId ? getSeasonSyncStateSnapshot(targetSeasonId) : null;
-    return getSeasonalRepairImportBlock({
-      targetSeasonId,
-      targetSeasonCode,
-      activeSeasonId: selectedSeasonId,
-      hasDraftChanges: draftState.hasDraftChanges,
-      pendingCount: syncState?.pendingCount ?? 0,
-      conflictCount: 0,
-      busy,
-    });
-  }, [seasonRepairRunning, selectedSeasonId]);
-
-  const applySeasonRepairCommittedRefresh = useCallback(async (
-    remoteImport: SeasonalImportV3CommittedResult,
-    operatorSessionEpoch: number,
-  ) => {
-    setSeasonRepairStatus(`Refreshing ${remoteImport.seasonCode} from server`);
-    const [refreshedSeasons, refreshedWindow] = await Promise.all([
-      getSeasons({ operatorSessionEpoch }),
-      revalidateSeasonWorkspaceAfterMutation({
-        seasonId: remoteImport.seasonId,
-        resourceType: 'schedule',
-        limit: 500000,
-      }, {
-        operatorSessionEpoch,
-        generationAlreadyAdvanced: false,
-        expectedSnapshot: {
-          dataVersion: remoteImport.dataVersion,
-          serverHighWater: remoteImport.serverHighWater,
-        },
-      }),
-    ]);
-    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-    if (!refreshedWindow) throw new Error('Server seasonal schedule window is unavailable after repair import.');
-    const refreshedSeason = refreshedSeasons.find((season) => season.id === remoteImport.seasonId);
-    if (!refreshedSeason) throw new Error(`Committed season ${remoteImport.seasonId} is missing from the authoritative season list.`);
-    const canonical = buildCanonicalSeasonalRows({
-      records: refreshedWindow.records,
-      modifications: refreshedWindow.modifications,
-    });
-    if (!canonical.validation.valid) {
-      throw new Error(canonical.validation.issues[0]?.message ?? 'Committed seasonal rows failed canonical validation.');
-    }
-
-    setCachedSeasons(refreshedSeasons);
-    setCachedSeasonData(remoteImport.seasonId, {
-      rows: canonical.rows,
-      records: refreshedWindow.records,
-      modifications: refreshedWindow.modifications,
-      seasonDataVersion: refreshedSeason.dataVersion,
-    });
-    const receiptCleared = typeof window === 'undefined'
-      || clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-    setSeasonRepairReceipt(null);
-    setSeasonRepairPreviewState({ kind: 'idle' });
-    setSeasonRepairStatus(
-      `Replaced ${remoteImport.seasonCode}: ${remoteImport.importedRecordCount} imported records`
-      + (receiptCleared ? '' : ' (recovery receipt cleanup failed; import remains committed)'),
-    );
-    await appendAuditLogEntry({
-      seasonId: remoteImport.seasonId,
-      seasonCode: remoteImport.seasonCode,
-      module: 'settings',
-      category: 'import',
-      operation: `Full replace repair import for season ${remoteImport.seasonCode}: ${remoteImport.importedRecordCount} imported records`,
-      targetFlightIds: refreshedWindow.records.slice(0, 200).map((record) => record.id),
-      targetFlightLabels: Array.from(new Set(
-        refreshedWindow.records.map((record) => `${record.airline}${record.flightNumber}`),
-      )).slice(0, 200),
-      deltas: [{
-        targetType: 'sync',
-        targetId: remoteImport.seasonId,
-        targetLabel: remoteImport.seasonCode,
-        field: 'repairImportSummary',
-        before: null,
-        after: {
-          batchId: remoteImport.batchId,
-          sourceRows: remoteImport.counts.sourceRowCount,
-          flightRecords: remoteImport.importedRecordCount,
-          totalEffectiveRecords: remoteImport.totalEffectiveRecordCount,
-          preservedOperationalRecords: remoteImport.counts.preservedOverlayCount,
-          removedImportedRecords: remoteImport.counts.removeImportedCount,
-          removedSeasonRecords: remoteImport.strategy === 'replace'
-            ? remoteImport.counts.removeImportedCount
-            : 0,
-          dataVersion: remoteImport.dataVersion,
-        },
-      }],
-    }, { operatorSessionEpoch });
-    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-  }, []);
-
-  const handleSeasonRepairImport = useCallback(async (file: File | null) => {
-    if (!file || seasonRepairRunning) return;
-    if (!canRepairSeason) {
-      void showAlert({
-        title: 'Season Repair Import Blocked',
-        message: 'Missing required permission: season.repair',
-        tone: 'warning',
-      });
-      return;
-    }
-    if (seasonRepairReceipt) {
-      void showAlert({
-        title: 'Season Repair Recovery Pending',
-        message: 'Finish the pending Resume/Check or Refresh action before choosing another file.',
-        tone: 'warning',
-      });
-      return;
-    }
-
-    setSeasonRepairRunning(true);
-    const operatorSessionEpoch = getOperatorSessionEpoch();
-    setSeasonRepairStatus(`Reading ${file.name}`);
-    try {
-      const buffer = await file.arrayBuffer();
-      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      const workbook = XLSX.read(buffer, { type: 'array' });
-      const { seasonCode, rows: parsedRows, issues } = parseSeasonalSchedule(workbook);
-      if (issues.length > 0) {
-        const visibleIssues = issues.slice(0, 10).map((issue) => issue.message);
-        const remaining = issues.length - visibleIssues.length;
-        throw new Error(`${visibleIssues.join('\n')}${remaining > 0 ? `\n...and ${remaining} more issue(s).` : ''}`);
-      }
-      if (parsedRows.length === 0) throw new Error('File contains no valid seasonal rows.');
-
-      const existing = await findSeasonByCode(seasonCode, { operatorSessionEpoch });
-      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      const initialBlock = getSeasonRepairBlockForTarget(existing?.id ?? null, seasonCode, false);
-      if (initialBlock) throw new Error(initialBlock.message);
-      const attemptedImport = await prepareSeasonalImportV3Attempt({
-        seasonId: existing?.id ?? null,
-        seasonCode,
-        expectedDataVersion: existing ? existing.dataVersion ?? null : 0,
-        strategy: 'replace',
-        fileName: file.name,
-        uploadedAt: Date.now(),
-        sourceRows: parsedRows,
-      });
-      setSeasonRepairPreviewState({ kind: 'staging', strategy: 'replace' });
-      setSeasonRepairStatus(`Staging ${attemptedImport.sourceRows.length} source rows`);
-      const preview = await stageSeasonalImportV3(attemptedImport, { operatorSessionEpoch });
-      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      const receipt = buildSeasonalImportV3RecoveryReceipt(preview);
-      persistSeasonalImportV3RecoveryReceipt(sessionStorage, receipt);
-      setSeasonRepairReceipt(receipt);
-      setSeasonRepairPreviewState({ kind: 'preview', result: preview, confirmation: '' });
-      setSeasonRepairStatus(`Preview ready for ${preview.seasonCode}`);
-    } catch (error) {
-      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      setSeasonRepairPreviewState({ kind: 'idle' });
-      setSeasonRepairStatus('Repair import staging failed');
-      void showAlert({ title: 'Season Repair Import Failed', message: (error as Error).message, tone: 'error' });
-    } finally {
-      if (isOperatorSessionEpochCurrent(operatorSessionEpoch)) setSeasonRepairRunning(false);
-    }
-  }, [
-    canRepairSeason,
-    getSeasonRepairBlockForTarget,
-    seasonRepairReceipt,
-    seasonRepairRunning,
-    showAlert,
-  ]);
-
-  const handleCommitSeasonRepairImport = useCallback(async () => {
-    if (
-      seasonRepairPreviewState.kind !== 'preview'
-      || !seasonRepairReceipt
-      || seasonRepairRunning
-      || !canRepairSeason
-    ) {
-      return;
-    }
-    if (!canCommitSeasonalImportPreview({
-      state: seasonRepairPreviewState,
-      hasDraftChanges: false,
-      busy: seasonRepairRunning,
-    })) {
-      return;
-    }
-    const preview = seasonRepairPreviewState.result;
-    const block = getSeasonRepairBlockForTarget(preview.seasonId, preview.seasonCode, false);
-    if (block) {
-      void showAlert({ title: 'Season Repair Import Blocked', message: block.message, tone: 'warning' });
-      return;
-    }
-    setSeasonRepairRunning(true);
-    setSeasonRepairPreviewState({ kind: 'committing', result: preview });
-    setSeasonRepairStatus(`Committing ${preview.seasonCode}`);
-    const operatorSessionEpoch = getOperatorSessionEpoch();
-    try {
-      const committed = await commitSeasonalImportV3({
-        batchId: preview.batchId,
-        expectedDataVersion: preview.expectedDataVersion,
-        previewHash: preview.previewHash,
-      }, { operatorSessionEpoch });
-      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      const committedReceipt = markSeasonalImportV3RecoveryCommitted(seasonRepairReceipt, committed);
-      persistSeasonalImportV3RecoveryReceipt(sessionStorage, committedReceipt);
-      setSeasonRepairReceipt(committedReceipt);
-      setSeasonRepairPreviewState({ kind: 'committed-refresh-pending', result: committed });
-      try {
-        await applySeasonRepairCommittedRefresh(committed, operatorSessionEpoch);
-      } catch (refreshError) {
-        const failure = buildSeasonalImportCommittedRefreshFailure(committed, refreshError);
-        setSeasonRepairStatus(failure.title);
-        void showAlert({ title: failure.title, message: failure.message, tone: 'warning' });
-        return;
-      }
-      void showAlert({
-        title: 'Season Repair Import Complete',
-        message: `Replaced ${committed.seasonCode} with ${committed.importedRecordCount} server-generated imported records.`,
-        tone: 'success',
-      });
-    } catch (error) {
-      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      const message = (error as Error).message;
-      if (/stale seasonal data version|changed after preview staging|created after preview staging|has expired/i.test(message)) {
-        clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-        setSeasonRepairReceipt(null);
-        setSeasonRepairPreviewState({ kind: 'idle' });
-        try {
-          await revalidateSeasonWorkspaceAfterMutation({
-            seasonId: preview.seasonId,
-            resourceType: 'schedule',
-            limit: 500000,
-          }, {
-            operatorSessionEpoch,
-            generationAlreadyAdvanced: false,
-          });
-        } catch (refreshError) {
-          console.error('Season repair stale-preview revalidation failed:', refreshError);
-        }
-        setSeasonRepairStatus('Preview expired');
-        void showAlert({
-          title: 'Preview expired',
-          message: 'Preview expired because the season changed. Stage the file again.',
-          tone: 'warning',
-        });
-      } else {
-        setSeasonRepairPreviewState({ kind: 'preview', result: preview, confirmation: '' });
-        const notice = buildSeasonalImportStatusUnknownNotice(seasonRepairReceipt, error);
-        setSeasonRepairStatus(notice.title);
-        void showAlert({ title: notice.title, message: notice.message, tone: 'warning' });
-      }
-    } finally {
-      if (isOperatorSessionEpochCurrent(operatorSessionEpoch)) setSeasonRepairRunning(false);
-    }
-  }, [
-    applySeasonRepairCommittedRefresh,
-    canRepairSeason,
-    getSeasonRepairBlockForTarget,
-    seasonRepairPreviewState,
-    seasonRepairReceipt,
-    seasonRepairRunning,
-    showAlert,
-  ]);
-
-  const handleCancelSeasonRepairImport = useCallback(async () => {
-    if (seasonRepairPreviewState.kind !== 'preview' || seasonRepairRunning) return;
-    const preview = seasonRepairPreviewState.result;
-    setSeasonRepairRunning(true);
-    try {
-      if (preview.status === 'validated') {
-        await cancelSeasonalImportV3(preview.batchId, {
-          operatorSessionEpoch: getOperatorSessionEpoch(),
-        });
-      }
-      clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-      setSeasonRepairReceipt(null);
-      setSeasonRepairPreviewState({ kind: 'idle' });
-      setSeasonRepairStatus(null);
-    } catch (error) {
-      const notice = buildSeasonalImportStatusUnknownNotice(preview, error);
-      setSeasonRepairStatus(notice.title);
-      void showAlert({ title: notice.title, message: notice.message, tone: 'warning' });
-    } finally {
-      setSeasonRepairRunning(false);
-    }
-  }, [seasonRepairPreviewState, seasonRepairRunning, showAlert]);
-
-  const handleResumeSeasonRepairImport = useCallback(async () => {
-    const receipt = seasonRepairReceipt;
-    if (!receipt || receipt.status === 'committed' || seasonRepairRunning || !canRepairSeason) return;
-    const block = getSeasonRepairBlockForTarget(receipt.seasonId, receipt.seasonCode);
-    if (block) {
-      void showAlert({ title: 'Season Repair Import Blocked', message: block.message, tone: 'warning' });
-      return;
-    }
-    setSeasonRepairRunning(true);
-    const operatorSessionEpoch = getOperatorSessionEpoch();
-    setSeasonRepairStatus(`Checking ${receipt.seasonCode} import status`);
-    try {
-      const recovery = await checkSeasonalImportV3RecoveryStatusOnce(
-        receipt,
-        (requestId) => getSeasonalImportV3Status(requestId, { operatorSessionEpoch }),
-      );
-      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      if (recovery.kind === 'preview') {
-        const nextReceipt = buildSeasonalImportV3RecoveryReceipt(recovery.result);
-        persistSeasonalImportV3RecoveryReceipt(sessionStorage, nextReceipt);
-        setSeasonRepairReceipt(nextReceipt);
-        setSeasonRepairPreviewState({ kind: 'preview', result: recovery.result, confirmation: '' });
-        setSeasonRepairStatus(`Preview ready for ${recovery.result.seasonCode}`);
-        return;
-      }
-      if (recovery.kind === 'terminal') {
-        await showAlert({
-          title: 'Season Repair Import Unavailable',
-          message: recovery.result.diagnostics[0]?.message
-            ?? `Import batch is ${recovery.result.status}.`,
-          tone: 'warning',
-        });
-        clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-        setSeasonRepairReceipt(null);
-        setSeasonRepairPreviewState({ kind: 'idle' });
-        setSeasonRepairStatus(null);
-        return;
-      }
-      const committedReceipt = markSeasonalImportV3RecoveryCommitted(receipt, recovery.result);
-      persistSeasonalImportV3RecoveryReceipt(sessionStorage, committedReceipt);
-      setSeasonRepairReceipt(committedReceipt);
-      setSeasonRepairPreviewState({ kind: 'committed-refresh-pending', result: recovery.result });
-      await applySeasonRepairCommittedRefresh(recovery.result, operatorSessionEpoch);
-    } catch (error) {
-      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      const notice = buildSeasonalImportStatusUnknownNotice(receipt, error);
-      setSeasonRepairStatus(notice.title);
-      void showAlert({ title: notice.title, message: notice.message, tone: 'warning' });
-    } finally {
-      if (isOperatorSessionEpochCurrent(operatorSessionEpoch)) setSeasonRepairRunning(false);
-    }
-  }, [
-    applySeasonRepairCommittedRefresh,
-    canRepairSeason,
-    getSeasonRepairBlockForTarget,
-    seasonRepairReceipt,
-    seasonRepairRunning,
-    showAlert,
-  ]);
-
-  const handleRefreshSeasonRepairImport = useCallback(async () => {
-    const receipt = seasonRepairReceipt;
-    if (!receipt || receipt.status !== 'committed' || seasonRepairRunning || !canRepairSeason) return;
-    const block = getSeasonRepairBlockForTarget(receipt.seasonId, receipt.seasonCode);
-    if (block) {
-      void showAlert({ title: 'Season Repair Refresh Blocked', message: block.message, tone: 'warning' });
-      return;
-    }
-    const committedImport = committedSeasonalImportV3FromRecoveryReceipt(receipt);
-    setSeasonRepairRunning(true);
-    const operatorSessionEpoch = getOperatorSessionEpoch();
-    try {
-      await applySeasonRepairCommittedRefresh(committedImport, operatorSessionEpoch);
-      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      void showAlert({
-        title: 'Season Repair Refresh Complete',
-        message: `Loaded committed season ${committedImport.seasonCode} from the server.`,
-        tone: 'success',
-      });
-    } catch (error) {
-      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      const failure = buildSeasonalImportCommittedRefreshFailure(committedImport, error);
-      setSeasonRepairStatus(failure.title);
-      void showAlert({ title: failure.title, message: failure.message, tone: 'warning' });
-    } finally {
-      if (isOperatorSessionEpochCurrent(operatorSessionEpoch)) setSeasonRepairRunning(false);
-    }
-  }, [
-    applySeasonRepairCommittedRefresh,
-    canRepairSeason,
-    getSeasonRepairBlockForTarget,
-    seasonRepairReceipt,
-    seasonRepairRunning,
-    showAlert,
-  ]);
 
   const updateAirlineColor = (airlineCode: string, patch: Partial<AirlineColorSetting>) => {
     const now = currentTimestamp();
@@ -1538,14 +1034,14 @@ export default function SettingsPage() {
       )),
       updatedAt: now,
     }));
-    setStatus('Unsaved airline color change');
+    setStatus('Đã đổi màu hãng bay (chưa lưu)');
   };
 
   const addAirlineColor = () => {
     const code = normalizeAirlineColorCode(airlineColorCode);
     const color = normalizeAirlineColorValue(airlineColorValue);
     if (!code) {
-      void showAlert({ title: 'Add Airline Color Failed', message: 'Airline code is required.', tone: 'error' });
+      void showAlert({ title: 'Thêm màu hãng bay thất bại', message: 'Mã hãng hàng không là bắt buộc.', tone: 'error' });
       return;
     }
     const now = currentTimestamp();
@@ -1559,7 +1055,7 @@ export default function SettingsPage() {
     }));
     setAirlineColorCode('');
     setAirlineColorValue('#1D4ED8');
-    setStatus('Unsaved airline color added');
+    setStatus('Đã thêm màu hãng bay (chưa lưu)');
   };
 
   const deleteAirlineColor = (airlineCode: string) => {
@@ -1569,120 +1065,9 @@ export default function SettingsPage() {
       airlineColors: current.airlineColors.filter((item) => item.airlineCode !== airlineCode),
       updatedAt: now,
     }));
-    setStatus('Unsaved airline color deletion');
+    setStatus('Đã xóa màu hãng bay (chưa lưu)');
   };
 
-  const updateAiModel = (modelId: string, patch: Partial<AiAnalysisModelSetting>) => {
-    const now = currentTimestamp();
-    setSettings((current) => ({
-      ...current,
-      aiAnalysis: {
-        ...current.aiAnalysis,
-        models: current.aiAnalysis.models.map((model) => (
-          model.id === modelId
-            ? {
-                ...model,
-                ...patch,
-                id: patch.id == null ? model.id : normalizeAiModelId(patch.id),
-                label: patch.label == null ? model.label : patch.label.trim(),
-                model: patch.model == null ? model.model : patch.model.trim(),
-                baseUrl: patch.provider === 'gemini'
-                  ? null
-                  : patch.baseUrl == null
-                    ? model.baseUrl
-                    : normalizeAiBaseUrl(patch.baseUrl),
-              }
-            : model
-        )),
-        updatedAt: now,
-      },
-      updatedAt: now,
-    }));
-    setStatus('Unsaved AI Analysis change');
-  };
-
-  const addAiModel = () => {
-    const label = aiModelLabel.trim();
-    const modelName = aiModelName.trim();
-    const id = normalizeAiModelId(label || modelName);
-    if (!id || !label || !modelName) {
-      void showAlert({ title: 'Add AI Model Failed', message: 'Model label and provider model name are required.', tone: 'error' });
-      return;
-    }
-    const now = currentTimestamp();
-    setSettings((current) => ({
-      ...current,
-      aiAnalysis: {
-        ...current.aiAnalysis,
-        models: [
-          ...current.aiAnalysis.models.filter((model) => model.id !== id),
-          {
-            id,
-            label,
-            provider: aiModelProvider,
-            model: modelName,
-            baseUrl: aiModelProvider === 'gemini' ? null : normalizeAiBaseUrl(aiModelBaseUrl || defaultBaseUrlForAiProvider(aiModelProvider)),
-            enabled: true,
-            keyUpdatedAt: null,
-          },
-        ],
-        activeModelId: current.aiAnalysis.activeModelId || id,
-        updatedAt: now,
-      },
-      updatedAt: now,
-    }));
-    setAiModelLabel('');
-    setAiModelName('');
-    setAiModelBaseUrl(defaultBaseUrlForAiProvider(aiModelProvider));
-    setStatus('Unsaved AI model added');
-  };
-
-  const deleteAiModel = (modelId: string) => {
-    const now = currentTimestamp();
-    setSettings((current) => {
-      const models = current.aiAnalysis.models.filter((model) => model.id !== modelId);
-      return {
-        ...current,
-        aiAnalysis: {
-          ...current.aiAnalysis,
-          models,
-          activeModelId: current.aiAnalysis.activeModelId === modelId ? models[0]?.id ?? '' : current.aiAnalysis.activeModelId,
-          updatedAt: now,
-        },
-        updatedAt: now,
-      };
-    });
-    setStatus('Unsaved AI model deletion');
-  };
-
-  const rotateAiProviderKey = async () => {
-    if (!canManageAi) {
-      void showAlert({ title: 'AI Key Sync Blocked', message: 'Your operator grant does not include can_manage_ai.', tone: 'error' });
-      return;
-    }
-    setAiKeyRotating(true);
-    try {
-      const result = await syncDashboardAiProviderKey({ provider: aiKeyProvider, apiKey: aiKeyValue });
-      const now = result.keyUpdatedAt;
-      setSettings((current) => ({
-        ...current,
-        aiAnalysis: {
-          ...current.aiAnalysis,
-          models: current.aiAnalysis.models.map((model) => (
-            model.provider === result.provider ? { ...model, keyUpdatedAt: now } : model
-          )),
-          updatedAt: now,
-        },
-        updatedAt: now,
-      }));
-      setAiKeyValue('');
-      setStatus(`${aiProviderLabel(result.provider)} key synced for local AI`);
-    } catch (err) {
-      void showAlert({ title: 'Sync Provider Key Failed', message: (err as Error).message, tone: 'error' });
-    } finally {
-      setAiKeyRotating(false);
-    }
-  };
 
   if (loading) {
     return (
@@ -1698,12 +1083,12 @@ export default function SettingsPage() {
       <div className="flex h-dvh min-w-0 flex-1 flex-col">
         <header className="z-30 flex flex-none items-center justify-between border-b border-slate-200 bg-white/80 px-6 py-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
           <div>
-            <h1 className="font-h3 text-h3 text-on-surface">Settings</h1>
-            <p className="font-body-sm text-body-sm text-on-surface-variant">Global operational configuration</p>
+            <h1 className="font-h3 text-h3 text-on-surface">Cài đặt</h1>
+            <p className="font-body-sm text-body-sm text-on-surface-variant">Cấu hình vận hành hệ thống</p>
           </div>
           <div className="flex items-center gap-3">
             {status && <span className="text-sm text-on-surface-variant">{status}</span>}
-            {isDirty && <span className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800"><span className="h-2 w-2 rounded-full bg-amber-500" />Unsaved changes</span>}
+            {isDirty && <span className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800"><span className="h-2 w-2 rounded-full bg-amber-500" />Thay đổi chưa lưu</span>}
             <button
               type="button"
               onClick={persistSettings}
@@ -1711,7 +1096,7 @@ export default function SettingsPage() {
               className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 font-label-caps text-label-caps text-on-primary transition-colors hover:bg-primary-container hover:text-on-primary-container disabled:cursor-not-allowed disabled:opacity-50"
             >
               <span className={`material-symbols-outlined text-[18px] ${saving ? 'animate-spin' : ''}`}>{saving ? 'progress_activity' : 'save'}</span>
-              {saving ? 'Saving' : 'Save Settings'}
+              {saving ? 'Đang lưu' : 'Lưu cài đặt'}
             </button>
           </div>
         </header>
@@ -1909,35 +1294,6 @@ export default function SettingsPage() {
             />
           )}
 
-          {activeTab === 'aiAnalysis' && (
-            <AiAnalysisTab
-              settings={settings}
-              setSettings={setSettings}
-              setStatus={setStatus}
-              currentTimestamp={currentTimestamp}
-              aiModelLabel={aiModelLabel}
-              setAiModelLabel={setAiModelLabel}
-              aiModelProvider={aiModelProvider}
-              setAiModelProvider={setAiModelProvider}
-              aiModelName={aiModelName}
-              setAiModelName={setAiModelName}
-              aiModelBaseUrl={aiModelBaseUrl}
-              setAiModelBaseUrl={setAiModelBaseUrl}
-              aiKeyProvider={aiKeyProvider}
-              setAiKeyProvider={setAiKeyProvider}
-              aiKeyValue={aiKeyValue}
-              setAiKeyValue={setAiKeyValue}
-              aiKeyRotating={aiKeyRotating}
-              canManageAi={canManageAi}
-              canUseAi={canUseAi}
-              defaultModelNameForAiProvider={defaultModelNameForAiProvider}
-              defaultBaseUrlForAiProvider={defaultBaseUrlForAiProvider}
-              addAiModel={addAiModel}
-              updateAiModel={updateAiModel}
-              deleteAiModel={deleteAiModel}
-              rotateAiProviderKey={rotateAiProviderKey}
-            />
-          )}
 
           {activeTab === 'usersRoles' && canManageUsers && (
             <UsersRolesTab
@@ -1947,45 +1303,10 @@ export default function SettingsPage() {
             />
           )}
 
-          {activeTab === 'seasonRepair' && canRepairSeason && (
-            <SeasonRepairTab
-              canRepairSeason={canRepairSeason}
-              running={seasonRepairRunning}
-              status={seasonRepairStatus}
-              selectedSeasonId={selectedSeasonId}
-              hasPendingAttempt={Boolean(
-                seasonRepairReceipt
-                && seasonRepairReceipt.status !== 'committed'
-                && seasonRepairPreviewState.kind === 'idle'
-              )}
-              hasPendingCommittedImport={seasonRepairReceipt?.status === 'committed'}
-              onImport={handleSeasonRepairImport}
-              onResume={handleResumeSeasonRepairImport}
-              onRefresh={handleRefreshSeasonRepairImport}
-            />
-          )}
 
           {activeTab === 'updates' && <UpdatesTab />}
         </main>
       </div>
-      <SeasonalImportPreviewDialog
-        state={
-          seasonRepairPreviewState.kind === 'preview' || seasonRepairPreviewState.kind === 'committing'
-            ? seasonRepairPreviewState
-            : null
-        }
-        hasDraftChanges={false}
-        busy={seasonRepairRunning}
-        strategyLocked
-        onStrategyChange={() => undefined}
-        onConfirmationChange={(confirmation) => {
-          setSeasonRepairPreviewState((current) => current.kind === 'preview'
-            ? { ...current, confirmation }
-            : current);
-        }}
-        onCancel={() => { void handleCancelSeasonRepairImport(); }}
-        onCommit={() => { void handleCommitSeasonRepairImport(); }}
-      />
       {dialogNode}
     </div>
   );

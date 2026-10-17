@@ -2,11 +2,20 @@ import assert from 'node:assert/strict';
 import { buildM0Fixture, M0_FIXTURE } from './seasonal_operational_separation_fixture.mjs';
 import {
   buildAuthoritativeDraftUndoChanges,
+  applyModificationsToFlightRecords,
+  composeSeasonalDraftUndoChanges,
+  executeSeasonalPlanningDraftSave,
 } from '../../src/lib/seasonalPlanningSaveManager.ts';
 import {
   countersToSeasonalDraftItems,
   seasonalDraftToFlightRecord,
 } from '../../src/lib/seasonalPlanningContract.ts';
+import { flightRecordsToLegs } from '../../src/lib/atomicSchedule.ts';
+import {
+  buildCanonicalAddedFlightRecords,
+  buildDetailedNewFlightModifications,
+  buildDetailedTransferModifications,
+} from '../../src/lib/detailedScheduleState.ts';
 
 const { db, asWriter } = await buildM0Fixture();
 let requestSeq = 500;
@@ -228,7 +237,86 @@ try {
   assert.deepEqual(consolidatedDraft.counters, restoredD2.counters);
   assert.equal(consolidatedDraft.linked_draft_id, d1.id);
 
-  console.log('M6 undo PASS: deleted draft, field edits, reciprocal survivor pairing, consecutive NULL/0 Pax and child allocation edits.');
+  // Exercise the same adapters as Detailed against the real Draft RPC.
+  const operationalBefore = (await db.query('select * from public.operational_flight_legs order by leg_id')).rows;
+  let workspace = await getWindow();
+  let records = workspace.drafts.map(seasonalDraftToFlightRecord);
+  const save = async (nextRecords) => {
+    const before = records;
+    const result = await executeSeasonalPlanningDraftSave({
+      seasonId: M0_FIXTURE.seasonW26,
+      currentRecords: nextRecords,
+      baseRecords: before,
+      expectedRevision: workspace.revision,
+      applyFn: ({ expectedRevision, changes }) => apply(expectedRevision, changes),
+    });
+    assert.equal(result.result.status, 'saved', result.result.error);
+    workspace = await getWindow();
+    records = workspace.drafts.map(seasonalDraftToFlightRecord);
+    return buildAuthoritativeDraftUndoChanges(result.result.receipt, before);
+  };
+  const newPair = buildCanonicalAddedFlightRecords(buildDetailedNewFlightModifications({
+    dates: ['2026-10-27'], airline: 'VN', flightType: 'turnaround', aircraft: '321', category: 'J',
+    arrFlightNum: '811', arrRoute: 'HAN', arrTime: '08:00', arrCodeShares: '',
+    depFlightNum: '812', depRoute: 'HAN', depTime: '10:00', depCodeShares: '',
+    idSeed: 'detailed-rpc-pair',
+  }));
+  const undoAdd = await save([...records, ...newPair]);
+  const newArrival = newPair.find((record) => record.type === 'A');
+  const newDeparture = newPair.find((record) => record.type === 'D');
+  const storedArrival = records.find((record) => record.id === newArrival.id);
+  const storedDeparture = records.find((record) => record.id === newDeparture.id);
+  assert.equal(storedArrival.linkedRecordId, storedDeparture.id);
+  assert.equal(storedDeparture.linkedRecordId, storedArrival.id);
+  assert.equal(storedArrival.turnaroundId, storedDeparture.turnaroundId);
+
+  const firstUndo = await save(applyModificationsToFlightRecords(records, [
+    { legId: newArrival.id, action: 'modified', schedule: '09:00' },
+  ]));
+  const optimisticSecondEdit = applyModificationsToFlightRecords(records, [
+    { legId: newArrival.id, action: 'modified', schedule: '09:30' },
+  ]);
+  const secondUndo = await save(optimisticSecondEdit);
+  // Deliberately transfer the optimistic records, not the authoritative reload.
+  const optimisticLegs = flightRecordsToLegs(optimisticSecondEdit);
+  const transfer = buildDetailedTransferModifications({
+    allLegs: optimisticLegs,
+    sourceLeg: optimisticLegs.find((leg) => leg.id === newArrival.id),
+    visibleLegs: optimisticLegs.filter((leg) => leg.id === newArrival.id),
+    targetDate: '2026-10-29', mode: 'move', idSeed: 'detailed-rpc-move',
+  });
+  const undoMove = await save([
+    ...applyModificationsToFlightRecords(records, transfer.filter((mod) => mod.action !== 'added')),
+    ...buildCanonicalAddedFlightRecords(transfer.filter((mod) => mod.action === 'added')),
+  ]);
+  const movedPair = records.filter((record) => record.date === '2026-10-29' && record.airline === 'VN');
+  assert.equal(movedPair.length, 2);
+  assert.equal(movedPair.find((record) => record.type === 'A').schedule, '09:30');
+  assert.equal(movedPair.find((record) => record.type === 'A').scheduledTime, '09:30');
+  assert.equal(movedPair[0].linkedRecordId, movedPair[1].id);
+  assert.equal(movedPair[1].linkedRecordId, movedPair[0].id);
+  await apply(workspace.revision, undoMove);
+  workspace = await getWindow();
+  records = workspace.drafts.map(seasonalDraftToFlightRecord);
+  await apply(workspace.revision, composeSeasonalDraftUndoChanges([...secondUndo, ...firstUndo]));
+  workspace = await getWindow();
+  records = workspace.drafts.map(seasonalDraftToFlightRecord);
+  assert.equal(records.find((record) => record.id === newArrival.id).schedule, '08:00');
+  assert.equal(records.find((record) => record.id === newArrival.id).linkedRecordId, newDeparture.id);
+
+  // Add -> edit -> delete -> undo to before Add must not resurrect either side.
+  const undoEdit = await save(applyModificationsToFlightRecords(records, [
+    { legId: newArrival.id, action: 'modified', schedule: '08:30' },
+  ]));
+  const undoDelete = await save(applyModificationsToFlightRecords(records, [
+    { legId: newArrival.id, action: 'deleted' },
+  ]));
+  await apply(workspace.revision, composeSeasonalDraftUndoChanges([...undoDelete, ...undoEdit, ...undoAdd]));
+  const afterUndoAdd = await getWindow();
+  assert.ok(!afterUndoAdd.drafts.some((draft) => newPair.some((record) => record.id === draft.draft_id)));
+  assert.deepEqual((await db.query('select * from public.operational_flight_legs order by leg_id')).rows, operationalBefore);
+
+  console.log('M6 undo PASS: deleted draft, scalar/child edits, survivor pairing, new turnaround, edit then move without reload, compound undo and add/edit/delete reversal; Operations unchanged.');
 } finally {
   await db.close();
 }

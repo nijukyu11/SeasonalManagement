@@ -189,23 +189,6 @@ export interface NativeDashboardSummaryResult {
   syncMeta: LocalSyncMeta;
 }
 
-export type NativeDashboardAiSqlValue = string | number | boolean | null;
-
-export interface NativeDashboardAiSqlInput {
-  sql: string;
-  params?: NativeDashboardAiSqlValue[];
-  limit?: number;
-}
-
-export interface NativeDashboardAiSqlResult {
-  columns: string[];
-  rows: Record<string, NativeDashboardAiSqlValue>[];
-  rowCount: number;
-  truncated: boolean;
-  executedSqlPreview: string;
-  dataQualityNotes: string[];
-}
-
 export interface NativeDiscardSessionEditsResult {
   discardedCount: number;
   syncMeta: LocalSyncMeta;
@@ -387,32 +370,6 @@ export async function queryNativeDashboardSummary(
   input: NativeDashboardSummaryInput
 ): Promise<NativeDashboardSummaryResult | null> {
   return invokeNative<NativeDashboardSummaryResult>('query_dashboard_summary', input);
-}
-
-export async function queryNativeDashboardAiSql(
-  input: NativeDashboardAiSqlInput
-): Promise<NativeDashboardAiSqlResult | null> {
-  return invokeNative<NativeDashboardAiSqlResult>('query_native_dashboard_ai_sql', input);
-}
-
-export async function callNativeDashboardAiAgent(payload: unknown): Promise<unknown | null> {
-  if (!isTauriRuntime()) return null;
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !anonKey) throw new Error('Thiếu cấu hình Supabase để tải provider key cho Python AI Agent.');
-  const accessToken = await currentAccessToken();
-  if (!accessToken) throw new Error('Cần đăng nhập operator để tải provider key cho Python AI Agent.');
-  return invokeNative<unknown>('call_dashboard_ai_agent', {
-    payload,
-    supabaseUrl,
-    anonKey,
-    accessToken,
-  });
-}
-
-export async function queryNativeDashboardAiAgentHealth(): Promise<{ healthy: boolean; status: string } | null> {
-  if (!isTauriRuntime()) return null;
-  return invokeNative<{ healthy: boolean; status: string }>('dashboard_ai_agent_health', {});
 }
 
 export async function discardNativeSessionEdits(

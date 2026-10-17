@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { openSavedExport, revealSavedExport, type ExportSaveResult } from '@/lib/exportSave';
+import { formatUiError } from '@/lib/uiDisplayText';
 
 interface ExportNotificationContextValue {
   notifyExportCompleted: (result: ExportSaveResult) => void;
@@ -32,7 +33,7 @@ export default function ExportNotificationProvider({ children }: { children: Rea
     try {
       await openSavedExport(result);
     } catch (openError) {
-      setError(openError instanceof Error ? openError.message : String(openError));
+      setError(formatUiError(openError, 'Không thể mở tệp đã xuất.'));
     }
   }, [result]);
 
@@ -41,7 +42,7 @@ export default function ExportNotificationProvider({ children }: { children: Rea
     try {
       await revealSavedExport(result);
     } catch (revealError) {
-      setError(revealError instanceof Error ? revealError.message : String(revealError));
+      setError(formatUiError(revealError, 'Không thể mở thư mục chứa tệp.'));
     }
   }, [result]);
 
@@ -53,7 +54,7 @@ export default function ExportNotificationProvider({ children }: { children: Rea
           <div className="flex items-start gap-3">
             <span className="material-symbols-outlined mt-0.5 text-[20px] text-primary">download_done</span>
             <div className="min-w-0 flex-1">
-              <div className="font-semibold text-on-surface">Export completed</div>
+              <div className="font-semibold text-on-surface">Xuất tệp thành công</div>
               <div className="mt-1 break-all text-xs text-on-surface-variant">
                 {result.filePath ?? result.fileName}
               </div>
@@ -65,7 +66,7 @@ export default function ExportNotificationProvider({ children }: { children: Rea
                   className="inline-flex items-center gap-1 rounded-md border border-outline px-2.5 py-1.5 text-xs font-semibold text-on-surface transition hover:bg-surface-container-highest"
                 >
                   <span className="material-symbols-outlined text-[16px]">open_in_new</span>
-                  Open file
+                  Mở tệp
                 </button>
                 <button
                   type="button"
@@ -73,7 +74,7 @@ export default function ExportNotificationProvider({ children }: { children: Rea
                   className="inline-flex items-center gap-1 rounded-md border border-outline px-2.5 py-1.5 text-xs font-semibold text-on-surface transition hover:bg-surface-container-highest"
                 >
                   <span className="material-symbols-outlined text-[16px]">folder_open</span>
-                  Show in folder
+                  Mở thư mục
                 </button>
                 <button
                   type="button"
@@ -82,9 +83,9 @@ export default function ExportNotificationProvider({ children }: { children: Rea
                     setError(null);
                   }}
                   className="ml-auto inline-flex items-center rounded-md px-2.5 py-1.5 text-xs font-semibold text-on-surface-variant transition hover:bg-surface-container-highest"
-                  aria-label="Dismiss export notification"
+                  aria-label="Đóng thông báo xuất tệp"
                 >
-                  Close
+                  Đóng
                 </button>
               </div>
             </div>

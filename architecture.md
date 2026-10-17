@@ -1,12 +1,18 @@
 # SeasonalManagement Architecture
 
-Last updated: 2026-07-23
+Last updated: 2026-09-04
 
 ## Purpose
 
 SeasonalManagement is a native-first aviation operations app for importing seasonal Excel schedules, editing atomic flight legs, allocating check-in counters and gates, exporting recognized Excel/PDF outputs, and running read-only dashboard analysis.
 
 The current runtime target is the Tauri desktop app. Next.js/React is the UI shell and self-hosted Supabase is the only operational read/write authority, auth boundary, Realtime source, and Edge Function host. Rust + SQLite remains packaged temporarily for explicitly enabled legacy repair tooling, not as a normal route read model or write queue. SQLite is never an import, export, retry, catch-up, or failure fallback.
+
+## Status And Precedence
+
+The current code/branch/public-endpoint reconciliation is maintained in [`docs/current-implementation-status.md`](docs/current-implementation-status.md). Use that status document before treating a plan, release receipt, production artifact, or older section in `context.md` as current runtime truth.
+
+Four states must remain separate: implemented on `main`, present only in a worktree/branch, applied to a database, and selected by the public route/UI. As of 2026-09-04, local `main` is two commits ahead of `origin/main`; rolling-30 forecast and indexed-Ops-Date Daily staging remain on separate branches. The public API returns Report v1 on both `/v1/overview` and `/v2/overview`, and exposes live Annual KPI v1 rather than the Daily Publication endpoints recorded in earlier receipts. The static UI mode was not inferred from API availability alone.
 
 ## Runtime Shape
 
@@ -28,6 +34,16 @@ Route mount read path
 Explicit legacy repair only
   -> legacyNativeSyncAdapter.ts
   -> native SQLite commands when NEXT_PUBLIC_ENABLE_LEGACY_NATIVE_SYNC_REPAIR=true
+
+Anonymous Report read
+  -> /api/report/v1/{overview,timeline,dimension,export}
+  -> traffic-report Edge Function
+  -> get_public_traffic_report_v2 + pinned read version
+
+Public KPI dashboard
+  -> compile-time selection: live annual-kpi or immutable Daily Publication
+  -> lightweight version endpoint + ETag poll
+  -> atomic snapshot replacement; last-known-good remains visible on background failure
 ```
 
 Browser/static mode is not the operational source of truth. Legacy IndexedDB and SQLite modules remain for compatibility and repair, but normal desktop routes commit durable writes through authenticated Supabase RPCs and never use SQLite as a fallback read surface.
@@ -121,6 +137,16 @@ Seasonal relational writes have two distinct authorization boundaries:
 - Baseline/import-owned tables, including `seasons`, source rows/days, generated flight records and their children, V3 staged records/preimages, import batches, change events, and entity versions, are RPC-only for mutation. Authenticated clients receive permission-gated read access where needed but no direct baseline `INSERT`, `UPDATE`, or `DELETE`. Season metadata changes use `manage_season_metadata_v2`; import mutation uses the V3 stage/commit functions.
 - Operational overlay parent rows accept operators with `seasonal.write`, `detailed.write`, `daily.write`, `checkin.write`, or `gate.write`. Check-in counter/window children accept `seasonal.write`, `detailed.write`, `daily.write`, or `checkin.write`. Added-leg and modification-history tables accept only `seasonal.write`, `detailed.write`, or `daily.write`. `season.repair` alone never grants direct table DML, and viewers cannot mutate either boundary.
 - Service-role maintenance remains available through server-side administration, but client recovery and import RPCs still require an authenticated operator identity and their exact application permission.
+
+## Daily Schedule Import V1
+
+Daily import accepts `.xlsx` and `.xls` workbooks through `analyzeDailyScheduleWorkbook()`. The parser scans the first ten rows of every sheet, requires exactly one valid 43-column operational table, supports `legacy-operationalturns`, `compact-lb`, and position-compatible layouts, and preserves Excel 1900/1904 date semantics.
+
+The active flow is `buildDailyImportStagePayloadV1()` -> `stage_daily_schedule_import_v1(jsonb)` -> persisted preview/diagnostics -> optional zero-flight confirmation -> `commit_daily_schedule_import_v1(uuid,jsonb,text)`. Stage and commit are blocked while a target season has drafts/pending changes. Cancelled or expired stage attempts get one new request ID; an ambiguous response is reconciled through the owner-scoped status RPC.
+
+Only structured `PT409` with `Stale Daily import stage` triggers automatic stale-version recovery. The client refreshes season metadata and stages once more; all other RPC errors remain terminal. A successful commit patches returned `dataVersion` values into season caches/store, force-revalidates the affected Daily window, then refreshes the route.
+
+The indexed Ops Date staging optimization in `6f05837` is not yet on `main`; the code-of-record migration still calculates canonical Ops Date during loose-identity matching.
 
 ## Import To Export Flow
 
@@ -227,11 +253,12 @@ Route shells should use dynamic viewport height (`h-dvh`) rather than fixed `h-s
 |---|---|---|
 | Seasonal Schedule | Aggregated ARR/DEP macro view, previewed V3 merge import, versioned export | Supabase import/export RPCs and schedule windows |
 | Detailed Schedule | ID-level calendar editing, pair-aware delete, manual link/unlink | Supabase schedule windows and server mutations |
-| Daily Schedule | Daily operational view and OperationalTurns import | Supabase schedule windows and server mutations |
+| Daily Schedule | Daily operational view; dual-layout atomic Daily Import V1 with preview, zero-flight confirmation and stale-version recovery | Supabase schedule windows, Daily stage/commit/status RPCs and server mutations |
 | Check-in Allocation | Departure-only Gantt, counter assignment/time windows | Supabase allocation windows and server mutations |
 | Gate Allocation | Gate/stand Gantt allocation | Supabase allocation windows and server mutations |
 | Dashboard | Overview, MoM/WoW comparison, AI notebook | Supabase reporting/AI reads |
-| Public Traffic Report | Anonymous continuous Ops Date KPI, timeline, breakdown and aggregate export | Same-origin `/api/report/v1/*` through Nginx to aggregate-only Edge/RPC publication |
+| Public Traffic Report | Anonymous continuous Ops Date KPI, timeline, dimensions and aggregate export | Same-origin `/api/report/v1/*` through Nginx/Edge to live `get_public_traffic_report_v2` reads pinned by read version |
+| Public KPI Dashboard | Annual KPI wallboard; live projection or immutable Daily Publication according to build flag | Same-origin KPI/publication snapshot and lightweight ETag version endpoints |
 | Settings | Operational resources, rules, route countries, AI providers, AI context docs | Supabase settings tables through `remoteStore` |
 | Audit | Audit session/log review | Supabase audit tables |
 
@@ -241,20 +268,36 @@ Check-in and Gate routes must keep pointer/drag hot paths separate from durable 
 
 `/reports/traffic` lives under the `(public-report)` root layout. Every operational route lives under the pathless `(desktop)` root layout, which is the only root allowed to import `AppShell`. Navigation between the roots is intentionally a full document transition so the public chunk graph cannot inherit desktop/native providers.
 
-The reporting flow is:
+The Report flow is:
 
 ```text
 anonymous browser GET /api/report/v1/overview
-  -> Nginx rate limit + canonical shared cache
+  -> Nginx rate limit/cache policy
   -> traffic-report Edge Function (no browser credentials)
-  -> one PostgREST call to get_public_traffic_report_overview_v1
-  -> one PostgreSQL statement snapshot
-  -> KPI + timeline + breakdown reporting functions
+  -> get_public_traffic_report_v2
+  -> canonical metrics payload + source watermark + semantic data_as_of + filter hash
+  -> signed read-version token reused by timeline/dimension/export calls
 ```
 
-The public database seam is `reporting.public_traffic_effective`. It resolves cross-season candidates using the server event sequence, applies tombstones before removing deleted winners, quarantines ambiguous recency, calculates typed Ops Date at the 05:00 local boundary, and enriches only the approved Country/aircraft-group dimensions. Publication functions are revoked from `PUBLIC`, `anon` and `authenticated`; only the Edge server role receives execute rights.
+The live Report database seam is the canonical traffic metrics path built from canonical effective legs. It resolves cross-season candidates using server sequence, applies tombstones before filtering deleted winners, quarantines ambiguous recency, calculates typed Ops Date at the 05:00 local boundary, and preserves `Pax NULL` as missing while `Pax 0` is a reported true-zero. Frontends and adapters do not recompute backend-owned totals, coverage or completeness states.
 
-Nginx is the sole shared-cache owner for `/api/report`. Cloudflare cache is bypassed for the API path. Cached responses are fresh for 60 seconds, browser SWR is at most another 30 seconds, and Nginx stale/background update is disabled.
+The read-version token prevents mixed watermark/data-as-of/filter results across separate requests; it is not a durable PostgreSQL MVCC snapshot. Reproducible exports must be produced by one statement/job and retain their own receipt.
+
+This is the code-path contract, not proof of current production activation. Public checks on 2026-09-04 returned `traffic-report-v1` without read-version/filter-hash fields for both v1 and v2 overview URLs; Edge/Nginx/feature-flag state must be reconciled before calling live v2 active.
+
+The Daily Dashboard publication path is separate:
+
+```text
+accepted Business Date or committed Pax correction
+  -> durable dirty marker + transactional NOTIFY
+  -> coalesced single-flight runner
+  -> canonical metrics + watermark/quality verification
+  -> immutable public_dashboard_publications row
+  -> ready publication may advance the current head
+  -> client polls the lightweight version and swaps snapshots atomically
+```
+
+Only a `ready` publication advances the head. Failed, empty, incomplete or rejected-version attempts keep the last-known-good visible. The dirty marker is acknowledged only when the ready publication watermark covers its latest event sequence. `NEXT_PUBLIC_TRAFFIC_DASHBOARD_DAILY_PUBLICATION` selects this path at build time; otherwise the dashboard uses live `/annual-kpi`. The public endpoints observed on 2026-09-04 expose the live v1 path, so Daily Publication must not be described as the active public UI without a new route/flag verification.
 
 ## Dashboard AI
 
@@ -262,9 +305,9 @@ Dashboard AI is read-only and dashboard-scoped.
 
 - Frontend context and sanitization live in `app/src/lib/dashboardAiAnalysis.ts`.
 - Shared intent/filter helpers live in `app/src/lib/dashboardAiShared.ts` and `app/supabase/functions/_shared/dashboardAiShared.ts`.
-- Provider calls run only through `app/supabase/functions/dashboard-ai-analysis/index.ts`.
+- The desktop may select an enabled local Python model runtime, while `dashboard-ai-analysis` remains the Edge/web fallback and the guarded provider boundary.
 - Remote data queries use allowlisted Supabase reporting RPCs such as `dashboard_ai_query_rows` and `dashboard_ai_query_aggregated`.
-- Local native analysis uses SQL plans executed by `queryNativeDashboardAiSql`, which only allows read-only `SELECT`/CTE statements against the temporary `dashboard_ai_flight_operations` view.
+- The active Dashboard page must not use `queryNativeDashboardAiSql` or local SQLite as analytical truth. Query-backed results come from the allowlisted Supabase reporting RPCs regardless of model runtime.
 - Custom AI Rules/Skills are markdown documents in `operational_ai_context_documents`, edited from Settings and injected into the Edge Function prompt context.
 - HTML output is allowed only as sanitized iframe preview. AI output must not execute JavaScript, SQL writes, formulas, file paths, or operational mutations.
 
@@ -274,15 +317,15 @@ Schedule-change Telegram notifications are data-driven:
 
 ```text
 TypeScript mutation history
-  -> scheduleNotification payload on mod history
-  -> native pending event
-  -> season_change_events insert
+  -> scheduleNotification payload + explicit changedFields
+  -> apply_season_server_mutation_v1 in normal server-authoritative mode
+  -> season_change_events
   -> enqueue_schedule_notification_delivery trigger
   -> schedule_notification_deliveries
   -> schedule-telegram-notify Edge Function
 ```
 
-Rust and TypeScript must preserve the full `scheduleNotification` payload. Best-effort notification flushing happens after successful pending upload.
+TypeScript must preserve the full `scheduleNotification` payload. The native pending-event path remains only for explicitly enabled legacy repair/rollback mode.
 
 ## Security Boundaries
 
@@ -324,6 +367,8 @@ For architecture-sensitive changes, use:
 
 ```text
 npm run test:rules
+npm run test:daily-import
+npm run test:traffic-report-contract
 npm run test:notifications
 npm run test:updater
 cargo test --manifest-path app/src-tauri/Cargo.toml --test native_catchup

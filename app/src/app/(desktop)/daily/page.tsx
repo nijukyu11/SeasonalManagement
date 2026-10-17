@@ -4,19 +4,13 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { usePathname, useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import {
-  cancelDailyScheduleImportV1,
-  commitDailyScheduleImportV1,
-  getDailyScheduleImportV1Status,
-  getOperationalSettings,
-  getSeasons,
-  loadSeasonWorkspaceWindow,
-  stageDailyScheduleImportV1,
-} from '@/lib/remoteStore';
-import {
   cancelDailyScheduleImportV2,
   commitDailyScheduleImportV2,
   getDailyScheduleImportV2Status,
   stageDailyScheduleImportV2,
+  getOperationalSettings,
+  getSeasons,
+  loadSeasonWorkspaceWindow,
 } from '@/lib/remoteStore';
 import {
   buildOperationalDateRange,
@@ -66,23 +60,18 @@ import {
   type DailyScheduleRow,
   type DailySortState,
 } from '@/lib/dailySchedule';
-import { analyzeDailyScheduleWorkbook } from '@/lib/dailyScheduleWorkbook';
 import {
-  buildDailyImportStagePayloadV1,
-  confirmDailyImportZeroFlightDatesV1,
-  DAILY_RESOURCE_POLICY_VERSION,
-  sha256Hex,
-  type DailyImportStagePayloadV1,
-} from '@/lib/dailyImportV1Contract';
+  uploadDailyImportInChunksV2,
+  parseDailyWorkbookWithWorker,
+  saveDailyUploadJournal,
+  getActiveDailyUploadJournal,
+  getDailyUploadJournalByFingerprint,
+  clearDailyUploadJournal,
+  resolveOperatorId,
+  type DailyImportUploadProgress,
+} from '@/lib/dailyImportChunkedUpload';
+import type { DailyImportCommittedResultV2 } from '@/lib/operationalScheduleContract';
 import { normalizeCheckInCounterList } from '@/lib/checkinAllocation';
-import { parseDailyImportRowsStrict } from '@/lib/dailyScheduleImport';
-import {
-  isDailyImportStaleVersionConflictV1,
-  finishCommittedDailyImportV1,
-  type DailyImportCommittedResultV1,
-  stageDailyImportWithTerminalRetryV1,
-  type DailyImportStageResultV1,
-} from '@/lib/dailyImportRpcContract';
 import { buildDailyScheduleExportFileName, buildDailyScheduleSummaryWorkbook } from '@/lib/dailyScheduleExport';
 import { saveWorkbookAsXlsx } from '@/lib/exportSave';
 import { buildDailyStandGateModifications } from '@/lib/gateAllocation';
@@ -100,7 +89,6 @@ import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import type { LocalSyncMeta } from '@/lib/localSeasonStore';
 import type { FlightCounter, FlightModification, FlightRecord, ModHistoryEntry, OperationalSettings, Season } from '@/lib/types';
-import DailyImportPreviewDialog from '@/app/(desktop)/components/DailyImportPreviewDialog';
 import NewFlightModal from '../components/NewFlightModal';
 import { useAppDialog } from '../components/AppDialog';
 import { useExportNotifications } from '../components/ExportNotificationProvider';
@@ -119,28 +107,29 @@ import {
 import { useSessionScrollRestoration } from '../hooks/useSessionScrollRestoration';
 import { useSessionState } from '../hooks/useSessionState';
 import { useSeasonWorkspaceRefresh } from '../hooks/useSeasonWorkspaceRefresh';
+import { formatUiError } from '@/lib/uiDisplayText';
+
 
 const GRID_COLUMNS: Array<{ field: DailyGridField; label: string; numeric?: boolean; className?: string }> = [
-  { field: 'aircraft', label: 'A/C Type', className: 'min-w-[92px]' },
-  { field: 'arrFlight', label: 'Arr Flight', className: 'min-w-[112px]' },
+  { field: 'aircraft', label: 'Loại tàu', className: 'min-w-[92px]' },
+  { field: 'arrFlight', label: 'Chuyến đến', className: 'min-w-[112px]' },
   { field: 'sta', label: 'STA', className: 'min-w-[82px]' },
   { field: 'mcat', label: 'MCAT', className: 'min-w-[82px]' },
-  { field: 'from', label: 'From', className: 'min-w-[90px]' },
-  { field: 'arrPax', label: 'ARR PAX', numeric: true, className: 'min-w-[88px]' },
-  { field: 'carousel', label: 'Carousel', numeric: true, className: 'min-w-[96px]' },
-  { field: 'arrStand', label: 'Arr Stand', className: 'min-w-[92px]' },
-  { field: 'arrCodeShare', label: 'Arr Code Share', className: 'min-w-[132px]' },
-  { field: 'depFlight', label: 'Dep Flight', className: 'min-w-[112px]' },
+  { field: 'from', label: 'Nơi đi', className: 'min-w-[90px]' },
+  { field: 'arrPax', label: 'Khách đến', numeric: true, className: 'min-w-[88px]' },
+  { field: 'carousel', label: 'Băng chuyền', numeric: true, className: 'min-w-[96px]' },
+  { field: 'arrStand', label: 'Vị trí đỗ đến', className: 'min-w-[92px]' },
+  { field: 'arrCodeShare', label: 'Liên danh đến', className: 'min-w-[132px]' },
+  { field: 'depFlight', label: 'Chuyến đi', className: 'min-w-[112px]' },
   { field: 'std', label: 'STD', className: 'min-w-[82px]' },
   { field: 'mcdt', label: 'MCDT', className: 'min-w-[82px]' },
-  { field: 'to', label: 'To', className: 'min-w-[90px]' },
-  { field: 'depPax', label: 'DEP PAX', numeric: true, className: 'min-w-[88px]' },
-  { field: 'gate', label: 'Gate', numeric: true, className: 'min-w-[78px]' },
-  { field: 'counters', label: 'Counters', className: 'min-w-[116px]' },
+  { field: 'to', label: 'Nơi đến', className: 'min-w-[90px]' },
+  { field: 'depPax', label: 'Khách đi', numeric: true, className: 'min-w-[88px]' },
+  { field: 'gate', label: 'Cửa', numeric: true, className: 'min-w-[78px]' },
+  { field: 'counters', label: 'Quầy', className: 'min-w-[116px]' },
 ];
 
 const NUMERIC_FILTER_FIELDS = new Set<DailyGridField>(['arrPax', 'carousel', 'depPax', 'gate']);
-const DAILY_IMPORT_V1_STAGE_ENABLED = process.env.NEXT_PUBLIC_DAILY_IMPORT_V1_STAGE_ENABLED !== 'false';
 
 function todayIso(): string {
   if (isOperationalScheduleV1Enabled()) {
@@ -295,9 +284,9 @@ function inferDailyLinkType(arrivals: FlightRecord[], departures: FlightRecord[]
 }
 
 function rowActionLabel(row: DailyScheduleRow, isSelected: boolean): string {
-  if (isSelected) return 'Selected';
-  if (row.arr && row.dep) return row.arr.linkedRecordId === row.dep.id ? 'Linked' : 'Paired';
-  return row.arr ? 'ARR' : 'DEP';
+  if (isSelected) return 'Đã chọn';
+  if (row.arr && row.dep) return row.arr.linkedRecordId === row.dep.id ? 'Đã ghép' : 'Cặp chuyến';
+  return row.arr ? 'Đến' : 'Đi';
 }
 
 function hasDailyLinkInfo(row: DailyScheduleRow): boolean {
@@ -343,7 +332,7 @@ function EditableCell({
       await onCommit(draft);
       setEditing(false);
     } catch (err) {
-      setError((err as Error).message);
+      setError(formatUiError(err, 'Lỗi chỉnh sửa ô'));
       setEditing(true);
     } finally {
       setCommitting(false);
@@ -432,7 +421,7 @@ function DailyScheduleContent() {
   const [loading, setLoading] = useState(() => !initialDailyRouteState);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
-    buildLoadProgress('Loading daily schedule...', 10, 'Preparing workspace')
+    buildLoadProgress('Đang tải lịch ngày...', 10, 'Đang chuẩn bị không gian làm việc')
   );
   const [dailyImporting, setDailyImportingState] = useState(false);
   const setDailyImporting = useCallback((value: boolean) => {
@@ -440,11 +429,9 @@ function DailyScheduleContent() {
     setDailyImportingState(value);
   }, []);
   const [dailyImportCommitting, setDailyImportCommitting] = useState(false);
-  const [pendingImportRefresh, setPendingImportRefresh] = useSessionState<DailyImportCommittedResultV1 | null>('daily:committed-import-refresh', null);
-  const [dailyImportPreview, setDailyImportPreview] = useState<{
-    payload: DailyImportStagePayloadV1;
-    result: DailyImportStageResultV1;
-  } | null>(null);
+  const [importProgress, setImportProgress] = useState<DailyImportUploadProgress | null>(null);
+  const importAbortControllerRef = useRef<AbortController | null>(null);
+  const [pendingCommittedReceipt, setPendingCommittedReceipt] = useSessionState<DailyImportCommittedResultV2 | null>('daily:committed-receipt-v2', null);
   const [dailyImportPreviewV2, setDailyImportPreviewV2] = useSessionState<DailyImportStageResultV2 | null>('daily:operational-import-preview', null);
   const [operationalMutating, setOperationalMutatingState] = useState(false);
   const operationalMutatingRef = useRef(false);
@@ -519,12 +506,12 @@ function DailyScheduleContent() {
 
   useSeasonSyncGuard(season?.id ?? targetSeasonId, 'daily', {
     blocked: dailyImporting,
-    reason: 'Importing daily file',
+    reason: 'Đang nhập tệp Lịch ngày',
     beforeSync: waitForDailyLocalCommit,
   });
   useSeasonSyncGuard(season?.id ?? targetSeasonId, 'daily-hydration', {
     blocked: loading,
-    reason: 'Loading server snapshot',
+    reason: 'Đang tải bản lưu từ máy chủ',
     quiet: true,
     blockingUi: false,
   });
@@ -696,7 +683,7 @@ function DailyScheduleContent() {
           if (loadedSettings) setSettings(loadedSettings);
           const startDate = fromDateTime.slice(0, 10);
           const endDate = toDateTime.slice(0, 10);
-          setLoadProgress(buildLoadProgress('Loading operational window', 40, `${startDate}..${endDate}`));
+          setLoadProgress(buildLoadProgress('Đang tải khoảng ngày vận hành', 40, `${startDate}..${endDate}`));
           await refreshDailyWindow();
           if (cancelled) return;
           setSyncSummary({ pendingCount: 0, lastLocalChangeAt: null });
@@ -705,9 +692,9 @@ function DailyScheduleContent() {
         } catch (err) {
           console.error('Error loading operational daily schedule', err);
           if (!cancelled) {
-            const message = err instanceof Error && err.message ? err.message : 'Could not load operational schedule.';
+            const message = formatUiError(err, 'Không thể tải Lịch ngày vận hành.');
             setLoadError(message);
-            void showAlert({ title: 'Load Failed', message, tone: 'error' });
+            void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
           }
           return;
         } finally {
@@ -717,7 +704,7 @@ function DailyScheduleContent() {
       if (cachedState === 'fresh') return;
       setLoading(cachedState !== 'stale');
       setLoadError(null);
-      setLoadProgress(buildLoadProgress('Loading seasons and settings', 15, 'Preparing daily schedule'));
+      setLoadProgress(buildLoadProgress('Đang tải mùa bay và cấu hình', 15, 'Đang chuẩn bị Lịch ngày'));
       try {
         const cachedSeasons = getCachedSeasons();
         const [nextSeasons, loadedSettings] = await Promise.all([
@@ -761,7 +748,7 @@ function DailyScheduleContent() {
           setLoading(false);
         }
 
-        setLoadProgress(buildLoadProgress('Loading server workspace', 35, targetSeason.seasonCode));
+        setLoadProgress(buildLoadProgress('Đang tải không gian làm việc máy chủ', 35, targetSeason.seasonCode));
         const serverWindow = await loadSeasonWorkspaceWindow({
           seasonId: targetSeason.id,
           dateFrom: fromDateTime.slice(0, 10),
@@ -773,9 +760,9 @@ function DailyScheduleContent() {
         if (serverWindow) {
           loadedWindowKeyRef.current = windowKey;
           setLoadProgress(buildLoadProgress(
-            'Preparing Daily Schedule',
+            'Đang chuẩn bị Lịch ngày',
             80,
-            `${serverWindow.records.length} records`
+            `${serverWindow.records.length} bản ghi`
           ));
           applyDailyNativeState(targetSeason.id, serverWindow.records, serverWindow.modifications, serverWindow.syncMeta, {
             replaceWindow: true,
@@ -791,13 +778,13 @@ function DailyScheduleContent() {
           return;
         }
 
-        throw new Error('Server daily schedule window is unavailable.');
+        throw new Error('Dữ liệu Lịch ngày trên máy chủ không khả dụng.');
       } catch (err) {
         console.error('Error loading daily schedule', err);
         if (!cancelled) {
-          const message = err instanceof Error && err.message ? err.message : 'Could not load daily schedule data from the server.';
+          const message = formatUiError(err, 'Không thể tải dữ liệu Lịch ngày từ máy chủ.');
           setLoadError(message);
-          void showAlert({ title: 'Load Failed', message, tone: 'error' });
+          void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -849,6 +836,20 @@ function DailyScheduleContent() {
       void refreshDailyWindow({ revalidate: true }).catch((error) => setLoadError(error instanceof Error ? error.message : String(error)));
     }
   }, [isActiveRoute, operationalMutating, operationalWritePending, refreshDailyWindow]);
+  useEffect(() => {
+    if (!isOperationalScheduleV1Enabled() || !isActiveRoute) return;
+    const operatorId = resolveOperatorId();
+    const activeJournal = getActiveDailyUploadJournal(operatorId);
+    if (activeJournal?.status === 'committed' && activeJournal.committedResult) {
+      setPendingCommittedReceipt(activeJournal.committedResult);
+    } else if (activeJournal?.status === 'staged' && activeJournal.requestId && !dailyImportPreviewV2) {
+      void getDailyScheduleImportV2Status(activeJournal.requestId).then((staged) => {
+        if (staged && staged.status === 'validated') {
+          setDailyImportPreviewV2(staged);
+        }
+      }).catch(() => undefined);
+    }
+  }, [isActiveRoute, dailyImportPreviewV2, setDailyImportPreviewV2, setPendingCommittedReceipt]);
   const rows = useMemo(() => buildDailyScheduleRows({
     records: flightRecords,
     modifications,
@@ -863,7 +864,7 @@ function DailyScheduleContent() {
   const handleExportDailyExcel = useCallback(async () => {
     if (!isOperationalScheduleV1Enabled() && !season) return;
     if (sortedRows.length === 0) {
-      void showAlert({ title: 'Nothing to Export', message: 'No visible Daily Schedule rows match the current date range and filters.', tone: 'warning' });
+      void showAlert({ title: 'Không có dữ liệu xuất', message: 'Không có dòng Lịch ngày nào phù hợp với khoảng ngày và bộ lọc hiện tại.', tone: 'warning' });
       return;
     }
     setExportingExcel(true);
@@ -877,7 +878,7 @@ function DailyScheduleContent() {
       const result = await saveWorkbookAsXlsx(workbook, fileName);
       notifyExportCompleted(result);
     } catch (err) {
-      void showAlert({ title: 'Daily Export Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Xuất Lịch ngày thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       setExportingExcel(false);
     }
@@ -906,15 +907,11 @@ function DailyScheduleContent() {
   const actionsDisabled = isOperationalScheduleV1Enabled()
     ? loading || operationalWritePending || operationalMutating
     : !season || syncWriteInProgress || dailyImporting;
-  const dailyImportDisabled = isOperationalScheduleV1Enabled()
-    ? loading || operationalWritePending || operationalMutating
-    : !DAILY_IMPORT_V1_STAGE_ENABLED || syncWriteInProgress || dailyImporting || syncPendingCount > 0;
-  const hasDailyImportTargetDraft = dailyImportPreview?.payload.seasons.some((target) => (
-    (useSeasonWorkspaceStore.getState().workspaces[target.seasonId]?.syncMeta?.pendingCount ?? 0) > 0
-  )) ?? false;
-  const dailyImportCommitEnabled = !syncWriteInProgress
-    && syncPendingCount === 0
-    && !hasDailyImportTargetDraft;
+  const dailyImportDisabled = !isOperationalScheduleV1Enabled()
+    || loading
+    || operationalWritePending
+    || operationalMutating
+    || dailyImporting;
   const selectedArrCount = selectedRowRecords.filter((record) => record.type === 'A').length;
   const selectedDepCount = selectedRowRecords.filter((record) => record.type === 'D').length;
   const selectedHasLinkInfo = selectedRows.some(hasDailyLinkInfo) ||
@@ -979,9 +976,9 @@ function DailyScheduleContent() {
   const handleCellCommit = useCallback(async (recordId: string, field: DailyCellField, value: string) => {
     if (isOperationalScheduleV1Enabled()) {
       const pending = useOperationalScheduleStore.getState();
-      if (pending.mutating || pending.importing || pending.unresolvedAttempt) throw new Error('Wait for the pending operational write.');
+      if (pending.mutating || pending.importing || pending.unresolvedAttempt) throw new Error('Vui lòng chờ thao tác ghi vận hành hoàn tất.');
       const canonicalRecord = flightRecords.find((record) => record.id === recordId);
-      if (!canonicalRecord) throw new Error(`Daily record ${recordId} was not found`);
+      if (!canonicalRecord) throw new Error(`Không tìm thấy chuyến bay ${recordId}`);
       const validation = validateDailyCellEdit({
         records: flightRecords,
         record: canonicalRecord,
@@ -998,7 +995,7 @@ function DailyScheduleContent() {
       const mods = mapped.length ? mapped : [buildDailyCellModification(canonicalRecord, field, value)];
       const patches = mods.flatMap(({ legId, action: _action, ...updates }) => {
         const record = flightRecords.find((item) => item.id === legId);
-        if (!record) throw new Error(`Daily record ${legId} was not found`);
+        if (!record) throw new Error(`Không tìm thấy chuyến bay ${legId}`);
         if (updates.counter !== undefined) updates.counter = normalizeCheckInCounterList(updates.counter);
         const patch = buildOperationalLegPatchAndPreimage(record, updates);
         return patch ? [patch] : [];
@@ -1008,7 +1005,7 @@ function DailyScheduleContent() {
         const res = await useOperationalScheduleStore.getState().applyMutations(patches);
         operationalSnapshotRef.current = useOperationalScheduleStore.getState().snapshot;
         if (res.refreshError) {
-          await showAlert({ title: 'Saved; refresh failed', message: res.refreshError, tone: 'error' });
+          await showAlert({ title: 'Đã lưu nhưng chưa tải lại được', message: formatUiError(res.refreshError), tone: 'error' });
         } else {
           setFlightRecords(useOperationalScheduleStore.getState().records);
         }
@@ -1017,11 +1014,11 @@ function DailyScheduleContent() {
       }
       return;
     }
-    if (!season) throw new Error('No season selected for daily edit');
+    if (!season) throw new Error('Chưa chọn mùa bay để chỉnh sửa Lịch ngày');
     const seasonId = season.id;
     await enqueueLocalMutation(async () => {
       const canonicalRecord = flightRecords.find((record) => record.id === recordId);
-      if (!canonicalRecord) throw new Error(`Daily record ${recordId} was not found`);
+      if (!canonicalRecord) throw new Error(`Không tìm thấy chuyến bay ${recordId}`);
 
       const validation = validateDailyCellEdit({
         records: flightRecords,
@@ -1096,270 +1093,101 @@ function DailyScheduleContent() {
 
   const stageOperationalImport = useCallback(async (payload: DailyImportStagePayloadV2) => {
     lastStagedV2PayloadRef.current = payload;
-    let staged;
+    setDailyImporting(true);
+    const abortController = new AbortController();
+    importAbortControllerRef.current = abortController;
     try {
-      staged = await stageDailyScheduleImportV2(payload);
+      const staged = await uploadDailyImportInChunksV2(payload, {
+        onProgress: (p) => setImportProgress(p),
+        signal: abortController.signal,
+      });
+      setDailyImportPreviewV2(staged);
     } catch (error) {
-      staged = await getDailyScheduleImportV2Status(payload.requestId).catch(() => { throw error; });
+      if (!abortController.signal.aborted) {
+        const recovered = await getDailyScheduleImportV2Status(payload.requestId).catch(() => null);
+        if (recovered && (recovered.status === 'validated' || recovered.status === 'committed')) {
+          setDailyImportPreviewV2(recovered);
+          return;
+        }
+      }
+      throw error;
+    } finally {
+      importAbortControllerRef.current = null;
+      setDailyImporting(false);
+      setImportProgress(null);
     }
-    setDailyImportPreviewV2(staged);
-  }, [setDailyImportPreviewV2]);
+  }, [setDailyImporting, setDailyImportPreviewV2]);
 
   const handleDailyImportFile = useCallback(async (file: File | null) => {
-    if (!file || dailyImporting || (isOperationalScheduleV1Enabled() ? (operationalWritePending || useOperationalScheduleStore.getState().importing) : (!DAILY_IMPORT_V1_STAGE_ENABLED || syncWriteInProgress || syncPendingCount > 0))) return;
-    if (isOperationalScheduleV1Enabled()) {
-      setDailyImporting(true);
-      try {
-        const buffer = await file.arrayBuffer();
-        const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
-        const analysis = analyzeDailyScheduleWorkbook(workbook);
-        if (!analysis.selected) throw new Error(analysis.diagnostics.map((item) => item.message).join(' '));
-        const selectedSheet = analysis.selected;
-        const strict = parseDailyImportRowsStrict(selectedSheet.rows, { workbookProfile: selectedSheet.profile });
-        const blocking = strict.diagnostics.filter((item) => item.severity === 'blocking');
-        if (blocking.length) throw new Error(blocking.map((item) => item.message).join('\n'));
-        const v2Legs: DailyImportLegInputV2[] = strict.legs.map((leg) => {
-          const row = selectedSheet.rows[leg.rowNumber - 1] ?? {};
-          return {
-            operationalDate: leg.operationalDate,
-            scheduledDate: leg.scheduledDate,
-            scheduledTime: leg.scheduledTime,
-            side: leg.side,
-            airline: leg.airline,
-            flightNumber: leg.flightNumber,
-            rawFlightNumber: leg.rawFlightNumber,
-            route: String(leg.updates.route ?? ''),
-            aircraft: leg.aircraft,
-            category: leg.category,
-            flightType: leg.flightType,
-            requestStatusCode: leg.requestStatusCode,
-            sheetName: selectedSheet.sheetName,
-            sourceRowNumber: leg.rowNumber,
-            resources: leg.updates,
-            rawResourceTokens: {
-              stand: row[`${leg.side}Stand`] ? String(row[`${leg.side}Stand`]).trim() : null,
-              gate: leg.side === 'DEP' && row.DEPGate ? String(row.DEPGate).trim() : null,
-              carousel: leg.side === 'ARR' && row.ARRReclaimBelt ? String(row.ARRReclaimBelt).trim() : null,
-              counter: leg.side === 'DEP' && row.CheckInDesk ? String(row.CheckInDesk).trim() : null,
-            },
-          };
-        });
-        const affectedDates = [...new Set(strict.coverage.map((entry) => entry.operationalDate))].sort();
-        if (affectedDates.length === 0) affectedDates.push(fromDateTime.slice(0, 10));
-        const legDates = new Set(strict.legs.map((leg) => leg.operationalDate));
-        const confirmedZeroFlightDates = affectedDates.filter((date) => !legDates.has(date));
-        if (confirmedZeroFlightDates.length > 0) {
-          const confirmed = await showConfirm({
-            title: 'Confirm zero flights',
-            message: `Replace all operational flights on ${confirmedZeroFlightDates.join(', ')} with an empty schedule? The import affects only ${affectedDates.join(', ')}.`,
-            tone: 'warning',
-          });
-          if (!confirmed) return;
-        }
-        const rawChecksum = await sha256Hex(buffer);
-        const canonicalChecksum = await sha256Hex(JSON.stringify(v2Legs));
-        const payloadV2: DailyImportStagePayloadV2 = {
-          contractVersion: 2,
-          requestId: crypto.randomUUID(),
-          fileName: file.name,
-          workbookProfile: selectedSheet.profile,
-          rawChecksum,
-          canonicalChecksum,
-          resourcePolicyHash: await sha256Hex(DAILY_RESOURCE_POLICY_VERSION),
-          affectedDates,
-          confirmedZeroFlightDates,
-          legs: v2Legs,
-          diagnostics: strict.diagnostics.map((item) => ({ ...item, sheetName: selectedSheet.sheetName })),
-        };
-        await stageOperationalImport(payloadV2);
-      } catch (err) {
-        void showAlert({ title: 'Daily Import V2 Failed', message: (err as Error).message, tone: 'error' });
-      } finally {
-        setDailyImporting(false);
-        if (dailyImportInputRef.current) dailyImportInputRef.current.value = '';
-      }
+    if (!file) return;
+    if (!isOperationalScheduleV1Enabled()) {
+      void showAlert({
+        title: 'Chức năng chưa được kích hoạt',
+        message: 'Chức năng nhập Lịch ngày yêu cầu bật chế độ Vận hành (Operations). Vui lòng kích hoạt cờ NEXT_PUBLIC_OPERATIONAL_SCHEDULE_V1_ENABLED để sử dụng.',
+        tone: 'warning',
+      });
       return;
     }
+    if (dailyImporting || operationalWritePending || useOperationalScheduleStore.getState().importing) return;
     setDailyImporting(true);
-    try {
-      const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
-      const analysis = analyzeDailyScheduleWorkbook(workbook);
-      if (!analysis.selected) throw new Error(analysis.diagnostics.map((item) => item.message).join(' '));
-      const selectedSheet = analysis.selected;
-      const stageWithSeasonMetadata = async (seasonMetadata: Season[]) => {
-        const payload = await buildDailyImportStagePayloadV1({
-          fileName: file.name,
-          rawBuffer: buffer,
-          sheet: selectedSheet,
-          seasons: seasonMetadata,
-        });
-        const pendingTarget = payload.seasons.find((target) => (
-          (useSeasonWorkspaceStore.getState().workspaces[target.seasonId]?.syncMeta?.pendingCount ?? 0) > 0
-        ));
-        if (pendingTarget) {
-          throw new Error(`Season ${pendingTarget.seasonCode} đang có draft/pending changes; hãy Save hoặc xử lý draft trước khi stage Daily import.`);
-        }
-        return stageDailyImportWithTerminalRetryV1(payload, stageDailyScheduleImportV1, {
-          getStatus: getDailyScheduleImportV1Status,
-        });
-      };
+    const abortController = new AbortController();
+    importAbortControllerRef.current = abortController;
+    const operatorId = resolveOperatorId();
 
-      try {
-        setDailyImportPreview(await stageWithSeasonMetadata(seasons));
-      } catch (stageError) {
-        if (!isDailyImportStaleVersionConflictV1(stageError)) throw stageError;
-        const refreshedSeasons = await getSeasons();
-        setCachedSeasons(refreshedSeasons);
-        setSeasons(refreshedSeasons);
-        useSeasonWorkspaceStore.getState().setSeasons(refreshedSeasons);
-        const refreshedSeason = season
-          ? refreshedSeasons.find((item) => item.id === season.id) ?? null
-          : null;
-        if (refreshedSeason) setSeason(refreshedSeason);
-        setDailyImportPreview(await stageWithSeasonMetadata(refreshedSeasons));
+    try {
+      const parseResult = await parseDailyWorkbookWithWorker(file, {
+        onProgress: (p) => setImportProgress(p),
+        signal: abortController.signal,
+        fallbackDate: fromDateTime.slice(0, 10),
+      });
+
+      const { payload } = parseResult;
+
+      const existingSession = payload.rawChecksum ? getDailyUploadJournalByFingerprint(operatorId, payload.rawChecksum) : null;
+      if (existingSession && existingSession.requestId) {
+        payload.requestId = existingSession.requestId;
       }
+
+      const legDates = new Set(payload.legs.map((leg) => leg.operationalDate));
+      const zeroDates = payload.affectedDates.filter((date) => !legDates.has(date));
+      if (zeroDates.length > 0) {
+        const confirmed = await showConfirm({
+          title: 'Xác nhận ngày không có chuyến bay',
+          message: `Thay thế toàn bộ chuyến bay vận hành trong ngày ${zeroDates.join(', ')} bằng lịch trống? Đợt nhập chỉ ảnh hưởng đến ngày ${payload.affectedDates.join(', ')}.`,
+          tone: 'warning',
+        });
+        if (!confirmed) return;
+        payload.confirmedZeroFlightDates = zeroDates;
+      }
+
+      await stageOperationalImport(payload);
     } catch (err) {
-      void showAlert({ title: 'Daily Import Failed', message: (err as Error).message, tone: 'error' });
+      if (!abortController.signal.aborted) {
+        void showAlert({ title: 'Nhập Lịch ngày thất bại', message: formatUiError(err), tone: 'error' });
+      }
     } finally {
+      importAbortControllerRef.current = null;
       setDailyImporting(false);
+      setImportProgress(null);
       if (dailyImportInputRef.current) dailyImportInputRef.current.value = '';
     }
-  }, [dailyImporting, fromDateTime, operationalWritePending, season, seasons, setDailyImporting, showAlert, showConfirm, stageOperationalImport, syncPendingCount, syncWriteInProgress]);
-
-  const closeDailyImportPreview = useCallback(async () => {
-    const current = dailyImportPreview;
-    setDailyImportPreview(null);
-    if (current && current.result.status !== 'committed') {
-      try { await cancelDailyScheduleImportV1(current.result.batchId); } catch { /* Expiry/cancel recovery is server-authoritative. */ }
-    }
-  }, [dailyImportPreview]);
-
-  const confirmDailyZeroFlightDates = useCallback(async (datesBySeasonId: Record<string, string[]>) => {
-    if (!dailyImportPreview || dailyImporting) return;
-    setDailyImporting(true);
-    try {
-      const payload = await confirmDailyImportZeroFlightDatesV1(dailyImportPreview.payload, datesBySeasonId);
-      await cancelDailyScheduleImportV1(dailyImportPreview.result.batchId);
-      const result = await stageDailyScheduleImportV1(payload);
-      setDailyImportPreview({ payload, result });
-    } catch (error) {
-      void showAlert({ title: 'Zero-flight Confirmation Failed', message: (error as Error).message, tone: 'error' });
-    } finally {
-      setDailyImporting(false);
-    }
-  }, [dailyImportPreview, dailyImporting, setDailyImporting, showAlert]);
-
-  const applyCommittedDailyImport = useCallback(async (receipt: NonNullable<DailyImportStageResultV1['result']>) => {
-    setDailyImportPreview(null);
-    setSelectedRowIds(new Set());
-    const committedVersions = new Map(receipt.seasons.map((item) => [item.seasonId, item.dataVersion]));
-    const nextSeasons = seasons.map((item) => {
-      const dataVersion = committedVersions.get(item.id);
-      const currentVersion = useSeasonWorkspaceStore.getState().seasons.find((entry) => entry.id === item.id)?.dataVersion ?? 0;
-      return dataVersion === undefined ? item : { ...item, dataVersion: Math.max(item.dataVersion ?? 0, currentVersion, dataVersion) };
-    });
-    setCachedSeasons(nextSeasons);
-    setSeasons(nextSeasons);
-    useSeasonWorkspaceStore.getState().setSeasons(nextSeasons);
-    for (const item of receipt.seasons) {
-      patchCachedSeasonData(item.seasonId, { seasonDataVersion: nextSeasons.find((entry) => entry.id === item.seasonId)?.dataVersion ?? item.dataVersion });
-    }
-    const committedSeason = season
-      ? nextSeasons.find((item) => item.id === season.id) ?? season
-      : null;
-    if (committedSeason && committedVersions.has(committedSeason.id)) {
-      setSeason(committedSeason);
-      const windowKey = buildDailyWindowKey(fromDateTime, toDateTime);
-      const serverWindow = await revalidateSeasonWorkspaceWindow({
-        seasonId: committedSeason.id,
-        dateFrom: fromDateTime.slice(0, 10),
-        dateTo: toDateTime.slice(0, 10),
-        resourceType: 'schedule',
-        limit: 100000,
-      }, {
-        force: true,
-        initiator: 'immediate',
-      });
-      if (!serverWindow?.syncMeta) throw new Error('Server chưa trả về workspace window sau commit.');
-      if (serverWindow?.syncMeta) {
-        loadedWindowKeyRef.current = windowKey;
-        applyDailyNativeState(committedSeason.id, serverWindow.records, serverWindow.modifications, serverWindow.syncMeta, {
-          replaceWindow: true,
-          season: committedSeason,
-          windowKey,
-        });
-      }
-    }
-  }, [applyDailyNativeState, fromDateTime, season, seasons, toDateTime]);
-
-  const refreshCommittedDailyImport = useCallback(async (receipt: DailyImportCommittedResultV1) => {
-    const remember = (value: DailyImportCommittedResultV1 | null) => {
-      setPendingImportRefresh(value);
-      // Persist before awaiting the network. Logout clears app session storage.
-      try { sessionStorage.setItem('daily:committed-import-refresh', JSON.stringify(value)); } catch { /* Keep the in-memory receipt if storage is unavailable. */ }
-    };
-    const outcome = await finishCommittedDailyImportV1(receipt, {
-      remember,
-      refresh: applyCommittedDailyImport,
-      clear: () => remember(null),
-    });
-    if (outcome.refreshError) {
-      void showAlert({ title: 'Daily Import Committed — Refresh Pending', message: `Batch ${receipt.batchId} đã commit. Chưa tải lại được lịch: ${outcome.refreshError}. Bấm tải lại dữ liệu; không cần import lại.`, tone: 'warning' });
-    }
-    return outcome;
-  }, [applyCommittedDailyImport, setPendingImportRefresh, showAlert]);
-
-  const retryCommittedDailyRefresh = useCallback(async () => {
-    if (!pendingImportRefresh || dailyImportCommitting) return;
-    setDailyImportCommitting(true);
-    try { await refreshCommittedDailyImport(pendingImportRefresh); }
-    finally { setDailyImportCommitting(false); }
-  }, [dailyImportCommitting, pendingImportRefresh, refreshCommittedDailyImport]);
+  }, [dailyImporting, fromDateTime, operationalWritePending, setDailyImporting, showAlert, showConfirm, stageOperationalImport]);
   const handleRetryPendingMutation = useCallback(async () => {
     setOperationalMutating(true);
     try {
       const outcome = await useOperationalScheduleStore.getState().retryPendingMutation();
       if (outcome && 'refreshError' in outcome && outcome.refreshError) {
-        void showAlert({ title: 'Saved; refresh failed', message: outcome.refreshError, tone: 'warning' });
+        void showAlert({ title: 'Đã lưu nhưng chưa tải lại được', message: formatUiError(outcome.refreshError), tone: 'warning' });
       } else {
         await refreshDailyWindow({ revalidate: true });
       }
     } catch (err) {
-      void showAlert({ title: 'Retry Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Thử lại thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       setOperationalMutating(false);
     }
   }, [refreshDailyWindow, setOperationalMutating, showAlert]);
 
-
-  const commitDailyImportPreview = useCallback(async () => {
-    if (!dailyImportPreview || dailyImportCommitting) return;
-    setDailyImportCommitting(true);
-    try {
-      const pendingTarget = dailyImportPreview.payload.seasons.find((target) => (
-        (useSeasonWorkspaceStore.getState().workspaces[target.seasonId]?.syncMeta?.pendingCount ?? 0) > 0
-      ));
-      if (syncPendingCount > 0 || pendingTarget) {
-        throw new Error('Daily import commit bị chặn vì target season đang có draft/pending changes.');
-      }
-      const expectedVersions = Object.fromEntries(dailyImportPreview.payload.seasons.map((target) => [target.seasonId, target.expectedDataVersion]));
-      let receipt;
-      try {
-        receipt = await commitDailyScheduleImportV1({ batchId: dailyImportPreview.result.batchId, expectedVersions, previewHash: dailyImportPreview.result.previewHash });
-      } catch (commitError) {
-        const recovered = await getDailyScheduleImportV1Status(dailyImportPreview.payload.requestId).catch(() => null);
-        if (recovered?.status !== 'committed' || !recovered.result) throw commitError;
-        receipt = recovered.result;
-      }
-      const outcome = await refreshCommittedDailyImport(receipt);
-      if (!outcome.refreshError) void showAlert({ title: 'Daily Import Complete', message: `Committed atomic batch ${receipt.batchId} for ${receipt.seasons.length} season(s).`, tone: 'success' });
-    } catch (error) {
-      void showAlert({ title: 'Daily Import Commit Failed', message: (error as Error).message, tone: 'error' });
-    } finally {
-      setDailyImportCommitting(false);
-    }
-  }, [refreshCommittedDailyImport, dailyImportCommitting, dailyImportPreview, showAlert, syncPendingCount]);
 
   const handleAddFlights = useCallback(async (mods: FlightModification[]) => {
     if (isOperationalScheduleV1Enabled()) {
@@ -1400,7 +1228,7 @@ function DailyScheduleContent() {
         pendingManualBatchRef.current = null;
         setSelectedRowIds(new Set());
         if (outcome.refreshError) {
-          void showAlert({ title: 'Flights created — refresh pending', message: outcome.refreshError, tone: 'warning' });
+          void showAlert({ title: 'Đã tạo chuyến bay — Đang chờ tải lại', message: formatUiError(outcome.refreshError), tone: 'warning' });
         } else {
           setFlightRecords(useOperationalScheduleStore.getState().records);
         }
@@ -1469,7 +1297,7 @@ function DailyScheduleContent() {
         }));
       });
     } catch (err) {
-      void showAlert({ title: 'Add Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Thêm chuyến bay thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, season, setOperationalMutating, showAlert, syncWriteInProgress]);
 
@@ -1477,10 +1305,10 @@ function DailyScheduleContent() {
     if (isOperationalScheduleV1Enabled()) {
       if (selectedRecordIds.length === 0) return;
       const shouldDelete = await showConfirm({
-        title: 'Delete Selected Flights',
-        message: `Delete ${selectedRecordIds.length} selected flight occurrence(s)?`,
+        title: 'Xóa chuyến bay đã chọn',
+        message: `Bạn có chắc chắn muốn xóa ${selectedRecordIds.length} chuyến bay đã chọn?`,
         tone: 'warning',
-        confirmLabel: 'Delete',
+        confirmLabel: 'Xóa',
       });
       if (!shouldDelete) return;
       setOperationalMutating(true);
@@ -1501,7 +1329,7 @@ function DailyScheduleContent() {
           setSelectedRowIds(new Set());
         }
       } catch (err) {
-        void showAlert({ title: 'Delete Failed', message: (err as Error).message, tone: 'error' });
+        void showAlert({ title: 'Xóa chuyến bay thất bại', message: formatUiError(err), tone: 'error' });
       } finally {
         setOperationalMutating(false);
       }
@@ -1509,10 +1337,10 @@ function DailyScheduleContent() {
     }
     if (!season || syncWriteInProgress || selectedRecordIds.length === 0) return;
     const shouldDelete = await showConfirm({
-      title: 'Delete Selected Flights',
-      message: `Delete ${selectedRecordIds.length} selected flight occurrence(s)?`,
+      title: 'Xóa chuyến bay đã chọn',
+      message: `Bạn có chắc chắn muốn xóa ${selectedRecordIds.length} chuyến bay đã chọn?`,
       tone: 'warning',
-      confirmLabel: 'Delete',
+      confirmLabel: 'Xóa',
     });
     if (!shouldDelete) return;
     const seasonId = season.id;
@@ -1558,7 +1386,7 @@ function DailyScheduleContent() {
         }));
       });
     } catch (err) {
-      void showAlert({ title: 'Delete Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Xóa chuyến bay thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, refreshDailyWindow, season, selectedRecordIds, setOperationalMutating, showAlert, showConfirm, syncWriteInProgress]);
 
@@ -1601,7 +1429,7 @@ function DailyScheduleContent() {
         const arrivals = selected.filter((record) => record.type === 'A');
         const departures = selected.filter((record) => record.type === 'D');
         if (arrivals.length === 0 || departures.length === 0 || arrivals.length !== departures.length) {
-          throw new Error('Linking requires equal nonzero ARR and DEP selections.');
+          throw new Error('Ghép cặp yêu cầu số lượng chuyến ĐẾN và ĐI bằng nhau và lớn hơn 0.');
         }
         const linkType = inferDailyLinkType(arrivals, departures);
         const result = linkFlightRecordPairs(
@@ -1630,7 +1458,7 @@ function DailyScheduleContent() {
           setSelectedRowIds(new Set());
         }
       } catch (err) {
-        void showAlert({ title: 'Link Failed', message: (err as Error).message, tone: 'error' });
+        void showAlert({ title: 'Ghép cặp chuyến bay thất bại', message: formatUiError(err), tone: 'error' });
       } finally {
         setOperationalMutating(false);
       }
@@ -1647,7 +1475,7 @@ function DailyScheduleContent() {
         const arrivals = selected.filter((record) => record.type === 'A');
         const departures = selected.filter((record) => record.type === 'D');
         if (arrivals.length === 0 || departures.length === 0 || arrivals.length !== departures.length) {
-          throw new Error('Linking requires equal nonzero ARR and DEP selections.');
+          throw new Error('Ghép cặp yêu cầu số lượng chuyến ĐẾN và ĐI bằng nhau và lớn hơn 0.');
         }
 
         const linkType = inferDailyLinkType(arrivals, departures);
@@ -1694,7 +1522,7 @@ function DailyScheduleContent() {
         }));
       });
     } catch (err) {
-      void showAlert({ title: 'Link Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Ghép cặp chuyến bay thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, refreshDailyWindow, season, selectedRecordIds, setOperationalMutating, showAlert, syncWriteInProgress]);
 
@@ -1702,10 +1530,10 @@ function DailyScheduleContent() {
     if (isOperationalScheduleV1Enabled()) {
       if (selectedRecordIds.length === 0) return;
       const shouldUnlink = await showConfirm({
-        title: 'Unlink Selected Flights',
-        message: `Unlink ${selectedRecordIds.length} selected flight occurrence(s)?`,
+        title: 'Hủy ghép cặp chuyến bay đã chọn',
+        message: `Hủy ghép cặp cho ${selectedRecordIds.length} chuyến bay đã chọn?`,
         tone: 'warning',
-        confirmLabel: 'Unlink',
+        confirmLabel: 'Hủy ghép cặp',
       });
       if (!shouldUnlink) return;
       setOperationalMutating(true);
@@ -1731,7 +1559,7 @@ function DailyScheduleContent() {
           setSelectedRowIds(new Set());
         }
       } catch (err) {
-        void showAlert({ title: 'Unlink Failed', message: (err as Error).message, tone: 'error' });
+        void showAlert({ title: 'Hủy ghép cặp thất bại', message: formatUiError(err), tone: 'error' });
       } finally {
         setOperationalMutating(false);
       }
@@ -1739,10 +1567,10 @@ function DailyScheduleContent() {
     }
     if (!season || syncWriteInProgress || selectedRecordIds.length === 0) return;
     const shouldUnlink = await showConfirm({
-      title: 'Unlink Selected Flights',
-      message: `Unlink ${selectedRecordIds.length} selected flight occurrence(s)?`,
+      title: 'Hủy ghép cặp chuyến bay đã chọn',
+      message: `Hủy ghép cặp cho ${selectedRecordIds.length} chuyến bay đã chọn?`,
       tone: 'warning',
-      confirmLabel: 'Unlink',
+      confirmLabel: 'Hủy ghép cặp',
     });
     if (!shouldUnlink) return;
     const seasonId = season.id;
@@ -1787,7 +1615,7 @@ function DailyScheduleContent() {
         }));
       });
     } catch (err) {
-      void showAlert({ title: 'Unlink Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Hủy ghép cặp thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [applyDailyNativeState, enqueueLocalMutation, flightRecords, modifications, publishDailyWorkspaceChange, refreshDailyWindow, season, selectedRecordIds, setOperationalMutating, showAlert, showConfirm, syncWriteInProgress]);
 
@@ -1796,10 +1624,10 @@ function DailyScheduleContent() {
     try {
       const result = await syncNow();
       if (result.status !== 'synced') {
-        void showAlert({ title: 'Save Failed', message: result.message ?? 'Save failed.', tone: 'error' });
+        void showAlert({ title: 'Đồng bộ thất bại', message: formatUiError(result.message ?? 'Đồng bộ thất bại.'), tone: 'error' });
       }
     } catch (err) {
-      void showAlert({ title: 'Save Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Đồng bộ thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [season, showAlert, syncInProgress, syncNow]);
 
@@ -1815,7 +1643,7 @@ function DailyScheduleContent() {
     const hasRouteDataLoaded = loadedWindowKeyRef.current === windowKey;
     setFetchingServerData(true);
     if (!hasRouteDataLoaded) setLoadError(null);
-    setLoadProgress(buildLoadProgress('Loading server workspace', 35, season.seasonCode));
+    setLoadProgress(buildLoadProgress('Đang tải không gian làm việc máy chủ', 35, season.seasonCode));
     try {
       await currentMutationRef.current;
       await commitQueueRef.current;
@@ -1829,7 +1657,7 @@ function DailyScheduleContent() {
         force: true,
         initiator: 'immediate',
       });
-      if (!serverWindow?.syncMeta) throw new Error('Server daily schedule window is unavailable.');
+      if (!serverWindow?.syncMeta) throw new Error('Dữ liệu Lịch ngày trên máy chủ không khả dụng.');
       if (
         fetchServerDataRequestRef.current !== requestId ||
         latestRouteWindowRef.current.seasonId !== requestedSeasonId ||
@@ -1838,7 +1666,7 @@ function DailyScheduleContent() {
         return;
       }
       loadedWindowKeyRef.current = windowKey;
-      setLoadProgress(buildLoadProgress('Preparing Daily Schedule', 80, `${serverWindow.records.length} records`));
+      setLoadProgress(buildLoadProgress('Đang chuẩn bị Lịch ngày', 80, `${serverWindow.records.length} bản ghi`));
       applyDailyNativeState(season.id, serverWindow.records, serverWindow.modifications, serverWindow.syncMeta, {
         replaceWindow: true,
         season,
@@ -1851,9 +1679,9 @@ function DailyScheduleContent() {
         syncMeta: serverWindow.syncMeta,
       });
     } catch (err) {
-      const message = err instanceof Error && err.message ? err.message : 'Could not fetch daily schedule data from the server.';
+      const message = formatUiError(err, 'Không thể tải dữ liệu Lịch ngày từ máy chủ.');
       if (!hasRouteDataLoaded) setLoadError(message);
-      void showAlert({ title: 'Fetch data failed', message, tone: 'error' });
+      void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
     } finally {
       setFetchingServerData(false);
     }
@@ -1864,9 +1692,9 @@ function DailyScheduleContent() {
       <div className="flex-1 flex flex-col min-w-0 bg-surface h-dvh overflow-hidden">
         <header className="flex-none flex items-center justify-between px-6 py-3 w-full bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 shadow-sm z-30">
           <div>
-            <h1 className="font-h3 text-h3 text-on-surface">Daily Schedule</h1>
+            <h1 className="font-h3 text-h3 text-on-surface">Lịch ngày</h1>
             <p className="font-body-sm text-body-sm text-on-surface-variant">
-              {isOperationalScheduleV1Enabled() ? 'Operational Turns' : (season ? buildSeasonDisplayLabel(season) : 'No season selected')}
+              {isOperationalScheduleV1Enabled() ? 'Lịch ngày vận hành' : (season ? buildSeasonDisplayLabel(season) : 'Chưa chọn mùa bay')}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -1878,7 +1706,7 @@ function DailyScheduleContent() {
                 className="px-3 py-2 bg-surface-container-low hover:bg-surface-container-high border border-outline-variant text-on-surface font-label-caps text-sm font-medium rounded-lg focus:outline-none focus:ring-2 focus:ring-primary transition-colors cursor-pointer shadow-sm min-w-[200px]"
               >
                 {seasons.length === 0 ? (
-                  <option value="">No seasons</option>
+                  <option value="">Không có mùa bay</option>
                 ) : seasons.map((item) => (
                   <option key={item.id} value={item.id}>{buildSeasonDisplayLabel(item)}</option>
                 ))}
@@ -1918,7 +1746,7 @@ function DailyScheduleContent() {
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-[18px] text-warning">warning</span>
               <p className="text-pretty">
-                Có thao tác operational chưa xác nhận trên server (Yêu cầu {operationalUnresolvedAttempt.requestId.slice(0, 8)}…). Các thao tác khác đang bị tạm khóa.
+                Có thao tác vận hành chưa xác nhận trên máy chủ (Mã yêu cầu {operationalUnresolvedAttempt.requestId.slice(0, 8)}…). Các thao tác khác đang bị tạm khóa.
               </p>
             </div>
             <button
@@ -1931,11 +1759,49 @@ function DailyScheduleContent() {
             </button>
           </div>
         )}
-        {pendingImportRefresh && (
-          <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-outline-variant bg-surface-container-high px-6 py-3 text-sm">
-            <p className="text-pretty">Batch {pendingImportRefresh.batchId} đã commit. Dữ liệu hiển thị chưa được tải lại.</p>
-            <button type="button" disabled={dailyImportCommitting || dailyImporting} onClick={() => void retryCommittedDailyRefresh()} className="rounded border border-primary px-3 py-2 font-semibold text-primary disabled:opacity-50">
-              {dailyImportCommitting ? 'Đang tải lại…' : 'Tải lại dữ liệu đã commit'}
+        {dailyImporting && importProgress && (
+          <div role="status" className="flex flex-wrap items-center justify-between gap-4 border-b border-primary/30 bg-surface-container-highest px-6 py-3 text-sm shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className="material-symbols-outlined animate-spin text-primary text-xl">sync</span>
+              <div>
+                <p className="font-semibold text-on-surface">{importProgress.message}</p>
+                {importProgress.detail && <p className="text-xs text-on-surface-variant">{importProgress.detail}</p>}
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="w-36 bg-surface-container rounded-full h-2 overflow-hidden border border-outline-variant">
+                <div className="bg-primary h-full transition-all duration-200" style={{ width: `${importProgress.percent}%` }} />
+              </div>
+              <span className="text-xs font-mono font-semibold text-primary">{importProgress.percent}%</span>
+              <button
+                type="button"
+                onClick={() => importAbortControllerRef.current?.abort()}
+                className="rounded border border-outline-variant px-2.5 py-1 text-xs font-medium hover:bg-surface-container-high"
+              >
+                Hủy
+              </button>
+            </div>
+          </div>
+        )}
+        {pendingCommittedReceipt && (
+          <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-warning/30 bg-surface-container-high px-6 py-3 text-sm">
+            <p className="text-pretty">Đợt nhập {pendingCommittedReceipt.batchId} đã được lưu thành công trên máy chủ nhưng dữ liệu hiển thị chưa được tải lại.</p>
+            <button
+              type="button"
+              disabled={loading || operationalMutating}
+              onClick={async () => {
+                try {
+                  await refreshDailyWindow({ revalidate: true });
+                  const operatorId = resolveOperatorId();
+                  clearDailyUploadJournal(operatorId);
+                  setPendingCommittedReceipt(null);
+                } catch (err) {
+                  void showAlert({ title: 'Tải lại thất bại', message: formatUiError(err), tone: 'error' });
+                }
+              }}
+              className="rounded border border-primary px-3 py-2 font-semibold text-primary disabled:opacity-50"
+            >
+              {loading ? 'Đang tải lại…' : 'Tải lại dữ liệu đã lưu'}
             </button>
           </div>
         )}
@@ -1945,7 +1811,7 @@ function DailyScheduleContent() {
             <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-surface-variant">
               <fieldset disabled={isOperationalScheduleV1Enabled() && operationalWritePending} className="flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-xs font-label-caps text-on-surface-variant">
-                  From
+                  Từ
                   <input
                     type="datetime-local"
                     value={fromDateTime}
@@ -1958,7 +1824,7 @@ function DailyScheduleContent() {
                   />
                 </label>
                 <label className="flex items-center gap-2 text-xs font-label-caps text-on-surface-variant">
-                  To
+                  Đến
                   <input
                     type="datetime-local"
                     value={toDateTime}
@@ -1977,7 +1843,7 @@ function DailyScheduleContent() {
                       className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface hover:bg-surface-container-high transition-colors"
                     >
                       <span className="material-symbols-outlined text-[16px]">today</span>
-                      Today
+                      Hôm nay
                     </button>
                     <button
                       onClick={() => {
@@ -1987,7 +1853,7 @@ function DailyScheduleContent() {
                       }}
                       className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant hover:bg-surface-container-high transition-colors"
                     >
-                      Tomorrow
+                      Ngày mai
                     </button>
                     <button
                       onClick={() => {
@@ -1997,14 +1863,14 @@ function DailyScheduleContent() {
                       }}
                       className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant hover:bg-surface-container-high transition-colors"
                     >
-                      7 Days
+                      7 ngày
                     </button>
                   </>
                 ) : (
                   <>
                     <button onClick={handleToday} className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface hover:bg-surface-container-high transition-colors">
                       <span className="material-symbols-outlined text-[16px]">today</span>
-                      Today
+                      Hôm nay
                     </button>
                     {[1, 2, 7].map((days) => (
                       <button
@@ -2012,34 +1878,34 @@ function DailyScheduleContent() {
                         onClick={() => handleQuickRange(days)}
                         className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant hover:bg-surface-container-high transition-colors"
                       >
-                        {days}D
+                        {days}N
                       </button>
                     ))}
                   </>
                 )}
                 <button
-                  onClick={() => handleAllocationNavigation('/checkin')}
                   disabled={!isOperationalScheduleV1Enabled() && !season}
-                  title="Open Check-in Allocation for current day range"
-                  aria-label="Open Check-in Allocation for current day range"
+                  onClick={() => handleAllocationNavigation('/checkin')}
+                  title="Mở Phân bổ quầy cho khoảng ngày hiện tại"
+                  aria-label="Mở Phân bổ quầy cho khoảng ngày hiện tại"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-[19px]">countertops</span>
                 </button>
                 <button
-                  onClick={() => handleAllocationNavigation('/gate')}
                   disabled={!isOperationalScheduleV1Enabled() && !season}
-                  title="Open Gate Allocation for current day range"
-                  aria-label="Open Gate Allocation for current day range"
+                  onClick={() => handleAllocationNavigation('/gate')}
+                  title="Mở Phân bổ cửa cho khoảng ngày hiện tại"
+                  aria-label="Mở Phân bổ cửa cho khoảng ngày hiện tại"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <PbbIcon className="h-[19px] w-[19px]" />
                 </button>
               </fieldset>
               <div className="flex items-center gap-2">
-                <span className="rounded-full bg-primary-container px-3 py-1 text-xs font-bold text-on-primary-container">ARR {summary.arr}</span>
-                <span className="rounded-full bg-secondary-container px-3 py-1 text-xs font-bold text-on-secondary-container">DEP {summary.dep}</span>
-                <span className="rounded-full bg-tertiary-container px-3 py-1 text-xs font-bold text-on-tertiary-container">TOTAL {summary.total}</span>
+                <span className="rounded-full bg-primary-container px-3 py-1 text-xs font-bold text-on-primary-container">ĐẾN {summary.arr}</span>
+                <span className="rounded-full bg-secondary-container px-3 py-1 text-xs font-bold text-on-secondary-container">ĐI {summary.dep}</span>
+                <span className="rounded-full bg-tertiary-container px-3 py-1 text-xs font-bold text-on-tertiary-container">TỔNG {summary.total}</span>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-3 px-4 py-3">
@@ -2055,10 +1921,20 @@ function DailyScheduleContent() {
                   }}
                 />
                 <button
-                  onClick={() => dailyImportInputRef.current?.click()}
+                  onClick={() => {
+                    if (!isOperationalScheduleV1Enabled()) {
+                      void showAlert({
+                        title: 'Chức năng chưa được kích hoạt',
+                        message: 'Chức năng nhập Lịch ngày yêu cầu bật chế độ Vận hành (Operations). Vui lòng kích hoạt cờ NEXT_PUBLIC_OPERATIONAL_SCHEDULE_V1_ENABLED để sử dụng.',
+                        tone: 'warning',
+                      });
+                      return;
+                    }
+                    dailyImportInputRef.current?.click();
+                  }}
                   disabled={dailyImportDisabled}
-                  title={DAILY_IMPORT_V1_STAGE_ENABLED ? 'Import Daily Schedule (.xls or .xlsx)' : 'Daily Import V1 staging is disabled'}
-                  aria-label="Import Daily Schedule file"
+                  title={!isOperationalScheduleV1Enabled() ? 'Chức năng nhập Lịch ngày yêu cầu bật chế độ Vận hành (Operations).' : 'Nhập Lịch ngày (.xls hoặc .xlsx)'}
+                  aria-label="Nhập tệp Lịch ngày"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className={`material-symbols-outlined text-[19px] ${dailyImporting ? 'animate-spin' : ''}`}>
@@ -2068,19 +1944,19 @@ function DailyScheduleContent() {
                 <button
                   onClick={() => void handleExportDailyExcel()}
                   disabled={(!isOperationalScheduleV1Enabled() && !season) || exportingExcel || sortedRows.length === 0}
-                  title="Export visible Daily schedule to Excel"
+                  title="Xuất Lịch ngày đang hiển thị ra Excel"
                   className="inline-flex h-9 items-center justify-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className={`material-symbols-outlined text-[18px] ${exportingExcel ? 'animate-spin' : ''}`}>
                     {exportingExcel ? 'sync' : 'download'}
                   </span>
-                  Export Excel
+                  Xuất Excel
                 </button>
                 <button
                   onClick={() => setIsNewFlightOpen(true)}
                   disabled={actionsDisabled}
-                  title="Add flight"
-                  aria-label="Add flight"
+                  title="Thêm chuyến bay"
+                  aria-label="Thêm chuyến bay"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-[19px]">add</span>
@@ -2088,8 +1964,8 @@ function DailyScheduleContent() {
                 <button
                   onClick={() => void handleLinkSelected()}
                   disabled={actionsDisabled || !canLinkSelection}
-                  title="Link selected flights"
-                  aria-label="Link selected flights"
+                  title="Ghép cặp chuyến bay đã chọn"
+                  aria-label="Ghép cặp chuyến bay đã chọn"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-[19px]">link</span>
@@ -2097,8 +1973,8 @@ function DailyScheduleContent() {
                 <button
                   onClick={() => void handleUnlinkSelected()}
                   disabled={actionsDisabled || !canUnlinkSelection}
-                  title="Unlink selected flights"
-                  aria-label="Unlink selected flights"
+                  title="Hủy ghép cặp chuyến bay đã chọn"
+                  aria-label="Hủy ghép cặp chuyến bay đã chọn"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-outline-variant bg-surface-container text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-[19px]">link_off</span>
@@ -2106,8 +1982,8 @@ function DailyScheduleContent() {
                 <button
                   onClick={() => void handleDeleteSelected()}
                   disabled={actionsDisabled || !hasSelectedRecords}
-                  title="Delete selected flights"
-                  aria-label="Delete selected flights"
+                  title="Xóa chuyến bay đã chọn"
+                  aria-label="Xóa chuyến bay đã chọn"
                   className="inline-flex h-9 w-9 items-center justify-center rounded border border-error/40 bg-surface-container text-error transition-colors hover:bg-error-container hover:text-on-error-container disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-[19px]">delete</span>
@@ -2116,7 +1992,7 @@ function DailyScheduleContent() {
               <input
                 value={filters.query ?? ''}
                 onChange={(event) => setFilters((current) => ({ ...current, query: event.target.value }))}
-                placeholder="Search flight, route, aircraft..."
+                placeholder="Tìm chuyến bay, đường bay, tàu bay..."
                 className="min-w-[280px] flex-1 bg-surface-container border border-outline-variant rounded px-3 py-2 text-sm focus:outline-none focus:border-primary"
               />
               <select
@@ -2124,9 +2000,9 @@ function DailyScheduleContent() {
                 onChange={(event) => setFilters((current) => ({ ...current, type: event.target.value as DailyFilterState['type'] }))}
                 className="bg-surface-container border border-outline-variant rounded px-3 py-2 text-sm"
               >
-                <option value="all">All</option>
-                <option value="arrivals">Arrivals</option>
-                <option value="departures">Departures</option>
+                <option value="all">Tất cả</option>
+                <option value="arrivals">Chuyến đến</option>
+                <option value="departures">Chuyến đi</option>
               </select>
             </div>
           </section>
@@ -2136,7 +2012,7 @@ function DailyScheduleContent() {
               <LoadingStatusPanel progress={loadProgress} className="h-full min-h-[320px]" />
             ) : loadError ? (
               <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 p-6 text-center">
-                <div className="font-body-sm text-body-sm font-semibold text-error">Cannot load daily schedule</div>
+                <div className="font-body-sm text-body-sm font-semibold text-error">Không thể tải Lịch ngày</div>
                 <div className="max-w-xl font-body-sm text-body-sm text-on-surface-variant">{loadError}</div>
                 {syncSeasonId && (
                   <FetchServerUpdatesButton
@@ -2149,7 +2025,7 @@ function DailyScheduleContent() {
               </div>
             ) : !isOperationalScheduleV1Enabled() && !season ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-on-surface-variant">
-                <div>No season selected. Import an OperationalTurns file to create one.</div>
+                <div>Chưa chọn mùa bay. Hãy nhập tệp Lịch ngày vận hành để tạo mùa bay.</div>
                 {syncSeasonId && (
                   <FetchServerUpdatesButton
                     fetching={fetchingServerData}
@@ -2178,7 +2054,7 @@ function DailyScheduleContent() {
                               return next;
                             });
                           }}
-                          aria-label="Select visible rows"
+                          aria-label="Chọn tất cả dòng đang hiển thị"
                           className="h-4 w-4 rounded border-outline text-primary focus:ring-primary"
                         />
                       </th>
@@ -2197,19 +2073,19 @@ function DailyScheduleContent() {
                             value={filterDrafts[column.field]}
                             onChange={(event) => handleFilterDraftChange(column.field, event.target.value)}
                             inputMode={column.numeric ? 'numeric' : 'text'}
-                            placeholder={column.numeric ? 'Number' : 'Filter'}
+                            placeholder={column.numeric ? 'Số' : 'Lọc'}
                             className="mt-2 w-full rounded border border-outline-variant bg-surface-container-highest px-2 py-1 text-xs font-normal text-on-surface focus:outline-none focus:border-primary"
                           />
                         </th>
                       ))}
-                      <th className="min-w-[96px] px-2 py-2 align-top font-label-caps text-label-caps text-on-surface-variant">Actions</th>
+                      <th className="min-w-[96px] px-2 py-2 align-top font-label-caps text-label-caps text-on-surface-variant">Thao tác</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-surface-variant font-data-tabular text-data-tabular text-on-surface">
                     {sortedRows.length === 0 ? (
                       <tr>
                         <td colSpan={GRID_COLUMNS.length + 2} className="px-4 py-10 text-center text-on-surface-variant">
-                          No rows match the current daily filters.
+                          Không có dòng nào phù hợp với bộ lọc Lịch ngày hiện tại.
                         </td>
                       </tr>
                     ) : sortedRows.map((row) => (
@@ -2226,7 +2102,7 @@ function DailyScheduleContent() {
                                 return next;
                               });
                             }}
-                            aria-label={`Select ${row.arr?.flightNumber ?? row.dep?.flightNumber ?? 'daily row'}`}
+                            aria-label={`Chọn chuyến ${row.arr?.flightNumber ?? row.dep?.flightNumber ?? 'này'}`}
                             className="h-4 w-4 rounded border-outline text-primary focus:ring-primary"
                           />
                         </td>
@@ -2277,17 +2153,6 @@ function DailyScheduleContent() {
         prefillDateSelection={newFlightDateSelection}
         onSubmitDetailed={handleAddFlights}
       />
-      {dailyImportPreview && (
-        <DailyImportPreviewDialog
-          result={dailyImportPreview.result}
-          commitEnabled={dailyImportCommitEnabled}
-          committing={dailyImportCommitting}
-          restaging={dailyImporting}
-          onCancel={() => { void closeDailyImportPreview(); }}
-          onCommit={() => { void commitDailyImportPreview(); }}
-          onConfirmZeroFlightDates={(datesBySeasonId) => { void confirmDailyZeroFlightDates(datesBySeasonId); }}
-        />
-      )}
       {dailyImportPreviewV2 && (
         <DailyImportPreviewDialogV2
           result={dailyImportPreviewV2}
@@ -2296,10 +2161,12 @@ function DailyScheduleContent() {
           onCancel={() => {
             if (useOperationalScheduleStore.getState().importing) return;
             const batchId = dailyImportPreviewV2.batchId;
+            const operatorId = resolveOperatorId();
+            clearDailyUploadJournal(operatorId);
             setDailyImportPreviewV2(null);
             if (dailyImportPreviewV2.status !== 'committed') {
               void cancelDailyScheduleImportV2(batchId).catch((error) => {
-                void showAlert({ title: 'Cancel not confirmed', message: error.message, tone: 'warning' });
+                void showAlert({ title: 'Hủy thao tác chưa được xác nhận', message: formatUiError(error), tone: 'warning' });
               });
             }
           }}
@@ -2307,6 +2174,7 @@ function DailyScheduleContent() {
             const pending = useOperationalScheduleStore.getState();
             if (pending.importing || pending.mutating || pending.unresolvedAttempt || dailyImportPreviewV2.status !== 'validated') return;
             setDailyImporting(true);
+            const operatorId = resolveOperatorId();
             try {
               let receipt;
               try {
@@ -2314,7 +2182,7 @@ function DailyScheduleContent() {
                   batchId: dailyImportPreviewV2.batchId,
                   previewHash: dailyImportPreviewV2.previewHash,
                 });
-                if (committed.status !== 'committed' || !committed.result) throw new Error('Commit receipt is unavailable; check batch status before retrying.');
+                if (committed.status !== 'committed' || !committed.result) throw new Error('Chưa nhận được biên nhận lưu dữ liệu; hãy kiểm tra trạng thái đợt nhập trước khi thử lại.');
                 receipt = committed.result;
               } catch (error) {
                 const recovered = await getDailyScheduleImportV2Status(dailyImportPreviewV2.requestId).catch(() => null);
@@ -2322,20 +2190,34 @@ function DailyScheduleContent() {
                 if (recovered?.status !== 'committed' || !recovered.result) throw error;
                 receipt = recovered.result;
               }
-              setDailyImportPreviewV2({ ...dailyImportPreviewV2, status: 'committed', result: receipt });
+
+              const activeJournal = getActiveDailyUploadJournal(operatorId);
+              if (activeJournal) {
+                saveDailyUploadJournal({
+                  ...activeJournal,
+                  status: 'committed',
+                  committedResult: receipt,
+                });
+              }
+
+              setDailyImportPreviewV2(null);
               useOperationalScheduleStore.setState({ snapshot: { revision: receipt.revision, token: '' } });
               setSelectedRowIds(new Set());
               try {
                 await refreshDailyWindow({ revalidate: true });
+                clearDailyUploadJournal(operatorId);
+                setPendingCommittedReceipt(null);
+                void showAlert({ title: 'Hoàn tất nhập Lịch ngày', message: `Đã lưu thành công đợt ${receipt.batchId}.`, tone: 'success' });
               } catch (refreshError) {
+                setPendingCommittedReceipt(receipt);
                 void showAlert({
-                  title: 'Import committed — refresh pending',
-                  message: `Batch ${receipt.batchId} was committed. Reload the window; do not import again. ${(refreshError as Error).message}`,
+                  title: 'Đã lưu đợt nhập — Đang chờ tải lại',
+                  message: `Đợt ${receipt.batchId} đã được lưu trên máy chủ. Hãy tải lại dữ liệu; không cần nhập lại. ${formatUiError(refreshError)}`,
                   tone: 'warning',
                 });
               }
             } catch (commitErr) {
-              void showAlert({ title: 'Import V2 Commit Failed', message: (commitErr as Error).message, tone: 'error' });
+              void showAlert({ title: 'Lưu đợt nhập thất bại', message: formatUiError(commitErr), tone: 'error' });
             } finally {
               setDailyImporting(false);
             }
@@ -2352,7 +2234,7 @@ function DailyScheduleContent() {
               };
               await stageOperationalImport(payloadWithZero);
             } catch (err) {
-              void showAlert({ title: 'Re-staging Failed', message: (err as Error).message, tone: 'error' });
+              void showAlert({ title: 'Chuẩn bị lại thất bại', message: formatUiError(err), tone: 'error' });
             } finally {
               setDailyImporting(false);
             }
@@ -2368,7 +2250,7 @@ export default function DailyPage() {
   return (
     <Suspense fallback={
       <LoadingStatusPanel
-        progress={buildLoadProgress('Loading daily schedule...', 20, 'Preparing route')}
+        progress={buildLoadProgress('Đang tải lịch ngày...', 20, 'Đang chuẩn bị giao diện')}
         mode="fullscreen"
       />
     }>

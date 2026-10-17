@@ -3,61 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
-use std::sync::Mutex;
 use tauri::Manager;
-use tauri_plugin_shell::{process::CommandChild, ShellExt};
-use tokio::time::{sleep, Duration};
 
 pub mod native_catchup;
-
-#[derive(Debug)]
-struct DashboardAiAgentState {
-    token: Mutex<String>,
-    child: Mutex<Option<CommandChild>>,
-}
-
-fn create_dashboard_ai_agent_state() -> DashboardAiAgentState {
-    let seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    DashboardAiAgentState {
-        token: Mutex::new(format!("seasonal-ai-agent-{seed}-{}", std::process::id())),
-        child: Mutex::new(None),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardAiAgentRequestInput {
-    payload: serde_json::Value,
-    port: Option<u16>,
-    supabase_url: Option<String>,
-    anon_key: Option<String>,
-    access_token: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardAiAgentHealthInput {
-    port: Option<u16>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DashboardAiAgentHealthResult {
-    healthy: bool,
-    status: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FetchProviderKeyRpcResponse {
-    ok: Option<bool>,
-    #[serde(rename = "secretValue")]
-    secret_value: Option<String>,
-    reason: Option<String>,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -211,258 +159,12 @@ fn reveal_export_file(file_path: String) -> Result<(), String> {
     Ok(())
 }
 
-fn dashboard_ai_agent_token(state: &DashboardAiAgentState) -> Result<String, String> {
-    state
-        .token
-        .lock()
-        .map_err(|_| "Dashboard AI agent token lock failed".to_string())
-        .map(|token| token.clone())
-}
-
-async fn probe_dashboard_ai_agent_health(port: u16, token: &str) -> Result<bool, String> {
-    let url = format!("http://127.0.0.1:{port}/health");
-    let response = reqwest::Client::new()
-        .get(url)
-        .header("x-seasonal-ai-agent-token", token)
-        .send()
-        .await
-        .map_err(|error| format!("Python AI Agent is not reachable: {error}"))?;
-    Ok(response.status().is_success())
-}
-
-async fn wait_dashboard_ai_agent_health(port: u16, token: &str) -> Result<(), String> {
-    let mut last_error = String::new();
-    for _ in 0..30 {
-        match probe_dashboard_ai_agent_health(port, token).await {
-            Ok(true) => return Ok(()),
-            Ok(false) => last_error = "Python AI Agent health endpoint returned a non-success status".to_string(),
-            Err(error) => last_error = error,
-        }
-        sleep(Duration::from_millis(150)).await;
-    }
-    Err(format!("Python AI Agent did not become healthy. {last_error}"))
-}
-
-async fn ensure_dashboard_ai_agent_running(
-    app: &tauri::AppHandle,
-    state: &DashboardAiAgentState,
-    port: u16,
-) -> Result<String, String> {
-    let token = dashboard_ai_agent_token(state)?;
-    if probe_dashboard_ai_agent_health(port, &token).await.unwrap_or(false) {
-        return Ok(token);
-    }
-
-    {
-        let mut child_guard = state
-            .child
-            .lock()
-            .map_err(|_| "Dashboard AI agent child lock failed".to_string())?;
-        if child_guard.is_none() {
-            let command = app
-                .shell()
-                .sidecar("dashboard-ai-agent")
-                .map_err(|error| format!("Could not create Python AI Agent sidecar command: {error}"))?
-                .env("SEASONAL_AI_AGENT_TOKEN", &token)
-                .env("SEASONAL_AI_AGENT_PORT", port.to_string());
-            let (mut rx, child) = command
-                .spawn()
-                .map_err(|error| format!("Could not start Python AI Agent sidecar: {error}"))?;
-            tauri::async_runtime::spawn(async move {
-                while rx.recv().await.is_some() {}
-            });
-            *child_guard = Some(child);
-        }
-    }
-
-    wait_dashboard_ai_agent_health(port, &token).await?;
-    Ok(token)
-}
-
-#[allow(dead_code)]
-async fn fetch_dashboard_ai_provider_key(
-    supabase_url: &str,
-    anon_key: &str,
-    access_token: &str,
-    provider: &str,
-) -> Result<String, String> {
-    let url = format!("{}/rest/v1/rpc/fetch_ai_provider_key", supabase_url.trim_end_matches('/'));
-    let payload = serde_json::json!({ "p_provider": provider });
-    let response = reqwest::Client::new()
-        .post(url)
-        .header("apikey", anon_key)
-        .header("Authorization", format!("Bearer {access_token}"))
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|error| format!("Không tải được provider key từ Supabase: {error}"))?;
-    let status = response.status();
-    let raw = response
-        .text()
-        .await
-        .map_err(|error| format!("Không đọc được phản hồi provider key từ Supabase: {error}"))?;
-    if !status.is_success() {
-        return Err(format!("Không tải được provider key từ Supabase ({status}): {raw}"));
-    }
-    let parsed = serde_json::from_str::<FetchProviderKeyRpcResponse>(&raw)
-        .map_err(|error| format!("Provider key RPC trả JSON không hợp lệ: {error}; payload={raw}"))?;
-    if parsed.ok == Some(true) {
-        if let Some(secret) = parsed.secret_value.map(|value| value.trim().to_string()) {
-            if !secret.is_empty() {
-                return Ok(secret);
-            }
-        }
-    }
-    let reason = parsed.reason.unwrap_or_else(|| "provider_key_not_synced".to_string());
-    Err(match reason.as_str() {
-        "operator_missing_can_use_ai" => "Operator hiện tại chưa có quyền can_use_ai để tải provider key về máy local.".to_string(),
-        "provider_key_not_synced" => format!("Chưa sync provider key cho {provider}. Vào Settings > AI Analysis để Save & Sync Local Provider Key."),
-        "invalid_provider" => format!("Provider AI không hợp lệ: {provider}."),
-        _ => format!("Không tải được provider key cho {provider}: {reason}"),
-    })
-}
-
-async fn fetch_dashboard_ai_provider_key_native(
-    supabase_url: &str,
-    anon_key: &str,
-    access_token: &str,
-    provider: &str,
-) -> Result<String, String> {
-    let url = format!("{}/rest/v1/rpc/fetch_ai_provider_key", supabase_url.trim_end_matches('/'));
-    let response = reqwest::Client::new()
-        .post(url)
-        .header("apikey", anon_key)
-        .header("Authorization", format!("Bearer {access_token}"))
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "p_provider": provider }))
-        .send()
-        .await
-        .map_err(|error| format!("Khong tai duoc provider key tu Supabase: {error}"))?;
-    let status = response.status();
-    let raw = response
-        .text()
-        .await
-        .map_err(|error| format!("Khong doc duoc phan hoi provider key tu Supabase: {error}"))?;
-    if !status.is_success() {
-        return Err(format!("Khong tai duoc provider key tu Supabase ({status}): {raw}"));
-    }
-    let parsed = serde_json::from_str::<FetchProviderKeyRpcResponse>(&raw)
-        .map_err(|error| format!("Provider key RPC tra JSON khong hop le: {error}; payload={raw}"))?;
-    if parsed.ok == Some(true) {
-        if let Some(secret) = parsed.secret_value.map(|value| value.trim().to_string()) {
-            if !secret.is_empty() {
-                return Ok(secret);
-            }
-        }
-    }
-    let reason = parsed.reason.unwrap_or_else(|| "provider_key_not_synced".to_string());
-    Err(match reason.as_str() {
-        "operator_missing_can_use_ai" => "Operator hien tai chua co quyen can_use_ai de tai provider key ve may local.".to_string(),
-        "provider_key_not_synced" => format!("Chua sync provider key cho {provider}. Vao Settings > AI Analysis de Save & Sync Local Provider Key."),
-        "invalid_provider" => format!("Provider AI khong hop le: {provider}."),
-        _ => format!("Khong tai duoc provider key cho {provider}: {reason}"),
-    })
-}
-
-#[tauri::command]
-async fn dashboard_ai_agent_health(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, DashboardAiAgentState>,
-    input: DashboardAiAgentHealthInput,
-) -> Result<DashboardAiAgentHealthResult, String> {
-    let port = input.port.unwrap_or(8765);
-    let token = ensure_dashboard_ai_agent_running(&app, &state, port).await?;
-    let healthy = probe_dashboard_ai_agent_health(port, &token).await?;
-    Ok(DashboardAiAgentHealthResult { healthy, status: if healthy { "ok".to_string() } else { "unhealthy".to_string() } })
-}
-
-#[tauri::command]
-async fn call_dashboard_ai_agent(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, DashboardAiAgentState>,
-    input: DashboardAiAgentRequestInput,
-) -> Result<serde_json::Value, String> {
-    let port = input.port.unwrap_or(8765);
-    let token = ensure_dashboard_ai_agent_running(&app, &state, port).await?;
-    let url = format!("http://127.0.0.1:{port}/v1/analyze");
-    let mut payload = input.payload;
-    if let Some(object) = payload.as_object_mut() {
-        if !object.contains_key("sqlitePath") {
-            let app_config_dir = app
-                .path()
-                .app_config_dir()
-                .map_err(|error| format!("Could not resolve app config directory: {error}"))?;
-            object.insert(
-                "sqlitePath".to_string(),
-                serde_json::Value::String(app_config_dir.join("seasonal-management-local.db").to_string_lossy().to_string()),
-            );
-        }
-        let provider = object
-            .get("model")
-            .and_then(|model| model.as_object())
-            .and_then(|model| model.get("provider"))
-            .and_then(|provider| provider.as_str())
-            .unwrap_or("");
-        let existing_provider_key = object
-            .get("model")
-            .and_then(|model| model.as_object())
-            .and_then(|model| model.get("providerKey"))
-            .and_then(|value| value.as_str())
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
-        if !existing_provider_key {
-            let supabase_url = input
-                .supabase_url
-                .as_deref()
-                .ok_or_else(|| "Thiếu Supabase URL để tải provider key cho Python AI Agent.".to_string())?;
-            let anon_key = input
-                .anon_key
-                .as_deref()
-                .ok_or_else(|| "Thiếu Supabase anon key để tải provider key cho Python AI Agent.".to_string())?;
-            let access_token = input
-                .access_token
-                .as_deref()
-                .ok_or_else(|| "Thiếu phiên đăng nhập để tải provider key cho Python AI Agent.".to_string())?;
-            if provider.trim().is_empty() {
-                return Err("Thiếu provider model để tải provider key cho Python AI Agent.".to_string());
-            }
-            let provider_key = fetch_dashboard_ai_provider_key_native(supabase_url, anon_key, access_token, provider).await?;
-            if let Some(model) = object.get_mut("model").and_then(|model| model.as_object_mut()) {
-                model.insert("providerKey".to_string(), serde_json::Value::String(provider_key));
-            }
-        }
-    }
-    let response = reqwest::Client::new()
-        .post(url)
-        .header("x-seasonal-ai-agent-token", token)
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|error| format!("Python AI Agent is not reachable: {error}"))?;
-    let status = response.status();
-    let payload = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|error| format!("Python AI Agent returned invalid JSON: {error}"))?;
-    if !status.is_success() {
-        let message = payload
-            .get("detail")
-            .and_then(|value| value.as_str())
-            .or_else(|| payload.get("message").and_then(|value| value.as_str()))
-            .unwrap_or("Python AI Agent request failed");
-        return Err(format!("{message} ({status})"));
-    }
-    Ok(payload)
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(native_catchup::create_native_catchup_state())
-        .manage(create_dashboard_ai_agent_state())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
@@ -476,8 +178,6 @@ pub fn run() {
             save_export_file,
             open_export_file,
             reveal_export_file,
-            dashboard_ai_agent_health,
-            call_dashboard_ai_agent,
             run_season_catchup,
             apply_local_modification_batch_delta,
             apply_schedule_mutation,
@@ -491,7 +191,6 @@ pub fn run() {
             query_allocation_window,
             query_source_rows_window,
             query_dashboard_summary,
-            query_native_dashboard_ai_sql,
             query_sync_summary,
             query_conflict_summary,
             resolve_season_conflict,
@@ -615,13 +314,6 @@ async fn query_dashboard_summary(
     native_catchup::query_native_dashboard_summary(app, input).await
 }
 
-#[tauri::command]
-async fn query_native_dashboard_ai_sql(
-    app: tauri::AppHandle,
-    input: native_catchup::QueryNativeDashboardAiSqlInput,
-) -> Result<native_catchup::QueryNativeDashboardAiSqlResult, String> {
-    native_catchup::query_native_dashboard_ai_sql(app, input).await
-}
 
 #[tauri::command]
 async fn query_sync_summary(

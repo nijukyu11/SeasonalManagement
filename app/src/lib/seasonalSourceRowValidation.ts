@@ -175,7 +175,7 @@ function rowIssue(
     code,
     rowIndex: row.rowIndex,
     column,
-    message: `Row ${row.rowIndex}: ${message}`,
+    message: `Dòng ${row.rowIndex}: ${message}`,
   };
 }
 
@@ -192,7 +192,7 @@ export function validateSeasonalSourceRow(
       row,
       'invalid-effective-date',
       'Effective',
-      'Effective is not a valid seasonal date.',
+      'Ngày bắt đầu (Effective) không phải ngày lịch mùa hợp lệ.',
     ));
   }
   if (!discontinue) {
@@ -200,7 +200,7 @@ export function validateSeasonalSourceRow(
       row,
       'invalid-discontinue-date',
       'Discontinue',
-      'Discontinue is not a valid seasonal date.',
+      'Ngày kết thúc (Discontinue) không phải ngày lịch mùa hợp lệ.',
     ));
   }
   if (effective && discontinue && effective > discontinue) {
@@ -208,7 +208,7 @@ export function validateSeasonalSourceRow(
       row,
       'reversed-date-range',
       null,
-      'Effective must be on or before Discontinue.',
+      'Ngày bắt đầu phải trước hoặc cùng ngày kết thúc.',
     ));
   }
 
@@ -219,7 +219,7 @@ export function validateSeasonalSourceRow(
       row,
       'invalid-time',
       'STA',
-      'STA must be a valid time from 00:00 through 23:59.',
+      'Giờ đến (STA) phải trong khoảng từ 00:00 đến 23:59.',
     ));
   }
   if (!isBlank(row.std) && !std) {
@@ -227,7 +227,7 @@ export function validateSeasonalSourceRow(
       row,
       'invalid-time',
       'STD',
-      'STD must be a valid time from 00:00 through 23:59.',
+      'Giờ đi (STD) phải trong khoảng từ 00:00 đến 23:59.',
     ));
   }
 
@@ -239,7 +239,7 @@ export function validateSeasonalSourceRow(
         row,
         'invalid-day-value',
         column,
-        `${column} must be TRUE, FALSE, 1, 0, or blank.`,
+        `Cột ${column} phải là TRUE, FALSE, 1, 0 hoặc để trống.`,
       ));
     }
     return normalized;
@@ -249,15 +249,15 @@ export function validateSeasonalSourceRow(
       row,
       'no-operating-days',
       null,
-      'At least one operating day from Mon through Sun is required.',
+      'Phải có ít nhất một ngày bay hoạt động trong tuần.',
     ));
   }
 
   if (!hasText(row.airline)) {
-    issues.push(rowIssue(row, 'missing-airline', 'Airline', 'Airline is required.'));
+    issues.push(rowIssue(row, 'missing-airline', 'Airline', 'Bắt buộc phải có thông tin hãng (Airline).'));
   }
   if (!hasText(row.aircraft)) {
-    issues.push(rowIssue(row, 'missing-aircraft', 'Aircraft', 'Aircraft is required.'));
+    issues.push(rowIssue(row, 'missing-aircraft', 'Aircraft', 'Bắt buộc phải có loại tàu bay (Aircraft).'));
   }
 
   const hasArrFlight = hasText(row.arrFlight);
@@ -270,7 +270,7 @@ export function validateSeasonalSourceRow(
       row,
       'incomplete-flight-side',
       'ARR',
-      'ARR must include STA, ARRFlight, and ARRRoute together.',
+      'Chặng đến (ARR) phải có đầy đủ đồng thời STA, ARRFlight và ARRRoute.',
     ));
   }
 
@@ -284,7 +284,7 @@ export function validateSeasonalSourceRow(
       row,
       'incomplete-flight-side',
       'DEP',
-      'DEP must include STD, DEPFlight, and DEPRoute together.',
+      'Chặng đi (DEP) phải có đầy đủ đồng thời STD, DEPFlight và DEPRoute.',
     ));
   }
 
@@ -293,7 +293,7 @@ export function validateSeasonalSourceRow(
       row,
       'no-flight-side',
       null,
-      'At least one complete ARR or DEP flight side is required.',
+      'Cần ít nhất một chặng đến (ARR) hoặc chặng đi (DEP) hoàn chỉnh.',
     ));
   }
 

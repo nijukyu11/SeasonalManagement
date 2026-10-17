@@ -50,9 +50,10 @@ export function TrafficReportMultiSelect({ name, label, options, values, placeho
           <div className="mt-2 max-h-60 overflow-y-auto overscroll-contain">
             {availableOptions.length === 0 ? <p className="p-3 text-sm font-normal text-slate-500">Không tìm thấy lựa chọn phù hợp.</p> : availableOptions.map((option) => {
               const checked = values.includes(option);
+              const displayOption = /^unknown$/i.test(option.trim()) ? 'Chưa xác định' : option;
               return <label key={option} className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg px-2 text-sm font-normal text-slate-800 hover:bg-slate-50">
                 <input className="size-4 rounded border-slate-300 text-blue-800" type="checkbox" checked={checked} disabled={!checked && values.length >= 24} onChange={() => toggle(option)} />
-                <span className="truncate">{option}</span>
+                <span className="truncate">{displayOption}</span>
               </label>;
             })}
           </div>
@@ -60,10 +61,13 @@ export function TrafficReportMultiSelect({ name, label, options, values, placeho
         </div>
       </details>
       {values.length > 0 ? <div className="mt-2 flex flex-wrap gap-2" aria-label={`${label} đang chọn`}>
-        {values.map((value) => <span key={value} className="inline-flex min-h-9 items-center gap-1 rounded-full bg-slate-100 pl-3 text-xs font-bold text-slate-700">
-          <span className="max-w-40 truncate">{value}</span>
-          <button className={cn('report-focus flex size-9 items-center justify-center rounded-full text-slate-600 hover:bg-slate-200')} type="button" aria-label={`Bỏ ${value} khỏi ${label}`} onClick={() => toggle(value)}><CloseIcon /></button>
-        </span>)}
+        {values.map((value) => {
+          const displayValue = /^unknown$/i.test(value.trim()) ? 'Chưa xác định' : value;
+          return <span key={value} className="inline-flex min-h-9 items-center gap-1 rounded-full bg-slate-100 pl-3 text-xs font-bold text-slate-700">
+            <span className="max-w-40 truncate">{displayValue}</span>
+            <button className={cn('report-focus flex size-9 items-center justify-center rounded-full text-slate-600 hover:bg-slate-200')} type="button" aria-label={`Bỏ ${displayValue} khỏi ${label}`} onClick={() => toggle(value)}><CloseIcon /></button>
+          </span>;
+        })}
       </div> : null}
       <span className="sr-only" aria-live="polite">Đã chọn {values.length} {label.toLocaleLowerCase('vi-VN')}.</span>
     </fieldset>

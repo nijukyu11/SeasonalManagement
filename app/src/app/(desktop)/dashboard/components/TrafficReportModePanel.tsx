@@ -5,6 +5,7 @@ import { cn } from '@/lib/cn';
 import { fetchTrafficReportV2Bundle } from '@/lib/trafficReportDataAdapter';
 import type { TrafficReportFilter, TrafficType } from '@/lib/trafficReportContract';
 import type { TrafficV2Bundle, TrafficV2MetricSet } from '@/lib/trafficReportV2Contract';
+import { formatUiError } from '@/lib/uiDisplayText';
 
 const numberFormat = new Intl.NumberFormat('vi-VN');
 const dateTimeFormat = new Intl.DateTimeFormat('vi-VN', {
@@ -41,7 +42,7 @@ function formatNumber(value: number | null): string {
 function statusLabel(status: TrafficV2MetricSet['status']): string {
   return {
     complete: 'Đầy đủ',
-    partial: 'Chưa đủ Pax',
+    partial: 'Chưa đủ số liệu hành khách',
     missing: 'Thiếu dữ liệu',
     future: 'Chưa đến hạn',
     zero: 'Không có chuyến',
@@ -65,7 +66,7 @@ function TrafficReportModeSkeleton() {
         {Array.from({ length: 4 }, (_, index) => <div key={index} className="h-28 animate-pulse rounded-lg bg-surface-container" />)}
       </div>
       <div className="h-64 animate-pulse rounded-lg bg-surface-container" />
-      <span className="sr-only">Đang tải dữ liệu Report</span>
+      <span className="sr-only">Đang tải số liệu báo cáo</span>
     </div>
   );
 }
@@ -102,7 +103,7 @@ export function TrafficReportModePanel() {
       .then(setBundle)
       .catch((reason: unknown) => {
         if (!controller.signal.aborted) {
-          setError(reason instanceof Error ? reason.message : 'Không thể tải dữ liệu Report.');
+          setError(formatUiError(reason, 'Không thể tải số liệu báo cáo.'));
         }
       })
       .finally(() => {
@@ -137,25 +138,25 @@ export function TrafficReportModePanel() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h2 id="dashboard-report-mode-title" className="text-balance text-lg font-bold text-on-surface">Số liệu Report</h2>
-              <span className="rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-800">Report data</span>
+              <h2 id="dashboard-report-mode-title" className="text-balance text-lg font-bold text-on-surface">Số liệu báo cáo</h2>
+              <span className="rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-800">Dữ liệu báo cáo</span>
               {bundle ? (
                 <span className={cn(
                   'rounded-full px-2 py-1 text-xs font-semibold',
                   bundle.version.sourceMode === 'live' ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800',
                 )}>
-                  {bundle.version.sourceMode === 'live' ? 'Live aggregate' : 'Snapshot fallback'}
+                  {bundle.version.sourceMode === 'live' ? 'Số liệu trực tiếp' : 'Bản lưu dự phòng'}
                 </span>
               ) : null}
             </div>
             <p className="mt-1 text-pretty text-sm text-on-surface-variant">
-              Cùng contract tổng hợp với trang Report; không tính lại KPI từ bản ghi Dashboard.
+              Dùng cùng cách tổng hợp với trang Báo cáo; không tính lại chỉ số từ bản ghi trên Tổng quan.
             </p>
           </div>
           {bundle ? (
             <dl className="text-xs text-on-surface-variant">
-              <div className="flex gap-2"><dt className="font-semibold">As-of</dt><dd className="tabular-nums">{dateTimeFormat.format(new Date(bundle.version.dataAsOf))}</dd></div>
-              <div className="flex gap-2"><dt className="font-semibold">Watermark</dt><dd className="tabular-nums">{numberFormat.format(bundle.version.sourceWatermark)}</dd></div>
+              <div className="flex gap-2"><dt className="font-semibold">Cập nhật đến</dt><dd className="tabular-nums">{dateTimeFormat.format(new Date(bundle.version.dataAsOf))}</dd></div>
+              <div className="flex gap-2"><dt className="font-semibold">Mốc dữ liệu</dt><dd className="tabular-nums">{numberFormat.format(bundle.version.sourceWatermark)}</dd></div>
             </dl>
           ) : null}
         </div>
@@ -164,11 +165,11 @@ export function TrafficReportModePanel() {
       <form onSubmit={applyFilter} className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <label className="text-pretty text-xs font-semibold text-on-surface-variant">
-            Từ Ops Date
+            Từ ngày khai thác
             <input type="date" required value={draft.from} onChange={(event) => setDraft((current) => ({ ...current, from: event.target.value }))} className="mt-1 min-h-11 w-full rounded-lg border border-outline-variant bg-surface px-3 text-sm font-medium text-on-surface" />
           </label>
           <label className="text-pretty text-xs font-semibold text-on-surface-variant">
-            Đến Ops Date
+            Đến ngày khai thác
             <input type="date" required value={draft.to} onChange={(event) => setDraft((current) => ({ ...current, to: event.target.value }))} className="mt-1 min-h-11 w-full rounded-lg border border-outline-variant bg-surface px-3 text-sm font-medium text-on-surface" />
           </label>
           <label className="text-pretty text-xs font-semibold text-on-surface-variant">
@@ -215,16 +216,16 @@ export function TrafficReportModePanel() {
         <>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <MetricCard label="Tổng chuyến bay" value={bundle.current.flights} note={`${formatNumber(bundle.current.arrivals)} đến · ${formatNumber(bundle.current.departures)} đi`} />
-            <MetricCard label="Tổng hành khách" value={bundle.current.reportedPax} note={bundle.current.reportedPax === null ? '— nghĩa là chưa có dữ liệu Pax' : `${formatNumber(bundle.current.reportedLegs)}/${formatNumber(bundle.current.dueLegs)} chặng đã có Pax`} />
-            <MetricCard label="Chặng thiếu Pax đến hạn" value={bundle.current.missingDueLegs} note={statusLabel(bundle.current.status)} />
-            <MetricCard label="Chặng Pax bằng 0" value={bundle.current.trueZeroReportedLegs} note="Đã báo cáo 0, không phải thiếu dữ liệu" />
+            <MetricCard label="Tổng hành khách" value={bundle.current.reportedPax} note={bundle.current.reportedPax === null ? '— nghĩa là chưa có số liệu hành khách' : `${formatNumber(bundle.current.reportedLegs)}/${formatNumber(bundle.current.dueLegs)} chặng đã có số liệu hành khách`} />
+            <MetricCard label="Chặng chưa có số liệu hành khách đến hạn" value={bundle.current.missingDueLegs} note={statusLabel(bundle.current.status)} />
+            <MetricCard label="Chặng không có hành khách" value={bundle.current.trueZeroReportedLegs} note="Đã báo cáo 0, không phải thiếu dữ liệu" />
           </div>
           <section className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm">
             <h3 className="text-balance text-base font-bold text-on-surface">Dữ liệu theo ngày</h3>
-            <div className="mt-3 overflow-x-auto" tabIndex={0} aria-label="Bảng số liệu Report theo ngày">
+            <div className="mt-3 overflow-x-auto" tabIndex={0} aria-label="Bảng số liệu báo cáo theo ngày">
               <table className="min-w-[760px] w-full text-left text-sm">
                 <thead className="border-b border-surface-variant text-xs font-semibold text-on-surface-variant">
-                  <tr><th className="px-3 py-2">Ops Date</th><th className="px-3 py-2 text-right">Tổng</th><th className="px-3 py-2 text-right">Đến</th><th className="px-3 py-2 text-right">Đi</th><th className="px-3 py-2 text-right">Hành khách</th><th className="px-3 py-2">Trạng thái</th></tr>
+                  <tr><th className="px-3 py-2">Ngày khai thác</th><th className="px-3 py-2 text-right">Tổng</th><th className="px-3 py-2 text-right">Đến</th><th className="px-3 py-2 text-right">Đi</th><th className="px-3 py-2 text-right">Hành khách</th><th className="px-3 py-2">Trạng thái</th></tr>
                 </thead>
                 <tbody className="divide-y divide-surface-variant">
                   {bundle.timeline.map((row) => (

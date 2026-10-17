@@ -3,13 +3,17 @@ import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 
 import {
+  addedModificationToFlightRecord,
   buildCanonicalAddedFlightRecords,
+  buildDetailedNewFlightModifications,
   buildDetailedTransferPairContext,
   buildDetailedTransferModifications,
   buildOvernightCompanionMap,
+  filterDetailedLegsForView,
   compactDraftModifications,
 } from './detailedScheduleState.ts';
-import type { FlightLeg, FlightModification } from './types.ts';
+import { applyModificationsToFlightRecords } from './seasonalPlanningSaveManager.ts';
+import type { FlightLeg, FlightModification } from './types';
 
 function leg(overrides: Partial<FlightLeg>): FlightLeg {
   const type = overrides.type ?? 'A';
@@ -381,4 +385,208 @@ test('buildOvernightCompanionMap remains linear for a large resolved set', () =>
 
   assert.equal(companions.size, pairCount);
   assert.ok(elapsedMs < 1_500, `expected linear companion lookup, took ${elapsedMs.toFixed(1)}ms`);
+});
+
+test('buildDetailedNewFlightModifications turnaround creates matching turnaroundId, linkId, reciprocal linkedRecordId, linkType and anchor', () => {
+  const mods = buildDetailedNewFlightModifications({
+    flightType: 'turnaround',
+    dates: ['2026-10-25', '2026-10-26'],
+    airline: 'VN',
+    aircraft: '321',
+    category: 'C',
+    arrFlightNum: '100',
+    arrRoute: 'HAN',
+    arrTime: '08:00',
+    arrCodeShares: '',
+    depFlightNum: '101',
+    depRoute: 'SGN',
+    depTime: '09:00',
+    depCodeShares: '',
+    idSeed: 'seed_trn_test',
+  });
+
+  assert.equal(mods.length, 4);
+  const day1Arr = mods.find((m) => m.addedLeg?.date === '2026-10-25' && m.addedLeg?.type === 'A')?.addedLeg;
+  const day1Dep = mods.find((m) => m.addedLeg?.date === '2026-10-25' && m.addedLeg?.type === 'D')?.addedLeg;
+  const day2Arr = mods.find((m) => m.addedLeg?.date === '2026-10-26' && m.addedLeg?.type === 'A')?.addedLeg;
+  const day2Dep = mods.find((m) => m.addedLeg?.date === '2026-10-26' && m.addedLeg?.type === 'D')?.addedLeg;
+
+  assert.ok(day1Arr && day1Dep && day2Arr && day2Dep);
+
+  // Day 1 pair link identity
+  assert.equal(day1Arr.linkId, day1Dep.linkId);
+  assert.equal(day1Arr.turnaroundId, day1Arr.linkId);
+  assert.equal(day1Dep.turnaroundId, day1Dep.linkId);
+  assert.equal(day1Arr.linkedRecordId, day1Dep.id);
+  assert.equal(day1Dep.linkedRecordId, day1Arr.id);
+  assert.equal(day1Arr.linkType, 'sameday');
+  assert.equal(day1Dep.linkType, 'sameday');
+  assert.equal(day1Arr.pairAnchorDate, '2026-10-25');
+  assert.equal(day1Dep.pairAnchorDate, '2026-10-25');
+  assert.equal(day1Arr.scheduledTime, '08:00');
+  assert.equal(day1Dep.scheduledTime, '09:00');
+
+  // Per-date uniqueness
+  assert.notEqual(day1Arr.linkId, day2Arr.linkId);
+  assert.notEqual(day1Arr.turnaroundId, day2Arr.turnaroundId);
+  assert.equal(day2Arr.turnaroundId, day2Arr.linkId);
+  assert.equal(day2Dep.turnaroundId, day2Dep.linkId);
+});
+
+test('buildDetailedNewFlightModifications preserves single creation without turnaround link', () => {
+  const mods = buildDetailedNewFlightModifications({
+    flightType: 'arrival',
+    dates: ['2026-10-25'],
+    airline: 'VN',
+    aircraft: '321',
+    category: 'C',
+    arrFlightNum: '100',
+    arrRoute: 'HAN',
+    arrTime: '08:00',
+    arrCodeShares: '',
+    depFlightNum: '',
+    depRoute: '',
+    depTime: '',
+    depCodeShares: '',
+  });
+
+  assert.equal(mods.length, 1);
+  const arr = mods[0]?.addedLeg;
+  assert.ok(arr);
+  assert.equal(arr.type, 'A');
+  assert.equal(arr.turnaroundId, undefined);
+  assert.equal(arr.linkedRecordId, undefined);
+  assert.equal(arr.linkType, undefined);
+});
+
+test('buildDetailedTransferModifications moves newly added turnaround pair after edit without reload and keeps authoritative display time consistent', () => {
+  // 1. Create a new turnaround pair
+  const newMods = buildDetailedNewFlightModifications({
+    flightType: 'turnaround',
+    dates: ['2026-10-25'],
+    airline: 'VN',
+    aircraft: '321',
+    category: 'C',
+    arrFlightNum: '200',
+    arrRoute: 'HAN',
+    arrTime: '08:00',
+    arrCodeShares: '',
+    depFlightNum: '201',
+    depRoute: 'SGN',
+    depTime: '09:00',
+    depCodeShares: '',
+    idSeed: 'seed_edit_move_test',
+  });
+
+  const records = newMods.flatMap((m) => {
+    const rec = addedModificationToFlightRecord(m);
+    return rec ? [rec] : [];
+  });
+  assert.equal(records.length, 2);
+  const arrRecord = records.find((r) => r.type === 'A')!;
+  const depRecord = records.find((r) => r.type === 'D')!;
+
+  // 2. Edit ARR record schedule without reload (08:00 -> 09:30)
+  const editedRecords = applyModificationsToFlightRecords(records, [
+    { legId: arrRecord.id, action: 'modified', schedule: '09:30' },
+  ]);
+  const editedArr = editedRecords.find((r) => r.id === arrRecord.id)!;
+  const editedDep = editedRecords.find((r) => r.id === depRecord.id)!;
+  assert.equal(editedArr.schedule, '09:30');
+  assert.equal(editedArr.scheduledTime, '09:30');
+
+  // 3. Move the pair to a new date without reload (trigger move on edited ARR)
+  const transferMods = buildDetailedTransferModifications({
+    sourceLeg: editedArr,
+    visibleLegs: [editedArr],
+    allLegs: [editedArr, editedDep],
+    targetDate: '2026-10-27',
+    mode: 'move',
+    idSeed: 'seed_transfer_moved',
+  });
+
+  // Both legs moved: 2 added new legs + 2 deleted old legs
+  assert.equal(transferMods.length, 4);
+  const addedArrMod = transferMods.find((m) => m.action === 'added' && m.addedLeg?.type === 'A')?.addedLeg;
+  const addedDepMod = transferMods.find((m) => m.action === 'added' && m.addedLeg?.type === 'D')?.addedLeg;
+  const deletedIds = transferMods.filter((m) => m.action === 'deleted').map((m) => m.legId);
+
+  assert.ok(addedArrMod && addedDepMod);
+  assert.equal(addedArrMod.date, '2026-10-27');
+  assert.equal(addedDepMod.date, '2026-10-27');
+
+  // Authoritative display time preserved from edit
+  assert.equal(addedArrMod.schedule, '09:30');
+  assert.equal(addedArrMod.scheduledTime, '09:30');
+  assert.equal(addedDepMod.schedule, '09:00');
+  assert.equal(addedDepMod.scheduledTime, '09:00');
+
+  // Reciprocal pair preserved
+  assert.equal(addedArrMod.linkId, addedDepMod.linkId);
+  assert.equal(addedArrMod.turnaroundId, addedArrMod.linkId);
+  assert.equal(addedDepMod.turnaroundId, addedArrMod.turnaroundId);
+  assert.equal(addedArrMod.linkedRecordId, addedDepMod.id);
+  assert.equal(addedDepMod.linkedRecordId, addedArrMod.id);
+
+  // Old legs deleted
+  assert.deepEqual(deletedIds.sort(), [arrRecord.id, depRecord.id].sort());
+});
+
+test('buildDetailedTransferModifications preserves overnight offsets and hidden companions without double transfer', () => {
+  const overnightArr = leg({
+    id: 'ovn-arr-1',
+    type: 'A',
+    date: '2026-10-25',
+    schedule: '23:30',
+    linkId: 'OVN_LINK_1',
+    turnaroundId: 'OVN_LINK_1',
+    linkType: 'overnight',
+    pairAnchorDate: '2026-10-25',
+    linkedRecordId: 'ovn-dep-1',
+  });
+  const overnightDep = leg({
+    id: 'ovn-dep-1',
+    type: 'D',
+    date: '2026-10-26',
+    schedule: '06:00',
+    linkId: 'OVN_LINK_1',
+    turnaroundId: 'OVN_LINK_1',
+    linkType: 'overnight',
+    pairAnchorDate: '2026-10-25',
+    linkedRecordId: 'ovn-arr-1',
+  });
+
+  // Dragging arrival leg to 2026-11-01 when dep is hidden
+  const mods = buildDetailedTransferModifications({
+    sourceLeg: overnightArr,
+    visibleLegs: [overnightArr], // dep is hidden
+    allLegs: [overnightArr, overnightDep],
+    targetDate: '2026-11-01',
+    mode: 'move',
+    idSeed: 'seed_ovn_test',
+  });
+
+  assert.equal(mods.length, 4);
+  const newArr = mods.find((m) => m.action === 'added' && m.addedLeg?.type === 'A')?.addedLeg;
+  const newDep = mods.find((m) => m.action === 'added' && m.addedLeg?.type === 'D')?.addedLeg;
+
+  assert.ok(newArr && newDep);
+  assert.equal(newArr.date, '2026-11-01');
+  assert.equal(newDep.date, '2026-11-02'); // overnight +1 preserved
+  assert.equal(newArr.linkType, 'overnight');
+  assert.equal(newDep.linkType, 'overnight');
+  assert.equal(newArr.pairAnchorDate, '2026-11-01');
+  assert.equal(newDep.pairAnchorDate, '2026-11-01');
+  assert.equal(newArr.linkedRecordId, newDep.id);
+  assert.equal(newDep.linkedRecordId, newArr.id);
+});
+test('Detailed without flight filters shows both sides within the inclusive date range', () => {
+  const records = [
+    leg({ id: 'before', date: '2026-05-26' }),
+    leg({ id: 'arrival', date: '2026-05-27', type: 'A', flightNumber: 'YP621' }),
+    leg({ id: 'departure', date: '2026-05-28', type: 'D', flightNumber: 'YP622' }),
+    leg({ id: 'after', date: '2026-05-29' }),
+  ];
+  assert.deepEqual(filterDetailedLegsForView(records, null, null, '2026-05-27', '2026-05-28').map((record) => record.id), ['arrival', 'departure']);
+  assert.deepEqual(filterDetailedLegsForView(records, 'YP621', null, '2026-05-27', '2026-05-28').map((record) => record.id), ['arrival']);
 });

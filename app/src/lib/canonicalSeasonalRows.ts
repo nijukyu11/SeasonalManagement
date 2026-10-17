@@ -17,7 +17,10 @@ const XLSX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.spreadshee
 const MS_PER_DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-export type CanonicalSeasonalRow = ParsedRow;
+export type CanonicalSeasonalRow = ParsedRow & {
+  /** Export-only references; the schedule template remains 25 columns. */
+  pairReferences?: FlightLeg[];
+};
 
 export interface CanonicalSeasonalRowsInput {
   records: FlightRecord[];
@@ -91,6 +94,7 @@ interface RowCandidate {
   aircraft: string;
   arrival: FlightLeg | null;
   departure: FlightLeg | null;
+  overnight?: boolean;
 }
 
 interface SourceRowRebuildApplyOptions {
@@ -98,10 +102,6 @@ interface SourceRowRebuildApplyOptions {
   syncMeta?: { pendingCount?: number; syncStatus?: string; conflicts?: unknown[] };
   pendingOps?: unknown[];
   replaceSourceRows: (seasonId: string, rows: CanonicalSeasonalRow[]) => Promise<void>;
-}
-
-function isoDateFromMs(ms: number): string {
-  return new Date(ms).toISOString().split('T')[0];
 }
 
 function shiftIsoDate(isoDate: string, days: number): string {
@@ -126,40 +126,64 @@ function computeDaysOfWeek(dates: string[]): boolean[] {
   return days;
 }
 
-function isCompletePatternRun(dates: string[]): boolean {
-  const present = new Set(dates);
-  const activeDays = new Set(dates.map((date) => new Date(`${date}T00:00:00Z`).getUTCDay()));
-  const startMs = new Date(`${dates[0]}T00:00:00Z`).getTime();
-  const endMs = new Date(`${dates[dates.length - 1]}T00:00:00Z`).getTime();
-
-  for (let ms = startMs; ms <= endMs; ms += MS_PER_DAY) {
-    const current = new Date(ms);
-    if (activeDays.has(current.getUTCDay()) && !present.has(isoDateFromMs(ms))) return false;
-  }
-
-  return true;
-}
-
 function splitIntoCompleteRuns(dates: string[]): string[][] {
   const uniqueDates = [...new Set(dates)].sort();
-  if (uniqueDates.length === 0) return [];
-  if (uniqueDates.length === 1) return [uniqueDates];
+  const count = uniqueDates.length;
+  if (count === 0) return [];
+  if (count === 1) return [uniqueDates];
 
-  const runs: string[][] = [];
-  let run = [uniqueDates[0]];
+  const calendarDays = uniqueDates.map((date) => new Date(`${date}T00:00:00Z`).getTime() / MS_PER_DAY);
+  const weekdays = uniqueDates.map(dayIndex);
+  const lastComplete = new Int32Array(count);
+  const weekdayCounts = new Int32Array(7);
 
-  for (let i = 1; i < uniqueDates.length; i++) {
-    const candidate = [...run, uniqueDates[i]];
-    if (isCompletePatternRun(candidate)) {
-      run = candidate;
-    } else {
-      runs.push(run);
-      run = [uniqueDates[i]];
+  // A missing active weekday inside an interval cannot be repaired by
+  // extending its end. Cache the longest valid endpoint for every start.
+  for (let start = 0; start < count; start++) {
+    weekdayCounts.fill(0);
+    lastComplete[start] = start;
+    for (let end = start; end < count; end++) {
+      weekdayCounts[weekdays[end]]++;
+      const span = calendarDays[end] - calendarDays[start];
+      let complete = true;
+      for (let weekday = 0; weekday < 7; weekday++) {
+        if (weekdayCounts[weekday] === 0) continue;
+        const firstOffset = (weekday - weekdays[start] + 7) % 7;
+        const expectedCount = Math.floor((span - firstOffset) / 7) + 1;
+        if (weekdayCounts[weekday] !== expectedCount) {
+          complete = false;
+          break;
+        }
+      }
+      if (!complete) break;
+      lastComplete[start] = end;
     }
   }
 
-  runs.push(run);
-  return runs;
+  const pending: Array<[number, number]> = [[0, count - 1]];
+  const phases: Array<[number, number]> = [];
+  while (pending.length > 0) {
+    const [left, right] = pending.pop()!;
+    let bestStart = left;
+    let bestEnd = left;
+    let bestSpan = 0;
+    for (let start = left; start <= right; start++) {
+      const end = Math.min(lastComplete[start], right);
+      const span = calendarDays[end] - calendarDays[start];
+      if (span > bestSpan || (span === bestSpan && end - start > bestEnd - bestStart)) {
+        bestStart = start;
+        bestEnd = end;
+        bestSpan = span;
+      }
+    }
+    // Ascending starts retain the earliest phase when span and count tie.
+    phases.push([bestStart, bestEnd]);
+    if (left < bestStart) pending.push([left, bestStart - 1]);
+    if (bestEnd < right) pending.push([bestEnd + 1, right]);
+  }
+
+  return phases.sort((left, right) => left[0] - right[0])
+    .map(([start, end]) => uniqueDates.slice(start, end + 1));
 }
 
 function timeToMinutes(value: string | null | undefined): number | null {
@@ -186,13 +210,11 @@ function pairLinkType(arrival: FlightLeg, departure: FlightLeg): 'overnight' | '
 }
 
 function canRepresentAsSingleImportRow(arrival: FlightLeg, departure: FlightLeg): boolean {
+  if (arrival.date !== departure.date) return false;
   if (arrival.airline !== departure.airline || arrival.aircraft !== departure.aircraft) return false;
   const linkType = pairLinkType(arrival, departure);
   const inferred = inferredSameRowLinkType(arrival, departure);
-  if (!linkType || !inferred || linkType !== inferred) return false;
-  if (linkType === 'sameday') return departure.date === arrival.date;
-  if (linkType === 'overnight') return departure.date === shiftIsoDate(arrival.date, 1);
-  return false;
+  return linkType === 'sameday' && inferred === 'sameday';
 }
 
 function legSort(left: FlightLeg, right: FlightLeg): number {
@@ -257,7 +279,14 @@ function buildCandidates(legs: FlightLeg[]): {
           continue;
         }
         if (pairLinkType(arrival, departure) === 'overnight') {
-          candidates.push(candidateFromLeg(arrival), candidateFromLeg(departure));
+          candidates.push({
+            date: arrival.date,
+            airline: arrival.airline,
+            aircraft: arrival.aircraft,
+            arrival,
+            departure,
+            overnight: true,
+          });
           processed.add(arrival.id);
           processed.add(departure.id);
           continue;
@@ -294,10 +323,13 @@ function candidateKey(candidate: RowCandidate): string {
     candidate.aircraft,
     legIdentity(candidate.arrival),
     legIdentity(candidate.departure),
+    candidate.overnight ?? false,
+    candidate.departure?.airline ?? '',
+    candidate.departure?.aircraft ?? '',
   ]);
 }
 
-function rowFromCandidate(candidate: RowCandidate, dates: string[], rowIndex: number): CanonicalSeasonalRow {
+function rowFromCandidate(candidate: RowCandidate, dates: string[], rowIndex: number, occurrences: RowCandidate[]): CanonicalSeasonalRow {
   const arrival = candidate.arrival;
   const departure = candidate.departure;
   return {
@@ -321,6 +353,10 @@ function rowFromCandidate(candidate: RowCandidate, dates: string[], rowIndex: nu
     depFlightCategory: departure?.category ?? null,
     depCodeShares: departure?.codeShares ?? null,
     depIntDomInd: departure?.intDomInd ?? null,
+    pairReferences: occurrences
+      .filter((occurrence) => dates.includes(occurrence.date))
+      .flatMap((occurrence) => [occurrence.arrival, occurrence.departure])
+      .filter((leg): leg is FlightLeg => leg !== null),
   };
 }
 
@@ -422,12 +458,13 @@ export function validateCanonicalSeasonalRoundTrip(
 export function buildCanonicalSeasonalRows(input: CanonicalSeasonalRowsInput): CanonicalSeasonalRowsResult {
   const effectiveLegs = buildEffectiveLegs(input);
   const { candidates, unpairedLinkedLegs } = buildCandidates(effectiveLegs);
-  const groups = new Map<string, { sample: RowCandidate; dates: string[] }>();
+  const groups = new Map<string, { sample: RowCandidate; dates: string[]; occurrences: RowCandidate[] }>();
 
   for (const candidate of candidates) {
     const key = candidateKey(candidate);
-    const group = groups.get(key) ?? { sample: candidate, dates: [] };
+    const group = groups.get(key) ?? { sample: candidate, dates: [], occurrences: [] };
     group.dates.push(candidate.date);
+    group.occurrences.push(candidate);
     groups.set(key, group);
   }
 
@@ -439,7 +476,20 @@ export function buildCanonicalSeasonalRows(input: CanonicalSeasonalRowsInput): C
     candidateKey(left.sample).localeCompare(candidateKey(right.sample))
   )) {
     for (const run of splitIntoCompleteRuns(group.dates)) {
-      rows.push(rowFromCandidate(group.sample, run, rowIndex++));
+      if (group.sample.overnight) {
+        const arrivalOccurrences = group.occurrences.map((occurrence) => candidateFromLeg(occurrence.arrival!));
+        const departureOccurrences = group.occurrences.map((occurrence) => candidateFromLeg(occurrence.departure!));
+        const arrivalRow = rowFromCandidate(candidateFromLeg(group.sample.arrival!), run, rowIndex++, arrivalOccurrences);
+        const departureRow = rowFromCandidate(
+          candidateFromLeg(group.sample.departure!), run.map((date) => shiftIsoDate(date, 1)), rowIndex++, departureOccurrences,
+        );
+        arrivalRow.overnightLinkRowIndex = departureRow.rowIndex;
+        departureRow.overnightLinkRowIndex = arrivalRow.rowIndex;
+        arrivalRow.linkType = departureRow.linkType = 'overnight';
+        rows.push(arrivalRow, departureRow);
+      } else {
+        rows.push(rowFromCandidate(group.sample, run, rowIndex++, group.occurrences));
+      }
     }
   }
 
@@ -491,6 +541,25 @@ export function exportCanonicalSeasonalRowsToExcel(rows: CanonicalSeasonalRow[],
   const worksheet = XLSX.utils.json_to_sheet(sheetRows);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, seasonCode);
+  const references = rows.flatMap((row, index) => (row.pairReferences ?? []).map((leg) => ({
+    'Schedule Row': index + 2,
+    'Pair Key': leg.turnaroundId ?? (leg.linkedRecordId || leg.linkType || leg.pairAnchorDate ? leg.linkId : ''),
+    'Record ID': leg.id,
+    'Linked Record ID': leg.linkedRecordId ?? '',
+    'Link Type': leg.linkType ?? '',
+    'Pair Anchor Date': leg.pairAnchorDate ? formatExcelDate(leg.pairAnchorDate) : '',
+    Type: leg.type,
+    'Scheduled Date': formatExcelDate(leg.scheduledDate ?? leg.date),
+    'Scheduled Time': leg.scheduledTime ?? leg.schedule,
+    'Operational Date': formatExcelDate(leg.operationalDate ?? leg.date),
+    Airline: leg.airline,
+    Aircraft: leg.aircraft,
+    Flight: leg.rawFlightNumber,
+    Route: leg.route,
+  })));
+  if (references.length > 0) {
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(references), 'Pair References');
+  }
   const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
   return new Blob([bytes], { type: XLSX_MIME_TYPE });
 }
@@ -565,7 +634,11 @@ function rebuildBlockReason(input: {
 
 export function buildSourceRowRebuildPlan(input: SourceRowRebuildPlanInput): SourceRowRebuildPlan {
   const canonical = buildCanonicalSeasonalRows(input);
-  const diffSummary = diffRows(input.currentRows, canonical.rows);
+  const rebuildRows = canonical.rows.map(({ pairReferences, ...row }) => {
+    void pairReferences;
+    return row;
+  });
+  const diffSummary = diffRows(input.currentRows, rebuildRows);
   const blockReason = rebuildBlockReason({
     validation: canonical.validation,
     syncMeta: input.syncMeta,
@@ -573,7 +646,7 @@ export function buildSourceRowRebuildPlan(input: SourceRowRebuildPlanInput): Sou
   });
 
   return {
-    rows: canonical.rows,
+    rows: rebuildRows,
     validation: canonical.validation,
     diffSummary,
     canApply: blockReason == null,

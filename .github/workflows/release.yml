@@ -44,15 +44,6 @@ jobs:
         with:
           workspaces: app/src-tauri -> target
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: |
-            app/ai-agent/requirements.txt
-            app/ai-agent/requirements-build.txt
-
       - name: Install dependencies
         run: npm ci
 
@@ -74,17 +65,11 @@ jobs:
             throw "Native release must be built with NEXT_PUBLIC_REMOTE_BACKEND=supabase"
           }
 
-      - name: Install Python agent dependencies
-        run: python -m pip install -r ai-agent/requirements.txt -r ai-agent/requirements-build.txt
-
       - name: Run updater tests
         run: npm run test:updater
 
       - name: Run rule regression tests
         run: npm run test:rules
-
-      - name: Run Python agent tests
-        run: npm run python:agent:test
 
       - name: Build signed Tauri bundle
         run: npm run native:build

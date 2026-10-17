@@ -282,7 +282,7 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
     patchSeasonState(seasonId, {
       status: pendingCount > 0 ? 'dirty' : 'live',
       ...nextSummary,
-      message: pendingCount > 0 ? 'Unsynced local changes. Use Save to push them to the server.' : null,
+      message: pendingCount > 0 ? 'Thay đổi cục bộ chưa lưu. Hãy lưu để gửi lên máy chủ.' : null,
       progress: null,
       mode: null,
     });
@@ -411,7 +411,7 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
       getPendingCount: async (seasonId) => statesRef.current[seasonId]?.pendingCount ?? 0,
       getBlockedReason: (seasonId) => {
         for (const guard of guardsRef.current.values()) {
-          if (guard.seasonId === seasonId && guard.blocked) return guard.reason ?? 'Local operation in progress';
+          if (guard.seasonId === seasonId && guard.blocked) return guard.reason ?? 'Thao tác cục bộ đang thực hiện';
         }
         return null;
       },
@@ -430,13 +430,13 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
           seasonId,
           source: syncGuardSource,
           blocked: mode === 'manual',
-          reason: mode === 'auto' ? 'Auto save running' : 'Manual save running',
+          reason: mode === 'auto' ? 'Đang tự động lưu' : 'Đang lưu thủ công',
           quiet: true,
           blockingUi: mode === 'manual',
         });
         try {
-          nextScheduler.setProgress(seasonId, mode === 'auto' ? 'Auto saving' : 'Saving to server');
-          return { status: 'synced' as const, message: 'Changes saved to server.' };
+          nextScheduler.setProgress(seasonId, mode === 'auto' ? 'Đang tự động lưu' : 'Đang lưu lên máy chủ');
+          return { status: 'synced' as const, message: 'Đã lưu thay đổi lên máy chủ.' };
         } finally {
           guardsRef.current.delete(syncGuardKey);
         }
@@ -463,7 +463,7 @@ export default function SeasonSyncProvider({ children }: { children: ReactNode }
 
   const syncNow = useCallback(async (seasonId: string, source: string) => {
     const result = await (scheduler?.syncNow(seasonId, source) ??
-      { status: 'failed' as const, message: 'Sync coordinator is not ready.' });
+      { status: 'failed' as const, message: 'Bộ điều phối đồng bộ chưa sẵn sàng.' });
     ensureLiveSeason(seasonId);
     return result;
   }, [ensureLiveSeason, scheduler]);
@@ -597,7 +597,7 @@ export function useSeasonSync(seasonId: string | null | undefined, source: strin
     return undefined;
   }, [context, isRouteActive, seasonId]);
   const syncNow = useCallback(async () => {
-    if (!seasonId || !context) return { status: 'failed' as const, message: 'No season selected.' };
+    if (!seasonId || !context) return { status: 'failed' as const, message: 'Chưa chọn lịch mùa.' };
     return context.syncNow(seasonId, source);
   }, [context, seasonId, source]);
 
@@ -612,7 +612,7 @@ export function useSeasonSyncActions() {
   return useMemo(() => ({
     syncNow: async (seasonId: string, source: string) => (
       context?.syncNow(seasonId, source) ??
-      { status: 'failed' as const, message: 'Sync coordinator is not ready.' }
+      { status: 'failed' as const, message: 'Bộ điều phối đồng bộ chưa sẵn sàng.' }
     ),
   }), [context]);
 }
@@ -651,12 +651,12 @@ export function getSeasonSyncPendingCount(status: SeasonAutoSyncState, fallbackP
 
 export function getSeasonSyncLabel(status: SeasonAutoSyncState, fallbackPendingCount: number | null): string {
   const pendingCount = getSeasonSyncPendingCount(status, fallbackPendingCount);
-  if (status.status === 'syncing') return status.mode === 'auto' ? 'Auto saving' : 'Saving';
-  if (status.status === 'offline') return 'Offline';
-  if (status.status === 'failed') return 'Failed';
-  if (pendingCount == null) return 'Checking';
-  if (pendingCount > 0) return `${pendingCount} pending submit`;
-  return 'Synced';
+  if (status.status === 'syncing') return status.mode === 'auto' ? 'Đang tự động lưu' : 'Đang lưu';
+  if (status.status === 'offline') return 'Ngoại tuyến';
+  if (status.status === 'failed') return 'Thất bại';
+  if (pendingCount == null) return 'Đang kiểm tra';
+  if (pendingCount > 0) return `${pendingCount} chờ gửi`;
+  return 'Đã đồng bộ';
 }
 
 export function getSeasonSyncTone(status: SeasonAutoSyncState, fallbackPendingCount: number | null): 'success' | 'warning' | 'error' | 'info' {

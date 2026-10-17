@@ -26,17 +26,17 @@ export function getSyncActionButtonState({
   const busy = syncing;
   const disabled = busy || !canSubmit;
   const disabledCursorClass = busy ? 'disabled:cursor-wait' : 'disabled:cursor-not-allowed';
-  const label = busy ? 'Submitting...' : hasPending ? 'Save pending' : hasDraft ? 'Save draft' : 'No pending';
+  const label = busy ? 'Đang lưu...' : hasPending ? 'Lưu thay đổi' : hasDraft ? 'Lưu bản nháp' : 'Không có thay đổi';
 
   let title: string;
   if (busy) {
-    title = progress ?? (hasDraft && !hasPending ? 'Submitting draft changes' : 'Submitting pending changes');
+    title = progress ?? (hasDraft && !hasPending ? 'Đang lưu thay đổi bản nháp' : 'Đang lưu thay đổi');
   } else if (hasPending) {
-    title = progress ?? 'Submit pending changes to server';
+    title = progress ?? 'Lưu thay đổi lên máy chủ';
   } else if (hasDraft) {
-    title = progress ?? 'Save draft changes to server';
+    title = progress ?? 'Lưu thay đổi bản nháp lên máy chủ';
   } else {
-    title = 'No pending changes to submit';
+    title = 'Không có thay đổi cần lưu';
   }
 
   return {

@@ -55,11 +55,11 @@ export interface OperatorPermissionOption {
 }
 
 export const OPERATOR_ROLE_OPTIONS: readonly OperatorRoleOption[] = [
-  { id: 'super_admin', label: 'Super Admin', description: 'Full system owner.' },
-  { id: 'ops_admin', label: 'Ops Admin', description: 'Daily operations administrator.' },
-  { id: 'schedule_planner', label: 'Schedule Planner', description: 'Seasonal, Detailed, and Daily schedule editor.' },
-  { id: 'resource_coordinator', label: 'Resource Coordinator', description: 'Check-in and Gate allocation editor.' },
-  { id: 'viewer', label: 'Viewer', description: 'Read-only operator.' },
+  { id: 'super_admin', label: 'Quản trị cấp cao', description: 'Toàn quyền quản trị hệ thống.' },
+  { id: 'ops_admin', label: 'Quản trị vận hành', description: 'Quản trị viên vận hành hàng ngày.' },
+  { id: 'schedule_planner', label: 'Điều phối viên kế hoạch', description: 'Biên tập lịch mùa, lịch chi tiết và lịch ngày.' },
+  { id: 'resource_coordinator', label: 'Điều phối viên tài nguyên', description: 'Biên tập phân bổ quầy thủ tục và cửa khởi hành.' },
+  { id: 'viewer', label: 'Người xem', description: 'Chỉ xem dữ liệu.' },
 ];
 
 export const ROLE_DEFAULT_PERMISSIONS: Record<OperatorRoleId, readonly OperatorPermissionKey[]> = {
@@ -113,13 +113,13 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<OperatorRoleId, readonly OperatorP
 };
 
 export const OPERATOR_EXTRA_CAPABILITY_OPTIONS: readonly OperatorPermissionOption[] = [
-  { id: 'ai.use', label: 'AI Use', description: 'Use Dashboard AI/local AI agent.' },
-  { id: 'ai.manage', label: 'AI Manage', description: 'Manage AI provider keys, models, and context.' },
-  { id: 'audit.read', label: 'Audit Read', description: 'Read Audit Log.' },
-  { id: 'settings.manage', label: 'Settings Manage', description: 'Manage operational settings.' },
-  { id: 'season.repair', label: 'Season Repair', description: 'Run season repair/import repair flows.' },
-  { id: 'updates.manage', label: 'Updates Manage', description: 'Manage desktop update actions.' },
-  { id: 'diagnostics.read', label: 'Diagnostics Read', description: 'Read support diagnostics.' },
+  { id: 'ai.use', label: 'Sử dụng AI', description: 'Sử dụng trợ lý AI trên tổng quan hoặc AI nội bộ.' },
+  { id: 'ai.manage', label: 'Quản lý AI', description: 'Quản lý khóa nhà cung cấp AI, mô hình và ngữ cảnh.' },
+  { id: 'audit.read', label: 'Xem lịch sử thao tác', description: 'Đọc nhật ký thao tác hệ thống.' },
+  { id: 'settings.manage', label: 'Quản lý cài đặt', description: 'Quản lý các cài đặt vận hành.' },
+  { id: 'season.repair', label: 'Khôi phục lịch mùa', description: 'Thực hiện quy trình khôi phục hoặc xử lý lỗi lịch mùa.' },
+  { id: 'updates.manage', label: 'Quản lý cập nhật', description: 'Quản lý cập nhật phiên bản ứng dụng.' },
+  { id: 'diagnostics.read', label: 'Xem chẩn đoán', description: 'Đọc thông tin chẩn đoán hỗ trợ kỹ thuật.' },
 ];
 
 export function isOperatorRoleId(value: unknown): value is OperatorRoleId {
@@ -206,11 +206,11 @@ export function validateOperatorAssignment(input: {
   extraPermissions?: readonly OperatorPermissionKey[];
 }): { ok: true } | { ok: false; reason: string } {
   if (!canAssignOperatorRole(input.actorPermissions, input.roleId)) {
-    return { ok: false, reason: input.roleId === 'super_admin' ? 'super_admin requires roles.manage' : 'users.manage is required' };
+    return { ok: false, reason: input.roleId === 'super_admin' ? 'Cần có quyền roles.manage để gán vai trò super_admin' : 'Cần có quyền users.manage' };
   }
   for (const permission of input.extraPermissions ?? []) {
     if (!canGrantOperatorPermission(input.actorPermissions, permission)) {
-      return { ok: false, reason: `${permission} requires roles.manage` };
+      return { ok: false, reason: `Cần có quyền roles.manage để cấp quyền ${permission}` };
     }
   }
   return { ok: true };

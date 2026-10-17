@@ -6,7 +6,7 @@ use seasonal_management_lib::native_catchup::{
     checkpoint_mode_for_committed_pages, configure_sqlite_connection,
     ensure_local_season_on_connection, ensure_native_schema, import_season_snapshot_on_connection,
     merge_season_snapshot_on_connection, query_allocation_window_on_connection,
-    query_dashboard_ai_sql_on_connection, query_schedule_window_on_connection,
+    query_schedule_window_on_connection,
     query_season_freshness_on_connection, query_sync_summary_on_connection,
     reconcile_flight_record_manifest_on_connection, resolve_season_conflict_on_connection,
     should_request_page_fetch_retry, should_request_token_refresh, sync_pending_changes_on_connection,
@@ -16,7 +16,7 @@ use seasonal_management_lib::native_catchup::{
     ImportSeasonSnapshotInput, MergeSeasonSnapshotInput, NativeCatchupEvent,
     NativeCatchupEventPage, NativeHttpError, NativeSyncPendingRpcResult,
     NativeSeasonOnlyInput,
-    QueryAllocationWindowInput, QueryDashboardSummaryInput, QueryNativeDashboardAiSqlInput,
+    QueryAllocationWindowInput, QueryDashboardSummaryInput,
     QueryScheduleWindowInput, QuerySeasonFreshnessInput, ResolveSeasonConflictInput,
     WalCheckpointMode, MAX_NATIVE_PENDING_SYNC_CHUNK_BYTES, MAX_NATIVE_PENDING_SYNC_CHUNK_EVENTS,
 };
@@ -1195,143 +1195,6 @@ fn create_minimal_local_schema(conn: &Connection) {
         "#,
     )
     .expect("schema");
-}
-
-fn insert_dashboard_ai_sql_fixture(conn: &Connection) {
-    create_minimal_local_schema(conn);
-    conn.execute(
-        "INSERT INTO local_seasons (season_id, season_code, effective_start, effective_end, payload_json) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![
-            "season-s26",
-            "S26",
-            "2026-03-28",
-            "2026-10-25",
-            json!({ "seasonCode": "S26" }).to_string()
-        ],
-    )
-    .expect("insert local season");
-    for (index, (record_id, ops_date, schedule, flight, airline, route, pax, type_code)) in [
-        (
-            "r1",
-            "2026-06-01",
-            "07:10",
-            "VN101",
-            "VN",
-            "HAN-DAD",
-            100,
-            "A",
-        ),
-        (
-            "r2",
-            "2026-06-01",
-            "08:20",
-            "VN102",
-            "VN",
-            "DAD-SGN",
-            120,
-            "D",
-        ),
-        (
-            "r3",
-            "2026-06-02",
-            "09:30",
-            "VJ201",
-            "VJ",
-            "SGN-DAD",
-            90,
-            "A",
-        ),
-    ]
-    .iter()
-    .enumerate()
-    {
-        conn.execute(
-            r#"INSERT INTO local_flight_records (
-                season_id, record_id, is_base, sort_order, flight_date, operational_date,
-                type, source_side, status, gate, stand, schedule, payload_json
-              ) VALUES (?1, ?2, 0, ?3, ?4, ?4, ?5, 'schedule', 'active', ?6, ?7, ?8, ?9)"#,
-            params![
-                "season-s26",
-                record_id,
-                index as i64,
-                ops_date,
-                type_code,
-                1_i64,
-                2_i64,
-                schedule,
-                json!({
-                    "flightNumber": flight,
-                    "airline": airline,
-                    "route": route,
-                    "iataSeasonCode": "S26",
-                    "pax": pax,
-                    "type": type_code,
-                    "status": "active"
-                })
-                .to_string()
-            ],
-        )
-        .expect("insert local flight record");
-    }
-}
-
-#[test]
-fn dashboard_ai_sql_accepts_select_and_cte_only_on_projection_view() {
-    let conn = open_test_db();
-    insert_dashboard_ai_sql_fixture(&conn);
-
-    let daily = query_dashboard_ai_sql_on_connection(
-        &conn,
-        &QueryNativeDashboardAiSqlInput {
-            sql: "SELECT ops_date, COUNT(*) AS flights, SUM(pax) AS pax FROM dashboard_ai_flight_operations WHERE month = ? GROUP BY ops_date ORDER BY flights DESC".to_string(),
-            params: vec![json!("2026-06")],
-            limit: Some(10),
-        },
-    )
-    .expect("daily query succeeds");
-    assert_eq!(daily.columns, vec!["ops_date", "flights", "pax"]);
-    assert_eq!(daily.rows[0]["ops_date"], json!("2026-06-01"));
-    assert_eq!(daily.rows[0]["flights"], json!(2));
-    assert!(daily.executed_sql_preview.ends_with("LIMIT 10"));
-
-    let cte = query_dashboard_ai_sql_on_connection(
-        &conn,
-        &QueryNativeDashboardAiSqlInput {
-            sql: "WITH daily AS (SELECT ops_date, COUNT(*) AS flights FROM dashboard_ai_flight_operations GROUP BY ops_date) SELECT ops_date, flights FROM daily ORDER BY flights DESC LIMIT 5".to_string(),
-            params: Vec::new(),
-            limit: Some(5),
-        },
-    )
-    .expect("cte query succeeds");
-    assert_eq!(cte.rows[0]["flights"], json!(2));
-}
-
-#[test]
-fn dashboard_ai_sql_rejects_mutation_multiple_statements_and_unknown_tables() {
-    let conn = open_test_db();
-    insert_dashboard_ai_sql_fixture(&conn);
-
-    for sql in [
-        "UPDATE dashboard_ai_flight_operations SET pax = 0",
-        "PRAGMA table_info(local_flight_records)",
-        "SELECT * FROM local_flight_records LIMIT 5",
-        "SELECT * FROM dashboard_ai_flight_operations LIMIT 1; SELECT 1",
-    ] {
-        let error = query_dashboard_ai_sql_on_connection(
-            &conn,
-            &QueryNativeDashboardAiSqlInput {
-                sql: sql.to_string(),
-                params: Vec::new(),
-                limit: Some(5),
-            },
-        )
-        .expect_err("unsafe SQL is rejected")
-        .to_string();
-        assert!(
-            error.contains("Dashboard AI SQL"),
-            "unexpected rejection error for {sql}: {error}"
-        );
-    }
 }
 
 #[test]

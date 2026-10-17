@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { TrafficReportFilter } from './trafficReportContract.ts';
 import {
   TrafficReportRequestError,
+  TrafficReportSyncingError,
   TrafficReportVersionChangedError,
   buildTrafficReportV2DimensionUrl,
   buildTrafficReportV2ExportUrl,
@@ -232,4 +233,64 @@ test('adapter classifies transient API failures as retryable', async () => {
     }),
     (error: unknown) => error instanceof TrafficReportRequestError && error.retryable,
   );
+});
+
+test('adapter classifies REPORT_SYNCING (503) as TrafficReportSyncingError', async () => {
+  await assert.rejects(
+    fetchTrafficReportV2Bundle(filter, {
+      fetchImpl: (async () => Response.json({
+        error_code: 'REPORT_SYNCING',
+        error: 'Đang đồng bộ dữ liệu vận hành. Vui lòng đợi trong giây lát.',
+      }, { status: 503 })) as typeof fetch,
+    }),
+    (error: unknown) => error instanceof TrafficReportSyncingError
+      && error.status === 503
+      && error.errorCode === 'REPORT_SYNCING'
+      && error.retryable,
+  );
+});
+
+test('adapter retries bounded sync failures when maxSyncRetries is configured and succeeds', async () => {
+  let calls = 0;
+  const syncStatuses: boolean[] = [];
+  const bundle = await fetchTrafficReportV2Bundle(filter, {
+    maxSyncRetries: 2,
+    syncRetryDelayMs: 5,
+    onSyncStatus: (syncing) => { syncStatuses.push(syncing); },
+    fetchImpl: (async () => {
+      calls += 1;
+      if (calls === 1) {
+        return Response.json({
+          error_code: 'REPORT_SYNCING',
+          error: 'Đang đồng bộ dữ liệu vận hành. Vui lòng đợi trong giây lát.',
+        }, { status: 503 });
+      }
+      return Response.json(payload(60));
+    }) as typeof fetch,
+  });
+  assert.equal(calls, 2);
+  assert.equal(bundle.version.sourceWatermark, 60);
+  assert.deepEqual(syncStatuses, [true, false]);
+});
+
+test('adapter exhausts bounded sync retries and retains failure after bound', async () => {
+  let calls = 0;
+  const syncStatuses: boolean[] = [];
+  await assert.rejects(
+    fetchTrafficReportV2Bundle(filter, {
+      maxSyncRetries: 2,
+      syncRetryDelayMs: 5,
+      onSyncStatus: (syncing) => { syncStatuses.push(syncing); },
+      fetchImpl: (async () => {
+        calls += 1;
+        return Response.json({
+          error_code: 'REPORT_SYNCING',
+          error: 'Đang đồng bộ dữ liệu vận hành. Vui lòng đợi trong giây lát.',
+        }, { status: 503 });
+      }) as typeof fetch,
+    }),
+    (error: unknown) => error instanceof TrafficReportSyncingError && error.errorCode === 'REPORT_SYNCING',
+  );
+  assert.equal(calls, 3);
+  assert.deepEqual(syncStatuses, [true, true, false]);
 });

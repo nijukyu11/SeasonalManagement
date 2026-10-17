@@ -22,8 +22,7 @@ export default function FetchServerUpdatesButton({
   const busy = fetching || clickLocked;
   const blocked = disabled || busy;
   const disabledCursorClass = busy ? 'disabled:cursor-wait' : 'disabled:cursor-not-allowed';
-  const label = busy ? 'Fetching...' : 'Fetch data';
-
+  const label = busy ? 'Đang tải dữ liệu...' : 'Tải dữ liệu';
   const handleClick = useCallback(async () => {
     if (blocked || clickLockedRef.current) return;
     clickLockedRef.current = true;
@@ -43,7 +42,7 @@ export default function FetchServerUpdatesButton({
       disabled={blocked}
       aria-busy={busy ? 'true' : 'false'}
       aria-live="polite"
-      title={busy ? progress ?? 'Fetching server data' : progress ?? 'Fetch latest data from server. Local edits are not uploaded.'}
+      title={busy ? progress ?? 'Đang tải dữ liệu máy chủ' : progress ?? 'Tải dữ liệu mới nhất từ máy chủ. Các chỉnh sửa cục bộ không bị tải lên.'}
       className={`flex min-w-[148px] items-center justify-center gap-2 rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 font-label-caps text-label-caps text-on-surface transition-colors hover:bg-surface-container-high ${disabledCursorClass} disabled:opacity-70 ${className}`}
     >
       <span aria-hidden="true" className={`material-symbols-outlined text-[18px] ${busy ? 'animate-spin' : ''}`}>cloud_sync</span>

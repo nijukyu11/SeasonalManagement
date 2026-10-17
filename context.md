@@ -8,9 +8,14 @@ A web-based aviation operations app for importing seasonal Excel schedules, revi
 
 ---
 
-## Current Server-First Context - 2026-07-23
+## Current Server-First Context - 2026-09-04
 
 This section is the current runtime contract and supersedes the legacy native-first notes below.
+
+- The current code/branch/public-endpoint reconciliation is in `docs/current-implementation-status.md`. It separates `main`, worktree/branch, database apply and public-route activation; plan and production receipt files do not override a newer code/live check.
+- Local `main` is at `3d928ce` and is two commits ahead of `origin/main`. The Daily Pax correction code/receipt is therefore not reproducible from `origin/main` until those commits are pushed or merged.
+- Rolling-30 forecast (`3ad9b54`, `36e9aa2`) and indexed Ops Date Daily staging (`6f05837`) are on separate clean branches, not on `main`. The KPI wallboard light/full-height redesign and v2 consumer changes in the main worktree are uncommitted WIP.
+- Public read-only verification on 2026-09-04 returned `traffic-report-v1` for both `/api/report/v1/overview` and `/api/report/v2/overview`, plus `annual-passenger-kpi-v1` at `/annual-kpi`; `/dashboard-publication` and `/dashboard-publication-version` returned `404`. The available public API contracts are therefore Report v1 and live KPI v1. Static UI mode still requires flag/DOM verification, and earlier cutover receipts do not override this current API evidence.
 
 - The Tauri desktop app is fully server-first against self-hosted Supabase. Supabase relational tables, mutation RPCs, and server change events are the only durable operational authority.
 - Normal route reads render any existing operator-scoped Zustand snapshot first, including stale snapshots, then revalidate through one shared coordinator promise per canonical window and invalidation generation. `get_season_schedule_allocation_window_v2` loads bounded keyset pages sequentially under one snapshot token; a server read failure preserves stale content when available and never falls back to direct-table fan-out or SQLite.
@@ -214,7 +219,7 @@ The public traffic report is a separate web publication boundary at `/reports/tr
 - The publication grain is one effective ARR/DEP leg after added/modified/deleted overlays. Cross-season duplicates use the canonical occurrence identity `(type, scheduled_date, airline, flight_number)` and authoritative server recency from `season_change_events.server_seq`. Deleted winners are resolved before the final deleted filter; duplicate candidates with tied or missing recency are quarantined.
 - Historical v1 note: the original 2026-08-22 contract included only positive Pax because it lacked an independent reported-zero state. This rule is superseded by the 2026-09-01 canonical Pax-presence contract below: NULL is missing and 0 is reported true-zero.
 - Country labels come from `operational_route_countries`; unmapped routes remain `Unknown`. Excel files are reconciliation evidence only and never override the database.
-- Public cells below 3 legs are suppressed or folded into `Khác`; complementary suppression protects a single small cell from subtraction. Raw leg identifiers, flight numbers, exact times, allocation fields and provenance never cross the public API.
+- Historical v1 note: cells below 3 legs were suppressed or folded into `Khác`. Migration `20260830213000_public_traffic_report_remove_suppression.sql` supersedes that policy for the current aggregate contract; `Khác` remains a top-N grouping, not privacy suppression. Raw leg identifiers, flight numbers, exact times, allocation fields and provenance still never cross the public API.
 - The browser makes one initial same-origin GET to `/api/report/v1/overview`. The anonymous Edge Function makes one PostgREST wrapper call; the wrapper calls the three reporting RPCs under one PostgreSQL statement snapshot. Timeline continuation uses a date cursor.
 - Nginx owns the 60-second shared cache and never serves stale content. Browser stale-while-revalidate is capped at 30 seconds; Cloudflare must bypass `/api/report/*`.
 
@@ -226,6 +231,7 @@ This section supersedes the Public Traffic Report source/read-path and Pax-prese
 
 - **Canonical Traffic Metrics Module** is the single domain module for Report and the public 24/7 Dashboard. Its implementation owns canonical active/deleted/duplicate resolution, operational overlays, Ops Date, A/D/all, flight count, Pax totals, Pax coverage and complete/partial/missing/future/zero states. Neither frontend nor either read adapter recalculates these metrics.
 - **Report Read Adapter** serves on-demand Report queries for arbitrary permitted date ranges and normalized filters. Report reads canonical committed data live. An initial read returns a **Report Read Version** containing the metrics contract version, source watermark, semantic data-as-of, latest completed Ops Date and filter hash. Timeline, dimension and export reads must use the same version; a source change invalidates the version instead of allowing mixed results.
+- Current Report v2 aggregate responses do not apply the old small-cell suppression threshold. Ranked overflow may still be grouped as `Khác`; the API remains aggregate-only and does not expose raw leg identity or allocation/provenance fields.
 - A Report Read Version detects drift but does not preserve a PostgreSQL MVCC snapshot across separate requests. A reproducible export must therefore be generated from one statement/job and retain its own receipt rather than assuming a browser token can replay an old database snapshot.
 - **Daily Publisher Adapter** runs only after the target **Business Date** has passed daily import/reconciliation acceptance. It computes through the Canonical Traffic Metrics Module, verifies the expected watermark before and after calculation, validates quality, then records an immutable **Daily Publication** and atomically advances the current publication pointer only for a ready result.
 - **Daily Publication** is the public Dashboard's data truth. It records publication id, Business Date, source watermark, semantic data-as-of, metrics contract version, row/count evidence, checksum, published time and aggregate payload. A correction creates a new immutable publication; it never overwrites the prior receipt.
@@ -240,7 +246,9 @@ This section supersedes the Public Traffic Report source/read-path and Pax-prese
 - For a completed Ops Date with canonical Daily coverage `complete`, known Pax is reportable immediately. T+24 remains the deadline for classifying a `Pax NULL` leg as overdue missing; it must not suppress a known Pax value.
 - The current `reporting.public_traffic_effective` materialized snapshot and refresh timer remain rollback infrastructure during dual-run. Their retirement is a separate post-soak decision after Report live reads and Daily Publication have passed clone, staging and production shadow gates.
 
-## Current Architecture
+## Historical Local-First Architecture (superseded 2026-06-23)
+
+The following long-form model is retained as implementation archaeology for repair/rollback work. It is not the normal server-first read/write path. For current architecture, use `architecture.md` and `docs/current-implementation-status.md`.
 
 ```text
 Excel workbook
@@ -281,7 +289,7 @@ The important architectural shift is that `sourceRows` are no longer the main tr
 
 ---
 
-## Supabase / Native SQLite Storage
+## Historical Supabase / Native SQLite Storage
 
 ```text
 seasons / local_seasons

@@ -3,8 +3,8 @@ import AppShell from './components/AppShell';
 import '../globals.css';
 
 export const metadata: Metadata = {
-  title: 'Seasonal Schedule - Aviation Command',
-  description: 'Aviation seasonal flight schedule management — Ops Control Center',
+  title: 'Lịch mùa bay - Trung tâm điều hành',
+  description: 'Quản lý lịch bay theo mùa - Trung tâm điều hành khai thác',
 };
 
 export default function DesktopRootLayout({ children }: { children: React.ReactNode }) {

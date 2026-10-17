@@ -31,6 +31,7 @@ import {
   filterDetailedLegsForView,
   revertFlightRecordHistoryList,
   revertModificationHistoryMap,
+  type OvernightCompanionState,
 } from '@/lib/detailedScheduleState';
 import { activeCanonicalFlightRecordIds } from '@/lib/effectiveSeasonalLegs';
 import type { CalendarSelectionMode, NewFlightDateSelection } from '@/lib/detailedScheduleState';
@@ -45,6 +46,7 @@ import { appendAuditLogEntry, createFlightActionAuditFromHistory } from '@/lib/a
 import { withScheduleNotificationPayload } from '@/lib/scheduleNotifications';
 import { resolveLinkedDeletionTargets } from '@/lib/pairDeletion';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
+import { formatUiError } from '@/lib/uiDisplayText';
 import { saveWorkbookAsXlsx } from '@/lib/exportSave';
 import type { Season, FlightLeg, FlightModification, ModHistoryEntry, FlightRecord } from '@/lib/types';
 
@@ -54,15 +56,7 @@ interface DetailedScheduleDraftState {
   modifications: FlightModification[];
 }
 
-/** Overnight companion leg shown alongside the primary flight in the calendar */
-interface OvernightCompanion {
-  flightNumber: string;
-  schedule: string; // time with +1 or -1 suffix
-  route: string;
-  aircraft: string;
-  type: 'A' | 'D';
-  linkId: string;
-}
+type OvernightCompanion = OvernightCompanionState;
 import * as XLSX from 'xlsx';
 import { Suspense } from 'react';
 import EditModal from './EditModal';
@@ -77,6 +71,7 @@ import HeaderActionMenu from '../components/HeaderActionMenu';
 import SyncActionButton from '../components/SyncActionButton';
 import WorkspacePageHeader from '../components/WorkspacePageHeader';
 import SeasonalPublishModal from '../components/SeasonalPublishModal';
+import SeasonalVersionHistoryModal from '../components/SeasonalVersionHistoryModal';
 import {
   isSeasonalPlanningV1Enabled,
   seasonalDraftToFlightRecord,
@@ -86,6 +81,7 @@ import {
 import {
   applyModificationsToFlightRecords,
   buildAuthoritativeDraftUndoChanges,
+  composeSeasonalDraftUndoChanges,
   createInitialDraftSaveState,
   executeSeasonalPlanningDraftSave,
   isDraftWorkspaceNotFoundError,
@@ -109,7 +105,7 @@ import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import { readCachedWorkspaceWindow, readWorkspaceWindowSnapshot } from '@/lib/seasonWorkspaceReadModel';
 import type { LocalSyncMeta } from '@/lib/localSeasonStore';
 
-const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const DAYS_OF_WEEK = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
 
 function buildDetailedWindowKey(input: {
   dateFrom?: string | null;
@@ -170,7 +166,7 @@ function DetailedScheduleContent() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
-    buildLoadProgress('Loading detailed schedule...', 10, 'Preparing calendar')
+    buildLoadProgress('Đang tải lịch chi tiết...', 10, 'Chuẩn bị lịch')
   );
 
   // Calendar State
@@ -179,8 +175,7 @@ function DetailedScheduleContent() {
   
   // Selection State
   const [selectedLegIds, setSelectedLegIds] = useState<Set<string>>(new Set());
-  const [isMultiSelect, setIsMultiSelect] = useState(false);
-
+  const [canonicalReloadError, setCanonicalReloadError] = useState<string | null>(null);
   const selectedLegs = useMemo(() => legs.filter(l => selectedLegIds.has(l.id)), [legs, selectedLegIds]);
   const singleSelectedLeg = selectedLegs.length === 1 ? selectedLegs[0] : null;
   const linkedLeg = useMemo(() => {
@@ -205,7 +200,8 @@ function DetailedScheduleContent() {
   const [proposedMods, setProposedMods] = useState<FlightModification[]>([]);
   const [editMode, setEditMode] = useState<'flight' | 'schedule'>('flight');
   const [isSaving, setIsSaving] = useState(false);
-
+  const [isRestoringDraft, setIsRestoringDraft] = useState(false);
+  const isRestoringDraftRef = useRef(false);
   // Undo History State
   const [modHistory, setModHistory] = useState<ModHistoryEntry[]>([]);
   const [currentMods, setCurrentMods] = useState<Map<string, FlightModification>>(new Map());
@@ -262,13 +258,25 @@ function DetailedScheduleContent() {
   const [fetchingServerData, setFetchingServerData] = useState(false);
   const syncInProgress = syncStatus.status === 'syncing';
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' ? syncStatus.message : null);
-  const fetchProgress = fetchingServerData ? 'Fetching server data' : syncStatus.message;
+  const fetchProgress = fetchingServerData ? 'Đang tải dữ liệu từ máy chủ' : syncStatus.message;
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncSummary.pendingCount);
   const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount);
   const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
   const draftChangeCount = draftState?.modifications.length ?? 0;
   const hasDraftChanges = draftChangeCount > 0;
+  const isMutationBlocked =
+    syncInProgress ||
+    isSaving ||
+    isUndoing ||
+    isRestoringDraft ||
+    (isSeasonalPlanningV1Enabled() && (
+      draftSaveState.status === 'saving' ||
+      draftSaveState.hasUnconfirmedChanges ||
+      Boolean(canonicalReloadError)
+    ));
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [historyDraftTokens, setHistoryDraftTokens] = useState<{ revision: string | number; epoch: string | null }>({ revision: 0, epoch: null });
   const currentDetailedWindow = buildDetailedScheduleQueryWindow({
     dateFrom: targetDateFrom || fromDate || null,
     dateTo: targetDateTo || toDate || null,
@@ -311,7 +319,7 @@ function DetailedScheduleContent() {
   const newFlightDateLabel = useMemo(() => {
     if (newFlightDates.length === 0) return '';
     if (newFlightDates.length === 1) return newFlightDates[0];
-    return `${newFlightDates.length} dates`;
+    return `${newFlightDates.length} ngày`;
   }, [newFlightDates]);
 
   useEffect(() => {
@@ -340,11 +348,20 @@ function DetailedScheduleContent() {
     );
     setAllLegs(finalAllLegs);
     setLegs(finalLegs);
-    setOvernightCompanions(
-      targetArrFlight || targetDepFlight
-        ? buildOvernightCompanionMap(finalLegs, finalAllLegs)
-        : new Map()
-    );
+    const companionMap = buildOvernightCompanionMap(finalLegs, finalAllLegs);
+    const visibleStart = targetDateFrom || fromDate || null;
+    const visibleEnd = targetDateTo || toDate || null;
+    const filteredCompanionMap = new Map<string, OvernightCompanionState>();
+    for (const [key, comp] of companionMap.entries()) {
+      const isOutside = Boolean(
+        (visibleStart && comp.date < visibleStart) ||
+        (visibleEnd && comp.date > visibleEnd)
+      );
+      if (targetArrFlight || targetDepFlight || isOutside) {
+        filteredCompanionMap.set(key, comp);
+      }
+    }
+    setOvernightCompanions(filteredCompanionMap);
     setSelectedLegIds((prev) => {
       if (!options.preserveSelection) return new Set();
       const visibleIds = new Set(finalLegs.map((leg) => leg.id));
@@ -367,26 +384,6 @@ function DetailedScheduleContent() {
     refreshDetailedStateRef.current = refreshDetailedState;
   }, [refreshDetailedState]);
 
-  const handleRetryDraftSave = useCallback(async () => {
-    if (!season || draftSaveState.status !== 'error') return;
-    setDraftSaveState((prev) => ({ ...prev, status: 'saving', error: null }));
-    const saveResult = await retrySeasonalPlanningDraft(draftSaveState);
-    if (saveResult.result) {
-      setDraftSaveState((prev) => ({ ...saveResult.state, lastSavedAt: saveResult.state.lastSavedAt ?? prev.lastSavedAt }));
-      if (saveResult.result.status === 'saved' && saveResult.result.receipt) {
-        latestDraftRevisionRef.current = saveResult.result.receipt.revision;
-        try {
-          const draftData = await loadFullSeasonalDraftRecords(season.id, getSeasonalDraftWindowV1);
-          setFlightRecords(draftData.records);
-          setCurrentMods(new Map());
-          refreshDetailedState(draftData.records, new Map(), { preserveSelection: true });
-        } catch {
-          // Keep optimistic if reload window transiently fails
-        }
-      }
-    }
-  }, [draftSaveState, refreshDetailedState, season, setCurrentMods, setDraftSaveState, setFlightRecords]);
-
   const publishDetailedWorkspaceChange = useCallback((
     seasonId: string,
     localRevision: number | null | undefined,
@@ -401,6 +398,92 @@ function DetailedScheduleContent() {
       syncMeta,
     });
   }, []);
+
+  const syncCanonicalDraftAfterCommit = useCallback(async (
+    targetSeason: NonNullable<typeof season>,
+    committedRevision: string | number,
+    affectedIds: string[]
+  ): Promise<boolean> => {
+    try {
+      const draftData = await loadFullSeasonalDraftRecords(targetSeason.id, getSeasonalDraftWindowV1);
+      latestDraftRevisionRef.current = draftData.revision;
+      latestDraftEpochRef.current = draftData.epoch;
+      setHistoryDraftTokens({ revision: draftData.revision, epoch: draftData.epoch });
+      setFlightRecords(draftData.records);
+      setCurrentMods(new Map());
+      patchCachedSeasonData(targetSeason.id, {
+        records: draftData.records,
+        modifications: new Map(),
+      });
+      const syncMeta: LocalSyncMeta = {
+        seasonId: targetSeason.id,
+        localRevision: Number(draftData.revision) || 0,
+        pendingCount: 0,
+        lastLocalChangeAt: Date.now(),
+        baseServerVersion: targetSeason.dataVersion ?? 0,
+        syncStatus: 'synced',
+      };
+      setSyncSummary({ pendingCount: 0, lastLocalChangeAt: syncMeta.lastLocalChangeAt });
+      useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+        seasonId: targetSeason.id,
+        season: targetSeason,
+        windowKey: loadedWindowKeyRef.current ?? undefined,
+        records: draftData.records,
+        modifications: new Map(),
+        syncMeta,
+      });
+      refreshDetailedState(draftData.records, new Map(), { preserveSelection: true });
+      publishDetailedWorkspaceChange(targetSeason.id, syncMeta.localRevision, affectedIds, syncMeta);
+      setDraftSaveState((prev) => ({ ...createInitialDraftSaveState(draftData.revision), status: 'saved', lastSavedAt: prev.lastSavedAt }));
+      setCanonicalReloadError(null);
+      return true;
+    } catch (reloadErr) {
+      const errorMsg = formatUiError(reloadErr, 'Không thể nạp lại dữ liệu bản nháp sau khi lưu.');
+      setCanonicalReloadError(errorMsg);
+      const failedSyncMeta: LocalSyncMeta = {
+        seasonId: targetSeason.id,
+        localRevision: Number(committedRevision) || 0,
+        pendingCount: 0,
+        lastLocalChangeAt: Date.now(),
+        baseServerVersion: targetSeason.dataVersion ?? 0,
+        syncStatus: 'failed',
+      };
+      useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
+        seasonId: targetSeason.id,
+        affectedIds,
+        syncMeta: failedSyncMeta,
+      });
+      publishDetailedWorkspaceChange(targetSeason.id, failedSyncMeta.localRevision, affectedIds, failedSyncMeta);
+      setDraftSaveState((prev) => ({
+        ...prev,
+        status: 'saved',
+        pendingRequest: null,
+        hasUnconfirmedChanges: false,
+        error: errorMsg,
+      }));
+      return false;
+    }
+  }, [publishDetailedWorkspaceChange, refreshDetailedState, setCurrentMods, setDraftSaveState, setFlightRecords, setSyncSummary]);
+
+  const handleRetryDraftSave = useCallback(async () => {
+    if (!season) return;
+    if (draftSaveState.status === 'saving') return;
+    if (canonicalReloadError) {
+      setDraftSaveState((prev) => ({ ...prev, status: 'saving', error: null }));
+      await syncCanonicalDraftAfterCommit(season, latestDraftRevisionRef.current, []);
+      return;
+    }
+    if (draftSaveState.status !== 'error') return;
+    setDraftSaveState((prev) => ({ ...prev, status: 'saving', error: null }));
+    const saveResult = await retrySeasonalPlanningDraft(draftSaveState);
+    if (saveResult.result) {
+      setDraftSaveState((prev) => ({ ...saveResult.state, lastSavedAt: saveResult.state.lastSavedAt ?? prev.lastSavedAt }));
+      if (saveResult.result.status === 'saved' && saveResult.result.receipt) {
+        latestDraftRevisionRef.current = saveResult.result.receipt.revision;
+        await syncCanonicalDraftAfterCommit(season, saveResult.result.receipt.revision, []);
+      }
+    }
+  }, [canonicalReloadError, draftSaveState, season, setDraftSaveState, syncCanonicalDraftAfterCommit]);
 
   // Planning mode reads season_planning_drafts; the legacy workspace window would show stale operational rows.
   const applyPlanningDraftWindow = useCallback(async (
@@ -432,6 +515,9 @@ function DetailedScheduleContent() {
     latestDraftRevisionRef.current = draftData.revision;
     latestDraftEpochRef.current = draftData.epoch;
     setDraftSaveState(createInitialDraftSaveState(draftData.revision));
+    setCanonicalReloadError(null);
+    setHistoryDraftTokens({ revision: draftData.revision, epoch: draftData.epoch });
+    patchCachedSeasonData(activeSeason.id, { records: draftData.records, modifications: new Map() });
     const mods = new Map<string, FlightModification>();
     const syncMeta: LocalSyncMeta = {
       seasonId: activeSeason.id,
@@ -635,7 +721,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
       <div className="min-w-0">
         <div className="font-data-tabular text-sm font-semibold text-primary truncate">{candidate.label}</div>
         <div className="text-xs text-on-surface-variant">
-          {candidate.linkType === 'overnight' ? 'Overnight +1' : 'Same-day'} · {candidate.arrIds.length} pair(s)
+          {candidate.linkType === 'overnight' ? 'Qua đêm +1' : 'Trong ngày'} · {candidate.arrIds.length} cặp
         </div>
       </div>
       <button
@@ -643,7 +729,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
         onClick={() => onApply(candidate)}
         className="shrink-0 px-3 py-1.5 rounded bg-tertiary-container text-on-tertiary-container text-xs font-semibold hover:bg-tertiary-container/80 transition-colors"
       >
-        Link
+        Liên kết
       </button>
     </div>
   );
@@ -704,14 +790,14 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
   }, [allLegs, selectedLegIds, selectedLegs]);
 
   const handleUnlinkSelected = useCallback(async () => {
-    if (!season || syncInProgress) return;
+    if (!season || isMutationBlocked) return;
     const ids = selectedLegs.filter((leg) => leg.linkType || leg.linkedRecordId).map((leg) => leg.id);
     if (ids.length === 0) return;
     const shouldUnlink = await showConfirm({
-      title: 'Unlink Selected Flights',
-      message: `Unlink ${ids.length} selected linked flight occurrence(s)?`,
+      title: 'Hủy liên kết chuyến bay đã chọn',
+      message: `Hủy liên kết ${ids.length} chuyến bay đã chọn?`,
       tone: 'warning',
-      confirmLabel: 'Unlink',
+      confirmLabel: 'Hủy liên kết',
     });
     if (!shouldUnlink) return;
 
@@ -721,7 +807,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
       const historyEntry = buildFlightRecordHistoryEntry({
         id: `LOCAL_RECORD_${historyTimestamp}`,
         timestamp: historyTimestamp,
-        description: `Unlinked ${result.updatedRecords.length} flight occurrence(s)`,
+        description: `Hủy liên kết ${result.updatedRecords.length} chuyến bay`,
         beforeRecords: flightRecords,
         afterRecords: result.records,
       });
@@ -748,24 +834,10 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           const draftUndoChanges = buildAuthoritativeDraftUndoChanges(saveResult.result.receipt, flightRecords);
           if (historyEntry) {
             (historyEntry as ModHistoryEntry & { draftUndoChanges?: SeasonalDraftChangeInput[] }).draftUndoChanges = draftUndoChanges;
+            setModHistory((prev) => trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...prev])));
           }
-          try {
-            const draftData = await loadFullSeasonalDraftRecords(season.id, getSeasonalDraftWindowV1);
-            setFlightRecords(draftData.records);
-            setCurrentMods(new Map());
-            refreshDetailedState(draftData.records, new Map(), { preserveSelection: true });
-          } catch {
-            // Keep optimistic if reload window transiently fails
-          }
+          await syncCanonicalDraftAfterCommit(season, saveResult.result.receipt.revision, result.updatedIds);
         }
-        nativeSyncMeta = {
-          seasonId: season.id,
-          localRevision: Number(saveResult.result.receipt?.revision ?? latestDraftRevisionRef.current),
-          pendingCount: 0,
-          lastLocalChangeAt: Date.now(),
-          baseServerVersion: season.dataVersion ?? 0,
-          syncStatus: 'synced',
-        };
       } else {
         nativeSyncMeta = await runNativeScheduleMutation(
           season.id,
@@ -782,58 +854,58 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           [],
           'detailed'
         );
+        if (!nativeSyncMeta) throw new Error('Cập nhật lịch bay cục bộ không khả dụng.');
+        setFlightRecords(result.records);
+        patchCachedSeasonData(season.id, { records: result.records });
+        useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
+          seasonId: season.id,
+          affectedIds: result.updatedIds,
+          records: result.updatedRecords,
+          syncMeta: nativeSyncMeta,
+        });
+        if (historyEntry) setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
+        setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
+        refreshDetailedState(result.records, currentMods, { preserveSelection: true });
+        publishDetailedWorkspaceChange(season.id, nativeSyncMeta.localRevision, result.updatedIds, nativeSyncMeta);
       }
-      if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
-      setFlightRecords(result.records);
-      patchCachedSeasonData(season.id, { records: result.records });
-      useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
-        seasonId: season.id,
-        affectedIds: result.updatedIds,
-        records: result.updatedRecords,
-        syncMeta: nativeSyncMeta,
-      });
-      if (historyEntry) setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
-      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
-      refreshDetailedState(result.records, currentMods, { preserveSelection: true });
-      publishDetailedWorkspaceChange(season.id, nativeSyncMeta.localRevision, result.updatedIds, nativeSyncMeta);
       void appendAuditLogEntry(createFlightActionAuditFromHistory({
         season,
         module: 'detailed',
-        operation: historyEntry?.description ?? `Unlinked ${result.updatedRecords.length} flight occurrence(s)`,
+        operation: historyEntry?.description ?? `Hủy liên kết ${result.updatedRecords.length} chuyến bay`,
         beforeRecords: flightRecords,
         afterRecords: result.records,
         targetRecordIds: result.updatedIds,
       }));
     } catch (err) {
-      void showAlert({ title: 'Unlink Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Hủy liên kết thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [
     currentMods,
     flightRecords,
+    isMutationBlocked,
     modHistory,
     publishDetailedWorkspaceChange,
     refreshDetailedState,
     season,
     selectedLegs,
-    setCurrentMods,
     setDraftSaveState,
     setFlightRecords,
     setModHistory,
     setSyncSummary,
     showAlert,
     showConfirm,
-    syncInProgress,
+    syncCanonicalDraftAfterCommit,
   ]);
 
   const handleApplyLinkCandidate = useCallback(async (candidate: DetailedLinkCandidate) => {
-    if (!season || syncInProgress) return;
+    if (!season || isMutationBlocked) return;
     try {
       const result = linkFlightRecordPairs(flightRecords, candidate.arrIds, candidate.depIds, candidate.linkType);
       const historyTimestamp = Date.now();
       const historyEntry = buildFlightRecordHistoryEntry({
         id: `LOCAL_RECORD_${historyTimestamp}`,
         timestamp: historyTimestamp,
-        description: `Linked ${result.updatedRecords.length} ${candidate.linkType} flight occurrence(s)`,
+        description: `Liên kết ${result.updatedRecords.length} chuyến bay (${candidate.linkType === 'overnight' ? 'qua đêm' : 'trong ngày'})`,
         beforeRecords: flightRecords,
         afterRecords: result.records,
       });
@@ -860,24 +932,10 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           const draftUndoChanges = buildAuthoritativeDraftUndoChanges(saveResult.result.receipt, flightRecords);
           if (historyEntry) {
             (historyEntry as ModHistoryEntry & { draftUndoChanges?: SeasonalDraftChangeInput[] }).draftUndoChanges = draftUndoChanges;
+            setModHistory((prev) => trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...prev])));
           }
-          try {
-            const draftData = await loadFullSeasonalDraftRecords(season.id, getSeasonalDraftWindowV1);
-            setFlightRecords(draftData.records);
-            setCurrentMods(new Map());
-            refreshDetailedState(draftData.records, new Map(), { preserveSelection: true });
-          } catch {
-            // Keep optimistic if reload window transiently fails
-          }
+          await syncCanonicalDraftAfterCommit(season, saveResult.result.receipt.revision, result.updatedIds);
         }
-        nativeSyncMeta = {
-          seasonId: season.id,
-          localRevision: Number(saveResult.result.receipt?.revision ?? latestDraftRevisionRef.current),
-          pendingCount: 0,
-          lastLocalChangeAt: Date.now(),
-          baseServerVersion: season.dataVersion ?? 0,
-          syncStatus: 'synced',
-        };
       } else {
         nativeSyncMeta = await runNativeScheduleMutation(
           season.id,
@@ -894,47 +952,47 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           [],
           'detailed'
         );
+        if (!nativeSyncMeta) throw new Error('Cập nhật lịch bay cục bộ không khả dụng.');
+        setFlightRecords(result.records);
+        patchCachedSeasonData(season.id, { records: result.records });
+        useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
+          seasonId: season.id,
+          affectedIds: result.updatedIds,
+          records: result.updatedRecords,
+          syncMeta: nativeSyncMeta,
+        });
+        if (historyEntry) setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
+        setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
+        refreshDetailedState(result.records, currentMods, { preserveSelection: true });
+        publishDetailedWorkspaceChange(season.id, nativeSyncMeta.localRevision, result.updatedIds, nativeSyncMeta);
       }
-      if (!nativeSyncMeta) throw new Error('Native schedule mutation is unavailable.');
-      setFlightRecords(result.records);
-      patchCachedSeasonData(season.id, { records: result.records });
-      useSeasonWorkspaceStore.getState().patchSeasonWorkspace({
-        seasonId: season.id,
-        affectedIds: result.updatedIds,
-        records: result.updatedRecords,
-        syncMeta: nativeSyncMeta,
-      });
-      if (historyEntry) setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([historyEntry, ...modHistory])));
-      setSyncSummary({ pendingCount: nativeSyncMeta.pendingCount, lastLocalChangeAt: nativeSyncMeta.lastLocalChangeAt });
-      refreshDetailedState(result.records, currentMods, { preserveSelection: true });
-      publishDetailedWorkspaceChange(season.id, nativeSyncMeta.localRevision, result.updatedIds, nativeSyncMeta);
       setIsLinkModalOpen(false);
       void appendAuditLogEntry(createFlightActionAuditFromHistory({
         season,
         module: 'detailed',
-        operation: historyEntry?.description ?? `Linked ${result.updatedRecords.length} ${candidate.linkType} flight occurrence(s)`,
+        operation: historyEntry?.description ?? `Liên kết ${result.updatedRecords.length} chuyến bay (${candidate.linkType === 'overnight' ? 'qua đêm' : 'trong ngày'})`,
         beforeRecords: flightRecords,
         afterRecords: result.records,
         targetRecordIds: result.updatedIds,
       }));
     } catch (err) {
-      void showAlert({ title: 'Link Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Liên kết thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [
     currentMods,
     flightRecords,
+    isMutationBlocked,
     modHistory,
     publishDetailedWorkspaceChange,
     refreshDetailedState,
     season,
-    setCurrentMods,
     setDraftSaveState,
     setFlightRecords,
     setIsLinkModalOpen,
     setModHistory,
     setSyncSummary,
     showAlert,
-    syncInProgress,
+    syncCanonicalDraftAfterCommit,
   ]);
 
   const handleEditNext = useCallback(async (mods: FlightModification[]) => {
@@ -944,13 +1002,13 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
       const deletionTargets = resolveLinkedDeletionTargets(allLegs, deletedIds);
       if (deletionTargets.hasActiveCounterpart) {
         const choice = await showChoice({
-          title: 'Delete Linked Flight Pair',
-          message: `The selected deletion affects ${deletionTargets.selectedIds.length} linked occurrence(s) with ${deletionTargets.counterpartIds.length} active counterpart occurrence(s).\n\nChoose whether to delete the full turnaround pair or only the selected leg.`,
+          title: 'Xóa cặp chuyến bay liên kết',
+          message: `Thao tác xóa ảnh hưởng đến ${deletionTargets.selectedIds.length} chuyến bay đã chọn có ${deletionTargets.counterpartIds.length} chuyến đối ứng đang hoạt động.\n\nChọn xóa toàn bộ cặp chuyến hay chỉ xóa chặng bay đã chọn.`,
           tone: 'warning',
           choices: [
-            { value: 'pair', label: `Delete Entire Flight Pair (${deletionTargets.pairIds.length})`, tone: 'warning' },
-            { value: 'selected', label: `Delete Selected Leg Only (${deletionTargets.selectedIds.length})` },
-            { value: 'cancel', label: 'Cancel' },
+            { value: 'pair', label: `Xóa toàn bộ cặp chuyến (${deletionTargets.pairIds.length})`, tone: 'warning' },
+            { value: 'selected', label: `Chỉ xóa chặng đã chọn (${deletionTargets.selectedIds.length})` },
+            { value: 'cancel', label: 'Hủy' },
           ],
         });
         if (choice === 'pair') {
@@ -979,9 +1037,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
   const handleDeleteSelectedLegs = useCallback(() => {
     if (
       !season ||
-      syncInProgress ||
-      isSaving ||
-      isUndoing ||
+      isMutationBlocked ||
       isEditModalOpen ||
       isConfirmModalOpen ||
       selectedLegs.length === 0
@@ -990,10 +1046,10 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
     }
     const deleteMods = selectedLegs.map((leg) => ({ legId: leg.id, action: 'deleted' as const }));
     void handleEditNext(deleteMods);
-  }, [handleEditNext, isConfirmModalOpen, isEditModalOpen, isSaving, isUndoing, season, selectedLegs, syncInProgress]);
+  }, [handleEditNext, isConfirmModalOpen, isEditModalOpen, isMutationBlocked, season, selectedLegs]);
 
   const handleAddToDraft = async () => {
-    if (!season) return;
+    if (!season || isMutationBlocked) return;
     if (proposedMods.length === 0) {
       setIsConfirmModalOpen(false);
       return;
@@ -1005,7 +1061,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
       const regularMods = proposedMods.filter((m) => m.action !== 'added');
       const addedRecords = buildCanonicalAddedFlightRecords(addedMods);
       if (addedRecords.length !== addedMods.length) {
-        throw new Error('Added flight payload is missing leg data.');
+        throw new Error('Dữ liệu chuyến bay thêm mới bị thiếu thông tin chặng.');
       }
       assertNoDuplicateFlightNumbersForEffectiveRecords(
         flightRecords,
@@ -1048,7 +1104,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
         const historyEntry = buildFlightRecordHistoryEntry({
           id: `LOCAL_DETAILED_${historyTimestamp}`,
           timestamp: historyTimestamp,
-          description: `Applied ${proposedMods.length} change(s)`,
+          description: `Áp dụng ${proposedMods.length} thay đổi`,
           beforeRecords: flightRecords,
           afterRecords: nextRecords,
         });
@@ -1074,14 +1130,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           if (historyEntry) {
             setModHistory((prev) => trimUiUndoEntries(filterUiUndoEntriesForSession([{ ...historyEntry, draftUndoChanges }, ...prev])));
           }
-          try {
-            const draftData = await loadFullSeasonalDraftRecords(season.id, getSeasonalDraftWindowV1);
-            setFlightRecords(draftData.records);
-            setCurrentMods(new Map());
-            refreshDetailedState(draftData.records, new Map(), { preserveSelection: true });
-          } catch {
-            // Keep optimistic if reload window transiently fails
-          }
+          await syncCanonicalDraftAfterCommit(season, saveResult.result.receipt.revision, saveResult.result.receipt.events.map((event) => event.draftId));
         }
       } else {
         setDraftState({
@@ -1093,7 +1142,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
       setIsConfirmModalOpen(false);
     } catch (err) {
       console.error(err);
-      void showAlert({ title: 'Draft Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Lưu bản nháp thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       setIsSaving(false);
     }
@@ -1167,10 +1216,10 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
     const modCount = regularMods.filter((mod) => mod.action === 'modified').length;
     const addCount = addedRecords.length;
     const parts: string[] = [];
-    if (delCount > 0) parts.push(`Deleted ${delCount}`);
-    if (modCount > 0) parts.push(`Modified ${modCount}`);
-    if (addCount > 0) parts.push(`Added ${addCount}`);
-    const description = `${parts.join(', ')} flight(s)`;
+    if (delCount > 0) parts.push(`Xóa ${delCount}`);
+    if (modCount > 0) parts.push(`Điều chỉnh ${modCount}`);
+    if (addCount > 0) parts.push(`Thêm mới ${addCount}`);
+    const description = `${parts.join(', ')} chuyến bay`;
     const historyTimestamp = Date.now();
     const existingRecordsById = new Map(draftState.baseRecords.map((record) => [record.id, record]));
     const historyEntryBase: ModHistoryEntry = {
@@ -1218,7 +1267,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           throw new Error('Phiên bản kế hoạch mùa đã thay đổi bởi người dùng khác. Vui lòng tải lại dữ liệu trước khi lưu.');
         }
         if (planningResult.status === 'error') {
-          throw new Error(planningResult.error || 'Lỗi lưu bản nháp mùa lên server.');
+          throw new Error(planningResult.error || 'Lưu bản nháp kế hoạch mùa lên máy chủ thất bại.');
         }
         if (planningResult.receipt) {
           latestDraftRevisionRef.current = planningResult.receipt.revision;
@@ -1272,6 +1321,14 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
         refreshDetailedState(effectiveRecords, new Map(), { preserveSelection: true });
         setModHistory(trimUiUndoEntries(filterUiUndoEntriesForSession([planningHistoryEntry, ...modHistory])));
         setDraftState(null);
+        const reloadSuccess = await syncCanonicalDraftAfterCommit(
+          season,
+          planningResult.receipt?.revision ?? latestDraftRevisionRef.current,
+          committedIds.length > 0 ? committedIds : targetRecordIds
+        );
+        if (!reloadSuccess) {
+          throw new Error('Đã lưu bản nháp thành công nhưng không thể đồng bộ lại dữ liệu mới nhất từ máy chủ.');
+        }
         void appendAuditLogEntry(createFlightActionAuditFromHistory({
           season,
           module: 'detailed',
@@ -1287,7 +1344,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
 
       const commitSeq = ++detailedCommitSeqRef.current;
       const syncMeta = await runNativeScheduleMutation(season.id, addedRecords, [], regularMods, historyEntry, [], 'detailed');
-      if (!syncMeta) throw new Error('Native schedule mutation is unavailable.');
+      if (!syncMeta) throw new Error('Cập nhật lịch bay cục bộ không khả dụng.');
       if (commitSeq !== detailedCommitSeqRef.current) {
         await refreshDetailedWindow({ preserveSelection: true });
         return;
@@ -1338,16 +1395,17 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
     setIsSaving,
     setModHistory,
     setSyncSummary,
+    syncCanonicalDraftAfterCommit,
   ]);
 
   useSeasonSyncGuard(season?.id ?? targetSeasonId, 'detailed', {
     blocked: isSaving || isUndoing,
-    reason: isSaving ? 'Saving detailed schedule changes' : isUndoing ? 'Undoing detailed schedule changes' : undefined,
+    reason: isSaving ? 'Đang lưu thay đổi lịch chi tiết' : isUndoing ? 'Đang hoàn tác thay đổi lịch chi tiết' : undefined,
     beforeSync: commitDraftBeforeSave,
   });
   useSeasonSyncGuard(season?.id ?? targetSeasonId, 'detailed-hydration', {
     blocked: loading,
-    reason: 'Loading server snapshot',
+    reason: 'Đang tải bản lưu từ máy chủ',
     quiet: true,
     blockingUi: false,
   });
@@ -1362,7 +1420,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
     blockingUi: true,
   });
   const handleOpenPublishModal = useCallback(async () => {
-    if (syncInProgress || isSaving) return;
+    if (isMutationBlocked) return;
     if (isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges)) {
       void showAlert({
         title: 'Chưa thể công bố',
@@ -1377,17 +1435,90 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
       } catch (err) {
         void showAlert({
           title: 'Chưa thể công bố',
-          message: `Lưu thay đổi nháp thất bại: ${(err as Error).message}. Vui lòng kiểm tra lại.`,
+          message: `Lưu thay đổi nháp thất bại: ${formatUiError(err)}. Vui lòng kiểm tra lại.`,
           tone: 'error',
         });
         return;
       }
     }
     setIsPublishModalOpen(true);
-  }, [commitDraftBeforeSave, draftSaveState.hasUnconfirmedChanges, draftSaveState.status, hasDraftChanges, isSaving, setIsPublishModalOpen, showAlert, syncInProgress]);
+  }, [commitDraftBeforeSave, draftSaveState.hasUnconfirmedChanges, draftSaveState.status, hasDraftChanges, isMutationBlocked, setIsPublishModalOpen, showAlert]);
+
+  const handleDraftRestored = useCallback(async () => {
+    if (!season) throw new Error('Ngữ cảnh mùa không khả dụng khi nạp lại bản khôi phục.');
+    setModHistory([]);
+    try {
+      const draftData = await loadFullSeasonalDraftRecords(season.id, getSeasonalDraftWindowV1);
+      latestDraftRevisionRef.current = draftData.revision;
+      latestDraftEpochRef.current = draftData.epoch;
+      setDraftSaveState(createInitialDraftSaveState(draftData.revision));
+      setHistoryDraftTokens({
+        revision: draftData.revision,
+        epoch: draftData.epoch,
+      });
+      setFlightRecords(draftData.records);
+      setCurrentMods(new Map());
+      setDraftState(null);
+      setModHistory([]);
+      patchCachedSeasonData(season.id, {
+        records: draftData.records,
+        modifications: new Map(),
+      });
+      const syncMeta: LocalSyncMeta = {
+        seasonId: season.id,
+        localRevision: Number(draftData.revision) || 0,
+        pendingCount: 0,
+        lastLocalChangeAt: Date.now(),
+        baseServerVersion: season.dataVersion ?? 0,
+        syncStatus: 'synced',
+      };
+      setSyncSummary({ pendingCount: 0, lastLocalChangeAt: syncMeta.lastLocalChangeAt });
+      useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+        seasonId: season.id,
+        season,
+        records: draftData.records,
+        modifications: new Map(),
+        syncMeta,
+        windowKey: loadedWindowKeyRef.current ?? undefined,
+      });
+      refreshDetailedState(draftData.records, new Map(), { preserveSelection: false });
+      setCanonicalReloadError(null);
+      publishDetailedWorkspaceChange(season.id, syncMeta.localRevision, [], syncMeta);
+      void showAlert({
+        title: 'Khôi phục Thành công',
+        message: `Đã khôi phục thành công dữ liệu lịch bay mùa ${season.seasonCode || season.code} vào bản nháp. Dữ liệu đã sẵn sàng để kiểm tra hoặc công bố lại.`,
+        tone: 'success',
+      });
+    } catch (err: unknown) {
+      setCanonicalReloadError(formatUiError(err, 'Lỗi nạp lại bản nháp sau khi khôi phục.'));
+      void showAlert({
+        title: 'Lỗi nạp lại bản nháp',
+        message: formatUiError(err, 'Không thể nạp lại bản nháp sau khi khôi phục.'),
+        tone: 'error',
+      });
+      throw err;
+    }
+  }, [publishDetailedWorkspaceChange, refreshDetailedState, season, setCurrentMods, setDraftSaveState, setDraftState, setFlightRecords, setHistoryDraftTokens, setModHistory, setSyncSummary, showAlert]);
+
+  const handleBeginRestore = useCallback(() => {
+    if (isRestoringDraftRef.current) return true;
+    if (isMutationBlocked || currentMods.size > 0) {
+      return false;
+    }
+    isRestoringDraftRef.current = true;
+    setIsRestoringDraft(true);
+    setIsSaving(true);
+    return true;
+  }, [currentMods.size, isMutationBlocked, setIsRestoringDraft, setIsSaving]);
+
+  const handleFinishRestore = useCallback(() => {
+    isRestoringDraftRef.current = false;
+    setIsRestoringDraft(false);
+    setIsSaving(false);
+  }, [setIsRestoringDraft, setIsSaving]);
 
   const handleUndo = useCallback(async (targetEntry: ModHistoryEntry) => {
-    if (!season || syncInProgress) return;
+    if (!season || isMutationBlocked) return;
     setIsUndoing(true);
     try {
       const historyToUndoFrom = modHistory;
@@ -1435,8 +1566,9 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
       let syncMeta: Awaited<ReturnType<typeof runNativeScheduleMutation>>;
       try {
         if (isSeasonalPlanningV1Enabled()) {
-          const undoChanges = (entriesToUndo as Array<ModHistoryEntry & { draftUndoChanges?: SeasonalDraftChangeInput[] }>)
-            .flatMap((entry) => entry.draftUndoChanges ?? []);
+          const undoChanges = composeSeasonalDraftUndoChanges(
+            entriesToUndo.flatMap((entry) => (entry as ModHistoryEntry & { draftUndoChanges?: SeasonalDraftChangeInput[] }).draftUndoChanges ?? [])
+          );
 
           localEditGenerationRef.current += 1;
           setDraftSaveState((prev) => ({ ...prev, status: 'saving', hasUnconfirmedChanges: true, error: null }));
@@ -1455,25 +1587,26 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           if (saveResult.result.status === 'error') {
             throw new Error(saveResult.result.error || 'Lưu thay đổi kế hoạch mùa thất bại.');
           }
+          const affectedIds = entriesToUndo.flatMap((entry) => [
+            ...entry.changes.map((change) => change.legId),
+            ...(entry.recordChanges?.map((change) => change.recordId) ?? []),
+          ]);
           if (saveResult.result.receipt) {
             latestDraftRevisionRef.current = saveResult.result.receipt.revision;
-            try {
-              const draftData = await loadFullSeasonalDraftRecords(season.id, getSeasonalDraftWindowV1);
-              setFlightRecords(draftData.records);
-              setCurrentMods(new Map());
-              refreshDetailedState(draftData.records, new Map(), { preserveSelection: true });
-            } catch {
-              // Keep optimistic if reload window transiently fails
-            }
+            await syncCanonicalDraftAfterCommit(season, saveResult.result.receipt.revision, affectedIds);
           }
-          syncMeta = {
-            seasonId: season.id,
-            localRevision: Number(saveResult.result.receipt?.revision ?? latestDraftRevisionRef.current),
-            pendingCount: 0,
-            lastLocalChangeAt: Date.now(),
-            baseServerVersion: season.dataVersion ?? 0,
-            syncStatus: 'synced',
-          };
+          setIsUndoOpen(false);
+          void appendAuditLogEntry(createFlightActionAuditFromHistory({
+            season,
+            module: 'detailed',
+            operation: `Hoàn tác ${targetEntry.description}`,
+            beforeRecords: flightRecords,
+            afterRecords: nextRecords,
+            beforeModifications: currentMods,
+            afterModifications: nextMods,
+            targetRecordIds: affectedIds,
+          }));
+          return;
         } else {
           syncMeta = await runNativeScheduleMutation(
             season.id,
@@ -1483,13 +1616,13 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
             {
               id: `LOCAL_UNDO_${undoTimestamp}`,
               timestamp: undoTimestamp,
-              description: `Undid ${targetEntry.description}`,
+              description: `Hoàn tác ${targetEntry.description}`,
             },
             [],
             'detailed'
           );
         }
-        if (!syncMeta) throw new Error('Native schedule mutation is unavailable.');
+        if (!syncMeta) throw new Error('Cập nhật lịch bay cục bộ không khả dụng.');
       } catch (error) {
         if (commitSeq === detailedCommitSeqRef.current) restoreDetailedOptimisticState(rollbackState);
         throw error;
@@ -1515,7 +1648,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
       void appendAuditLogEntry(createFlightActionAuditFromHistory({
         season,
         module: 'detailed',
-        operation: `Undid ${targetEntry.description}`,
+        operation: `Hoàn tác ${targetEntry.description}`,
         beforeRecords: flightRecords,
         afterRecords: nextRecords,
         beforeModifications: currentMods,
@@ -1524,14 +1657,16 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
       }));
     } catch (err) {
       console.error(err);
-      void showAlert({ title: 'Undo Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Hoàn tác thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       setIsUndoing(false);
     }
   }, [
+    canonicalReloadError,
     captureDetailedOptimisticRollbackState,
     currentMods,
     flightRecords,
+    isMutationBlocked,
     modHistory,
     publishDetailedWorkspaceChange,
     refreshDetailedState,
@@ -1546,7 +1681,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
     setModHistory,
     setSyncSummary,
     showAlert,
-    syncInProgress,
+    syncCanonicalDraftAfterCommit,
   ]);
 
   const handleSync = useCallback(async () => {
@@ -1554,12 +1689,12 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
     try {
       const result = await syncNow();
       void showAlert({
-        title: result.status === 'synced' ? 'Save Complete' : 'Save Failed',
-        message: result.message ?? 'No pending local changes to save.',
+        title: result.status === 'synced' ? 'Lưu thành công' : 'Lưu thất bại',
+        message: result.message ?? 'Không có thay đổi cục bộ nào cần lưu.',
         tone: result.status === 'synced' ? 'success' : 'error',
       });
     } catch (err) {
-      void showAlert({ title: 'Save Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Lưu thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [season, showAlert, syncInProgress, syncNow]);
 
@@ -1578,7 +1713,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
     const hasRouteDataLoaded = loadedWindowKeyRef.current === windowKey;
     setFetchingServerData(true);
     if (!hasRouteDataLoaded) setLoadError(null);
-    setLoadProgress(buildLoadProgress('Loading server workspace', 35, season.seasonCode));
+    setLoadProgress(buildLoadProgress('Đang tải dữ liệu từ máy chủ', 35, season.seasonCode));
     try {
       if (isSeasonalPlanningV1Enabled()) {
         const records = await applyPlanningDraftWindow(season, windowKey, true);
@@ -1594,7 +1729,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
         force: true,
         initiator: 'immediate',
       });
-      if (!serverWindow?.syncMeta) throw new Error('Server detailed schedule window is unavailable.');
+      if (!serverWindow?.syncMeta) throw new Error('Không thể tải dữ liệu lịch chi tiết từ máy chủ.');
       if (
         fetchServerDataRequestRef.current !== requestId ||
         latestRouteWindowRef.current.seasonId !== requestedSeasonId ||
@@ -1603,7 +1738,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
         return;
       }
       loadedWindowKeyRef.current = windowKey;
-      setLoadProgress(buildLoadProgress('Rendering calendar', 80, `${serverWindow.records.length} records`));
+      setLoadProgress(buildLoadProgress('Đang hiển thị lịch bay', 80, `${serverWindow.records.length} bản ghi`));
       setFlightRecords(serverWindow.records);
       setCurrentMods(serverWindow.modifications);
       setDraftState(null);
@@ -1627,9 +1762,9 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
       });
       refreshDetailedState(serverWindow.records, serverWindow.modifications, { preserveSelection: true });
     } catch (err) {
-      const message = err instanceof Error && err.message ? err.message : 'Could not fetch detailed schedule data from the server.';
+      const message = formatUiError(err, 'Không thể tải dữ liệu lịch chi tiết từ máy chủ.');
       if (!hasRouteDataLoaded) setLoadError(message);
-      void showAlert({ title: 'Fetch data failed', message, tone: 'error' });
+      void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
     } finally {
       setFetchingServerData(false);
     }
@@ -1657,11 +1792,13 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
   ]);
 
   const handleSeasonalNavigation = () => {
-    if (isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges)) {
+    if (isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges || Boolean(canonicalReloadError))) {
       void showAlert({
         title: 'Chưa thể chuyển trang',
         message: draftSaveState.status === 'saving'
           ? 'Đang lưu bản nháp, vui lòng đợi hoàn tất trước khi rời khỏi trang.'
+          : canonicalReloadError
+          ? 'Đang có lỗi nạp lại dữ liệu bản nháp sau khi lưu. Vui lòng thử lại trước khi rời đi.'
           : 'Có thay đổi chưa được xác nhận bởi máy chủ. Vui lòng thử lại lưu nháp trước khi rời đi.',
         tone: 'warning',
       });
@@ -1675,12 +1812,12 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
 
   const handleShowKeyboardShortcuts = () => {
     void showAlert({
-      title: 'Keyboard Shortcuts',
+      title: 'Phím tắt bàn phím',
       message: [
-        'Ctrl+C = Copy selected flight',
-        'Ctrl+V = Paste copied flight to selected day(s)',
-        'Ctrl+A = Select all visible days and flights',
-        'Shift+Click = Select a date range',
+        'Ctrl+C = Sao chép chuyến bay đã chọn',
+        'Ctrl+V = Dán chuyến bay đã sao chép vào (các) ngày đã chọn',
+        'Ctrl+A = Chọn tất cả ngày và chuyến bay hiển thị',
+        'Shift+Click = Chọn khoảng ngày',
       ].join('\n'),
     });
   };
@@ -1690,7 +1827,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
     (async () => {
       setLoading(true);
       setLoadError(null);
-      setLoadProgress(buildLoadProgress('Resolving schedule filters', 15, 'Preparing detailed calendar'));
+      setLoadProgress(buildLoadProgress('Xử lý bộ lọc lịch bay', 15, 'Chuẩn bị lịch chi tiết'));
       try {
         let activeSeasonId = targetSeasonId;
         let activeArr = targetArrFlight;
@@ -1749,7 +1886,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
         }
 
         const cachedSeasons = getCachedSeasons();
-        setLoadProgress(buildLoadProgress('Loading seasons', 25, activeSeasonId));
+        setLoadProgress(buildLoadProgress('Đang tải danh sách mùa', 25, activeSeasonId));
         const seasons = cachedSeasons ?? await getSeasons();
         if (cancelled) return;
         if (!cachedSeasons) setCachedSeasons(seasons);
@@ -1774,7 +1911,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
         });
         const windowKey = buildDetailedWindowKey(queryWindow);
         if (isSeasonalPlanningV1Enabled()) {
-          setLoadProgress(buildLoadProgress('Loading seasonal draft workspace', 25, found.seasonCode));
+          setLoadProgress(buildLoadProgress('Đang tải bản nháp lịch mùa', 25, found.seasonCode));
           try {
             const draftData = await loadFullSeasonalDraftRecords(found.id, getSeasonalDraftWindowV1);
             if (cancelled) return;
@@ -1792,48 +1929,10 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
               baseServerVersion: found.dataVersion ?? 0,
               syncStatus: 'synced',
             };
-            setLoadProgress(buildLoadProgress('Rendering calendar', 80, `${canonicalRecords.length} records`));
+            setLoadProgress(buildLoadProgress('Đang hiển thị lịch bay', 80, `${canonicalRecords.length} bản ghi`));
             setSyncSummary({ pendingCount: 0, lastLocalChangeAt: Date.now() });
-            setLoadProgress(buildLoadProgress('Rendering calendar', 95, 'Applying filters'));
+            setLoadProgress(buildLoadProgress('Đang hiển thị lịch bay', 95, 'Áp dụng bộ lọc'));
             setFlightRecords(canonicalRecords);
-            const allSeasonLegs = flightRecordsToLegs(canonicalRecords);
-            const expanded = filterDetailedLegsForView(allSeasonLegs, activeArr, activeDep, initialFrom, initialTo);
-            if (activeArr || activeDep) {
-              const companionMap = new Map<string, OvernightCompanion>();
-              for (const leg of expanded) {
-                if (!leg.linkId) continue;
-                const linked = leg.linkedRecordId
-                  ? allSeasonLegs.find(l => l.id === leg.linkedRecordId)
-                  : allSeasonLegs.find(l =>
-                      l.linkId === leg.linkId &&
-                      l.id !== leg.id &&
-                      l.type !== leg.type &&
-                      (l.pairAnchorDate ?? l.date) === (leg.pairAnchorDate ?? leg.date)
-                    );
-                if (!linked) continue;
-                const key = `${leg.date}_${leg.id}`;
-                if (leg.type === 'A') {
-                  companionMap.set(key, {
-                    flightNumber: linked.flightNumber,
-                    schedule: leg.linkType === 'overnight' ? `${linked.schedule}+1` : linked.schedule,
-                    route: linked.route,
-                    aircraft: linked.aircraft,
-                    type: 'D',
-                    linkId: leg.linkId,
-                  });
-                } else {
-                  companionMap.set(key, {
-                    flightNumber: linked.flightNumber,
-                    schedule: leg.linkType === 'overnight' ? `${linked.schedule}-1` : linked.schedule,
-                    route: linked.route,
-                    aircraft: linked.aircraft,
-                    type: 'A',
-                    linkId: leg.linkId,
-                  });
-                }
-              }
-              setOvernightCompanions(companionMap);
-            }
             setCurrentMods(mods);
             useSeasonWorkspaceStore.getState().replaceSeasonWindow({
               seasonId: found.id,
@@ -1849,10 +1948,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
               source: 'server-window',
               syncMeta,
             });
-            const finalAllLegs = applyModificationsToFlightLegs(allSeasonLegs, mods);
-            const finalLegs = filterDetailedLegsForView(finalAllLegs, activeArr, activeDep, initialFrom, initialTo);
-            setAllLegs(finalAllLegs);
-            setLegs(finalLegs);
+            refreshDetailedStateRef.current(canonicalRecords, mods);
             return;
           } catch (err) {
             if (!isDraftWorkspaceNotFoundError(err)) {
@@ -1877,7 +1973,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           setLoading(false);
         }
 
-        setLoadProgress(buildLoadProgress('Loading server workspace', 35, found.seasonCode));
+        setLoadProgress(buildLoadProgress('Đang tải dữ liệu từ máy chủ', 35, found.seasonCode));
         const serverWindow = await loadSeasonWorkspaceWindow({
           seasonId: found.id,
           dateFrom: queryWindow.dateFrom,
@@ -1891,55 +1987,17 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           const canonicalRecords = serverWindow.records;
           const mods = serverWindow.modifications;
           setLoadProgress(buildLoadProgress(
-            'Rendering calendar',
+            'Đang hiển thị lịch bay',
             80,
-            `${canonicalRecords.length} records`
+            `${canonicalRecords.length} bản ghi`
           ));
           setSyncSummary({
             pendingCount: serverWindow.syncMeta.pendingCount,
             lastLocalChangeAt: serverWindow.syncMeta.lastLocalChangeAt,
           });
-          setLoadProgress(buildLoadProgress('Rendering calendar', 95, 'Applying filters'));
+          setLoadProgress(buildLoadProgress('Đang hiển thị lịch bay', 95, 'Áp dụng bộ lọc'));
           setFlightRecords(canonicalRecords);
 
-          const allSeasonLegs = flightRecordsToLegs(canonicalRecords);
-          const expanded = filterDetailedLegsForView(allSeasonLegs, activeArr, activeDep, initialFrom, initialTo);
-          if (activeArr || activeDep) {
-            const companionMap = new Map<string, OvernightCompanion>();
-            for (const leg of expanded) {
-              if (!leg.linkId) continue;
-              const linked = leg.linkedRecordId
-                ? allSeasonLegs.find(l => l.id === leg.linkedRecordId)
-                : allSeasonLegs.find(l =>
-                    l.linkId === leg.linkId &&
-                    l.id !== leg.id &&
-                    l.type !== leg.type &&
-                    (l.pairAnchorDate ?? l.date) === (leg.pairAnchorDate ?? leg.date)
-                  );
-              if (!linked) continue;
-              const key = `${leg.date}_${leg.id}`;
-              if (leg.type === 'A') {
-                companionMap.set(key, {
-                  flightNumber: linked.flightNumber,
-                  schedule: leg.linkType === 'overnight' ? `${linked.schedule}+1` : linked.schedule,
-                  route: linked.route,
-                  aircraft: linked.aircraft,
-                  type: 'D',
-                  linkId: leg.linkId,
-                });
-              } else {
-                companionMap.set(key, {
-                  flightNumber: linked.flightNumber,
-                  schedule: leg.linkType === 'overnight' ? `${linked.schedule}-1` : linked.schedule,
-                  route: linked.route,
-                  aircraft: linked.aircraft,
-                  type: 'A',
-                  linkId: leg.linkId,
-                });
-              }
-            }
-            setOvernightCompanions(companionMap);
-          }
 
           setCurrentMods(mods);
           useSeasonWorkspaceStore.getState().replaceSeasonWindow({
@@ -1956,15 +2014,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
             source: 'server-window',
             syncMeta: serverWindow.syncMeta,
           });
-          const finalAllLegs = applyModificationsToFlightLegs(allSeasonLegs, mods);
-          const finalLegs = filterDetailedLegsForView(finalAllLegs, activeArr, activeDep, initialFrom, initialTo);
-
-          setAllLegs(finalAllLegs);
-          setLegs(finalLegs);
-          setOvernightCompanions(prev => {
-            if (activeArr || activeDep) return prev;
-            return new Map();
-          });
+          refreshDetailedStateRef.current(canonicalRecords, mods);
           if (isSeasonalPlanningV1Enabled()) {
             try {
               const draftWindow = await getSeasonalDraftWindowV1({ seasonId: found.id, pageSize: 1 });
@@ -1976,11 +2026,11 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           }
           return;
         }
-        throw new Error('Server detailed schedule window is unavailable.');
+        throw new Error('Không thể tải dữ liệu lịch chi tiết từ máy chủ.');
       } catch (err) {
         if (!cancelled) {
           console.error('Error loading detailed schedule', err);
-          setLoadError(err instanceof Error && err.message ? err.message : 'Could not load detailed schedule data from the server.');
+          setLoadError(formatUiError(err, 'Không thể tải dữ liệu lịch chi tiết từ máy chủ.'));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -2009,6 +2059,12 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
   useEffect(() => {
     if (!isRouteActive) return undefined;
     const handleKeyboard = (e: KeyboardEvent) => {
+      const isInputFocused =
+        document.activeElement instanceof HTMLInputElement ||
+        document.activeElement instanceof HTMLTextAreaElement ||
+        (document.activeElement instanceof HTMLElement && document.activeElement.isContentEditable);
+      if (isInputFocused) return;
+
       if (
         e.key === 'Delete' &&
         !e.repeat &&
@@ -2017,6 +2073,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
         !e.altKey &&
         !e.shiftKey
       ) {
+        if (isMutationBlocked) return;
         e.preventDefault();
         handleDeleteSelectedLegs();
         return;
@@ -2027,6 +2084,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
         }
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+        if (isMutationBlocked) return;
         if (copiedLeg && sweepSelectedDates.length > 0) {
           try {
             const transferPairContext = buildDetailedTransferPairContext(allLegs);
@@ -2048,17 +2106,19 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
               setIsConfirmModalOpen(true);
             }
           } catch (err) {
-            void showAlert({ title: 'Cannot Copy Flight', message: (err as Error).message, tone: 'error' });
+            void showAlert({ title: 'Không thể sao chép chuyến bay', message: formatUiError(err), tone: 'error' });
           }
         }
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
         e.preventDefault();
-        if (fromDate && toDate) {
+        const start = targetDateFrom || fromDate;
+        const end = targetDateTo || toDate;
+        if (start && end) {
           const allDates: string[] = [];
-          const cur = new Date(fromDate);
-          const end = new Date(toDate);
-          while (cur <= end) {
+          const cur = new Date(start);
+          const endDate = new Date(end);
+          while (cur <= endDate) {
             allDates.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`);
             cur.setDate(cur.getDate() + 1);
           }
@@ -2066,13 +2126,12 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           const dateSet = new Set(allDates);
           const visibleLegIds = new Set(legs.filter(l => dateSet.has(l.date)).map(l => l.id));
           setSelectedLegIds(visibleLegIds);
-          setIsMultiSelect(true);
         }
       }
     };
     window.addEventListener('keydown', handleKeyboard);
     return () => window.removeEventListener('keydown', handleKeyboard);
-  }, [singleSelectedLeg, copiedLeg, sweepSelectedDates, legs, allLegs, fromDate, toDate, isRouteActive, handleDeleteSelectedLegs, showAlert]);
+  }, [singleSelectedLeg, copiedLeg, sweepSelectedDates, legs, allLegs, fromDate, toDate, targetDateFrom, targetDateTo, isRouteActive, isMutationBlocked, handleDeleteSelectedLegs, showAlert]);
 
   // Calendar Logic
   const calendarDays = useMemo(() => {
@@ -2175,7 +2234,6 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
       });
       setSweepSelectedDates(prev => mergeCalendarDateSelections(prev, selectedDates, selectionMode));
       setSelectedLegIds(newSelectedLegIds);
-      setIsMultiSelect(true);
     }
     setIsSelecting(false);
     setSelectionStart(null);
@@ -2184,48 +2242,93 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
   };
 
   const handleDragStart = (e: React.DragEvent, leg: FlightLeg) => {
-    e.dataTransfer.setData('text/plain', JSON.stringify({ legId: leg.id }));
+    if (isMutationBlocked) {
+      e.preventDefault();
+      return;
+    }
+    const legIds = selectedLegIds.has(leg.id) && selectedLegIds.size > 1
+      ? Array.from(selectedLegIds)
+      : [leg.id];
+    e.dataTransfer.setData('text/plain', JSON.stringify({ legId: leg.id, legIds, sourceDate: leg.date }));
     e.dataTransfer.effectAllowed = 'copyMove';
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    if (isMutationBlocked) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = (e.ctrlKey || e.metaKey) ? 'copy' : 'move';
   };
 
   const handleDrop = (e: React.DragEvent, targetDateStr: string) => {
     e.preventDefault();
+    if (isMutationBlocked) return;
     const data = e.dataTransfer.getData('text/plain');
     if (!data) return;
     const isCopy = e.ctrlKey || e.metaKey;
     try {
-      const { legId } = JSON.parse(data);
-      const draggedLeg = legs.find(l => l.id === legId);
-      if (!draggedLeg) return;
-      if (draggedLeg.date === targetDateStr) return;
+      const parsed = JSON.parse(data);
+      const legIds: string[] = Array.isArray(parsed.legIds) && parsed.legIds.length > 0
+        ? parsed.legIds
+        : parsed.legId
+        ? [parsed.legId]
+        : [];
+      if (legIds.length === 0) return;
+      const legsById = new Map<string, FlightLeg>();
+      for (const leg of allLegs) legsById.set(leg.id, leg);
+      for (const leg of legs) legsById.set(leg.id, leg);
+      const sourceLegs = legIds.map((id) => legsById.get(id)).filter(Boolean) as FlightLeg[];
+      if (sourceLegs.length === 0) return;
 
-      const newMods = buildDetailedTransferModifications({
-        sourceLeg: draggedLeg,
-        visibleLegs: legs,
-        allLegs,
-        targetDate: targetDateStr,
-        mode: isCopy ? 'copy' : 'move',
-      });
+      const anchorDate = parsed.sourceDate || sourceLegs[0]?.date || targetDateStr;
+      const anchorMillis = new Date(anchorDate).getTime();
+      const targetMillis = new Date(targetDateStr).getTime();
+      const dayDiff = Math.round((targetMillis - anchorMillis) / (24 * 60 * 60 * 1000));
+      if (dayDiff === 0 && !isCopy) return;
 
-      setProposedMods(newMods);
-      setIsConfirmModalOpen(true);
+      const transferPairContext = buildDetailedTransferPairContext(allLegs);
+      const newMods: FlightModification[] = [];
+      const handledPairKeys = new Set<string>();
+
+      for (const sourceLeg of sourceLegs) {
+        const pairKey = sourceLeg.turnaroundId
+          ? `turnaround:${sourceLeg.turnaroundId}`
+          : sourceLeg.linkId
+          ? `link:${sourceLeg.linkId}:${sourceLeg.pairAnchorDate ?? sourceLeg.date}`
+          : null;
+        if (pairKey && handledPairKeys.has(pairKey)) continue;
+
+        const legDateMillis = new Date(sourceLeg.date).getTime();
+        const legTargetDateObj = new Date(legDateMillis + dayDiff * 24 * 60 * 60 * 1000);
+        const legTargetDateStr = `${legTargetDateObj.getFullYear()}-${String(legTargetDateObj.getMonth() + 1).padStart(2, '0')}-${String(legTargetDateObj.getDate()).padStart(2, '0')}`;
+
+        const mods = buildDetailedTransferModifications({
+          sourceLeg,
+          visibleLegs: legs,
+          allLegs,
+          targetDate: legTargetDateStr,
+          mode: isCopy ? 'copy' : 'move',
+          pairContext: transferPairContext,
+        });
+        newMods.push(...mods);
+        if (pairKey) handledPairKeys.add(pairKey);
+      }
+
+      if (newMods.length > 0) {
+        setProposedMods(newMods);
+        setIsConfirmModalOpen(true);
+      }
     } catch (err) {
       console.error('Drop error', err);
       void showAlert({
-        title: isCopy ? 'Cannot Copy Flight' : 'Cannot Move Flight',
-        message: (err as Error).message,
+        title: isCopy ? 'Không thể sao chép chuyến bay' : 'Không thể di chuyển chuyến bay',
+        message: formatUiError(err),
         tone: 'error',
       });
     }
   };
 
   const handleExport = useCallback(async () => {
-    if (!season || legs.length === 0) return;
+    if (!season || legs.length === 0 || isMutationBlocked) return;
     try {
       const ws = XLSX.utils.json_to_sheet(legs.map(l => ({
         Date: l.date,
@@ -2242,9 +2345,9 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
       const result = await saveWorkbookAsXlsx(wb, `Detailed_${season.seasonCode}_${Date.now()}.xlsx`);
       notifyExportCompleted(result);
     } catch (err) {
-      void showAlert({ title: 'Export Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Xuất tệp thất bại', message: formatUiError(err), tone: 'error' });
     }
-  }, [season, legs, notifyExportCompleted, showAlert]);
+  }, [isMutationBlocked, legs, notifyExportCompleted, season, showAlert]);
 
   if (loading) {
     return <LoadingStatusPanel progress={loadProgress} mode="fullscreen" />;
@@ -2254,7 +2357,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
     return (
       <div className="flex h-dvh items-center justify-center bg-surface p-6">
         <div className="max-w-xl rounded-lg border border-error/30 bg-surface-container-lowest p-6 text-center shadow-sm">
-          <div className="font-title-sm text-title-sm text-error">Cannot load detailed schedule</div>
+          <div className="font-title-sm text-title-sm text-error">Không thể tải lịch chi tiết</div>
           <div className="mt-2 font-body-sm text-body-sm text-on-surface-variant">{loadError}</div>
           {syncSeasonId && (
             <div className="mt-4 flex justify-center">
@@ -2277,12 +2380,12 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
       <div className="flex-1 flex flex-col min-w-0 bg-surface h-dvh overflow-hidden">
         <WorkspacePageHeader
           leading={(
-            <button onClick={handleSeasonalNavigation} className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-outline transition-colors hover:bg-surface-container-high" title="Back to Seasonal Schedule" aria-label="Back to Seasonal Schedule">
+            <button onClick={handleSeasonalNavigation} className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-outline transition-colors hover:bg-surface-container-high" title="Quay lại Lịch mùa" aria-label="Quay lại Lịch mùa">
               <span className="material-symbols-outlined">arrow_back</span>
             </button>
           )}
-          title="Detailed Schedule"
-          subtitle={season ? `${buildSeasonDisplayLabel(season)}${(targetArrFlight || targetDepFlight) ? ` (Filtered to ${targetArrFlight || ''} ${targetArrFlight && targetDepFlight ? '/' : ''} ${targetDepFlight || ''})` : ''}` : 'No season selected'} 
+          title="Lịch chi tiết"
+          subtitle={season ? `${buildSeasonDisplayLabel(season)}${(targetArrFlight || targetDepFlight) ? ` (Đã lọc theo ${targetArrFlight || ''} ${targetArrFlight && targetDepFlight ? '/' : ''} ${targetDepFlight || ''})` : ''}` : 'Chưa chọn mùa'} 
           statusControls={season && (
             isSeasonalPlanningV1Enabled() ? (
               <>
@@ -2308,6 +2411,19 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                       className="ml-1 rounded bg-red-700 px-2 py-0.5 text-xs text-white hover:bg-red-800 font-medium"
                     >
                       Thử lại
+                    </button>
+                  </span>
+                )}
+                {canonicalReloadError && (
+                  <span role="status" className="flex items-center gap-1.5 rounded-full border border-amber-400 bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-950" title={canonicalReloadError}>
+                    <span>Đã lưu trên máy chủ; chưa nạp lại được bản nháp</span>
+                    <button
+                      type="button"
+                      disabled={draftSaveState.status === 'saving'}
+                      onClick={() => { void handleRetryDraftSave(); }}
+                      className="ml-1 rounded bg-amber-800 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                    >
+                      Nạp lại bản nháp
                     </button>
                   </span>
                 )}
@@ -2363,49 +2479,31 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           draftControls={!isSeasonalPlanningV1Enabled() && hasDraftChanges && (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-amber-900">
               <span className="material-symbols-outlined text-[18px]">edit_note</span>
-              <span className="text-xs font-semibold">{draftChangeCount} draft changes</span>
+              <span className="text-xs font-semibold">{draftChangeCount} thay đổi nháp</span>
               <button
                 onClick={handleDiscardDraft}
                 disabled={isSaving || syncInProgress}
                 className="rounded px-3 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
               >
-                Discard
+                Hủy bỏ
               </button>
             </div>
           )}
           primaryActions={(
             <>
-              <label className="flex min-h-10 items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-low px-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high">
-                <input
-                  type="checkbox"
-                  checked={isMultiSelect}
-                  onChange={(event) => {
-                    setIsMultiSelect(event.target.checked);
-                    if (!event.target.checked && selectedLegIds.size > 1) {
-                      const first = Array.from(selectedLegIds)[0];
-                      setSelectedLegIds(new Set(first ? [first] : []));
-                    }
-                    if (!event.target.checked) {
-                      setSweepSelectedDates([]);
-                    }
-                  }}
-                  className="h-4 w-4 rounded text-primary focus:ring-primary"
-                />
-                Multi-select
-              </label>
               <button
                 onClick={() => setIsNewFlightOpen(true)}
-                disabled={!newFlightDateSelection || syncInProgress}
-                title={newFlightDateSelection ? `Add flights on ${newFlightDateLabel}` : 'Select date cells first'}
+                disabled={!newFlightDateSelection || isMutationBlocked}
+                title={newFlightDateSelection ? `Thêm chuyến bay vào ${newFlightDateLabel}` : 'Chọn ô ngày trước'}
                 className="flex min-h-10 items-center gap-2 rounded-lg border border-outline-variant px-4 py-2 font-label-caps text-label-caps text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <span className="material-symbols-outlined text-[18px]">add</span>
-                Add Flight
+                Thêm chuyến bay
               </button>
               {isSeasonalPlanningV1Enabled() && season && (
                 <button
                   onClick={() => { void handleOpenPublishModal(); }}
-                  disabled={syncInProgress || isSaving || draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges}
+                  disabled={isMutationBlocked}
                   title="Công bố lịch bay mùa sang phân hệ Vận hành (Operations)"
                   className="flex min-h-10 items-center gap-2 rounded-lg bg-emerald-700 px-4 py-2 font-label-caps text-label-caps text-white shadow-sm transition-colors hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-40"
                 >
@@ -2413,19 +2511,36 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                   Công bố lịch bay
                 </button>
               )}
+              {isSeasonalPlanningV1Enabled() && season && (
+                <button
+                  onClick={() => {
+                    setHistoryDraftTokens({
+                      revision: latestDraftRevisionRef.current,
+                      epoch: latestDraftEpochRef.current,
+                    });
+                    setIsHistoryModalOpen(true);
+                  }}
+                  disabled={isMutationBlocked}
+                  title="Xem lịch sử các phiên bản đã công bố, so sánh và khôi phục"
+                  className="flex min-h-10 items-center gap-2 rounded-lg border border-outline-variant bg-surface px-4 py-2 font-label-caps text-label-caps text-on-surface shadow-sm transition-colors hover:bg-surface-variant/30 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <span className="material-symbols-outlined text-[18px]">history</span>
+                  Lịch sử phiên bản
+                </button>
+              )}
               <button
                 onClick={handleShowKeyboardShortcuts}
                 className="flex min-h-10 items-center gap-2 rounded-lg border border-outline-variant px-4 py-2 font-label-caps text-label-caps text-on-surface transition-colors hover:bg-surface-container-low"
               >
                 <span className="material-symbols-outlined text-[18px]">keyboard</span>
-                Shortcuts
+                Phím tắt
               </button>
               {copiedLeg && (
                 <span className="flex min-h-10 items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-100 px-2.5 py-1.5 text-xs font-medium text-amber-800">
                   <span className="material-symbols-outlined text-[14px]">content_copy</span>
                   {copiedLeg.flightNumber}
                   {sweepSelectedDates.length > 0 && (
-                    <span className="ml-1 text-amber-600">to {sweepSelectedDates.length} days (Ctrl+V)</span>
+                    <span className="ml-1 text-amber-600">sang {sweepSelectedDates.length} ngày (Ctrl+V)</span>
                   )}
                 </span>
               )}
@@ -2436,52 +2551,52 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
               <div className="hidden flex-wrap items-center gap-2 xl:flex">
                 <button
                   onClick={() => setIsLinkModalOpen(true)}
-                  disabled={linkCandidates.length === 0 || syncInProgress}
+                  disabled={linkCandidates.length === 0 || isMutationBlocked}
                   className="flex min-h-10 items-center gap-2 rounded-lg border border-outline-variant px-4 py-2 font-label-caps text-label-caps text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <span className="material-symbols-outlined text-[18px]">link</span>
-                  Link
+                  Liên kết
                 </button>
                 <button
                   onClick={handleUnlinkSelected}
-                  disabled={syncInProgress || !selectedLegs.some((leg) => leg.linkType || leg.linkedRecordId)}
+                  disabled={isMutationBlocked || !selectedLegs.some((leg) => leg.linkType || leg.linkedRecordId)}
                   className="flex min-h-10 items-center gap-2 rounded-lg border border-outline-variant px-4 py-2 font-label-caps text-label-caps text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <span className="material-symbols-outlined text-[18px]">link_off</span>
-                  Unlink
+                  Hủy liên kết
                 </button>
                 <button
                   onClick={handleExport}
-                  disabled={isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges)}
+                  disabled={isMutationBlocked || !season || legs.length === 0}
                   className="flex min-h-10 items-center gap-2 rounded-lg border border-outline-variant px-4 py-2 font-label-caps text-label-caps text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <span className="material-symbols-outlined text-[18px]">download</span>
-                  Export Excel
+                  Xuất Excel
                 </button>
               </div>
               <HeaderActionMenu
                 className="xl:hidden"
                 items={[
-                  { label: 'Link', icon: 'link', onSelect: () => setIsLinkModalOpen(true), disabled: linkCandidates.length === 0 || syncInProgress },
-                  { label: 'Unlink', icon: 'link_off', onSelect: () => void handleUnlinkSelected(), disabled: syncInProgress || !selectedLegs.some((leg) => leg.linkType || leg.linkedRecordId) },
-                  { label: 'Export Excel', icon: 'download', onSelect: () => void handleExport(), disabled: isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges) },
+                  { label: 'Liên kết', icon: 'link', onSelect: () => setIsLinkModalOpen(true), disabled: linkCandidates.length === 0 || isMutationBlocked },
+                  { label: 'Hủy liên kết', icon: 'link_off', onSelect: () => void handleUnlinkSelected(), disabled: isMutationBlocked || !selectedLegs.some((leg) => leg.linkType || leg.linkedRecordId) },
+                  { label: 'Xuất Excel', icon: 'download', onSelect: () => void handleExport(), disabled: isMutationBlocked || !season || legs.length === 0 },
                 ]}
               />
               <div className="relative">
                 <button
                   onClick={() => setIsUndoOpen(!isUndoOpen)}
-                  disabled={hasDraftChanges || modHistory.length === 0 || isUndoing}
+                  disabled={hasDraftChanges || modHistory.length === 0 || isMutationBlocked}
                   className="flex min-h-10 items-center gap-2 rounded-lg border border-outline-variant px-4 py-2 font-label-caps text-label-caps text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <span className="material-symbols-outlined text-[18px]">{isUndoing ? 'sync' : 'undo'}</span>
-                  Undo{modHistory.length > 0 ? ` (${modHistory.length})` : ''}
+                  Hoàn tác{modHistory.length > 0 ? ` (${modHistory.length})` : ''}
                 </button>
                 {isUndoOpen && modHistory.length > 0 && (
                   <>
                     <div className="fixed inset-0 z-30" onClick={() => setIsUndoOpen(false)} />
                     <div className="absolute right-0 top-full z-40 mt-2 w-80 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-lg">
                       <div className="border-b border-surface-variant bg-surface-container-low px-4 py-3">
-                        <h3 className="font-label-caps text-label-caps text-on-surface-variant">Change History</h3>
+                        <h3 className="font-label-caps text-label-caps text-on-surface-variant">Lịch sử thay đổi</h3>
                       </div>
                       <div className="max-h-64 overflow-y-auto">
                         {modHistory.map((entry, idx) => (
@@ -2489,15 +2604,15 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                             <div className="mr-3 min-w-0 flex-1">
                               <p className="truncate text-sm font-medium text-on-surface">{entry.description}</p>
                               <p className="text-xs text-on-surface-variant">
-                                {new Date(entry.timestamp).toLocaleString()} - {countHistoryEntryLegs(entry)} leg(s)
+                                {new Date(entry.timestamp).toLocaleString('vi-VN')} - {countHistoryEntryLegs(entry)} chặng
                               </p>
                             </div>
                             <button
                               onClick={() => handleUndo(entry)}
-                              disabled={isUndoing}
+                              disabled={isMutationBlocked}
                               className="flex-shrink-0 rounded-lg bg-error-container px-3 py-1.5 text-xs font-medium text-on-error-container transition-colors hover:bg-error/20 disabled:opacity-50"
                             >
-                              {idx === 0 ? 'Undo' : 'Revert to here'}
+                              {idx === 0 ? 'Hoàn tác' : 'Khôi phục về đây'}
                             </button>
                           </div>
                         ))}
@@ -2518,14 +2633,14 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
             {selectedLegs.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center text-on-surface-variant font-body-base p-6 text-center gap-4">
                 <span className="material-symbols-outlined text-4xl opacity-50">touch_app</span>
-                <p>Select a flight on the calendar</p>
+                <p>Chọn một chuyến bay trên lịch</p>
                 {newFlightDateSelection && (
                   <button
                     onClick={() => setIsNewFlightOpen(true)}
                     className="flex items-center gap-2 bg-primary text-on-primary font-label-caps text-label-caps px-5 py-2.5 rounded-lg hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm"
                   >
                     <span className="material-symbols-outlined text-[18px]">add</span>
-                    Add Flight on {newFlightDateLabel}
+                    Thêm chuyến bay vào {newFlightDateLabel}
                   </button>
                 )}
               </div>
@@ -2533,9 +2648,9 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
               <>
                 <div className="bg-primary-container p-6 text-on-primary-container">
                   <h2 className="font-h1 text-h1 mb-1">
-                    Selected {selectedLegs.length} flights
+                    Đã chọn {selectedLegs.length} chuyến bay
                   </h2>
-                  <p className="font-body-sm opacity-80">Ready for batch editing</p>
+                  <p className="font-body-sm opacity-80">Sẵn sàng chỉnh sửa hàng loạt</p>
                 </div>
                 <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
                   {selectedLegs.map(leg => (
@@ -2549,17 +2664,17 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                   ))}
                 </div>
                 <div className="p-4 border-t border-surface-variant bg-surface-container-low flex gap-3">
-                  <button onClick={handleEditFlight} className="flex-1 bg-primary text-on-primary font-label-caps text-label-caps py-2 rounded hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm flex items-center justify-center gap-2">
+                  <button onClick={handleEditFlight} disabled={isMutationBlocked} className="flex-1 bg-primary text-on-primary font-label-caps text-label-caps py-2 rounded hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm flex items-center justify-center gap-2 disabled:opacity-50">
                     <span className="material-symbols-outlined text-[18px]">edit</span>
-                    Edit Selected Flights
+                    Sửa chuyến bay đã chọn
                   </button>
                   <button
                     onClick={handleDeleteSelectedLegs}
-                    disabled={syncInProgress || isSaving || isUndoing}
+                    disabled={isMutationBlocked}
                     className="flex-1 border border-error/50 text-error font-label-caps text-label-caps py-2 rounded hover:bg-error-container hover:text-on-error-container transition-colors shadow-sm flex items-center justify-center gap-2 disabled:opacity-50"
                   >
                     <span className="material-symbols-outlined text-[18px]">delete</span>
-                    Delete Selected
+                    Xóa đã chọn
                   </button>
                 </div>
               </>
@@ -2568,7 +2683,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                 <div className="bg-primary p-6 text-on-primary">
                   <div className="flex items-center justify-between mb-4">
                     <span className="font-label-caps text-label-caps px-2 py-1 bg-white/20 rounded">
-                      {singleSelectedLeg.type === 'A' ? 'ARRIVAL' : 'DEPARTURE'}
+                      {singleSelectedLeg.type === 'A' ? 'ĐẾN' : 'ĐI'}
                     </span>
                     <span className="font-body-sm text-on-primary/80">{singleSelectedLeg.date}</span>
                   </div>
@@ -2585,19 +2700,19 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                 <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <span className="block font-label-caps text-label-caps text-on-surface-variant mb-1">AIRCRAFT</span>
+                      <span className="block font-label-caps text-label-caps text-on-surface-variant mb-1">TÀU BAY</span>
                       <span className="font-data-tabular text-data-tabular text-on-surface">{singleSelectedLeg.aircraft || '—'}</span>
                     </div>
                     <div>
-                      <span className="block font-label-caps text-label-caps text-on-surface-variant mb-1">CATEGORY</span>
+                      <span className="block font-label-caps text-label-caps text-on-surface-variant mb-1">PHÂN LOẠI</span>
                       <span className="font-data-tabular text-data-tabular text-on-surface">{singleSelectedLeg.category || '—'}</span>
                     </div>
                     <div>
-                      <span className="block font-label-caps text-label-caps text-on-surface-variant mb-1">SCHEDULE</span>
+                      <span className="block font-label-caps text-label-caps text-on-surface-variant mb-1">GIỜ BAY</span>
                       <span className="font-data-tabular text-data-tabular text-on-surface">{singleSelectedLeg.schedule || '—'}</span>
                     </div>
                     <div>
-                      <span className="block font-label-caps text-label-caps text-on-surface-variant mb-1">CODESHARE</span>
+                      <span className="block font-label-caps text-label-caps text-on-surface-variant mb-1">LIÊN DANH</span>
                       <span className="font-data-tabular text-data-tabular text-on-surface">{singleSelectedLeg.codeShares || '—'}</span>
                     </div>
                   </div>
@@ -2606,12 +2721,12 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                     <div className="border-t border-surface-variant pt-6">
                       <h3 className="font-h3 text-h3 text-on-surface mb-3 flex items-center gap-2">
                          <span className="material-symbols-outlined text-[18px]">sync_alt</span>
-                         Linked Flight
+                         Chuyến bay liên kết
                       </h3>
                       <div className="bg-surface-container p-4 rounded-lg border border-surface-variant">
                         <div className="flex justify-between items-center mb-2">
                            <span className="font-medium text-primary">{linkedLeg.flightNumber}</span>
-                           <span className="text-xs font-label-caps bg-surface-variant px-1 rounded">{linkedLeg.type === 'A' ? 'ARR' : 'DEP'}</span>
+                           <span className="text-xs font-label-caps bg-surface-variant px-1 rounded">{linkedLeg.type === 'A' ? 'ĐẾN' : 'ĐI'}</span>
                         </div>
                         <div className="flex justify-between text-sm">
                            <span className="text-on-surface-variant">{linkedLeg.route}</span>
@@ -2623,21 +2738,21 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                 </div>
 
                 <div className="p-4 border-t border-surface-variant bg-surface-container-low flex flex-col gap-3">
-                  <button onClick={handleEditFlight} className="w-full bg-primary text-on-primary font-label-caps text-label-caps py-2 rounded hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm flex items-center justify-center gap-2">
+                  <button onClick={handleEditFlight} disabled={isMutationBlocked} className="w-full bg-primary text-on-primary font-label-caps text-label-caps py-2 rounded hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm flex items-center justify-center gap-2 disabled:opacity-50">
                     <span className="material-symbols-outlined text-[18px]">edit</span>
-                    Edit This Flight
+                    Sửa chuyến bay này
                   </button>
-                  <button onClick={handleEditSchedule} className="w-full border border-outline text-on-surface font-label-caps text-label-caps py-2 rounded hover:bg-surface-variant transition-colors flex items-center justify-center gap-2">
+                  <button onClick={handleEditSchedule} disabled={isMutationBlocked} className="w-full border border-outline text-on-surface font-label-caps text-label-caps py-2 rounded hover:bg-surface-variant transition-colors flex items-center justify-center gap-2 disabled:opacity-50">
                     <span className="material-symbols-outlined text-[18px]">edit_calendar</span>
-                    Edit Master Schedule
+                    Sửa toàn bộ lịch
                   </button>
                   <button
                     onClick={handleDeleteSelectedLegs}
-                    disabled={syncInProgress || isSaving || isUndoing}
+                    disabled={isMutationBlocked}
                     className="w-full border border-error/50 text-error font-label-caps text-label-caps py-2 rounded hover:bg-error-container hover:text-on-error-container transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
                   >
                     <span className="material-symbols-outlined text-[18px]">delete</span>
-                    Delete Selected
+                    Xóa đã chọn
                   </button>
                 </div>
               </>
@@ -2650,7 +2765,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
             <div className="flex items-center justify-between px-6 py-4 border-b border-surface-variant bg-surface-container-lowest sticky top-0 z-20">
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
-                  <label className="text-xs font-label-caps text-on-surface-variant">From</label>
+                  <label className="text-xs font-label-caps text-on-surface-variant">Từ</label>
                   <input 
                     type="date" 
                     value={fromDate} 
@@ -2659,7 +2774,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                   />
                 </div>
                 <div className="flex items-center gap-2">
-                  <label className="text-xs font-label-caps text-on-surface-variant">To</label>
+                  <label className="text-xs font-label-caps text-on-surface-variant">Đến</label>
                   <input 
                     type="date" 
                     value={toDate} 
@@ -2669,10 +2784,10 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                 </div>
               </div>
               <div className="flex items-center gap-4 text-xs">
-                <div className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-100 border border-blue-300 rounded-sm"></span> ARR</div>
-                <div className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-100 border border-emerald-300 rounded-sm"></span> DEP</div>
-                <div className="flex items-center gap-1"><span className="w-3 h-3 border border-outline border-dashed rounded-sm"></span> Single</div>
-                <div className="flex items-center gap-1"><span className="w-3 h-3 border border-outline border-solid rounded-sm"></span> Turnaround</div>
+                <div className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-100 border border-blue-300 rounded-sm"></span> Đến</div>
+                <div className="flex items-center gap-1"><span className="w-3 h-3 bg-emerald-100 border border-emerald-300 rounded-sm"></span> Đi</div>
+                <div className="flex items-center gap-1"><span className="w-3 h-3 border border-outline border-dashed rounded-sm"></span> Đơn lẻ</div>
+                <div className="flex items-center gap-1"><span className="w-3 h-3 border border-outline border-solid rounded-sm"></span> Cặp chuyến</div>
               </div>
             </div>
             {syncProgress && (
@@ -2702,14 +2817,34 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                   const isToday = new Date().toDateString() === dateObj.toDateString();
                   const isInSelection = isCellInSelection(dateStr);
                   const isFirstOfMonth = dateObj.getDate() === 1;
+                  const selectedDayLegsCount = dayLegs.filter(leg => selectedLegIds.has(leg.id)).length;
+                  const isDayFullySelected = dayLegs.length > 0 && selectedDayLegsCount === dayLegs.length;
+                  const isDayPartiallySelected = selectedDayLegsCount > 0 && selectedDayLegsCount < dayLegs.length;
                   const isSweepTarget = sweepSelectedDates.includes(dateStr);
-                  const isSelectedCell = isInSelection || isSweepTarget;
-                  const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                  const isSelectedCell = isInSelection || isSweepTarget || isDayFullySelected;
+                  const selectionAttr = isDayFullySelected ? 'full' : isDayPartiallySelected ? 'partial' : isSweepTarget ? 'full' : 'none';
+                  const MONTH_ABBR = ['Th1', 'Th2', 'Th3', 'Th4', 'Th5', 'Th6', 'Th7', 'Th8', 'Th9', 'Th10', 'Th11', 'Th12'];
 
                   return (
                     <div 
-                      key={dateStr} 
-                      className={`border-r border-b border-surface-variant p-2 flex flex-col gap-1 min-h-[120px] transition-colors select-none ${isFirstOfMonth ? 'border-l-4 border-l-primary' : ''} ${isToday && !isSelectedCell ? 'bg-primary-fixed/20' : ''} ${isInSelection ? 'bg-primary/10 border-primary' : ''} ${isSweepTarget ? 'bg-amber-50 dark:bg-amber-900/20' : ''} ${!isSelectedCell ? 'hover:bg-surface-container-low/50' : ''}`}
+                      key={dateStr}
+                      data-date={dateStr}
+                      data-selection={selectionAttr}
+                      aria-selected={isDayFullySelected || isSweepTarget ? 'true' : isDayPartiallySelected ? 'false' : undefined}
+                      aria-label={isDayPartiallySelected ? `${dateStr} đã chọn một phần` : undefined}
+                      className={`border-r border-b border-surface-variant p-2 flex flex-col gap-1 min-h-[120px] transition-colors select-none ${
+                        isFirstOfMonth ? 'border-l-4 border-l-primary' : ''
+                      } ${
+                        isToday && !isSelectedCell && !isDayPartiallySelected ? 'bg-primary-fixed/20' : ''
+                      } ${
+                        isInSelection ? 'bg-primary/10 border-primary' : ''
+                      } ${
+                        isDayFullySelected || isSweepTarget ? 'bg-amber-50 dark:bg-amber-900/20' : ''
+                      } ${
+                        isDayPartiallySelected ? 'bg-amber-50/50 dark:bg-amber-900/10 border-amber-300 border-dashed' : ''
+                      } ${
+                        !isSelectedCell && !isDayPartiallySelected ? 'hover:bg-surface-container-low/50' : ''
+                      }`}
                       onMouseDown={(e) => handleMouseDownCell(e, dateStr)}
                       onMouseEnter={() => handleMouseEnterCell(dateStr)}
                       onMouseUp={handleMouseUpCell}
@@ -2723,10 +2858,23 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                         }
                         if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
                           e.preventDefault();
-                          setSweepSelectedDates(prev =>
-                            prev.includes(dateStr) ? prev.filter(d => d !== dateStr) : [...prev, dateStr]
-                          );
                           setDateAnchor(dateStr);
+                          setSelectedDate(dateStr);
+                          const newSelectedLegIds = new Set(selectedLegIds);
+                          if (dayLegs.length > 0) {
+                            if (isDayFullySelected) {
+                              dayLegs.forEach(leg => newSelectedLegIds.delete(leg.id));
+                              setSweepSelectedDates(prev => prev.filter(d => d !== dateStr));
+                            } else {
+                              dayLegs.forEach(leg => newSelectedLegIds.add(leg.id));
+                              setSweepSelectedDates(prev => prev.includes(dateStr) ? prev : [...prev, dateStr]);
+                            }
+                            setSelectedLegIds(newSelectedLegIds);
+                          } else {
+                            setSweepSelectedDates(prev =>
+                              prev.includes(dateStr) ? prev.filter(d => d !== dateStr) : [...prev, dateStr]
+                            );
+                          }
                         } else if (e.shiftKey && dateAnchor) {
                           e.preventDefault();
                           const startT = new Date(dateAnchor).getTime();
@@ -2739,17 +2887,23 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                             range.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`);
                             cur.setDate(cur.getDate() + 1);
                           }
+                          const rangeSet = new Set(range);
+                          const newSelectedLegIds = new Set(selectedLegIds);
+                          legs.forEach(leg => {
+                            if (rangeSet.has(leg.date)) newSelectedLegIds.add(leg.id);
+                          });
+                          setSelectedLegIds(newSelectedLegIds);
                           setSweepSelectedDates(prev => {
                             const merged = new Set([...prev, ...range]);
                             return Array.from(merged);
                           });
-                        } else {
-                          // Plain click on cell: clear all selections and track date for Add Flight
-                          setSweepSelectedDates([]);
-                          setDateAnchor(null);
-                          setSelectedLegIds(new Set());
-                          setIsMultiSelect(false);
                           setSelectedDate(dateStr);
+                        } else {
+                          setDateAnchor(dateStr);
+                          setSelectedDate(dateStr);
+                          setSweepSelectedDates([dateStr]);
+                          const dayLegIds = new Set(dayLegs.map(leg => leg.id));
+                          setSelectedLegIds(dayLegIds);
                         }
                       }}
                     >
@@ -2758,7 +2912,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                           {dateObj.getDate()}-{MONTH_ABBR[dateObj.getMonth()]}
                         </span>
                         {dayLegs.length > 0 && (
-                           <span className="text-xs text-on-surface-variant font-label-caps">{dayLegs.length} flights</span>
+                           <span className="text-xs text-on-surface-variant font-label-caps">{dayLegs.length} chuyến</span>
                         )}
                       </div>
                       
@@ -2769,19 +2923,29 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                           const companionKey = `${dateStr}_${leg.id}`;
                           const companion = overnightCompanions.get(companionKey);
                           return (
-                            <div key={leg.id} className="flex flex-col gap-0.5">
+                            <div
+                              key={leg.id}
+                              className="flex flex-col gap-0.5"
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
                               <div
                                 draggable
+                                data-flight-id={leg.id}
+                                data-date={leg.date}
+                                aria-selected={isSelected}
                                 onDragStart={(e) => handleDragStart(e, leg)}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (isMultiSelect) {
+                                  setDateAnchor(leg.date);
+                                  setSelectedDate(leg.date);
+                                  if (e.ctrlKey || e.metaKey) {
                                     const newSet = new Set(selectedLegIds);
                                     if (newSet.has(leg.id)) newSet.delete(leg.id);
                                     else newSet.add(leg.id);
                                     setSelectedLegIds(newSet);
                                   } else {
                                     setSelectedLegIds(new Set([leg.id]));
+                                    setSweepSelectedDates([leg.date]);
                                   }
                                 }}
                                 className={`cursor-pointer text-left px-2 py-1.5 rounded text-xs font-data-tabular border ${!leg.linkId ? 'border-dashed' : 'border-solid'} ${
@@ -2802,15 +2966,31 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                                 </div>
                               </div>
                               {companion && (
-                                <div className={`text-left px-2 py-1 rounded text-[10px] font-data-tabular border border-dashed opacity-60 ${
+                                <div className={`text-left px-2 py-1 rounded text-[10px] font-data-tabular border border-dashed opacity-75 ${
                                   companion.type === 'A'
-                                    ? 'bg-blue-50/50 text-blue-800 border-blue-300'
-                                    : 'bg-emerald-50/50 text-emerald-800 border-emerald-300'
+                                    ? 'bg-blue-50/70 text-blue-800 border-blue-300'
+                                    : 'bg-emerald-50/70 text-emerald-800 border-emerald-300'
                                 }`}>
                                   <div className="flex justify-between items-center">
                                     <span className="font-semibold">{companion.schedule}</span>
                                     <span className="opacity-70 truncate ml-1">{companion.flightNumber}</span>
                                   </div>
+                                  {(() => {
+                                    const visibleStart = targetDateFrom || fromDate || null;
+                                    const visibleEnd = targetDateTo || toDate || null;
+                                    const isOutside = Boolean(
+                                      (visibleStart && companion.date < visibleStart) ||
+                                      (visibleEnd && companion.date > visibleEnd)
+                                    );
+                                    if (isOutside || companion.date !== dateStr) {
+                                      return (
+                                        <div className="text-[9px] text-amber-700 dark:text-amber-300 mt-0.5 font-medium">
+                                          {isOutside ? `Ngoài phạm vi hiển thị (${companion.date})` : companion.date}
+                                        </div>
+                                      );
+                                    }
+                                    return null;
+                                  })()}
                                 </div>
                               )}
                             </div>
@@ -2829,7 +3009,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
         <EditModal 
           isOpen={isEditModalOpen} 
           onClose={() => setIsEditModalOpen(false)} 
-          title={editMode === 'schedule' ? 'Edit Master Schedule' : 'Edit Selected Flights'}
+          title={editMode === 'schedule' ? 'Chỉnh sửa toàn bộ lịch' : 'Chỉnh sửa chuyến bay đã chọn'}
           targetLegs={targetLegsForEdit} 
           onNext={handleEditNext} 
         />
@@ -2840,7 +3020,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
               <div className="px-6 py-4 border-b border-surface-variant flex items-center justify-between">
                 <h2 className="font-h3 text-h3 text-on-surface flex items-center gap-2">
                   <span className="material-symbols-outlined text-tertiary">link</span>
-                  Link Selected Phase
+                  Liên kết chặng đã chọn
                 </h2>
                 <button onClick={() => setIsLinkModalOpen(false)} className="p-1 rounded-full hover:bg-surface-container-high transition-colors">
                   <span className="material-symbols-outlined">close</span>
@@ -2848,7 +3028,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
               </div>
               <div className="px-6 py-4 overflow-y-auto max-h-[420px] flex flex-col gap-2">
                 {linkCandidates.length === 0 ? (
-                  <p className="text-sm text-on-surface-variant">No exact matching unlinked counterpart found for the selected phase.</p>
+                  <p className="text-sm text-on-surface-variant">Không tìm thấy chuyến bay đối ứng phù hợp chưa liên kết cho giai đoạn đã chọn.</p>
                 ) : linkCandidates.map((candidate) => (
                   <LinkCandidateItem
                     key={candidate.key}
@@ -2867,9 +3047,11 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           proposedMods={proposedMods} 
           recordsById={confirmRecordsById}
           nativeChangeCount={proposedMods.length}
+          fromDate={targetDateFrom || fromDate || null}
+          toDate={targetDateTo || toDate || null}
           onConfirm={handleAddToDraft}
           isSaving={isSaving} 
-          confirmLabel="ADD TO DRAFT"
+          confirmLabel="LƯU VÀO BẢN NHÁP"
         />
 
         <NewFlightModal
@@ -2892,6 +3074,34 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
             onClose={() => setIsPublishModalOpen(false)}
           />
         )}
+        {season && isSeasonalPlanningV1Enabled() && (
+          <SeasonalVersionHistoryModal
+            isOpen={isHistoryModalOpen}
+            seasonId={season.id}
+            seasonCode={season.seasonCode || season.code || ''}
+            onClose={() => setIsHistoryModalOpen(false)}
+            isRestricted={
+              isMutationBlocked ||
+              currentMods.size > 0
+            }
+            restrictedReason={
+              syncInProgress
+                ? 'Đang đồng bộ dữ liệu'
+                : (isSaving && !isRestoringDraft) || draftSaveState.status === 'saving'
+                ? 'Đang lưu bản nháp'
+                : canonicalReloadError
+                ? 'Đang có lỗi nạp lại dữ liệu bản nháp sau khi lưu'
+                : draftSaveState.hasUnconfirmedChanges || currentMods.size > 0
+                ? 'Có thay đổi chưa lưu trong bản nháp'
+                : undefined
+            }
+            currentDraftRevision={historyDraftTokens.revision}
+            currentDraftEpoch={historyDraftTokens.epoch}
+            onBeginRestore={handleBeginRestore}
+            onFinishRestore={handleFinishRestore}
+            onDraftRestored={handleDraftRestored}
+          />
+        )}
         {dialogNode}
       </div>
     </div>
@@ -2902,7 +3112,7 @@ export default function DetailedPage() {
   return (
     <Suspense fallback={
       <LoadingStatusPanel
-        progress={buildLoadProgress('Loading detailed schedule...', 20, 'Preparing route')}
+        progress={buildLoadProgress('Đang tải lịch chi tiết...', 20, 'Chuẩn bị dữ liệu tuyến')}
         mode="fullscreen"
       />
     }>

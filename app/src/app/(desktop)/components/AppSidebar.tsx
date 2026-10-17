@@ -6,18 +6,20 @@ import { useOperatorAuth } from './OperatorAuthGate';
 import PbbIcon from './PbbIcon';
 import { isOperationalScheduleV1Enabled } from '@/lib/operationalScheduleContract';
 import { useOperationalScheduleStore } from '@/lib/operationalScheduleAdapter';
+import { isSeasonalRestoreBlockedSync, useSeasonalRestoreBlocked } from '@/lib/seasonalRestoreJournal';
 const SIDEBAR_COLLAPSED_KEY = 'appSidebarCollapsed';
 const APP_SIDEBAR_LAST_MODULE_ROUTE_PREFIX = 'appSidebarLastModuleRoute:';
 
 const NAV_ITEMS = [
-  { href: '/', label: 'Dashboard', icon: 'dashboard' },
-  { href: '/seasonal', label: 'Seasonal Schedule', icon: 'table_chart' },
-  { href: '/detailed', label: 'Detailed Schedule', icon: 'calendar_month' },
-  { href: '/daily', label: 'Daily Schedule', icon: 'view_list' },
-  { href: '/checkin', label: 'Check-in Allocation', icon: 'countertops' },
-  { href: '/gate', label: 'Gate Allocation', icon: 'pbb' },
-  { href: '/audit', label: 'Audit Log', icon: 'manage_search' },
-  { href: '/settings', label: 'Settings', icon: 'settings' },
+  { href: '/', label: 'Tổng quan', icon: 'dashboard' },
+  { href: '/seasonal', label: 'Lịch mùa', icon: 'table_chart' },
+  { href: '/detailed', label: 'Lịch chi tiết', icon: 'calendar_month' },
+  { href: '/daily', label: 'Lịch ngày', icon: 'view_list' },
+  { href: '/checkin', label: 'Phân bổ quầy', icon: 'countertops' },
+  { href: '/gate', label: 'Phân bổ cửa', icon: 'pbb' },
+  { href: '/reports', label: 'Báo cáo', icon: 'bar_chart' },
+  { href: '/audit', label: 'Lịch sử thao tác', icon: 'manage_search' },
+  { href: '/settings', label: 'Cài đặt', icon: 'settings' },
 ];
 
 type LastModuleRoutes = Record<string, string>;
@@ -30,10 +32,11 @@ const MODULE_PATHS: Record<string, true> = {
   '/daily': true,
   '/checkin': true,
   '/gate': true,
+  '/reports': true,
   '/audit': true,
   '/settings': true,
 };
-const OPERATIONAL_MODULE_PATHS: Record<string, true> = { '/': true, '/dashboard': true, '/daily': true, '/checkin': true, '/gate': true };
+const OPERATIONAL_MODULE_PATHS: Record<string, true> = { '/daily': true, '/checkin': true, '/gate': true };
 function resolveActiveSeasonId(querySeasonId: string | null, includeStoredSeason: boolean): string | null {
   if (querySeasonId) return querySeasonId;
   if (!includeStoredSeason) return null;
@@ -109,7 +112,8 @@ export default function AppSidebar() {
   const operatorAuth = useOperatorAuth();
   const currentSearch = searchParams.toString();
   const operationalWritePending = useOperationalScheduleStore((state) => state.mutating || state.importing || Boolean(state.unresolvedAttempt));
-  const navigationBlocked = isOperationalScheduleV1Enabled() && operationalWritePending;
+  const seasonalRestoreBlocked = useSeasonalRestoreBlocked();
+  const navigationBlocked = (isOperationalScheduleV1Enabled() && operationalWritePending) || seasonalRestoreBlocked;
   useEffect(() => {
     if (!navigationBlocked) return;
     const preventUnload = (event: BeforeUnloadEvent) => {
@@ -151,6 +155,7 @@ export default function AppSidebar() {
   const navigateTo = useCallback((href: string) => {
     const pending = useOperationalScheduleStore.getState();
     if (isOperationalScheduleV1Enabled() && (pending.mutating || pending.importing || pending.unresolvedAttempt)) return;
+    if (isSeasonalRestoreBlockedSync()) return;
     router.push(href);
   }, [router]);
 
@@ -203,7 +208,7 @@ export default function AppSidebar() {
   return (
     <aside
       className={`app-sidebar relative z-40 flex h-dvh flex-none flex-col border-r border-slate-200 bg-slate-50 text-slate-700 shadow-sm transition-[width] duration-200 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 ${collapsed ? 'w-16' : 'w-64'}`}
-      aria-label="Main navigation"
+      aria-label="Điều hướng chính"
       data-collapsed={collapsed ? 'true' : 'false'}
     >
       <div className="flex h-16 items-center justify-between border-b border-slate-200 px-3 dark:border-slate-800">
@@ -212,11 +217,11 @@ export default function AppSidebar() {
           onClick={() => navigateTo('/')}
           disabled={navigationBlocked}
           className={`flex min-w-0 items-center gap-3 rounded-lg px-2 py-1.5 text-slate-900 transition-colors hover:bg-slate-100 dark:text-white dark:hover:bg-slate-900 ${collapsed ? 'justify-center' : ''}`}
-          title="Seasonal Management"
+          title="Quản lý lịch mùa"
         >
           <span className="material-symbols-outlined text-[24px] text-primary">flight_takeoff</span>
           {!collapsed && (
-            <span className="min-w-0 truncate text-sm font-semibold tracking-tight">Seasonal Management</span>
+            <span className="min-w-0 truncate text-sm font-semibold tracking-tight">Quản lý lịch mùa</span>
           )}
         </button>
         <button
@@ -224,8 +229,8 @@ export default function AppSidebar() {
           onPointerDown={handleTogglePointerDown}
           onClick={handleToggleClick}
           className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-slate-500 transition-colors hover:border-slate-200 hover:bg-white hover:text-slate-900 dark:text-slate-400 dark:hover:border-slate-800 dark:hover:bg-slate-900 dark:hover:text-white"
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={collapsed ? 'Mở rộng thanh bên' : 'Thu gọn thanh bên'}
+          title={collapsed ? 'Mở rộng thanh bên' : 'Thu gọn thanh bên'}
         >
           <span className="material-symbols-outlined text-[20px]">{collapsed ? 'chevron_right' : 'chevron_left'}</span>
         </button>
@@ -269,8 +274,8 @@ export default function AppSidebar() {
               type="button"
               onClick={() => void operatorAuth.signOut()}
               className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white"
-              title={`Sign out ${operatorAuth.operatorLabel}`}
-              aria-label="Sign out"
+              title={`Đăng xuất ${operatorAuth.operatorLabel}`}
+              aria-label="Đăng xuất"
               disabled={operatorAuth.signingOut}
             >
               <span className="material-symbols-outlined text-[20px]">logout</span>
@@ -290,7 +295,7 @@ export default function AppSidebar() {
                 disabled={operatorAuth.signingOut}
               >
                 <span className="material-symbols-outlined text-[17px]">logout</span>
-                {operatorAuth.signingOut ? 'Signing out...' : 'Sign out'}
+                {operatorAuth.signingOut ? 'Đang đăng xuất...' : 'Đăng xuất'}
               </button>
             </div>
           )}

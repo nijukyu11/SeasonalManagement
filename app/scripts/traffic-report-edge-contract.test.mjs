@@ -51,7 +51,7 @@ assert.doesNotMatch(edge, /request\.headers\.get\(['"]Authorization/);
 assert.match(edge, /get_public_traffic_report_overview_v1/);
 assert.match(edge, /get_public_traffic_report_v2/);
 assert.match(edge, /p_payload_scope: payloadScope/);
-assert.match(edge, /p_data_as_of: readVersion\?\.dataAsOf \?\? null/);
+assert.match(edge, /p_data_as_of:\s*\(!readVersion\s*\|\|\s*readVersion\.expiresAt\s*<=\s*Math\.floor\(Date\.now\(\)\s*\/\s*1000\)\)\s*\?\s*null\s*:\s*readVersion\.dataAsOf/);
 assert.match(edge, /endpoint === 'timeline'[\s\S]+?'timeline'[\s\S]+?endpoint === 'overview' \? 'full' : 'dimensions'/);
 assert.match(edge, /expected_watermark/);
 assert.match(edge, /TRAFFIC_REPORT_READ_VERSION_SECRET/);

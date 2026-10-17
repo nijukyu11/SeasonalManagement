@@ -1,5 +1,5 @@
 import DashboardPage from './dashboard/page';
 
 export default function HomePage() {
-  return <DashboardPage routeBase="/" />;
+  return <DashboardPage />;
 }

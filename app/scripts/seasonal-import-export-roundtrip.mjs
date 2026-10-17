@@ -24,6 +24,7 @@ const {
   exportCanonicalSeasonalRowsToExcel,
 } = await import('../src/lib/canonicalSeasonalRows.ts');
 const { parseSeasonalSchedule, expandToFlightLegs } = await import('../src/lib/parser.ts');
+const { normalizeSeasonalDate } = await import('../src/lib/seasonalSourceRowValidation.ts');
 const { materializeSeasonalExportSnapshot } = await import('../src/lib/seasonalExportSnapshot.ts');
 const { materializeEffectiveSeasonalLegs } = await import('../src/lib/effectiveSeasonalLegs.ts');
 const {
@@ -131,7 +132,10 @@ async function parseWorkbookBlob(blob, seasonCode) {
   assert.equal(parsed.seasonCode, seasonCode);
   assert.deepEqual(parsed.issues, [], `${seasonCode} exported workbook parser issues`);
   assert.ok(parsed.rows.length > 0, `${seasonCode} exported workbook contains no source rows`);
-  return { bytes, rows: canonicalizeSeasonalImportSourceRows(parsed.rows), legs: expandToFlightLegs(parsed.rows) };
+  const references = workbook.Sheets['Pair References']
+    ? XLSX.utils.sheet_to_json(workbook.Sheets['Pair References'], { defval: '' })
+    : [];
+  return { bytes, references, rows: canonicalizeSeasonalImportSourceRows(parsed.rows), legs: expandToFlightLegs(parsed.rows) };
 }
 
 async function verifySeasonRoundTrip(client, userId, seasonCode) {
@@ -180,11 +184,22 @@ async function verifySeasonRoundTrip(client, userId, seasonCode) {
   const preExportPairResolution = resolveSeasonalPairs(canonical.effectiveLegs);
   const preExportPairDiagnostics = pairDiagnostics(preExportPairResolution);
   assertEmptyPairDiagnostics(preExportPairDiagnostics, `${seasonCode} baseline`);
-  const preExportPairingTopology = pairingTopology(canonical.effectiveLegs, preExportPairResolution);
   assertNoDuplicateKeys(canonical.effectiveLegs, `${seasonCode} effective snapshot`);
 
   const workbookBlob = exportCanonicalSeasonalRowsToExcel(canonical.rows, seasonCode);
   const reparsed = await parseWorkbookBlob(workbookBlob, seasonCode);
+  for (const pair of preExportPairResolution.pairs) {
+    for (const leg of [pair.arrival, pair.departure]) {
+      const reference = reparsed.references.find((entry) => entry['Record ID'] === leg.id);
+      assert.ok(reference, `${seasonCode} missing pair reference for ${leg.id}`);
+      assert.equal(reference['Pair Key'], leg.turnaroundId ?? leg.linkId);
+      assert.equal(reference['Linked Record ID'], leg.linkedRecordId ?? '');
+      assert.equal(normalizeSeasonalDate(reference['Scheduled Date']), leg.scheduledDate ?? leg.date);
+    }
+  }
+  // The 25-column importer preserves occurrences; split pairs are manually
+  // re-linkable through Pair References, not automatically re-linked by it.
+  const expectedReimportPairingTopology = pairingTopology(reparsed.legs, resolveSeasonalPairs(reparsed.legs));
   assertNoDuplicateKeys(reparsed.legs, `${seasonCode} exported workbook`);
   assert.equal(reparsed.legs.length, fixtureData.fixture.verification.expectedGeneratedCount);
   assertSignaturesEqual(fixtureSignatures, sortedSignatures(reparsed.legs), `${seasonCode} export`);
@@ -291,17 +306,17 @@ async function verifySeasonRoundTrip(client, userId, seasonCode) {
   );
   assert.deepEqual(
     postReimportPairingTopology.pairSignatures,
-    preExportPairingTopology.pairSignatures,
+    expectedReimportPairingTopology.pairSignatures,
     `${seasonCode} re-import pair signatures changed`,
   );
   assert.deepEqual(
     postReimportPairingTopology.pairTurnaroundCardinality,
-    preExportPairingTopology.pairTurnaroundCardinality,
+    expectedReimportPairingTopology.pairTurnaroundCardinality,
     `${seasonCode} re-import turnaround cardinality changed`,
   );
   assert.equal(
     postReimportPairingTopology.turnaroundGroupCount,
-    preExportPairingTopology.turnaroundGroupCount,
+    expectedReimportPairingTopology.turnaroundGroupCount,
     `${seasonCode} re-import turnaround group count changed`,
   );
 

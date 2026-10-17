@@ -12,10 +12,17 @@ function formatBytes(value: number): string {
 }
 
 function statusText(status: ReturnType<typeof useAppUpdate>['checkResult']): string {
-  if (!status) return 'Updates have not been checked in this session.';
-  if (status.status === 'unavailable') return status.message;
-  if (status.status === 'upToDate') return status.message;
-  return `Update ${status.update.version} is available.`;
+  if (!status) return 'Chưa kiểm tra cập nhật trong phiên này.';
+  if (status.status === 'unavailable') {
+    if (/only in the tauri desktop app|updates are not supported/i.test(status.message)) {
+      return 'Tính năng cập nhật chỉ khả dụng trên ứng dụng máy tính (Tauri).';
+    }
+    return 'Tính năng cập nhật hiện không khả dụng.';
+  }
+  if (status.status === 'upToDate') {
+    return 'Seasonal Management đang ở phiên bản mới nhất.';
+  }
+  return `Đã có bản cập nhật ${status.update.version}.`;
 }
 
 export default function UpdatesTab() {
@@ -35,7 +42,7 @@ export default function UpdatesTab() {
   } = useAppUpdate();
 
   const lastCheckedLabel = lastCheckedAt == null
-    ? 'Never'
+    ? 'Chưa bao giờ'
     : formatUpdateDate(new Date(lastCheckedAt).toISOString());
   const progressLabel = progress.contentLength == null
     ? formatBytes(progress.downloadedBytes)
@@ -46,9 +53,9 @@ export default function UpdatesTab() {
       <div className="rounded-lg border border-outline-variant bg-surface-container-low p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="font-h3 text-[18px] font-semibold text-on-surface">Application Updates</h2>
+            <h2 className="font-h3 text-[18px] font-semibold text-on-surface">Cập nhật ứng dụng</h2>
             <p className="mt-1 max-w-3xl text-sm text-on-surface-variant">
-              Desktop updates are signed by Tauri and downloaded from GitHub Releases after operator confirmation.
+              Các bản cập nhật ứng dụng Desktop được Tauri ký số và tải xuống từ GitHub Releases sau khi người vận hành xác nhận.
             </p>
           </div>
           <button
@@ -60,7 +67,7 @@ export default function UpdatesTab() {
             <span className={`material-symbols-outlined text-[18px] ${checking ? 'animate-spin' : ''}`}>
               {checking ? 'progress_activity' : 'sync'}
             </span>
-            {checking ? 'Checking' : 'Check for updates'}
+            {checking ? 'Đang kiểm tra' : 'Kiểm tra cập nhật'}
           </button>
         </div>
       </div>
@@ -69,16 +76,16 @@ export default function UpdatesTab() {
         <div className="rounded-lg border border-outline-variant bg-surface-container-low p-4">
           <div className="grid gap-3 sm:grid-cols-3">
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-on-surface-variant">Current version</div>
-              <div className="mt-1 text-lg font-semibold text-on-surface">{currentVersion ?? 'Unknown'}</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-on-surface-variant">Phiên bản hiện tại</div>
+              <div className="mt-1 text-lg font-semibold text-on-surface">{currentVersion ?? 'Không xác định'}</div>
             </div>
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-on-surface-variant">Latest version</div>
-              <div className="mt-1 text-lg font-semibold text-on-surface">{availableUpdate?.version ?? 'No newer release'}</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-on-surface-variant">Phiên bản mới nhất</div>
+              <div className="mt-1 text-lg font-semibold text-on-surface">{availableUpdate?.version ?? 'Không có bản phát hành mới hơn'}</div>
             </div>
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-on-surface-variant">Last checked</div>
-              <div className="mt-1 text-lg font-semibold text-on-surface">{lastCheckedLabel ?? 'Never'}</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-on-surface-variant">Lần kiểm tra cuối</div>
+              <div className="mt-1 text-lg font-semibold text-on-surface">{lastCheckedLabel ?? 'Chưa bao giờ'}</div>
             </div>
           </div>
 
@@ -91,7 +98,7 @@ export default function UpdatesTab() {
                 <h3 className="text-sm font-semibold text-on-surface">{statusText(checkResult)}</h3>
                 {availableUpdate?.publishedAt && (
                   <p className="mt-1 text-sm text-on-surface-variant">
-                    Published {formatUpdateDate(availableUpdate.publishedAt)}
+                    Phát hành {formatUpdateDate(availableUpdate.publishedAt)}
                   </p>
                 )}
                 {availableUpdate?.notes && (
@@ -104,9 +111,9 @@ export default function UpdatesTab() {
         </div>
 
         <div className="rounded-lg border border-outline-variant bg-surface-container-low p-4">
-          <h3 className="text-sm font-semibold text-on-surface">Install update</h3>
+          <h3 className="text-sm font-semibold text-on-surface">Cài đặt bản cập nhật</h3>
           <p className="mt-1 text-sm text-on-surface-variant">
-            Download starts only after confirmation. Restart is required after installation.
+            Quá trình tải về chỉ bắt đầu sau khi xác nhận. Cần khởi động lại ứng dụng sau khi cài đặt.
           </p>
 
           <div className="mt-4 space-y-3">
@@ -119,7 +126,7 @@ export default function UpdatesTab() {
               <span className={`material-symbols-outlined text-[18px] ${installing ? 'animate-spin' : ''}`}>
                 {installing ? 'progress_activity' : 'download'}
               </span>
-              {installing ? 'Downloading and installing' : 'Download & install'}
+              {installing ? 'Đang tải về và cài đặt' : 'Tải về & cài đặt'}
             </button>
 
             <button
@@ -129,7 +136,7 @@ export default function UpdatesTab() {
               className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-4 py-2 text-sm font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
             >
               <span className="material-symbols-outlined text-[18px]">restart_alt</span>
-              Restart app
+              Khởi động lại ứng dụng
             </button>
           </div>
 
@@ -137,7 +144,7 @@ export default function UpdatesTab() {
             <div className="mt-4">
               <div className="flex items-center justify-between text-xs font-semibold text-on-surface-variant">
                 <span>{progressLabel}</span>
-                <span>{progress.percent == null ? 'Working' : `${progress.percent}%`}</span>
+                <span>{progress.percent == null ? 'Đang xử lý' : `${progress.percent}%`}</span>
               </div>
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface-container-high">
                 <div
@@ -150,7 +157,9 @@ export default function UpdatesTab() {
 
           {installResult && (
             <p className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-medium text-emerald-900">
-              {installResult.message}
+                {/update installed\. restart seasonal management to finish/i.test(installResult.message)
+                  ? 'Đã cài đặt bản cập nhật. Hãy khởi động lại Seasonal Management để hoàn tất.'
+                  : 'Đã cài đặt bản cập nhật. Hãy khởi động lại ứng dụng để hoàn tất.'}
             </p>
           )}
         </div>

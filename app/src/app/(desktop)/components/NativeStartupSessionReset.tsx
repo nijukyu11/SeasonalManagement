@@ -4,6 +4,7 @@ import { type ReactNode, useEffect, useState } from 'react';
 import { clearNativeAppEphemeralData } from '@/lib/appSessionCleanup';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
 import { resetUiUndoSession } from '@/lib/uiUndoMemory';
+import { formatUiError } from '@/lib/uiDisplayText';
 import LoadingStatusPanel from './LoadingStatusPanel';
 
 async function isNativeRuntime(): Promise<boolean> {
@@ -20,7 +21,7 @@ export default function NativeStartupSessionReset({ children }: { children: Reac
   const [ready, setReady] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
   const [progress, setProgress] = useState<LoadProgress>(() =>
-    buildLoadProgress('Checking native runtime...', 10, 'Preparing app session')
+    buildLoadProgress('Đang kiểm tra môi trường ứng dụng...', 10, 'Đang chuẩn bị phiên làm việc')
   );
 
   useEffect(() => {
@@ -29,28 +30,28 @@ export default function NativeStartupSessionReset({ children }: { children: Reac
     void (async () => {
       const native = await isNativeRuntime();
       if (!native) {
-        if (!cancelled) setProgress(buildLoadProgress('Loading app...', 100, 'Browser session ready'));
+        if (!cancelled) setProgress(buildLoadProgress('Đang tải ứng dụng...', 100, 'Phiên trình duyệt đã sẵn sàng'));
         if (!cancelled) setReady(true);
         return;
       }
 
       try {
         if (!cancelled) {
-          setProgress(buildLoadProgress('Clearing local UI session...', 35, 'Keeping Supabase login', { indeterminate: true }));
+          setProgress(buildLoadProgress('Đang xóa phiên giao diện cục bộ...', 35, 'Giữ nguyên phiên đăng nhập', { indeterminate: true }));
         }
         clearNativeAppEphemeralData({ preserveAuth: true });
         resetUiUndoSession();
         if (!cancelled) {
-          setProgress(buildLoadProgress('Connecting to server workspace', 70, 'Loading saved data from Supabase'));
+          setProgress(buildLoadProgress('Đang kết nối không gian làm việc trên máy chủ', 70, 'Đang tải dữ liệu đã lưu từ máy chủ'));
         }
       } catch (error) {
         if (!cancelled) {
-          setWarning(error instanceof Error && error.message ? error.message : 'Session startup cleanup failed.');
-          setProgress(buildLoadProgress('Continuing startup...', 85, 'Startup cleanup failed'));
+          setWarning(formatUiError(error, 'Không thể dọn dẹp phiên khi khởi động.'));
+          setProgress(buildLoadProgress('Đang tiếp tục khởi động...', 85, 'Dọn dẹp khi khởi động chưa thành công'));
         }
       } finally {
         if (!cancelled) {
-          setProgress(buildLoadProgress('Rendering latest schedule', 100, 'Checking server changes after open'));
+          setProgress(buildLoadProgress('Đang hiển thị lịch mới nhất', 100, 'Đang kiểm tra thay đổi trên máy chủ sau khi mở'));
           setReady(true);
         }
       }

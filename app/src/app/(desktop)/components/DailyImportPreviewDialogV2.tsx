@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { DailyImportStageResultV2 } from '@/lib/operationalScheduleContract';
+import type { DailyImportStageResultV2, DailyImportReplacedLegV2 } from '@/lib/operationalScheduleContract';
+import { formatUiError, formatUiValue } from '@/lib/uiDisplayText';
 
 function getDiagnosticCode(d: unknown): string {
   if (d && typeof d === 'object' && 'code' in d && typeof d.code === 'string') return d.code;
@@ -41,12 +42,12 @@ export default function DailyImportPreviewDialogV2({
   const unavailableMessage =
     result.diagnostics.length === 0 && result.status !== 'validated'
       ? result.status === 'cancelled'
-        ? 'Preview V2 này đã bị hủy. Đóng preview và chọn lại file để tạo batch mới.'
+        ? 'Bản xem trước này đã bị hủy. Hãy đóng bản xem trước và chọn lại tệp để tạo đợt nhập mới.'
         : result.status === 'expired'
-          ? 'Preview V2 này đã hết hạn. Đóng preview và chọn lại file để stage lại.'
+          ? 'Bản xem trước này đã hết hạn. Hãy đóng bản xem trước và chọn lại tệp để chuẩn bị lại.'
           : result.status === 'committed'
-            ? `Batch V2 đã commit. Revision ${result.result?.revision ?? '—'}; ${result.result?.insertedCount ?? 0} legs mới, ${result.result?.replacedCount ?? 0} legs được thay thế. Không cần import lại.`
-            : 'Batch V2 không ở trạng thái có thể commit.'
+            ? `Đợt nhập đã được lưu. Phiên bản ${result.result?.revision ?? '—'}; ${result.result?.insertedCount ?? 0} chặng bay mới, ${result.result?.replacedCount ?? 0} chặng bay được thay thế. Không cần nhập lại.`
+            : 'Đợt nhập không ở trạng thái có thể lưu.'
       : null;
 
   useEffect(() => {
@@ -71,10 +72,10 @@ export default function DailyImportPreviewDialogV2({
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 id="daily-import-preview-v2-title" className="text-balance text-xl font-semibold">
-              Preview thay thế Daily Schedule (V2 Vận Hành)
+              Xem trước thay thế Lịch ngày (vận hành)
             </h2>
             <p id="daily-import-preview-v2-summary" className="mt-1 text-pretty text-sm text-on-surface-variant">
-              Batch: <span className="font-mono text-xs">{result.batchId}</span> · {result.preview.legCount} legs trong file · {result.preview.rebaseCount} rebased overrides
+              Đợt nhập: <span className="font-mono text-xs">{result.batchId}</span> · {result.preview.legCount.toLocaleString('vi-VN')} chặng bay trong tệp · {(result.preview.rebaseCount ?? 0).toLocaleString('vi-VN')} điều chỉnh được giữ lại · {(result.preview.replacedCount ?? result.preview.replacedLegsCount ?? (result.preview.replacedLegs ?? []).length).toLocaleString('vi-VN')} chặng bị thay thế
             </p>
           </div>
           <span
@@ -82,7 +83,7 @@ export default function DailyImportPreviewDialogV2({
               valid || result.status === 'committed' ? 'bg-primary-container text-on-primary-container' : 'bg-error-container text-on-error-container'
             }`}
           >
-            {result.status === 'committed' ? 'Đã commit V2' : valid ? 'Sẵn sàng commit V2' : 'Đang bị chặn'}
+            {result.status === 'committed' ? 'Đã lưu' : valid ? 'Sẵn sàng lưu' : 'Đang bị chặn'}
           </span>
         </div>
 
@@ -93,7 +94,7 @@ export default function DailyImportPreviewDialogV2({
               {result.diagnostics.slice(0, 20).map((diagnostic, index) => {
                 const code = getDiagnosticCode(diagnostic);
                 const message = getDiagnosticMessage(diagnostic);
-                return <li key={`${code || 'diag'}-${index}`}>{message || code || 'Invalid import data'}</li>;
+                return <li key={`${code || 'diag'}-${index}`}>{formatUiError(message || code, 'Dữ liệu nhập không hợp lệ')}</li>;
               })}
             </ul>
           </div>
@@ -107,9 +108,9 @@ export default function DailyImportPreviewDialogV2({
 
         {needsZeroFlightConfirmation && onConfirmZeroFlightDates && (
           <div className="mt-4 rounded-lg border border-outline-variant bg-surface-container-low p-3">
-            <h3 className="text-balance text-sm font-semibold">Xác nhận rõ Ops Date không có chuyến bay (Zero Flights)</h3>
+            <h3 className="text-balance text-sm font-semibold">Xác nhận rõ ngày khai thác không có chuyến bay</h3>
             <p className="mt-1 text-pretty text-sm text-on-surface-variant">
-              Nhập danh sách ngày vận hành xác nhận không có chuyến bay (YYYY-MM-DD, cách nhau bởi dấu phẩy).
+              Nhập danh sách ngày khai thác xác nhận không có chuyến bay (YYYY-MM-DD, cách nhau bởi dấu phẩy).
             </p>
             <div className="mt-3">
               <input
@@ -132,7 +133,7 @@ export default function DailyImportPreviewDialogV2({
               }}
               className="mt-3 rounded-lg border border-primary px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {restaging ? 'Đang stage lại V2…' : 'Xác nhận ngày trống V2 và stage lại'}
+              {restaging ? 'Đang chuẩn bị lại…' : 'Xác nhận ngày trống và chuẩn bị lại'}
             </button>
           </div>
         )}
@@ -149,40 +150,51 @@ export default function DailyImportPreviewDialogV2({
             </div>
             {result.preview.confirmedZeroFlightDates.length > 0 && (
               <div className="mt-2 text-xs text-on-surface-variant">
-                Ngày zero-flight đã xác nhận: {result.preview.confirmedZeroFlightDates.join(', ')}
+                Ngày không có chuyến bay đã xác nhận: {result.preview.confirmedZeroFlightDates.join(', ')}
               </div>
             )}
           </div>
 
-          {result.preview.replacedLegs.length > 0 && (
+          {((result.preview.replacedLegs ?? []).length > 0 || (result.preview.replacedLegsCount ?? 0) > 0 || (result.preview.replacedCount ?? 0) > 0) && (
             <div className="overflow-x-auto rounded-lg border border-outline-variant">
-              <div className="bg-surface-container-high px-3 py-2 text-xs font-semibold uppercase text-on-surface-variant">
-                Chuyến bay bị thay thế ({result.preview.replacedLegs.length})
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-surface-container-high px-3 py-2 text-xs font-semibold uppercase text-on-surface-variant">
+                <span>Chuyến bay bị thay thế ({(result.preview.replacedCount ?? result.preview.replacedLegsCount ?? (result.preview.replacedLegs ?? []).length).toLocaleString('vi-VN')})</span>
+                {(result.preview.replacedLegsTruncated || (result.preview.replacedLegs ?? []).length < (result.preview.replacedCount ?? result.preview.replacedLegsCount ?? (result.preview.replacedLegs ?? []).length)) && (
+                  <span className="font-normal normal-case text-on-surface-variant">
+                    (Đang hiển thị {(result.preview.replacedLegs ?? []).length.toLocaleString('vi-VN')} chuyến mẫu; các chuyến còn lại vẫn được thay thế đầy đủ khi lưu)
+                  </span>
+                )}
               </div>
-              <table className="w-full min-w-[600px] border-collapse text-left text-sm">
-                <thead className="bg-surface-container text-xs text-on-surface-variant">
-                  <tr>
-                    <th className="px-3 py-1.5">Ngày</th>
-                    <th className="px-3 py-1.5">Loại</th>
-                    <th className="px-3 py-1.5">Chuyến</th>
-                    <th className="px-3 py-1.5">Giờ</th>
-                    <th className="px-3 py-1.5">Chặng</th>
-                    <th className="px-3 py-1.5">Nguồn</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.preview.replacedLegs.slice(0, 50).map((leg) => (
-                    <tr key={leg.legId} className="border-t border-outline-variant">
-                      <td className="px-3 py-1 font-mono text-xs">{leg.operationalDate}</td>
-                      <td className="px-3 py-1">{leg.side}</td>
-                      <td className="px-3 py-1 font-semibold">{leg.flightNumber.startsWith(leg.airline) ? leg.flightNumber : `${leg.airline}${leg.flightNumber}`}</td>
-                      <td className="px-3 py-1 font-mono text-xs">{leg.scheduledTime}</td>
-                      <td className="px-3 py-1 text-xs">{leg.route}</td>
-                      <td className="px-3 py-1 text-xs">{leg.sourceType}</td>
+              {(result.preview.replacedLegs ?? []).length > 0 ? (
+                <table className="w-full min-w-[600px] border-collapse text-left text-sm">
+                  <thead className="bg-surface-container text-xs text-on-surface-variant">
+                    <tr>
+                      <th className="px-3 py-1.5">Ngày</th>
+                      <th className="px-3 py-1.5">Loại</th>
+                      <th className="px-3 py-1.5">Chuyến</th>
+                      <th className="px-3 py-1.5">Giờ</th>
+                      <th className="px-3 py-1.5">Chặng</th>
+                      <th className="px-3 py-1.5">Nguồn</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {(result.preview.replacedLegs ?? []).slice(0, 100).map((leg: DailyImportReplacedLegV2) => (
+                      <tr key={leg.legId} className="border-t border-outline-variant">
+                        <td className="px-3 py-1 font-mono text-xs">{leg.operationalDate}</td>
+                        <td className="px-3 py-1">{leg.side === 'ARR' ? 'Đến' : 'Đi'}</td>
+                        <td className="px-3 py-1 font-semibold">{leg.flightNumber.startsWith(leg.airline) ? leg.flightNumber : `${leg.airline}${leg.flightNumber}`}</td>
+                        <td className="px-3 py-1 font-mono text-xs">{leg.scheduledTime}</td>
+                        <td className="px-3 py-1 text-xs">{leg.route}</td>
+                        <td className="px-3 py-1 text-xs">{formatUiValue(leg.sourceType, 'sourceType')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="p-3 text-xs text-on-surface-variant">
+                  Có {(result.preview.replacedLegsCount ?? 0).toLocaleString('vi-VN')} chuyến bay hiện hữu trong phạm vi ngày sẽ được thay thế khi lưu.
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -195,7 +207,7 @@ export default function DailyImportPreviewDialogV2({
             disabled={committing || restaging}
             className="rounded-lg border border-outline-variant px-4 py-2 text-sm font-medium hover:bg-surface-container-high disabled:opacity-50"
           >
-            Đóng preview
+            Đóng bản xem trước
           </button>
           <button
             type="button"
@@ -203,7 +215,7 @@ export default function DailyImportPreviewDialogV2({
             disabled={!valid || !commitEnabled || committing || restaging}
             className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-on-primary hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {committing ? 'Đang commit V2…' : 'Commit thay thế V2'}
+            {committing ? 'Đang nhập…' : 'Nhập và thay thế'}
           </button>
         </div>
       </section>

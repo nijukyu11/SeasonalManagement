@@ -8,7 +8,7 @@ const ROUTES = [
   '(desktop)/daily/page.tsx',
   '(desktop)/checkin/page.tsx',
   '(desktop)/gate/page.tsx',
-  '(desktop)/dashboard/page.tsx',
+
 ] as const;
 
 test('heavy schedule routes render any existing snapshot before background revalidation', () => {

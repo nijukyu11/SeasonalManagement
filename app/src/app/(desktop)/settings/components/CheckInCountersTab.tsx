@@ -53,10 +53,10 @@ export default function CheckInCountersTab({
     <section className="space-y-5">
       <div className="grid gap-5 xl:grid-cols-[360px_1fr]">
         <div className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm">
-          <h2 className="font-title-md text-title-md text-on-surface">Counter Inventory</h2>
+          <h2 className="font-title-md text-title-md text-on-surface">Danh sách quầy</h2>
           <div className="mt-4 space-y-3">
             <label className="block text-sm font-semibold text-on-surface">
-              Add counters
+              Thêm quầy
               <input
                 value={counterInventoryInput}
                 onChange={(event) => setCounterInventoryInput(event.target.value)}
@@ -70,23 +70,23 @@ export default function CheckInCountersTab({
               className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-on-primary hover:bg-primary-container hover:text-on-primary-container"
             >
               <span className="material-symbols-outlined text-[18px]">add</span>
-              Add Counters
+              Thêm quầy
             </button>
           </div>
         </div>
 
         <div className="rounded-lg border border-surface-variant bg-surface-container-lowest shadow-sm">
           <div className="border-b border-surface-variant px-4 py-3">
-            <h2 className="font-title-md text-title-md text-on-surface">Check-in Counters</h2>
+            <h2 className="font-title-md text-title-md text-on-surface">Quầy làm thủ tục</h2>
           </div>
           <div className="hidden grid-cols-[1fr_110px_120px_56px] gap-3 border-b border-surface-variant bg-surface-container px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-on-surface-variant lg:grid">
-            <span>Counter</span>
-            <span>Order</span>
-            <span>Status</span>
-            <span>Action</span>
+            <span>Quầy</span>
+            <span>Thứ tự</span>
+            <span>Trạng thái</span>
+            <span>Thao tác</span>
           </div>
           {checkInCounters.length === 0 ? (
-            <div className="px-4 py-10 text-center text-sm text-on-surface-variant">No check-in counters yet</div>
+            <div className="px-4 py-10 text-center text-sm text-on-surface-variant">Chưa có quầy làm thủ tục</div>
           ) : (
             <div className="divide-y divide-surface-variant">
               {checkInCounters.map((counter) => (
@@ -95,14 +95,14 @@ export default function CheckInCountersTab({
                     value={counterLabelDrafts[counter.id] ?? counter.label}
                     onChange={(event) => setCounterLabelDrafts((current) => ({ ...current, [counter.id]: event.target.value }))}
                     onBlur={(event) => void confirmCheckInCounterLabelChange(counter, event.target.value)}
-                    aria-label={`${counter.label} label`}
+                    aria-label={`Tên quầy ${counter.label}`}
                     className="rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
                   />
                   <input
                     value={String(counter.sortOrder)}
                     onChange={(event) => updateCheckInCounter(counter.id, { sortOrder: Number(event.target.value) })}
                     inputMode="numeric"
-                    aria-label={`${counter.label} order`}
+                    aria-label={`Thứ tự quầy ${counter.label}`}
                     className="rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
                   />
                   <label className="inline-flex items-center gap-2 rounded-lg border border-outline-variant px-3 py-2 text-sm">
@@ -111,9 +111,9 @@ export default function CheckInCountersTab({
                       checked={counter.enabled}
                       onChange={(event) => updateCheckInCounter(counter.id, { enabled: event.target.checked })}
                     />
-                    Enabled
+                    Đang bật
                   </label>
-                  <DeleteIconButton label={`Delete Counter ${counter.label}`} onClick={() => void deleteCheckInCounter(counter.id)} />
+                  <DeleteIconButton label={`Xóa quầy ${counter.label}`} onClick={() => void deleteCheckInCounter(counter.id)} />
                 </div>
               ))}
             </div>
@@ -123,14 +123,14 @@ export default function CheckInCountersTab({
 
       <div className="grid gap-5 xl:grid-cols-[420px_1fr]">
         <div className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm">
-          <h2 className="font-title-md text-title-md text-on-surface">Create Counter Group / BHS</h2>
+          <h2 className="font-title-md text-title-md text-on-surface">Tạo nhóm quầy / BHS</h2>
           <div className="mt-4 grid gap-3">
             <label className="block text-sm font-semibold text-on-surface">
-              Group name
+              Tên nhóm
               <input
                 value={counterGroupName}
                 onChange={(event) => setCounterGroupName(event.target.value)}
-                placeholder="Island A"
+                placeholder="Đảo A"
                 className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
               />
             </label>
@@ -144,10 +144,10 @@ export default function CheckInCountersTab({
               />
             </label>
             <div>
-              <div className="mb-2 text-sm font-semibold text-on-surface">Counters</div>
+              <div className="mb-2 text-sm font-semibold text-on-surface">Quầy</div>
               <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto rounded-lg border border-outline-variant p-2">
                 {checkInCounters.length === 0 ? (
-                  <span className="text-sm text-on-surface-variant">No counters available</span>
+                  <span className="text-sm text-on-surface-variant">Chưa có quầy nào</span>
                 ) : checkInCounters.map((counter) => (
                   <label key={counter.id} className="inline-flex items-center gap-2 rounded-lg border border-outline-variant px-3 py-2 text-sm">
                     <input
@@ -166,23 +166,23 @@ export default function CheckInCountersTab({
               className="inline-flex w-fit items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-on-primary hover:bg-primary-container hover:text-on-primary-container"
             >
               <span className="material-symbols-outlined text-[18px]">add</span>
-              Add Counter Group
+              Thêm nhóm quầy
             </button>
           </div>
         </div>
 
         <div className="rounded-lg border border-surface-variant bg-surface-container-lowest shadow-sm">
           <div className="border-b border-surface-variant px-4 py-3">
-            <h2 className="font-title-md text-title-md text-on-surface">Counter Groups / BHS</h2>
+            <h2 className="font-title-md text-title-md text-on-surface">Nhóm quầy / BHS</h2>
           </div>
           <div className="hidden grid-cols-[1fr_160px_110px_56px] gap-3 border-b border-surface-variant bg-surface-container px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-on-surface-variant lg:grid">
-            <span>Group</span>
+            <span>Nhóm</span>
             <span>BHS</span>
-            <span>Order</span>
-            <span>Action</span>
+            <span>Thứ tự</span>
+            <span>Thao tác</span>
           </div>
           {settings.checkInCounterGroups.length === 0 ? (
-            <div className="px-4 py-10 text-center text-sm text-on-surface-variant">No counter groups yet</div>
+            <div className="px-4 py-10 text-center text-sm text-on-surface-variant">Chưa có nhóm quầy</div>
           ) : (
             <div className="divide-y divide-surface-variant">
               {settings.checkInCounterGroups.map((group) => (
@@ -191,27 +191,27 @@ export default function CheckInCountersTab({
                     <input
                       value={group.name}
                       onChange={(event) => updateCheckInCounterGroup(group.id, { name: event.target.value })}
-                      aria-label={`${group.name || 'Counter group'} name`}
+                      aria-label={`Tên ${group.name || 'nhóm quầy'}`}
                       className="rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
                     />
                     <input
                       value={group.bhs}
                       onChange={(event) => updateCheckInCounterGroup(group.id, { bhs: event.target.value })}
-                      aria-label={`${group.name} BHS`}
+                      aria-label={`BHS của ${group.name}`}
                       className="rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
                     />
                     <input
                       value={String(group.sortOrder)}
                       onChange={(event) => updateCheckInCounterGroup(group.id, { sortOrder: Number(event.target.value) })}
                       inputMode="numeric"
-                      aria-label={`${group.name} order`}
+                      aria-label={`Thứ tự ${group.name}`}
                       className="rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
                     />
-                    <DeleteIconButton label={`Delete ${group.name || 'counter group'}`} onClick={() => void deleteCheckInCounterGroup(group.id)} />
+                    <DeleteIconButton label={`Xóa ${group.name || 'nhóm quầy'}`} onClick={() => void deleteCheckInCounterGroup(group.id)} />
                   </div>
                   <div className="flex max-h-36 flex-wrap gap-2 overflow-y-auto rounded-lg border border-outline-variant p-2">
                     {checkInCounters.length === 0 ? (
-                      <span className="text-sm text-on-surface-variant">No counters available</span>
+                      <span className="text-sm text-on-surface-variant">Chưa có quầy nào</span>
                     ) : checkInCounters.map((counter) => (
                       <label key={counter.id} className="inline-flex items-center gap-2 rounded-lg border border-outline-variant px-3 py-2 text-sm">
                         <input

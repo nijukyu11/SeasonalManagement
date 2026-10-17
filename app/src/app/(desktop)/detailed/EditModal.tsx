@@ -10,7 +10,7 @@ interface EditModalProps {
   onNext: (mods: FlightModification[]) => void;
 }
 
-const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const DAYS = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
 
 export default function EditModal({ isOpen, onClose, title, targetLegs, onNext }: EditModalProps) {
   const [fromDate, setFromDate] = useState('');
@@ -109,7 +109,7 @@ export default function EditModal({ isOpen, onClose, title, targetLegs, onNext }
       <div className="bg-surface rounded-2xl shadow-xl w-[500px] max-w-[90vw] overflow-hidden flex flex-col max-h-[90vh]">
         
         <div className="p-6 border-b border-surface-variant bg-surface-container-lowest">
-          <h2 className="font-h2 text-h2 text-on-surface">Edit Schedule</h2>
+          <h2 className="font-h2 text-h2 text-on-surface">Chỉnh sửa lịch bay</h2>
           <p className="font-body-sm text-on-surface-variant mt-1">{title}</p>
         </div>
 
@@ -117,14 +117,14 @@ export default function EditModal({ isOpen, onClose, title, targetLegs, onNext }
           
           {/* Period */}
           <div>
-            <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">PERIOD</h3>
+            <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">KỲ ÁP DỤNG</h3>
             <div className="flex gap-4">
               <div className="flex-1">
-                <label className="text-xs text-on-surface-variant mb-1 block">From Date</label>
+                <label className="text-xs text-on-surface-variant mb-1 block">Từ ngày</label>
                 <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-full bg-surface-container-low border border-outline-variant rounded p-2 text-sm" />
               </div>
               <div className="flex-1">
-                <label className="text-xs text-on-surface-variant mb-1 block">To Date</label>
+                <label className="text-xs text-on-surface-variant mb-1 block">Đến ngày</label>
                 <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-full bg-surface-container-low border border-outline-variant rounded p-2 text-sm" />
               </div>
             </div>
@@ -132,10 +132,10 @@ export default function EditModal({ isOpen, onClose, title, targetLegs, onNext }
 
           {/* Details */}
           <div>
-            <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">NEW DETAILS</h3>
+            <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">THÔNG TIN MỚI</h3>
             <div className="flex gap-4">
               <div className="flex-1">
-                <label className="text-xs text-on-surface-variant mb-1 block">Schedule (STA/STD)</label>
+                <label className="text-xs text-on-surface-variant mb-1 block">Giờ bay (STA/STD)</label>
                 <input
                   type="text"
                   placeholder="HH:MM"
@@ -152,25 +152,25 @@ export default function EditModal({ isOpen, onClose, title, targetLegs, onNext }
                 />
                 {hasScheduleError && (
                   <p id="schedule-format-error" className="mt-1 text-xs text-error">
-                    Enter a valid time as HH:mm or HHmm.
+                    Nhập giờ hợp lệ theo dạng HH:mm hoặc HHmm.
                   </p>
                 )}
               </div>
               <div className="flex-1">
-                <label className="text-xs text-on-surface-variant mb-1 block">Aircraft Type</label>
-                <input type="text" placeholder="e.g. 321" value={newAircraft} onChange={e => setNewAircraft(e.target.value)} className="w-full bg-surface-container-low border border-outline-variant rounded p-2 text-sm font-data-tabular placeholder:opacity-40" />
+                <label className="text-xs text-on-surface-variant mb-1 block">Loại tàu bay</label>
+                <input type="text" placeholder="VD: 321" value={newAircraft} onChange={e => setNewAircraft(e.target.value)} className="w-full bg-surface-container-low border border-outline-variant rounded p-2 text-sm font-data-tabular placeholder:opacity-40" />
               </div>
             </div>
             <div className="mt-3">
-              <label className="text-xs text-on-surface-variant mb-1 block">CodeShares</label>
-              <input type="text" placeholder="e.g. VN123,KE321" value={newCodeShares} onChange={e => setNewCodeShares(e.target.value)} className="w-full bg-surface-container-low border border-outline-variant rounded p-2 text-sm font-data-tabular placeholder:opacity-40" />
-              <p className="text-xs text-on-surface-variant mt-1 opacity-70">Separate multiple codes with commas</p>
+              <label className="text-xs text-on-surface-variant mb-1 block">Liên danh</label>
+              <input type="text" placeholder="VD: VN123,KE321" value={newCodeShares} onChange={e => setNewCodeShares(e.target.value)} className="w-full bg-surface-container-low border border-outline-variant rounded p-2 text-sm font-data-tabular placeholder:opacity-40" />
+              <p className="text-xs text-on-surface-variant mt-1 opacity-70">Nhiều mã cách nhau bằng dấu phẩy</p>
             </div>
           </div>
 
           {/* Operation Days */}
           <div>
-            <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">OPERATING DAYS</h3>
+            <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">NGÀY KHAI THÁC</h3>
             <div className="flex gap-2 justify-between">
               {DAYS.map((day, idx) => (
                 <label key={day} className="flex flex-col items-center gap-1 cursor-pointer">
@@ -188,25 +188,25 @@ export default function EditModal({ isOpen, onClose, title, targetLegs, onNext }
                 </label>
               ))}
             </div>
-            <p className="text-xs text-error mt-2 italic">* Unchecking will delete the flight on that day.</p>
+            <p className="text-xs text-error mt-2 italic">* Bỏ chọn sẽ xóa chuyến bay của ngày đó.</p>
           </div>
 
         </div>
 
         <div className="p-4 border-t border-surface-variant bg-surface-container-low flex justify-between gap-3">
           <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-variant rounded transition-colors">
-            Cancel
+            Hủy
           </button>
           <div className="flex gap-3">
             <button onClick={handleDeleteAll} className="px-4 py-2 text-sm font-medium text-error border border-error/50 hover:bg-error-container hover:text-on-error-container rounded transition-colors">
-              Delete Period
+              Xóa cả kỳ
             </button>
             <button
               onClick={handleApply}
               disabled={hasScheduleError}
               className="px-4 py-2 text-sm font-medium bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container rounded transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Review Changes
+              Xem lại thay đổi
             </button>
           </div>
         </div>

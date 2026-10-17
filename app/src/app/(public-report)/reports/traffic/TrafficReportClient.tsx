@@ -27,8 +27,10 @@ import {
   fetchTrafficReportV2Bundle,
   fetchTrafficReportV2TimelinePage,
   toTrafficReportPresentationBundle,
+  TrafficReportSyncingError,
   TrafficReportVersionChangedError,
 } from '@/lib/trafficReportDataAdapter';
+import { formatUiError } from '@/lib/uiDisplayText';
 import { DayOfWeekChart, FleetMixChart, FlightCategoryChart, PeakHourChart } from './TrafficReportAdvancedCharts';
 import { TrafficReportDimensionSection } from './TrafficReportDimensionSection';
 import { TrafficReportFilters } from './TrafficReportFilters';
@@ -181,23 +183,33 @@ export default function TrafficReportClient() {
   const [bundle, setBundle] = useState<TrafficReportBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const exportControllerRef = useRef<AbortController | null>(null);
   const lastSuccessfulQueryRef = useRef<string | null>(null);
-
+  const syncTimerRef = useRef<number | null>(null);
+  const syncRetryCountRef = useRef(0);
   const parsed = useMemo(() => {
     try {
       return { state: parseTrafficReportPageState(new URLSearchParams(searchParams.toString())), error: null };
     } catch (reason) {
-      return { state: null, error: reason instanceof Error ? reason.message : 'Bộ lọc chưa hợp lệ.' };
+      return { state: null, error: formatUiError(reason, 'Bộ lọc chưa hợp lệ.') };
     }
   }, [searchParams]);
   const globalQuery = parsed.state ? toTrafficReportSearchParams(parsed.state.filter).toString() : null;
 
-  const requestBundle = useCallback(async (filter: TrafficReportPageState['filter']): Promise<TrafficReportBundle | null> => {
+  const requestBundle = useCallback(async function requestReport(filter: TrafficReportPageState['filter'], isSyncRetry = false): Promise<TrafficReportBundle | null> {
     controllerRef.current?.abort();
+    if (syncTimerRef.current) {
+      window.clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = null;
+    }
+    if (!isSyncRetry) {
+      syncRetryCountRef.current = 0;
+      setSyncing(false);
+    }
     const controller = new AbortController();
     controllerRef.current = controller;
     setLoading(true);
@@ -216,10 +228,25 @@ export default function TrafficReportClient() {
           return result;
         })();
       setBundle(payload);
+      setSyncing(false);
+      syncRetryCountRef.current = 0;
       lastSuccessfulQueryRef.current = toTrafficReportSearchParams(payload.metadata.normalized_filter).toString();
       return payload;
     } catch (reason) {
-      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Không thể tải báo cáo.');
+      if (!controller.signal.aborted) {
+        const isSyncingError = reason instanceof TrafficReportSyncingError
+          || (reason instanceof Error && /REPORT_SYNCING|STALE_OPERATIONAL_PROJECTION/i.test(reason.message));
+        if (isSyncingError && syncRetryCountRef.current < 5) {
+          syncRetryCountRef.current += 1;
+          setSyncing(true);
+          syncTimerRef.current = window.setTimeout(() => {
+            void requestReport(filter, true);
+          }, 1500);
+          return null;
+        }
+        setSyncing(false);
+        setError(formatUiError(reason, 'Không thể tải báo cáo.'));
+      }
       return null;
     } finally {
       if (!controller.signal.aborted) setLoading(false);
@@ -243,6 +270,10 @@ export default function TrafficReportClient() {
   useEffect(() => () => {
     controllerRef.current?.abort();
     exportControllerRef.current?.abort();
+    if (syncTimerRef.current) {
+      window.clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = null;
+    }
   }, []);
 
   const pageState = parsed.state;
@@ -305,7 +336,7 @@ export default function TrafficReportClient() {
         let timeline: TrafficTimelinePoint[];
         let next: string | null;
         if (bundle.contract_version === 'traffic-report-v2') {
-          if (typeof bundle.source_watermark !== 'number' || !bundle.read_version_token) throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.');
+          if (typeof bundle.source_watermark !== 'number' || !bundle.read_version_token) throw new Error('Phiên bản dữ liệu mới nhất chưa sẵn sàng.');
           const payload = await fetchTrafficReportV2TimelinePage(bundle.metadata.normalized_filter, 'all', after, bundle.source_watermark, bundle.read_version_token, { signal: controller.signal });
           timeline = payload.timeline;
           hasMore = payload.hasMore;
@@ -328,7 +359,7 @@ export default function TrafficReportClient() {
     } catch (reason) {
       if (!controller.signal.aborted) {
         if (reason instanceof TrafficReportVersionChangedError) await requestBundle(bundle.metadata.normalized_filter);
-        setExportError(reason instanceof Error ? reason.message : 'Không thể tạo file Excel.');
+        setExportError(formatUiError(reason, 'Không thể tạo file Excel.'));
       }
     } finally {
       if (!controller.signal.aborted) setExportingExcel(false);
@@ -365,8 +396,13 @@ export default function TrafficReportClient() {
   const readVersion = bundle?.contract_version === 'traffic-report-v2' ? 'v2' as const : 'v1' as const;
   const expectedWatermark = readVersion === 'v2' && typeof bundle?.source_watermark === 'number' ? bundle.source_watermark : undefined;
   const readVersionToken = readVersion === 'v2' ? bundle?.read_version_token : undefined;
+  const reloadInFlightRef = useRef(false);
   const reloadVersionedBundle = useCallback(() => {
-    if (normalizedFilter) void requestBundle(normalizedFilter);
+    if (!normalizedFilter || reloadInFlightRef.current) return;
+    reloadInFlightRef.current = true;
+    void requestBundle(normalizedFilter).finally(() => {
+      reloadInFlightRef.current = false;
+    });
   }, [normalizedFilter, requestBundle]);
   const aggregateCsvHref = bundle?.contract_version === 'traffic-report-v2' && typeof bundle.source_watermark === 'number' && bundle.read_version_token
     ? buildTrafficReportV2ExportUrl(bundle.metadata.normalized_filter, bundle.source_watermark, bundle.read_version_token)
@@ -404,19 +440,25 @@ export default function TrafficReportClient() {
       /> : null}
 
       <div className="mx-auto max-w-7xl space-y-12 px-5 py-8 sm:px-8 sm:py-10">
-        {loading && !bundle && parsed.state ? <LoadingSkeleton /> : null}
-        {loading && bundle ? <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-4 text-cyan-950" role="status">Đang cập nhật số liệu theo bộ lọc mới…</div> : null}
+        {syncing ? (
+          <div className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-950" role="status">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-amber-800 border-t-transparent" />
+            <p className="font-semibold">Đang đồng bộ</p>
+          </div>
+        ) : null}
+        {loading && !syncing && !bundle && parsed.state ? <LoadingSkeleton /> : null}
+        {loading && !syncing && bundle ? <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-4 text-cyan-950" role="status">Đang cập nhật số liệu theo bộ lọc mới…</div> : null}
         {visibleError ? <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-rose-950" role="alert"><p className="font-semibold">Không thể cập nhật báo cáo</p><p className="mt-1 text-sm">{visibleError}</p>{pageState ? <button className="report-focus mt-3 min-h-11 rounded-lg bg-rose-800 px-4 text-sm font-bold text-white" type="button" onClick={() => void requestBundle(pageState.filter)}>Thử lại</button> : null}</div> : null}
 
-        {bundle && normalizedFilter && pageState ? <>
+        {bundle && normalizedFilter && pageState && !syncing ? <>
           {projectionNotice ? <aside className={cn('rounded-xl border px-4 py-3 text-sm', projectionNotice.tone === 'rose' ? 'border-rose-300 bg-rose-50 text-rose-950' : 'border-amber-300 bg-amber-50 text-amber-950')} aria-label="Lưu ý cập nhật báo cáo" role="status"><p className="text-pretty font-semibold">{projectionNotice.title}</p></aside> : null}
 
           <section aria-labelledby="overview-title">
             <div className="flex flex-wrap items-end justify-between gap-4">
-              <div><p className="text-sm font-bold text-blue-900">Sản lượng Tổng quan</p><h2 id="overview-title" className="mt-1 text-balance text-3xl font-bold text-slate-950">Các chỉ số nổi bật</h2></div>
+              <div><p className="text-sm font-bold text-blue-900">Tổng quan sản lượng</p><h2 id="overview-title" className="mt-1 text-balance text-3xl font-bold text-slate-950">Các chỉ số nổi bật</h2></div>
               <div className="text-right text-xs text-slate-600">
                 <p>{reportUpdatedAt ? `Cập nhật ${new Date(reportUpdatedAt).toLocaleString('vi-VN')}` : 'Chưa có thời điểm cập nhật'}</p>
-                {typeof bundle.source_watermark === 'number' ? <p>Nguồn {readVersion === 'v2' ? 'live' : 'snapshot'} · watermark {numberFormat.format(bundle.source_watermark)}</p> : null}
+                {typeof bundle.source_watermark === 'number' ? <p>Nguồn {readVersion === 'v2' ? 'mới nhất' : 'bản lưu'} · điểm mốc {numberFormat.format(bundle.source_watermark)}</p> : null}
               </div>
             </div>
             <CoverageScopeStrip
@@ -519,7 +561,7 @@ export default function TrafficReportClient() {
                 <a className="report-focus inline-flex min-h-11 items-center rounded-lg border border-blue-900 px-4 text-sm font-bold text-blue-900 hover:bg-blue-50" href={aggregateCsvHref}>Tải CSV tổng hợp</a>
               </div>
               {exportError ? <p className="mt-3 text-sm font-semibold text-rose-800" role="alert">{exportError}</p> : null}
-              <details className="mt-5 rounded-xl bg-slate-50 p-4"><summary className="report-focus cursor-pointer rounded-sm font-semibold text-blue-900">Ghi chú dữ liệu</summary><ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600"><li>• Sản lượng khách chỉ tính số khách đã báo cáo; dấu — nghĩa là chưa có số liệu.</li><li>• Quốc gia chưa xác định được hiển thị là Unknown.</li><li>• File tải xuống sử dụng cùng phạm vi và bộ lọc với trang báo cáo.</li></ul></details>
+              <details className="mt-5 rounded-xl bg-slate-50 p-4"><summary className="report-focus cursor-pointer rounded-sm font-semibold text-blue-900">Ghi chú dữ liệu</summary><ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600"><li>• Sản lượng khách chỉ tính số khách đã báo cáo; dấu — nghĩa là chưa có số liệu.</li><li>• Quốc gia chưa xác định được hiển thị là Chưa xác định.</li><li>• File tải xuống sử dụng cùng phạm vi và bộ lọc với trang báo cáo.</li></ul></details>
             </article>
           </section>
         </> : null}

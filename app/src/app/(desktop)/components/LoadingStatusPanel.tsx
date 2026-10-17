@@ -64,7 +64,7 @@ export default function LoadingStatusPanel({
           />
         </div>
         <div className="mt-2 text-xs font-semibold tabular-nums text-on-surface-variant">
-          {progress.indeterminate ? 'Working...' : `${percent}%`}
+          {progress.indeterminate ? 'Đang xử lý...' : `${percent}%`}
         </div>
       </div>
     </div>

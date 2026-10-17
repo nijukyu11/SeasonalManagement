@@ -346,6 +346,41 @@ Mục tiêu: Đối soát **trước** từng lần đổi reader/writer; nếu 
     - **Gate chưa đạt**: người dùng còn nghiệm thu app shell/Tauri staging với auth thật, layout/CSS và Gantt. Production **NO-GO**; không đổi feature gate, apply migration hoặc ép reverse sau native writes dựa trên controlled harness.
     - Đã dọn 15 file harness/probe/preimage mới sau khi ghi bằng chứng; dừng Tauri process tree/Bun smoke và đóng Chromium recovery. Giữ workbook W26 đã duyệt, các script/artifact cũ của người dùng và các staging units phục vụ nghiệm thu UI. Không commit `tmp/` hoặc credential.
 
+  - **Kiểm chứng bổ sung 2026-10-08 — PostgreSQL local độc lập, không production**:
+    - PostgreSQL 17.11 trên loopback `127.0.0.1:54918`, database disposable `sm_planning_review_20261008`; bootstrap schema và 69 migration của chain thành công. Không dùng dữ liệu/cấu hình production để chạy probe.
+    - Workload 250.000 operational legs, refresh thật và reader giữ transaction trên `reporting.canonical_flight_legs`. `pg_locks` xác nhận projector chờ `AccessExclusiveLock`, `granted=false`, `wait_event=relation`; writer qua RPC resource vẫn cập nhật gate và commit. Native write làm projection stale dù refresh đang chạy; refresh kế tiếp bắt kịp và trả `is_fresh=true`, gate mới vẫn là 8.
+
+    | Phép đo local (một lượt, không phải SLO/p95 production) | Thời gian |
+    |---|---:|
+    | Seed 250.000 legs | 17.806 ms |
+    | Full refresh đầu | 15.649 ms |
+    | RPC resource write khi projector cạnh tranh với reader | 140 ms |
+    | Refresh có reader giữ relation lock | 17.651 ms |
+    | Refresh bắt kịp write đồng thời | 16.676 ms |
+
+    - Rủi ro còn thật: full refresh/mirror dùng `TRUNCATE`, reader dài có thể giữ relation lock và kéo dài refresh; không được coi kết quả write 140 ms là bằng chứng Report không bị block. Giữ worker ngoài transaction mutation và theo dõi projection lag; bài đo này chưa thay capacity test hay query Report end-to-end production.
+    - M0 baseline giữ `effective_legs=12`, `canonical_legs=8`, `quarantine=1`, export W26/M26 8/3; M10 pass đủ 8 pha default-OFF/cutover/consumer/freshness/reversal/rollback. Journal restore pass 8 ca; Report adapter pass 10 ca; edge contract pass. Đây là các lượt kiểm chứng local, không đánh dấu hoàn thành gate nghiệm thu production.
+    - History UI chạy component thật qua HTTP → RPC PostgreSQL local: snapshot 3 legs, diff JX881 `09:00 → 09:30`, export tải file 25 cột `A1:Y3`. Tên worksheet giữ `W88`; version tag nằm trong tên file. `parseSeasonalSchedule` đọc lại hai pattern rows với `issues=[]`, không đổi template.
+    - Restore UI: cố ý mất response sau commit; journal khóa Publish/chuyển phiên bản/đóng modal, còn nguyên sau full reload. Retry gửi cùng request ID/revision/epoch, nhận receipt rồi nạp draft revision `6` mới gỡ khóa; vẫn 2 immutable versions, Operations giữ JX881 `09:30/gate 5`, JX882 `10:30`, JX883 `14:00`. Sửa callback để lỗi reload không bị nuốt; confirmation có width hữu hạn và scroll khi màn hình thấp.
+    - Correction PostgreSQL thật: mutation trả `committed`, nhận `public_dashboard_daily_wake` payload `pax-correction:2026`; `latest_event_seq=57` khớp generation thực `57`, canonical Pax `176` sau refresh. PGlite correction và edge contract pass; 29/29 behavioral tests của Planning contract/journal/Report adapter pass. TypeScript và production build 14 static pages pass; lint các source liên quan 0 lỗi, 1 cảnh báo unused import `FlightModification`.
+    - Report UI đã quan sát trạng thái `Đang đồng bộ` và tự retry sau HTTP 503. Không coi harness v1 local là bằng chứng màn hình fresh: overview thật trả `P0002` do fixture không có effective operations cho surface v1; consumer SQL được kiểm chứng riêng bởi M0/M10. Không sửa nguồn Report hoặc dựng dữ liệu báo cáo giả để che giới hạn harness.
+    - Nghiệm thu SQL tích hợp cuối: `seasonal_publish_safety_pglite.mjs`, M7 Publish, `seasonal_version_management_pglite.mjs`, `operational_reporting_correction_pglite.mjs` đều exit 0. Safety kiểm initial release/true no-op, impact pagination, Pax override `777/0/NULL`, explicit acknowledgement, deterministic receipt replay, Manual collision và rollback guard. M7 kiểm lifecycle/generation, allocation overrides, stale preview, immutable history và Operations isolation.
+    - Hợp đồng phát hành: collision được kiểm với các leg active liên quan và recheck dưới lock; preview yêu cầu xác nhận khi có thay đổi đụng operational edits. Receipt retry phải giữ notes/ack; true no-op không tạo version mới. Pax và resource override hiện hành được giữ; khôi phục version chỉ thay Planning, không tự Publish.
+
+  - **Nghiệm thu History Diff 2026-10-11 — local/Tauri và staging, không production**:
+    - RPC `get_seasonal_version_changes_page_v1` gom nhóm trên toàn bộ comparison trước khi phân trang; hỗ trợ nhóm chặng/từng ngày, tìm kiếm hai phía Before/After, loại thay đổi, trường và khoảng ngày. Tóm tắt Added/Removed/Modified/Unchanged thuộc toàn comparison; số nhóm/lượt chặng hiển thị thuộc bộ lọc hiện tại.
+    - Sidebar phiên bản đã hiển thị trên Tauri thật (width 320 px). W88 nạp lần lượt 50 → 100 → 124 thay đổi; tìm `ZZ9500` trả đúng một nhóm Added, giữ summary toàn comparison 2 Added/2 Removed/120 Modified/4 Unchanged.
+    - W87 gom 26 lượt chặng thành 6 nhóm: Added 5, Removed 8, Modified 13. Nhóm `ZX9701` chứa đủ 7 ngày 14–20/10; bảng chi tiết tải đúng 7 dòng Before/After. Nhóm Added `ZX9720` giữ các ngày gián đoạn 14,15,17,19/10, không ngụ ý bay ngày 16/18. Technical Payload mặc định đóng; bảng nghiệp vụ hiển thị giờ/tuyến/tàu và `Cùng ngày → Qua đêm`, không lộ flightSeriesId/turnaroundId.
+    - Formatter regression **12/12**, TypeScript pass, ESLint 0 errors với một warning unused import `FlightModification` có sẵn. Ba suite `seasonal_version_changes_pglite`, `seasonal_snapshot_integrity_indexed_pglite`, `seasonal_version_management_pglite` pass. Migration History presentation đã apply vào staging; chưa apply production.
+
+
+  - **Kiểm chứng Detailed 2026-10-13 — local/Tauri WebView2, không production**:
+    - Cặp thêm mới dùng chung turnaround/link identity và linked record hai chiều. Adapter cập nhật đồng thời giờ hiển thị, scheduled time/date và identity khi sửa/chuyển; helper chuyển cặp dùng toàn bộ Draft để không bỏ counterpart ngoài bộ lọc ngày.
+    - Restore phiên bản nạp lại canonical Draft, revision/epoch và dọn Undo cũ. Undo nhiều bước gộp preimage từ receipt mới nhất về trạng thái trước thao tác đầu tiên; không gửi nhiều patch có expected đã lỗi thời cho cùng một record.
+    - Chọn ngày/chặng thống nhất: click ngày chọn các chặng hiển thị; Ctrl toggle ngày/chặng, ngày chỉ chọn một phần có trạng thái riêng; Shift mở rộng dải ngày; Ctrl+A chọn toàn bộ chặng trong khoảng hiển thị. Khi không lọc số chuyến, Detailed hiển thị cả Arrival/Departure trong khoảng ngày bao gồm hai đầu.
+    - Native smoke trên component thật với RPC PGlite cô lập: Ctrl+A chọn 12/12 chặng; bỏ một chặng chuyển ngày sang partial; hai lần sửa 08:00 → 09:00 → 09:30 được Revert to here về 08:00. Kéo một chặng preview đủ 2 Added + 2 Deleted và lưu cả cặp reciprocal; cặp vừa tạo sửa sang 21:45 rồi chuyển ngày không reload, scheduled metadata vẫn khớp. Chặng qua đêm ngoài phạm vi hiển thị ghi rõ ngày kế tiếp.
+    - Chèn lỗi canonical reload sau commit: UI giữ trạng thái đã lưu/revision và cảnh báo tải lại riêng; nút Nạp lại bản nháp tải thành công mà không commit lại. Trong mutation chờ, Add/Publish/Undo bị khóa. Restore version trả lịch từ 09:45 về 08:00 trên calendar ngay, không reload trang; so sánh đủ 12 operational rows trước/sau các thao tác cho kết quả không đổi.
+    - Verification: 60/60 behavioral tests của Detailed state, pairing, Planning contract/save manager và effective legs pass; `node --experimental-strip-types supabase/tests/seasonal_operational_separation_m6_undo_pglite.mjs` pass, gồm new pair, edit→move, compound Undo/add-edit-delete và Operations isolation; `npx tsc --noEmit` pass. Tauri dev compile/launch thành công. Harness không có app shell/font/auth production đầy đủ; đây không phải nghiệm thu bố cục production hay multi-operator. Modal New Flight ở viewport cao 900 px có chú thích phủ tâm nút Add Flights trong harness; click vùng dưới nút vẫn thực hiện được. Không đổi form ngoài phạm vi này.
 ---
 
 ## 3. Biện Pháp Kiểm Soát Rủi Ro Khi Thực Hiện Code

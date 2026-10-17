@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  buildSeasonalImportStatusUnknownNotice,
   checkSeasonalImportV3RecoveryStatusOnce,
   loadTargetedCommittedImportRefresh,
   resumeSeasonalImportAttemptOnce,
@@ -319,16 +318,6 @@ test('empty committed refresh requires both a zero commit count and an explicit 
     allowEmptyCommittedImport: true,
   });
   assert.equal(refreshed.snapshot.records.length, 0);
-});
-
-test('ambiguous RPC failure notice is status unknown and exposes Resume/Check', () => {
-  const notice = buildSeasonalImportStatusUnknownNotice(attempt, new Error('Failed to fetch'));
-
-  assert.equal(notice.title, 'Import status unknown');
-  assert.match(notice.message, /33333333-3333-5333-8333-333333333333/);
-  assert.match(notice.message, /Resume\/Check/);
-  assert.match(notice.message, /Failed to fetch/);
-  assert.doesNotMatch(notice.title, /Import Failed/);
 });
 
 test('V3 Resume/Check performs one status-only request and returns preview or commit', async () => {

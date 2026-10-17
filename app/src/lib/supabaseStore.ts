@@ -7,16 +7,33 @@ import type {
   SeasonalPublishCommitResult,
   SeasonalPublishVersionsPageResult,
   SeasonalPublishedDiffPageResult,
+  SeasonalVersionChangesInput,
+  SeasonalDraftChangesInput,
+  SeasonalVersionChangesResult,
+  SeasonalPublishOperationalImpactPageResult,
+  SeasonalPublishedSnapshotPageResult,
+  SeasonalPublishedExportSnapshotResult,
+  SeasonalDraftRestoreResult,
 } from './seasonalPlanningContract';
+import type {
+  SeasonalDraftImportStageInput,
+  SeasonalDraftImportResponse,
+  SeasonalDraftImportPreviewPage,
+} from './seasonalDraftImportContract';
 import type {
   OperationalWindowResult,
   OperationalLegChangeInput,
   OperationalMutationReceipt,
   DailyImportStagePayloadV2,
   DailyImportStageResultV2,
+  DailyImportLegInputV2,
+  DailyImportUploadBeginResultV2,
+  DailyImportUploadAppendResultV2,
 } from './operationalScheduleContract';
 import {
   parseDailyImportStageResultV2,
+  parseDailyImportUploadBeginResultV2,
+  parseDailyImportUploadAppendResultV2,
 } from './operationalScheduleContract';
 import { getSupabaseClient, invokeSupabaseFunction } from './supabase';
 import type {
@@ -57,15 +74,6 @@ import {
   SeasonalImportV2RpcRejectedError,
 } from './seasonalImportRpcContract';
 import {
-  parseSeasonalImportV3CancelResult,
-  parseSeasonalImportV3CommittedResult,
-  parseSeasonalImportV3StageResult,
-  parseSeasonalImportV3StatusResult,
-  type SeasonalImportV3Attempt,
-  type SeasonalImportV3CommittedResult,
-  type SeasonalImportV3StageResult,
-} from './seasonalImportV3Contract';
-import {
   DailyImportV1RpcRejectedError,
   parseDailyImportCommittedResultV1,
   parseDailyImportStageResultV1,
@@ -79,9 +87,7 @@ import {
   fromModificationRows,
   fromSeasonRow,
   fromSettingsTableRows,
-  toAiContextDocumentRows,
   hydrateSourceRowsFromRelationalPages,
-  toAiModelRows,
   toAircraftGroupRows,
   toAircraftGroupTypeRows,
   toAirlineColorRows,
@@ -135,9 +141,6 @@ const SYNC_V2_EVENT_CHUNK_SIZE = 50;
 const OPERATIONAL_SETTINGS_BASE_COLUMNS = [
   'id',
   'updated_at',
-  'ai_enabled',
-  'ai_active_model_id',
-  'ai_updated_at',
 ] as const;
 const OPERATIONAL_SETTINGS_DASHBOARD_ALERT_COLUMNS = [
   'dashboard_arrival_bucket_flights',
@@ -268,13 +271,6 @@ function assertSeasonalImportRpcOk<T>(result: SupabaseResult<T>, action: string)
   throw new Error(message);
 }
 
-function assertSeasonalImportV3RpcOk<T>(result: SupabaseResult<T>, action: string): T {
-  if (!result.error) return result.data as T;
-  const code = typeof result.error.code === 'string' && result.error.code.trim()
-    ? ` [${result.error.code.trim()}]`
-    : '';
-  throw new Error(`${action}${code}: ${result.error.message}`);
-}
 
 function isMissingDashboardAlertColumnError(error: unknown): boolean {
   if (!error) return false;
@@ -657,14 +653,11 @@ async function readFlightRecordsForDashboardSeason(seasonId: string): Promise<{
   return { ...data, records };
 }
 
-function toOperationalSettingsBaseRow(settings: OperationalSettings): Pick<OperationalSettingsRow, 'id' | 'updated_at' | 'ai_enabled' | 'ai_active_model_id' | 'ai_updated_at'> {
+function toOperationalSettingsBaseRow(settings: OperationalSettings): Pick<OperationalSettingsRow, 'id' | 'updated_at'> {
   const row = toOperationalSettingsRow(settings);
   return {
     id: row.id,
     updated_at: row.updated_at,
-    ai_enabled: row.ai_enabled,
-    ai_active_model_id: row.ai_active_model_id,
-    ai_updated_at: row.ai_updated_at,
   };
 }
 
@@ -725,8 +718,6 @@ async function readOperationalSettingsRelational(): Promise<OperationalSettings>
     gateLockRows,
     gateLockMemberRows,
     standGateMappingRows,
-    aiModelRows,
-    aiContextDocumentRows,
   ] = await Promise.all([
     readOperationalSettingsRowWithDashboardAlertFallback(),
     client().from('operational_route_countries').select('*').order('route', { ascending: true }),
@@ -745,8 +736,6 @@ async function readOperationalSettingsRelational(): Promise<OperationalSettings>
     client().from('operational_gate_locks').select('*').order('start_time', { ascending: true }),
     client().from('operational_gate_lock_members').select('*').order('sort_order', { ascending: true }),
     client().from('operational_stand_gate_mappings').select('*').order('sort_order', { ascending: true }),
-    client().from('operational_ai_models').select('*').order('sort_order', { ascending: true }),
-    client().from('operational_ai_context_documents').select('*').order('sort_order', { ascending: true }),
   ]);
   return fromSettingsTableRows({
     settingsRow: assertOk(settingsRow as unknown as SupabaseResult<OperationalSettingsRow>, 'load operational settings') as OperationalSettingsRow | null,
@@ -766,8 +755,6 @@ async function readOperationalSettingsRelational(): Promise<OperationalSettings>
     gateLockRows: assertOk(gateLockRows, 'load gate locks') as Parameters<typeof fromSettingsTableRows>[0]['gateLockRows'],
     gateLockMemberRows: assertOk(gateLockMemberRows, 'load gate lock members') as Parameters<typeof fromSettingsTableRows>[0]['gateLockMemberRows'],
     standGateMappingRows: assertOk(standGateMappingRows, 'load stand gate mappings') as Parameters<typeof fromSettingsTableRows>[0]['standGateMappingRows'],
-    aiModelRows: assertOk(aiModelRows, 'load AI models') as Parameters<typeof fromSettingsTableRows>[0]['aiModelRows'],
-    aiContextDocumentRows: assertOk(aiContextDocumentRows, 'load AI context documents') as Parameters<typeof fromSettingsTableRows>[0]['aiContextDocumentRows'],
   });
 }
 
@@ -808,8 +795,6 @@ async function writeOperationalSettingsRelational(settings: OperationalSettings,
   await replaceTableRows('operational_gate_groups', toGateGroupRows(normalized), 'id', 'id', options);
   await replaceTableRows('operational_gate_locks', toGateLockRows(normalized), 'id', 'id', options);
   await replaceTableRows('operational_stand_gate_mappings', toStandGateMappingRows(normalized), 'id', 'id', options);
-  await replaceTableRows('operational_ai_models', toAiModelRows(normalized), 'id', 'id', options);
-  await replaceTableRows('operational_ai_context_documents', toAiContextDocumentRows(normalized), 'id', 'id', options);
 
   await upsertTableRows('operational_aircraft_group_types', toAircraftGroupTypeRows(normalized), 'group_id,aircraft_type', options);
   await upsertTableRows('operational_checkin_counter_group_members', toCheckInCounterGroupMemberRows(normalized), 'group_id,counter_id', options);
@@ -1075,65 +1060,6 @@ export const supabaseStore: RemoteStore = {
     return hydrateSourceRowsFromRelationalPages([rows], [dayRows]);
   },
 
-  async stageSeasonalImportV3(
-    input: SeasonalImportV3Attempt,
-    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
-  ): Promise<SeasonalImportV3StageResult> {
-    const attempt = {
-      ...input,
-      sourceRows: canonicalizeSeasonalImportSourceRows(input.sourceRows),
-    };
-    options.assertOperatorSessionCurrent();
-    const response = await client().rpc('stage_seasonal_import_v3', { p_import: attempt });
-    options.assertOperatorSessionCurrent();
-    return parseSeasonalImportV3StageResult(
-      assertSeasonalImportV3RpcOk(response, 'stage seasonal import V3'),
-    );
-  },
-
-  async commitSeasonalImportV3(
-    input: { batchId: string; expectedDataVersion: number; previewHash: string },
-    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
-  ): Promise<SeasonalImportV3CommittedResult> {
-    options.assertOperatorSessionCurrent();
-    const response = await client().rpc('commit_seasonal_import_v3', {
-      p_batch_id: input.batchId,
-      p_expected_data_version: input.expectedDataVersion,
-      p_preview_hash: input.previewHash,
-    });
-    options.assertOperatorSessionCurrent();
-    return parseSeasonalImportV3CommittedResult(
-      assertSeasonalImportV3RpcOk(response, 'commit seasonal import V3'),
-    );
-  },
-
-  async getSeasonalImportV3Status(
-    requestId: string,
-    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
-  ): Promise<SeasonalImportV3StageResult | SeasonalImportV3CommittedResult> {
-    options.assertOperatorSessionCurrent();
-    const response = await client().rpc('get_seasonal_import_v3_status', {
-      p_request_id: requestId,
-    });
-    options.assertOperatorSessionCurrent();
-    return parseSeasonalImportV3StatusResult(
-      assertSeasonalImportV3RpcOk(response, 'get seasonal import V3 status'),
-    );
-  },
-
-  async cancelSeasonalImportV3(
-    batchId: string,
-    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
-  ): Promise<{ batchId: string; status: 'cancelled' }> {
-    options.assertOperatorSessionCurrent();
-    const response = await client().rpc('cancel_seasonal_import_v3', {
-      p_batch_id: batchId,
-    });
-    options.assertOperatorSessionCurrent();
-    return parseSeasonalImportV3CancelResult(
-      assertSeasonalImportV3RpcOk(response, 'cancel seasonal import V3'),
-    );
-  },
 
   async stageDailyScheduleImportV1(
     input: DailyImportStagePayloadV1,
@@ -1711,36 +1637,49 @@ export const supabaseStore: RemoteStore = {
     return assertOk(response, 'get seasonal draft export snapshot V1') as SeasonalDraftExportSnapshotResult;
   },
 
-  async stageSeasonalDraftImportV1(input: unknown): Promise<unknown> {
+  async stageSeasonalDraftImportV1(input: SeasonalDraftImportStageInput): Promise<SeasonalDraftImportResponse> {
     const response = await client().rpc('stage_seasonal_draft_import_v1', {
       p_import: input,
     });
-    return assertOk(response, 'stage seasonal draft import V1');
+    return assertOk(response, 'stage seasonal draft import V1') as SeasonalDraftImportResponse;
   },
 
   async commitSeasonalDraftImportV1(input: {
     batchId: string;
     previewHash: string;
-  }): Promise<unknown> {
+  }): Promise<SeasonalDraftImportResponse> {
     const response = await client().rpc('commit_seasonal_draft_import_v1', {
       p_batch_id: input.batchId,
       p_preview_hash: input.previewHash,
     });
-    return assertOk(response, 'commit seasonal draft import V1');
+    return assertOk(response, 'commit seasonal draft import V1') as SeasonalDraftImportResponse;
   },
 
-  async getSeasonalDraftImportStatusV1(requestId: string): Promise<unknown> {
+  async getSeasonalDraftImportStatusV1(requestId: string): Promise<SeasonalDraftImportResponse> {
     const response = await client().rpc('get_seasonal_draft_import_status_v1', {
       p_request_id: requestId,
     });
-    return assertOk(response, 'get seasonal draft import status V1');
+    return assertOk(response, 'get seasonal draft import status V1') as SeasonalDraftImportResponse;
   },
 
-  async cancelSeasonalDraftImportV1(batchId: string): Promise<unknown> {
+  async cancelSeasonalDraftImportV1(batchId: string): Promise<SeasonalDraftImportResponse> {
     const response = await client().rpc('cancel_seasonal_draft_import_v1', {
       p_batch_id: batchId,
     });
-    return assertOk(response, 'cancel seasonal draft import V1');
+    return assertOk(response, 'cancel seasonal draft import V1') as SeasonalDraftImportResponse;
+  },
+
+  async getSeasonalDraftImportPreviewV1(input: {
+    batchId: string;
+    afterDraftId?: string | null;
+    pageSize?: number;
+  }): Promise<SeasonalDraftImportPreviewPage> {
+    const response = await client().rpc('get_seasonal_draft_import_preview_v1', {
+      p_batch_id: input.batchId,
+      p_after_draft_id: input.afterDraftId ?? null,
+      p_page_size: input.pageSize ?? 100,
+    });
+    return assertOk(response, 'get seasonal draft import preview V1') as SeasonalDraftImportPreviewPage;
   },
 
   async previewSeasonalPublishV1(input: {
@@ -1777,14 +1716,31 @@ export const supabaseStore: RemoteStore = {
     previewId: string;
     previewHash: string;
     notes?: string;
+    acknowledgeOperational?: boolean;
   }): Promise<SeasonalPublishCommitResult> {
     const response = await client().rpc('commit_seasonal_publish_v1', {
       p_season_id: input.seasonId,
       p_preview_id: input.previewId,
       p_preview_hash: input.previewHash,
       p_notes: input.notes ?? '',
+      p_acknowledge_operational: Boolean(input.acknowledgeOperational),
     });
     return assertOk(response, 'commit seasonal publish V1') as SeasonalPublishCommitResult;
+  },
+
+  async getSeasonalPublishOperationalImpactPageV1(input: {
+    previewId: string;
+    previewHash: string;
+    afterIndex?: string | number;
+    pageSize?: number;
+  }): Promise<SeasonalPublishOperationalImpactPageResult> {
+    const response = await client().rpc('get_seasonal_publish_operational_impact_page_v1', {
+      p_preview_id: input.previewId,
+      p_preview_hash: input.previewHash,
+      p_after_index: input.afterIndex !== undefined ? Number(input.afterIndex) : 0,
+      p_page_size: input.pageSize ?? 100,
+    });
+    return assertOk(response, 'get seasonal publish operational impact page V1') as SeasonalPublishOperationalImpactPageResult;
   },
 
   async getSeasonalPublishVersionsV1(input: {
@@ -1811,6 +1767,100 @@ export const supabaseStore: RemoteStore = {
       p_page_size: input.pageSize ?? 100,
     });
     return assertOk(response, 'get seasonal published diff page V1') as SeasonalPublishedDiffPageResult;
+  },
+
+  async getSeasonalPublishedSnapshotPageV1(input: {
+    versionId: string;
+    afterDraftId?: string | null;
+    pageSize?: number;
+  }): Promise<SeasonalPublishedSnapshotPageResult> {
+    const response = await client().rpc('get_seasonal_published_snapshot_page_v1', {
+      p_version_id: input.versionId,
+      p_after_draft_id: input.afterDraftId ?? null,
+      p_page_size: input.pageSize ?? 200,
+    });
+    return assertOk(response, 'get seasonal published snapshot page V1') as SeasonalPublishedSnapshotPageResult;
+  },
+
+  async getSeasonalVersionComparisonPageV1(input: {
+    baseVersionId: string;
+    versionId: string;
+    afterIndex?: string | number;
+    pageSize?: number;
+  }): Promise<SeasonalPublishedDiffPageResult> {
+    const response = await client().rpc('get_seasonal_version_comparison_page_v1', {
+      p_base_version_id: input.baseVersionId,
+      p_version_id: input.versionId,
+      p_after_index: input.afterIndex !== undefined ? Number(input.afterIndex) : 0,
+      p_page_size: input.pageSize ?? 100,
+    });
+    return assertOk(response, 'get seasonal version comparison page V1') as SeasonalPublishedDiffPageResult;
+  },
+
+  async getSeasonalVersionChangesPageV1(
+    input: SeasonalVersionChangesInput,
+  ): Promise<SeasonalVersionChangesResult> {
+    const response = await client().rpc('get_seasonal_version_changes_page_v1', {
+      p_version_id: input.versionId,
+      p_base_version_id: input.baseVersionId ?? null,
+      p_view: input.view ?? 'groups',
+      p_after_cursor: input.afterCursor ?? null,
+      p_page_size: input.pageSize ?? 50,
+      p_change_type: input.changeType ?? 'all',
+      p_search: input.search ?? null,
+      p_date_from: input.dateFrom ?? null,
+      p_date_to: input.dateTo ?? null,
+      p_field: input.field ?? 'all',
+      p_group_key: input.groupKey ?? null,
+    });
+    return assertOk(response, 'get seasonal version changes page V1') as SeasonalVersionChangesResult;
+  },
+
+  async getSeasonalDraftChangesPageV1(
+    input: SeasonalDraftChangesInput,
+  ): Promise<SeasonalVersionChangesResult> {
+    const response = await client().rpc('get_seasonal_draft_changes_page_v1', {
+      p_season_id: input.seasonId,
+      p_base_version_id: input.baseVersionId ?? null,
+      p_view: input.view ?? 'groups',
+      p_after_cursor: input.afterCursor ?? null,
+      p_page_size: input.pageSize ?? 50,
+      p_change_type: input.changeType ?? 'all',
+      p_search: input.search ?? null,
+      p_date_from: input.dateFrom ?? null,
+      p_date_to: input.dateTo ?? null,
+      p_field: input.field ?? 'all',
+      p_group_key: input.groupKey ?? null,
+      p_expected_epoch: input.expectedEpoch ?? null,
+      p_expected_revision: input.expectedRevision !== undefined && input.expectedRevision !== null ? Number(input.expectedRevision) : null,
+    });
+    return assertOk(response, 'get seasonal draft changes page V1') as SeasonalVersionChangesResult;
+  },
+
+  async getSeasonalPublishedExportSnapshotV1(input: {
+    versionId: string;
+  }): Promise<SeasonalPublishedExportSnapshotResult> {
+    const response = await client().rpc('get_seasonal_published_export_snapshot_v1', {
+      p_version_id: input.versionId,
+    });
+    return assertOk(response, 'get seasonal published export snapshot V1') as SeasonalPublishedExportSnapshotResult;
+  },
+
+  async restoreSeasonalPublishedDraftV1(input: {
+    seasonId: string;
+    versionId: string;
+    requestId: string;
+    expectedRevision: string | number;
+    expectedEpoch: string;
+  }): Promise<SeasonalDraftRestoreResult> {
+    const response = await client().rpc('restore_seasonal_published_draft_v1', {
+      p_season_id: input.seasonId,
+      p_version_id: input.versionId,
+      p_request_id: input.requestId,
+      p_expected_revision: Number(input.expectedRevision),
+      p_expected_epoch: input.expectedEpoch,
+    });
+    return assertOk(response, 'restore seasonal published draft V1') as SeasonalDraftRestoreResult;
   },
 
   async getOperationalScheduleAllocationWindowV1(input: {
@@ -1915,5 +1965,45 @@ export const supabaseStore: RemoteStore = {
     const response = await client().rpc('cancel_daily_schedule_import_v2', { p_batch_id: batchId });
     options.assertOperatorSessionCurrent();
     return parseDailyImportStageResultV2(assertDailyImportRpcOk(response, 'cancel Daily Schedule import V2'));
+  },
+
+  async beginDailyScheduleImportUploadV2(
+    input: { importPayload: Omit<DailyImportStagePayloadV2, 'legs'>; legCount: number; chunkCount: number },
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<DailyImportUploadBeginResultV2> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('begin_daily_schedule_import_upload_v2', {
+      p_import: input.importPayload,
+      p_leg_count: input.legCount,
+      p_chunk_count: input.chunkCount,
+    });
+    options.assertOperatorSessionCurrent();
+    return parseDailyImportUploadBeginResultV2(assertDailyImportRpcOk(response, 'begin Daily Schedule import upload V2'));
+  },
+
+  async appendDailyScheduleImportUploadV2(
+    input: { uploadId: string; chunkIndex: number; legs: DailyImportLegInputV2[] },
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<DailyImportUploadAppendResultV2> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('append_daily_schedule_import_upload_v2', {
+      p_upload_id: input.uploadId,
+      p_chunk_index: input.chunkIndex,
+      p_legs: input.legs,
+    });
+    options.assertOperatorSessionCurrent();
+    return parseDailyImportUploadAppendResultV2(assertDailyImportRpcOk(response, 'append Daily Schedule import upload V2'));
+  },
+
+  async finalizeDailyScheduleImportUploadV2(
+    uploadId: string,
+    options: OperatorSessionCheckpointOptions = { assertOperatorSessionCurrent: () => undefined },
+  ): Promise<DailyImportStageResultV2> {
+    options.assertOperatorSessionCurrent();
+    const response = await client().rpc('finalize_daily_schedule_import_upload_v2', {
+      p_upload_id: uploadId,
+    });
+    options.assertOperatorSessionCurrent();
+    return parseDailyImportStageResultV2(assertDailyImportRpcOk(response, 'finalize Daily Schedule import upload V2'));
   },
 };

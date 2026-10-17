@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   applyModificationsToFlightRecords,
   buildAuthoritativeDraftUndoChanges,
+  composeSeasonalDraftUndoChanges,
   createInitialDraftSaveState,
   executeSeasonalPlanningDraftSave,
   getSeasonalPlanningExportLegs,
@@ -903,3 +904,216 @@ test('buildAuthoritativeDraftUndoChanges reconstructs undo from minimal RPC rece
   assert.equal(pairUndo.patch.link_type, 'sameday');
   assert.equal(pairUndo.patch.pair_anchor_date, '2026-10-25');
 });
+
+test('applyModificationsToFlightRecords keeps schedule metadata and route identity consistent', () => {
+  const baseRecord: FlightRecord = {
+    ...BASE_RECORD,
+    id: 'REC_CONSISTENT_1',
+    date: '2026-10-25',
+    scheduledDate: '2026-10-25',
+    schedule: '08:00',
+    scheduledTime: '08:00',
+    operationalDate: '2026-10-25',
+    route: 'HAN',
+    airline: 'VN',
+    flightNumber: 'VN123',
+  };
+
+  // 1. Modify schedule to early morning (04:30), which shifts operationalDate to previous day
+  const modifiedEarly = applyModificationsToFlightRecords([baseRecord], [
+    { legId: baseRecord.id, action: 'modified', schedule: '04:30' },
+  ]);
+  const r1 = modifiedEarly[0]!;
+  assert.equal(r1.schedule, '04:30');
+  assert.equal(r1.scheduledTime, '04:30');
+  assert.equal(r1.date, '2026-10-25');
+  assert.equal(r1.scheduledDate, '2026-10-25');
+  assert.equal(r1.operationalDate, '2026-10-24'); // 04:30 is before 05:00 operational day start
+
+  // 2. Modify route
+  const modifiedRoute = applyModificationsToFlightRecords([r1], [
+    { legId: r1.id, action: 'modified', route: 'DAD' },
+  ]);
+  const r2 = modifiedRoute[0]!;
+  assert.equal(r2.route, 'DAD');
+  assert.equal(r2.flightSeriesId, 'SER_A_VN_VN123_DAD');
+});
+
+test('composeSeasonalDraftUndoChanges collapses multi-edit on same record into one change with latest expected preimage and earliest target', () => {
+  // Initial: gate 1
+  // Action 1: gate 1 -> 2
+  // Action 2: gate 2 -> 3
+  // Undoing Action 2 and Action 1 in reverse chronological order:
+  const undoAction2: SeasonalDraftChangeInput = {
+    draftId: 'DRF_COLLAPSE_1',
+    expected: { gate: 3 },
+    patch: { gate: 2 },
+  };
+  const undoAction1: SeasonalDraftChangeInput = {
+    draftId: 'DRF_COLLAPSE_1',
+    expected: { gate: 2 },
+    patch: { gate: 1 },
+  };
+
+  const composed = composeSeasonalDraftUndoChanges([undoAction2, undoAction1]);
+  assert.equal(composed.length, 1);
+  assert.equal(composed[0]?.draftId, 'DRF_COLLAPSE_1');
+  // Latest expected preimage from DB state after Action 2 (3, avoiding 40001 stale error)
+  assert.equal(composed[0]?.expected?.gate, 3);
+  // Earliest undo target from before Action 1 (1)
+  assert.equal(composed[0]?.patch.gate, 1);
+});
+
+test('composeSeasonalDraftUndoChanges merges different fields on same record into one change', () => {
+  // Initial: gate 1, stand 'A'
+  // Action 1: gate 1 -> 2
+  // Action 2: stand 'A' -> 'B'
+  const undoAction2: SeasonalDraftChangeInput = {
+    draftId: 'DRF_MULTI_FIELDS_1',
+    expected: { stand: 'B' },
+    patch: { stand: 'A' },
+  };
+  const undoAction1: SeasonalDraftChangeInput = {
+    draftId: 'DRF_MULTI_FIELDS_1',
+    expected: { gate: 2 },
+    patch: { gate: 1 },
+  };
+
+  const composed = composeSeasonalDraftUndoChanges([undoAction2, undoAction1]);
+  assert.equal(composed.length, 1);
+  assert.equal(composed[0]?.draftId, 'DRF_MULTI_FIELDS_1');
+  assert.equal(composed[0]?.expected?.stand, 'B');
+  assert.equal(composed[0]?.expected?.gate, 2);
+  assert.equal(composed[0]?.patch.stand, 'A');
+  assert.equal(composed[0]?.patch.gate, 1);
+});
+
+test('composeSeasonalDraftUndoChanges handles add then edit flight undo by deleting the flight', () => {
+  // Action 1: Add new flight DRF_NEW
+  // Action 2: Edit gate of DRF_NEW (null -> 5)
+  const undoEdit: SeasonalDraftChangeInput = {
+    draftId: 'DRF_NEW',
+    expected: { gate: 5 },
+    patch: { gate: null },
+  };
+  const undoAdd: SeasonalDraftChangeInput = {
+    draftId: 'DRF_NEW',
+    expected: { status: 'active', deletion_reason: null },
+    patch: { status: 'deleted', deletion_reason: 'planning_removed' },
+  };
+
+  const composed = composeSeasonalDraftUndoChanges([undoEdit, undoAdd]);
+  assert.equal(composed.length, 1);
+  assert.equal(composed[0]?.draftId, 'DRF_NEW');
+  assert.equal(composed[0]?.expected?.status, 'active');
+  assert.equal(composed[0]?.patch.status, 'deleted');
+  assert.equal(composed[0]?.patch.deletion_reason, 'planning_removed');
+});
+
+test('composeSeasonalDraftUndoChanges handles edit then delete flight undo by restoring the flight to initial state', () => {
+  // Initial: gate 1, status active
+  // Action 1: Edit gate (1 -> 2)
+  // Action 2: Delete flight
+  const undoDelete: SeasonalDraftChangeInput = {
+    draftId: 'DRF_DEL_RESTORE',
+    expected: { status: 'deleted', deletion_reason: 'planning_removed' },
+    patch: { status: 'active', deletion_reason: null, gate: 2 },
+  };
+  const undoEdit: SeasonalDraftChangeInput = {
+    draftId: 'DRF_DEL_RESTORE',
+    expected: { gate: 2 },
+    patch: { gate: 1 },
+  };
+
+  const composed = composeSeasonalDraftUndoChanges([undoDelete, undoEdit]);
+  assert.equal(composed.length, 1);
+  assert.equal(composed[0]?.draftId, 'DRF_DEL_RESTORE');
+  assert.equal(composed[0]?.expected?.status, 'deleted');
+  assert.equal(composed[0]?.patch.status, 'active');
+  assert.equal(composed[0]?.patch.gate, 1);
+});
+
+test('composeSeasonalDraftUndoChanges handles implicit pair fields and server companion updates', () => {
+  // Action 1: Pair Flight A with Flight B
+  // Action 2: Edit Flight A schedule (08:00 -> 08:30)
+  const undoEditA: SeasonalDraftChangeInput = {
+    draftId: 'FLIGHT_A',
+    expected: { schedule: '08:30', scheduled_time: '08:30' },
+    patch: { schedule: '08:00', scheduled_time: '08:00' },
+  };
+  const undoPairA: SeasonalDraftChangeInput = {
+    draftId: 'FLIGHT_A',
+    expected: {
+      linked_draft_id: 'FLIGHT_B',
+      turnaround_id: 'TRN_PAIR',
+      link_type: 'sameday',
+      pair_anchor_date: '2026-10-25',
+    },
+    patch: {
+      linked_draft_id: null,
+      turnaround_id: null,
+      link_type: null,
+      pair_anchor_date: null,
+    },
+  };
+  const undoPairB: SeasonalDraftChangeInput = {
+    draftId: 'FLIGHT_B',
+    expected: {
+      linked_draft_id: 'FLIGHT_A',
+      turnaround_id: 'TRN_PAIR',
+      link_type: 'sameday',
+      pair_anchor_date: '2026-10-25',
+    },
+    patch: {
+      linked_draft_id: null,
+      turnaround_id: null,
+      link_type: null,
+      pair_anchor_date: null,
+    },
+  };
+
+  const composed = composeSeasonalDraftUndoChanges([undoEditA, undoPairA, undoPairB]);
+  assert.equal(composed.length, 2);
+  const changeA = composed.find((c) => c.draftId === 'FLIGHT_A')!;
+  const changeB = composed.find((c) => c.draftId === 'FLIGHT_B')!;
+
+  assert.ok(changeA && changeB);
+  assert.equal(changeA.expected?.schedule, '08:30');
+  assert.equal(changeA.expected?.linked_draft_id, 'FLIGHT_B');
+  assert.equal(changeA.patch.schedule, '08:00');
+  assert.equal(changeA.patch.linked_draft_id, null);
+  assert.equal(changeA.patch.turnaround_id, null);
+
+  assert.equal(changeB.expected?.linked_draft_id, 'FLIGHT_A');
+  assert.equal(changeB.patch.linked_draft_id, null);
+});
+
+test('composeSeasonalDraftUndoChanges prevents stale preimage across successive schedule edits', () => {
+  // Successive edits: 08:00 -> 09:00 -> 10:00 -> 11:00
+  // Undo inputs in reverse chronological order:
+  const undo3: SeasonalDraftChangeInput = {
+    draftId: 'DRF_STALE_TEST',
+    expected: { schedule: '11:00', scheduled_time: '11:00' },
+    patch: { schedule: '10:00', scheduled_time: '10:00' },
+  };
+  const undo2: SeasonalDraftChangeInput = {
+    draftId: 'DRF_STALE_TEST',
+    expected: { schedule: '10:00', scheduled_time: '10:00' },
+    patch: { schedule: '09:00', scheduled_time: '09:00' },
+  };
+  const undo1: SeasonalDraftChangeInput = {
+    draftId: 'DRF_STALE_TEST',
+    expected: { schedule: '09:00', scheduled_time: '09:00' },
+    patch: { schedule: '08:00', scheduled_time: '08:00' },
+  };
+
+  const composed = composeSeasonalDraftUndoChanges([undo3, undo2, undo1]);
+  assert.equal(composed.length, 1);
+  // Current DB is 11:00, so latest expected preimage MUST be 11:00 (not stale 09:00 or 10:00)
+  assert.equal(composed[0]?.expected?.schedule, '11:00');
+  assert.equal(composed[0]?.expected?.scheduled_time, '11:00');
+  // Earliest undo target is original 08:00
+  assert.equal(composed[0]?.patch.schedule, '08:00');
+  assert.equal(composed[0]?.patch.scheduled_time, '08:00');
+});
+

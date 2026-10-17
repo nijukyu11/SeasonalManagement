@@ -115,6 +115,14 @@ export interface SeasonalPublishPreviewOperationalCounts {
   retire: number;
 }
 
+export interface SeasonalPublishPreviewOperationalImpactCounts {
+  added: number;
+  modified: number;
+  removed: number;
+  unchanged: number;
+  overwrites: number;
+}
+
 export interface SeasonalPublishPreviewPayload {
   publishContractVersion: number;
   baseVersionId: string | null;
@@ -130,6 +138,9 @@ export interface SeasonalPublishPreviewPayload {
   rangeEnd: string;
   planningCounts: SeasonalPublishPreviewPlanningCounts;
   operationalCounts: SeasonalPublishPreviewOperationalCounts;
+  operationalImpactCounts?: SeasonalPublishPreviewOperationalImpactCounts;
+  requiresOperationalAcknowledgement?: boolean;
+  publishKind?: 'release' | 'reapply' | 'noop';
   diagnostics: Array<{ code: string; [key: string]: unknown }>;
   operationalDiagnosticCount?: number;
   skippedDays: string[];
@@ -151,6 +162,9 @@ export interface SeasonalPublishCommitResult {
   versionTag: string;
   planningCounts: SeasonalPublishPreviewPlanningCounts;
   operationalCounts: SeasonalPublishPreviewOperationalCounts;
+  operationalImpactCounts?: SeasonalPublishPreviewOperationalImpactCounts;
+  publishKind?: 'release' | 'reapply' | 'noop';
+  acknowledgedOperational?: boolean;
   skippedDays: string[];
   operationalRevision: string;
 }
@@ -174,6 +188,8 @@ export interface SeasonalPublishVersionSummary {
   skipped_day_count: number;
   snapshot_checksum: string;
   publish_sequence: string;
+  publish_kind?: 'release' | 'reapply' | 'noop';
+  skipped_days?: string[];
 }
 
 export interface SeasonalPublishVersionsPageResult {
@@ -206,6 +222,115 @@ export interface SeasonalPublishedDiffPageResult {
   nextIndex: string | null;
   stale?: boolean;
 }
+
+export interface SeasonalVersionChangesInput {
+  versionId: string;
+  baseVersionId?: string | null;
+  view?: 'groups' | 'days';
+  afterCursor?: string | null;
+  pageSize?: number;
+  changeType?: 'all' | 'added' | 'removed' | 'modified';
+  search?: string;
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  field?: 'all' | 'time' | 'route' | 'aircraft' | 'other';
+  groupKey?: string | null;
+}
+
+export interface SeasonalDraftChangesInput {
+  seasonId: string;
+  baseVersionId?: string | null;
+  view?: 'groups' | 'days';
+  afterCursor?: string | null;
+  pageSize?: number;
+  changeType?: 'all' | 'added' | 'removed' | 'modified';
+  search?: string;
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  field?: 'all' | 'time' | 'route' | 'aircraft' | 'other';
+  groupKey?: string | null;
+  expectedEpoch?: string | null;
+  expectedRevision?: string | number | null;
+}
+
+export interface SeasonalVersionChangeRow extends SeasonalPublishedDiffEntry {
+  group_key: string;
+  dates: string[];
+  occurrence_count: number;
+}
+
+export interface SeasonalVersionChangesResult {
+  entries: SeasonalVersionChangeRow[];
+  hasMore: boolean;
+  nextCursor: string | null;
+  summary: {
+    added: number;
+    removed: number;
+    modified: number;
+    unchanged: number;
+    totalChanges: number;
+  };
+  totalRows: number;
+  filteredOccurrenceCount: number;
+  draftEpoch?: string | null;
+  draftRevision?: string | null;
+  baseVersionId?: string | null;
+  baseVersion: {
+    versionId: string;
+    versionTag: string;
+    publishedAt: string;
+    notes: string;
+  } | null;
+  version: {
+    versionId: string;
+    versionTag: string;
+    publishedAt: string;
+    notes: string;
+    epoch?: string;
+    revision?: string;
+  };
+}
+
+export interface SeasonalPublishOperationalImpactEntry {
+  entry_index: string;
+  leg_id: string | null;
+  draft_id: string | null;
+  operational_date: string;
+  change_type: 'added' | 'modified' | 'removed';
+  before_state: Record<string, unknown> | null;
+  after_state: Record<string, unknown> | null;
+  changed_fields: string[];
+  overwrites_operational: boolean;
+}
+
+export interface SeasonalPublishOperationalImpactPageResult {
+  entries: SeasonalPublishOperationalImpactEntry[];
+  hasMore: boolean;
+  nextIndex: string | null;
+  stale?: boolean;
+}
+
+export interface SeasonalPublishedSnapshotPageResult {
+  versionId: string;
+  seasonId: string;
+  seasonCode: string;
+  checksum: string;
+  totalCount: number;
+  flights: SeasonalDraftRecord[];
+  hasMore: boolean;
+  nextDraftId: string | null;
+}
+
+export type SeasonalPublishedExportSnapshotResult = SeasonalDraftExportSnapshotResult & {
+  versionId: string;
+  versionTag: string;
+};
+
+export type SeasonalDraftRestoreResult = Omit<SeasonalDraftWindowResult, 'status'> & {
+  status: 'committed';
+  requestId: string;
+  versionId: string;
+};
 
 export function isSeasonalPlanningV1Enabled(): boolean {
   if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_SEASONAL_PLANNING_V1_ENABLED === '1') {
@@ -439,4 +564,15 @@ export function flightRecordToSeasonalDraftChange(
 
   if (Object.keys(patch).length === 0) return null;
   return { draftId, expected, patch };
+}
+
+export type PlanningSourceKind = 'draft' | 'published';
+
+export interface PlanningSourceIdentity {
+  seasonId: string;
+  sourceKind: PlanningSourceKind;
+  draftEpoch?: string | null;
+  draftRevision?: string | number | null;
+  versionId?: string | null;
+  snapshotChecksum?: string | null;
 }

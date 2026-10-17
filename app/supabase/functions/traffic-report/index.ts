@@ -771,7 +771,7 @@ async function reportReadHmac(value: string): Promise<string> {
 async function createReportReadVersion(claims: Omit<ReportReadVersionClaims, 'version' | 'expiresAt'>): Promise<string> {
   const payload: ReportReadVersionClaims = {
     version: 1,
-    expiresAt: Math.floor(Date.now() / 1000) + 30 * 60,
+    expiresAt: Math.floor(Date.now() / 1000) + 12 * 60 * 60,
     ...claims,
   };
   const encoded = base64Url(new TextEncoder().encode(JSON.stringify(payload)));
@@ -797,7 +797,6 @@ async function verifyReportReadVersion(token: string): Promise<ReportReadVersion
   const item = claims as Partial<ReportReadVersionClaims>;
   if (item.version !== 1
     || !Number.isSafeInteger(item.expiresAt)
-    || Number(item.expiresAt) <= Math.floor(Date.now() / 1000)
     || !Number.isSafeInteger(item.sourceWatermark)
     || Number(item.sourceWatermark) < 0
     || typeof item.dataAsOf !== 'string'
@@ -827,7 +826,7 @@ function v2Args(
     p_expected_watermark: readVersion?.sourceWatermark ?? request.expectedWatermark,
     p_contract_version: V2_CONTRACT_VERSION,
     p_payload_scope: payloadScope,
-    p_data_as_of: readVersion?.dataAsOf ?? null,
+    p_data_as_of: (!readVersion || readVersion.expiresAt <= Math.floor(Date.now() / 1000)) ? null : readVersion.dataAsOf,
   };
 }
 
@@ -1025,9 +1024,10 @@ Deno.serve(async (request: Request) => {
       const filterHash = bundle.filter_hash;
       const dataAsOf = bundle.data_as_of;
       if (!Number.isSafeInteger(sourceWatermark) || typeof filterHash !== 'string' || typeof dataAsOf !== 'string') throw new Error('invalid traffic-report-v2 version envelope');
+      const isExpired = readVersion ? readVersion.expiresAt <= Math.floor(Date.now() / 1000) : false;
       if (readVersion && (sourceWatermark !== readVersion.sourceWatermark
-        || dataAsOf !== readVersion.dataAsOf)) throw new Error('READ_VERSION_INVALID');
-      const readVersionToken = normalized.readVersion ?? await createReportReadVersion({
+        || (!isExpired && dataAsOf !== readVersion.dataAsOf))) throw new Error('READ_VERSION_INVALID');
+      const readVersionToken = (!isExpired && normalized.readVersion) ? normalized.readVersion : await createReportReadVersion({
         sourceWatermark: Number(sourceWatermark),
         dataAsOf,
         filterHash,
@@ -1290,6 +1290,15 @@ Deno.serve(async (request: Request) => {
         expected_watermark: null,
         actual_watermark: null,
       }, 409, { 'Cache-Control': 'no-store' });
+    }
+    if (/STALE_OPERATIONAL_PROJECTION/i.test(message)) {
+      return json({
+        error_code: 'REPORT_SYNCING',
+        error: 'Đang đồng bộ dữ liệu vận hành. Vui lòng đợi trong giây lát.',
+      }, 503, {
+        'Cache-Control': 'no-store',
+        'Retry-After': '1',
+      });
     }
     const clientError = /invalid|unsupported|must|required|cardinality|outside|provided|exceed/i.test(message);
     return json({

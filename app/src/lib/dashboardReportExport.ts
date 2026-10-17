@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import type { DashboardAiContext, DashboardCustomWorkbookSpec } from './dashboardAiAnalysis';
+import type { DashboardComparisonMode, DashboardComparisonResult, DashboardDimension, DashboardDriverContribution, DashboardMetric, DashboardTimeBasis, DashboardTypeFilter } from './dashboardAnalysis';
 import { saveWorkbookAsXlsx, workbookToXlsxBlob as sharedWorkbookToXlsxBlob, type ExportSaveResult } from './exportSave';
 import type { FlightRecord, RouteCountryMapping } from './types';
 import { resolveCountryForRoute } from './routeCountry';
@@ -37,17 +37,36 @@ export interface BuildDashboardWorkbookInput extends BuildDashboardReportRowsInp
   generatedAt?: Date;
 }
 
+export interface DashboardComparisonReportContext {
+  filters?: {
+    comparisonMode: DashboardComparisonMode;
+    metric: DashboardMetric;
+    typeFilter: DashboardTypeFilter;
+    dimension: DashboardDimension;
+    timeBasis: DashboardTimeBasis;
+  };
+  comparison?: DashboardComparisonResult;
+  waterfallRows?: Array<{
+    label: string;
+    result: DashboardComparisonResult;
+    topDriver: DashboardDriverContribution | null;
+    reconciledDelta: number;
+  }>;
+  selectedDriver?: Pick<DashboardDriverContribution, 'label'> | null;
+  selectedDriverRecords?: {
+    totalRecords: number;
+    includedRecords: number;
+    truncated: boolean;
+    records: Array<Pick<FlightRecord, 'date' | 'type' | 'airline' | 'flightNumber' | 'rawFlightNumber' | 'route' | 'schedule' | 'aircraft' | 'pax'>>;
+  };
+}
+
 export interface BuildMomWowAnalysisWorkbookInput {
-  context: DashboardAiContext;
-  aiNotes?: string | null;
+  context: DashboardComparisonReportContext;
   seasonCode?: string | null;
   generatedAt?: Date;
 }
 
-export interface BuildCustomDashboardWorkbookOptions {
-  seasonCode?: string | null;
-  generatedAt?: Date;
-}
 
 export const CANONICAL_DASHBOARD_REPORT_COLUMNS = [
   'Type',
@@ -150,7 +169,7 @@ export function buildMomWowAnalysisWorkbook(input: BuildMomWowAnalysisWorkbookIn
     generatedAt: input.generatedAt,
   }));
   appendRowsSheet(workbook, 'Summary', [
-    { Field: 'Report Type', Value: 'MoM/WoW AI Analysis' },
+    { Field: 'Report Type', Value: 'MoM/WoW Analysis' },
     { Field: 'Season', Value: input.seasonCode ?? '' },
     { Field: 'Generated At', Value: formatGeneratedAt(input.generatedAt) },
     { Field: 'Comparison Mode', Value: filters.comparisonMode },
@@ -199,8 +218,7 @@ export function buildMomWowAnalysisWorkbook(input: BuildMomWowAnalysisWorkbookIn
     Aircraft: record.aircraft,
     Pax: record.pax ?? '',
   })));
-  appendRowsSheet(workbook, 'AI Notes', [
-    { Field: 'Latest AI Answer', Value: input.aiNotes?.trim() || 'No AI answer included.' },
+  appendRowsSheet(workbook, 'Export Notes', [
     { Field: 'Selected Records Included', Value: selectedDriverRecords.includedRecords },
     { Field: 'Selected Records Total', Value: selectedDriverRecords.totalRecords },
     { Field: 'Selected Records Truncated', Value: selectedDriverRecords.truncated ? 'Yes' : 'No' },
@@ -208,35 +226,12 @@ export function buildMomWowAnalysisWorkbook(input: BuildMomWowAnalysisWorkbookIn
   return workbook;
 }
 
-export function buildCustomDashboardWorkbook(
-  spec: DashboardCustomWorkbookSpec,
-  options: BuildCustomDashboardWorkbookOptions = {}
-): XLSX.WorkBook {
-  const workbook = XLSX.utils.book_new();
-  appendRowsSheet(workbook, 'Report Guide', [
-    { Field: 'Template', Value: 'dashboard-custom-workbook' },
-    { Field: 'Title', Value: spec.title },
-    { Field: 'Season', Value: options.seasonCode ?? '' },
-    { Field: 'Generated At', Value: formatGeneratedAt(options.generatedAt) },
-    { Field: 'Safety', Value: 'Generated locally from a validated AI workbook spec. Formulas, paths, macros, scripts, and external links are not allowed.' },
-  ]);
-  for (const sheet of spec.sheets) {
-    appendRowsSheet(workbook, sheet.name, sheet.rows, sheet.columns);
-    if (sheet.notes) {
-      const worksheet = workbook.Sheets[sheet.name] as XLSX.WorkSheet & { '!comments'?: unknown };
-      const noteCell = XLSX.utils.encode_cell({ r: 0, c: Math.max(0, sheet.columns.length - 1) });
-      worksheet[noteCell] = worksheet[noteCell] ?? { t: 's', v: sheet.columns[Math.max(0, sheet.columns.length - 1)] ?? 'Notes' };
-      worksheet[noteCell].c = [{ a: 'AI', t: sheet.notes }];
-    }
-  }
-  return workbook;
-}
 
 export function buildDashboardReportFileName(templateId: DashboardReportTemplateId, seasonCode?: string | null, now: Date = new Date()): string {
   const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
   const season = sanitizeFilePart(seasonCode || 'Season');
   return templateId === 'mom-wow-analysis'
-    ? `${season}_MoM_WoW_AI_Analysis_${stamp}.xlsx`
+    ? `${season}_MoM_WoW_Analysis_${stamp}.xlsx`
     : `${season}_SanLuong_Summary_${stamp}.xlsx`;
 }
 

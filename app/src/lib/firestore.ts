@@ -92,7 +92,7 @@ export async function getOperationalSettings(): Promise<OperationalSettings> {
 }
 
 export async function saveOperationalSettings(settings: OperationalSettings): Promise<void> {
-  await setDoc(operationalSettingsRef, validateOperationalSettings(settings));
+  await setDoc(operationalSettingsRef, validateOperationalSettings(settings), { merge: true });
 }
 
 export async function saveAuditLogEntry(session: AuditSession, entry: AuditLogEntry): Promise<void> {

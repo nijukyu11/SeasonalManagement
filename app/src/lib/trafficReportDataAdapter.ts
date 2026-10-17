@@ -25,6 +25,9 @@ export interface TrafficReportFetchOptions {
   fetchImpl?: typeof fetch;
   /** A 409 means the caller must replace, not merge, its current bundle. */
   reloadOnVersionChange?: boolean;
+  maxSyncRetries?: number;
+  syncRetryDelayMs?: number;
+  onSyncStatus?: (syncing: boolean) => void;
 }
 
 export class TrafficReportVersionChangedError extends Error {
@@ -42,12 +45,21 @@ export class TrafficReportVersionChangedError extends Error {
 export class TrafficReportRequestError extends Error {
   readonly status: number;
   readonly retryable: boolean;
+  readonly errorCode?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, errorCode?: string) {
     super(message);
     this.name = 'TrafficReportRequestError';
     this.status = status;
     this.retryable = status === 408 || status === 429 || status >= 500;
+    this.errorCode = errorCode;
+  }
+}
+
+export class TrafficReportSyncingError extends TrafficReportRequestError {
+  constructor(message = 'Đang đồng bộ dữ liệu vận hành. Vui lòng đợi trong giây lát.', status = 503) {
+    super(message, status, 'REPORT_SYNCING');
+    this.name = 'TrafficReportSyncingError';
   }
 }
 
@@ -166,10 +178,14 @@ async function requestBundle(
   }
   if (!response.ok) {
     const details = errorPayload(payload);
+    const errorCode = typeof details.error_code === 'string' ? details.error_code : undefined;
     const message = typeof details.error === 'string'
       ? details.error
       : 'Báo cáo tạm thời chưa thể cập nhật.';
-    throw new TrafficReportRequestError(message, response.status);
+    if (response.status === 503 && (errorCode === 'REPORT_SYNCING' || /STALE_OPERATIONAL_PROJECTION/i.test(message))) {
+      throw new TrafficReportSyncingError(message, response.status);
+    }
+    throw new TrafficReportRequestError(message, response.status, errorCode);
   }
   return decodeTrafficV2ApiEnvelope(payload);
 }
@@ -184,15 +200,38 @@ export async function fetchTrafficReportV2Bundle(
   options: TrafficReportFetchOptions = {},
 ): Promise<TrafficV2Bundle> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  try {
-    return await requestBundle(filter, fetchImpl, options.signal, options.expectedWatermark);
-  } catch (error) {
-    if (error instanceof TrafficReportVersionChangedError
-      && options.expectedWatermark !== undefined
-      && options.reloadOnVersionChange !== false) {
-      return requestBundle(filter, fetchImpl, options.signal, undefined);
+  const maxSyncRetries = Math.max(0, options.maxSyncRetries ?? 0);
+  const syncRetryDelayMs = options.syncRetryDelayMs ?? 1500;
+  let attempt = 0;
+  while (true) {
+    try {
+      const bundle = await requestBundle(filter, fetchImpl, options.signal, options.expectedWatermark);
+      options.onSyncStatus?.(false);
+      return bundle;
+    } catch (error) {
+      if (error instanceof TrafficReportVersionChangedError
+        && options.expectedWatermark !== undefined
+        && options.reloadOnVersionChange !== false) {
+        return requestBundle(filter, fetchImpl, options.signal, undefined);
+      }
+      if (error instanceof TrafficReportSyncingError && attempt < maxSyncRetries) {
+        attempt += 1;
+        options.onSyncStatus?.(true);
+        if (options.signal?.aborted) throw error;
+        if (syncRetryDelayMs > 0) {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, syncRetryDelayMs);
+            options.signal?.addEventListener('abort', () => {
+              clearTimeout(timer);
+              reject(options.signal?.reason ?? new Error('Aborted'));
+            }, { once: true });
+          });
+        }
+        continue;
+      }
+      options.onSyncStatus?.(false);
+      throw error;
     }
-    throw error;
   }
 }
 
@@ -227,7 +266,7 @@ function presentationTimeline(bundle: TrafficV2Bundle): TrafficTimelinePoint[] {
     pax_status: row.status === 'future'
       ? 'not_due'
       : row.dueLegs != null && row.dueLegs > 0 ? 'available' : 'unavailable',
-    completeness: row.status === 'missing' ? 'missing' : row.status === 'partial' ? 'partial' : 'complete',
+    completeness: row.status === 'missing' || row.flights === null ? 'missing' : row.status === 'partial' ? 'partial' : 'complete',
     suppressed: false,
     status: row.status,
   }));
@@ -250,7 +289,7 @@ function apiTimelinePoint(row: TrafficV2ApiTimelinePoint): TrafficTimelinePoint 
     pax_status: row.status === 'future'
       ? 'not_due'
       : dueLegs != null && dueLegs > 0 ? 'available' : 'unavailable',
-    completeness: row.status === 'missing' ? 'missing' : row.status === 'partial' ? 'partial' : 'complete',
+    completeness: row.status === 'missing' || row.flights === null ? 'missing' : row.status === 'partial' ? 'partial' : 'complete',
     suppressed: false,
     status: row.status,
   };
@@ -271,10 +310,14 @@ async function v2ResourcePayload(
   }
   if (!response.ok) {
     const details = errorPayload(payload);
-    throw new TrafficReportRequestError(
-      typeof details.error === 'string' ? details.error : 'Báo cáo tạm thời chưa thể cập nhật.',
-      response.status,
-    );
+    const errorCode = typeof details.error_code === 'string' ? details.error_code : undefined;
+    const message = typeof details.error === 'string'
+      ? details.error
+      : 'Báo cáo tạm thời chưa thể cập nhật.';
+    if (response.status === 503 && (errorCode === 'REPORT_SYNCING' || /STALE_OPERATIONAL_PROJECTION/i.test(message))) {
+      throw new TrafficReportSyncingError(message, response.status);
+    }
+    throw new TrafficReportRequestError(message, response.status, errorCode);
   }
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new Error('Payload traffic-report-v2 không hợp lệ.');

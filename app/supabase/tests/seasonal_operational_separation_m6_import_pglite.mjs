@@ -22,6 +22,10 @@ const patch=async(d,changes)=>rpc('apply_seasonal_draft_changes_v1','$1,$2::uuid
  M0_FIXTURE.seasonW26,randomUUID(),(await window()).revision,JSON.stringify([{draftId:d.draft_id,
    expected:Object.fromEntries(Object.keys(changes).map(k=>[k,d[k]])),patch:changes}])]);
 try {
+ await asAdmin();
+ for (const name of ['20261016100000_operational_daily_full_import_v2', '20261016090000_seasonal_full_import_v1', '20261009110000_schedule_preview_lifecycle_v1', '20261009100000_operational_incremental_projection_v1', '20261009090000_seasonal_snapshot_integrity_indexed_v1', '20261008100000_seasonal_version_management_v1', '20261008090000_seasonal_publish_safety_v1']) {
+   await db.exec(await readFile(new URL(`../migrations/${name}.rollback.sql`, import.meta.url), 'utf8'));
+ }
  await asAdmin(); await db.exec(await readFile(new URL('../migrations/20260928210000_seasonal_publish_v1.rollback.sql',import.meta.url),'utf8'));
  await asAdmin(); await db.exec(await readFile(rollback,'utf8')); await db.exec(await readFile(migration,'utf8'));
  await asWriter(); await db.query("select public.run_seasonal_operational_backfill_v1('2026-10-01',$1::uuid)",[M0_FIXTURE.writerId]);

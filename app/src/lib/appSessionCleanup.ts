@@ -17,7 +17,6 @@ function shouldPreserveLocalStorageKey(key: string, preserveAuth: boolean): bool
 
 function shouldClearLocalStorageKey(key: string): boolean {
   return APP_LOCAL_STORAGE_KEYS.has(key) ||
-    key.startsWith('dashboard:aiNotebook:') ||
     key.startsWith('season-sync:') ||
     key.startsWith('seasonal-management:') ||
     key.startsWith('sidebar:') ||

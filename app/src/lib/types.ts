@@ -317,46 +317,6 @@ export interface RouteCountryMapping {
   country: string;
 }
 
-export type AiAnalysisProvider = 'gemini' | 'openai-compatible' | 'deepseek';
-
-export interface AiAnalysisModelSetting {
-  id: string;
-  label: string;
-  provider: AiAnalysisProvider;
-  model: string;
-  baseUrl: string | null;
-  enabled: boolean;
-  keyUpdatedAt: number | null;
-}
-
-export interface AiAnalysisProviderKeyStatus {
-  provider: AiAnalysisProvider;
-  keyFingerprint: string;
-  keyUpdatedAt: number;
-  updatedBy: string | null;
-}
-
-export type AiAnalysisContextDocumentKind = 'rule' | 'skill';
-
-export interface AiAnalysisContextDocument {
-  id: string;
-  kind: AiAnalysisContextDocumentKind;
-  title: string;
-  contentMd: string;
-  enabled: boolean;
-  sortOrder: number;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface AiAnalysisSettings {
-  enabled: boolean;
-  activeModelId: string;
-  models: AiAnalysisModelSetting[];
-  contextDocuments: AiAnalysisContextDocument[];
-  updatedAt: number | null;
-}
-
 export interface DashboardAlertSettings {
   arrivalBucketFlights: number | null;
   departureBucketFlights: number | null;
@@ -368,7 +328,6 @@ export interface DashboardAlertSettings {
 export interface OperationalSettings {
   airlineColors: AirlineColorSetting[];
   routeCountries: RouteCountryMapping[];
-  aiAnalysis: AiAnalysisSettings;
   dashboardAlerts: DashboardAlertSettings;
   aircraftGroups: AircraftGroup[];
   counterAllocationRules: CounterAllocationRule[];

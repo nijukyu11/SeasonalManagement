@@ -1,6 +1,6 @@
 export const NATIVE_CLOSE_CONFIRM_COPY = {
-  title: 'Close app?',
-  message: 'Closing the app will discard unsaved in-memory drafts and Undo history. Saved server data is unchanged.',
-  confirmLabel: 'Close App',
-  cancelLabel: 'Cancel',
+  title: 'Đóng ứng dụng?',
+  message: 'Đóng ứng dụng sẽ hủy các bản nháp chưa lưu trong bộ nhớ và lịch sử hoàn tác. Dữ liệu đã lưu trên máy chủ không bị ảnh hưởng.',
+  confirmLabel: 'Đóng ứng dụng',
+  cancelLabel: 'Hủy',
 } as const;

@@ -16,6 +16,7 @@ export interface OvernightCompanionState {
   aircraft: string;
   type: 'A' | 'D';
   linkId: string;
+  date: string;
 }
 
 export function formatLinkedFlightTime(
@@ -144,15 +145,25 @@ export function buildDetailedNewFlightModifications(input: DetailedNewFlightInpu
     const depId = showDep ? nextId('F_NEW') : null;
 
     if (showArr && arrId) {
+      const arrFlightNum = `${airline}${input.arrFlightNum.trim().padStart(3, '0')}`;
+      const arrRoute = input.arrRoute.trim().toUpperCase();
+      const arrMeta = buildOperationalFlightMetadata({
+        scheduledDate: dateStr,
+        scheduledTime: input.arrTime,
+        type: 'A',
+        airline,
+        flightNumber: arrFlightNum,
+        route: arrRoute,
+      });
       const arrLeg: FlightLeg = {
         id: arrId,
         linkId: sharedLinkId ?? `L_${arrId}`,
         type: 'A',
         airline,
-        flightNumber: `${airline}${input.arrFlightNum.trim().padStart(3, '0')}`,
+        flightNumber: arrFlightNum,
         rawFlightNumber: input.arrFlightNum.trim(),
         requestStatusCode: null,
-        route: input.arrRoute.trim().toUpperCase(),
+        route: arrRoute,
         schedule: input.arrTime,
         aircraft,
         category,
@@ -173,7 +184,9 @@ export function buildDetailedNewFlightModifications(input: DetailedNewFlightInpu
         dayOfWeek: new Date(`${dateStr}T00:00:00Z`).getUTCDay(),
         action: 'added',
         sourceRowIndex: -1,
+        ...arrMeta,
         ...(input.flightType === 'turnaround' && depId ? {
+          turnaroundId: sharedLinkId ?? undefined,
           linkType: 'sameday' as const,
           pairAnchorDate: dateStr,
           linkedRecordId: depId,
@@ -183,15 +196,25 @@ export function buildDetailedNewFlightModifications(input: DetailedNewFlightInpu
     }
 
     if (showDep && depId) {
+      const depFlightNum = `${airline}${input.depFlightNum.trim().padStart(3, '0')}`;
+      const depRoute = input.depRoute.trim().toUpperCase();
+      const depMeta = buildOperationalFlightMetadata({
+        scheduledDate: dateStr,
+        scheduledTime: input.depTime,
+        type: 'D',
+        airline,
+        flightNumber: depFlightNum,
+        route: depRoute,
+      });
       const depLeg: FlightLeg = {
         id: depId,
         linkId: sharedLinkId ?? `L_${depId}`,
         type: 'D',
         airline,
-        flightNumber: `${airline}${input.depFlightNum.trim().padStart(3, '0')}`,
+        flightNumber: depFlightNum,
         rawFlightNumber: input.depFlightNum.trim(),
         requestStatusCode: null,
-        route: input.depRoute.trim().toUpperCase(),
+        route: depRoute,
         schedule: input.depTime,
         aircraft,
         category,
@@ -212,7 +235,9 @@ export function buildDetailedNewFlightModifications(input: DetailedNewFlightInpu
         dayOfWeek: new Date(`${dateStr}T00:00:00Z`).getUTCDay(),
         action: 'added',
         sourceRowIndex: -1,
+        ...depMeta,
         ...(input.flightType === 'turnaround' && arrId ? {
+          turnaroundId: sharedLinkId ?? undefined,
           linkType: 'sameday' as const,
           pairAnchorDate: dateStr,
           linkedRecordId: arrId,
@@ -446,7 +471,7 @@ export function filterDetailedLegs(
   targetArrFlight: string | null,
   targetDepFlight: string | null
 ): FlightLeg[] {
-  if (!targetArrFlight && !targetDepFlight) return [];
+  if (!targetArrFlight && !targetDepFlight) return legs;
   return legs.filter((leg) => {
     if (targetArrFlight && leg.type === 'A' && leg.flightNumber === targetArrFlight) return true;
     if (targetDepFlight && leg.type === 'D' && leg.flightNumber === targetDepFlight) return true;
@@ -538,9 +563,10 @@ function targetAnchorDateForTransfer(sourceLeg: FlightLeg, targetDate: string, l
 }
 
 function transferredSingleLeg(sourceLeg: FlightLeg, targetDate: string, newId: string): FlightLeg {
+  const scheduledTime = sourceLeg.schedule ?? sourceLeg.scheduledTime;
   const metadata = buildOperationalFlightMetadata({
     scheduledDate: targetDate,
-    scheduledTime: sourceLeg.scheduledTime ?? sourceLeg.schedule,
+    scheduledTime,
     type: sourceLeg.type,
     airline: sourceLeg.airline,
     flightNumber: sourceLeg.flightNumber,
@@ -551,7 +577,10 @@ function transferredSingleLeg(sourceLeg: FlightLeg, targetDate: string, newId: s
     ...metadata,
     id: newId,
     linkId: `L_${newId}`,
+    schedule: metadata.scheduledTime,
+    scheduledTime: metadata.scheduledTime,
     date: metadata.scheduledDate,
+    scheduledDate: metadata.scheduledDate,
     dayOfWeek: new Date(`${metadata.scheduledDate}T00:00:00Z`).getUTCDay(),
     action: 'added',
   };
@@ -573,9 +602,10 @@ function transferredPairLeg(
   pairAnchorDate: string,
   linkedSourceRowIndex: number
 ): FlightLeg {
+  const scheduledTime = sourceLeg.schedule ?? sourceLeg.scheduledTime;
   const metadata = buildOperationalFlightMetadata({
     scheduledDate: targetDate,
-    scheduledTime: sourceLeg.scheduledTime ?? sourceLeg.schedule,
+    scheduledTime,
     type: sourceLeg.type,
     airline: sourceLeg.airline,
     flightNumber: sourceLeg.flightNumber,
@@ -586,7 +616,10 @@ function transferredPairLeg(
     ...metadata,
     id: newId,
     linkId: sharedLinkId,
+    schedule: metadata.scheduledTime,
+    scheduledTime: metadata.scheduledTime,
     date: metadata.scheduledDate,
+    scheduledDate: metadata.scheduledDate,
     dayOfWeek: new Date(`${metadata.scheduledDate}T00:00:00Z`).getUTCDay(),
     action: 'added',
     turnaroundId: sharedLinkId,
@@ -694,6 +727,7 @@ export function buildOvernightCompanionMap(
         aircraft: linked.aircraft,
         type: 'D',
         linkId: leg.linkId,
+        date: linked.date,
       });
     } else {
       companionMap.set(key, {
@@ -703,9 +737,11 @@ export function buildOvernightCompanionMap(
         aircraft: linked.aircraft,
         type: 'A',
         linkId: leg.linkId,
+        date: linked.date,
       });
     }
   }
 
   return companionMap;
 }
+

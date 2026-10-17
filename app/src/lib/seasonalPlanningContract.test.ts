@@ -128,6 +128,34 @@ test('seasonalDraftToFlightRecord maps database draft record into typed FlightRe
   assert.deepEqual(record.checkInCounterWindows, { '55': { start: '12:00', end: '14:00' } });
 });
 
+test('seasonalDraftToFlightRecord correctly handles draft records with both snake_case and camelCase fields', () => {
+  const dualDraft: SeasonalDraftRecord = {
+    draft_id: 'DRF_DUAL_1',
+    link_id: 'TRN_DUAL_1',
+    category: 'J',
+    season_id: 'W26',
+    flight_number: 'VJ123',
+    airline: 'VJ',
+    type: 'A',
+    date: '2026-11-05',
+    scheduled_date: '2026-11-05',
+    schedule: '08:00',
+    route: 'HAN',
+    aircraft: 'A321',
+    pax: 220,
+    counters: [],
+    checkin_windows: [],
+  };
+
+  const record = seasonalDraftToFlightRecord(dualDraft);
+  assert.equal(record.id, 'DRF_DUAL_1');
+  assert.equal(record.airline, 'VJ');
+  assert.equal(record.flightNumber, 'VJ123');
+  assert.equal(record.pax, 220);
+  assert.equal(record.type, 'A');
+  assert.equal(record.sourceSide, 'ARR');
+});
+
 test('flightRecordToSeasonalDraftChange generates new record change payload with null expected', () => {
   const change = flightRecordToSeasonalDraftChange(SAMPLE_FLIGHT_RECORD, null);
   assert.ok(change);

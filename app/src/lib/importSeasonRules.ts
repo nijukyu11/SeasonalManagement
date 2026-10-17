@@ -21,7 +21,7 @@ export function normalizeSeasonSheetName(sheetName: string | undefined): string 
   const seasonCode = (sheetName ?? '').trim();
   if (!SEASON_CODE_PATTERN.test(seasonCode)) {
     throw new Error(
-      'Invalid season code in first worksheet name. Rename the first worksheet to a code such as S26, W26, or S27.'
+      'Mã lịch mùa trong tên trang tính (sheet) đầu tiên không hợp lệ. Vui lòng đổi tên trang tính đầu tiên thành mã chuẩn như S26, W26, hoặc S27.'
     );
   }
   return seasonCode;
@@ -63,17 +63,17 @@ export function getDirtyImportGuard(input: DirtyImportGuardInput): DirtyImportGu
   }
 
   const scope: ImportDirtyScope = input.targetSeasonId === input.activeSeasonId ? 'active' : 'target';
-  const seasonLabel = scope === 'active' ? 'current season' : `season ${input.targetSeasonCode}`;
+  const seasonLabel = scope === 'active' ? 'Lịch mùa hiện tại' : `Lịch mùa ${input.targetSeasonCode}`;
   const issues = [
-    pendingCount > 0 ? `${pendingCount} unsynced local change${pendingCount === 1 ? '' : 's'}` : null,
-    conflictCount > 0 ? `${conflictCount} conflict review item${conflictCount === 1 ? '' : 's'}` : null,
-  ].filter(Boolean).join(' and ');
+    pendingCount > 0 ? `${pendingCount} thay đổi cục bộ chưa đồng bộ` : null,
+    conflictCount > 0 ? `${conflictCount} mục xung đột cần xử lý` : null,
+  ].filter(Boolean).join(' và ');
 
   return {
     shouldBlock: true,
     scope,
     message:
-      `${seasonLabel} has ${issues}. ` +
-      'Re-import replaces the season baseline and cannot safely merge those edits or review items.',
+      `${seasonLabel} đang có ${issues}. ` +
+      'Việc nhập lại sẽ thay thế dữ liệu gốc của lịch mùa và không thể tự động hợp nhất các chỉnh sửa hoặc mục xung đột này.',
   };
 }

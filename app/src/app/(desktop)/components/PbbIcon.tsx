@@ -14,7 +14,7 @@ export default function PbbIcon({ className = 'h-5 w-5' }: PbbIconProps) {
       strokeLinejoin="round"
       strokeWidth="1.8"
     >
-      <title>Passenger boarding bridge</title>
+      <title>Cầu hành khách</title>
       <path d="M3.5 6.5h5v11h-5z" />
       <path d="M8.5 10h6.5l3 3.2" />
       <path d="M8.5 14h6.5l3-3.2" />

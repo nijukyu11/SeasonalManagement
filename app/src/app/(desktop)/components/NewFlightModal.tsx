@@ -7,13 +7,14 @@ import {
   normalizeNewFlightDateSelection,
 } from '@/lib/detailedScheduleState';
 import type { NewFlightDateSelection } from '@/lib/detailedScheduleState';
+import { formatUiError } from '@/lib/uiDisplayText';
 
-const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const DAYS = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
 const CATEGORIES = [
-  { value: 'J', label: 'J — Scheduled' },
-  { value: 'C', label: 'C — Charter' },
-  { value: 'G', label: 'G — General Aviation' },
-  { value: 'F', label: 'F — Cargo' },
+  { value: 'J', label: 'J — Thường lệ' },
+  { value: 'C', label: 'C — Thuê chuyến' },
+  { value: 'G', label: 'G — Hàng không chung' },
+  { value: 'F', label: 'F — Hàng hóa' },
 ];
 
 type FlightType = 'arrival' | 'departure' | 'turnaround';
@@ -141,7 +142,7 @@ function NewFlightModalContent({
       setSubmitting(true);
       setSubmitError(null);
       void Promise.resolve().then(() => onSubmitDetailed(mods)).then(onClose).catch((error) => {
-        setSubmitError(error instanceof Error ? error.message : String(error));
+        setSubmitError(formatUiError(error));
       }).finally(() => {
         submittingRef.current = false;
         setSubmitting(false);
@@ -158,9 +159,9 @@ function NewFlightModalContent({
 
         {/* Header */}
         <div className="p-6 border-b border-surface-variant bg-surface-container-lowest">
-          <h2 className="font-h2 text-h2 text-on-surface">New Flight</h2>
+          <h2 className="font-h2 text-h2 text-on-surface">Thêm chuyến bay</h2>
           <p className="font-body-sm text-on-surface-variant mt-1">
-            {mode === 'seasonal' ? 'Create a recurring schedule pattern' : 'Add flights on specific dates'}
+            {mode === 'seasonal' ? 'Tạo lịch bay lặp lại theo tuần' : 'Thêm chuyến bay vào các ngày cụ thể'}
           </p>
         </div>
 
@@ -169,7 +170,7 @@ function NewFlightModalContent({
 
           {/* Flight Type */}
           <div>
-            <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">FLIGHT TYPE</h3>
+            <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">LOẠI CHUYẾN</h3>
             <div className="flex gap-3">
               {(['arrival', 'departure', 'turnaround'] as FlightType[]).map(t => (
                 <label key={t} className="flex items-center gap-2 text-sm cursor-pointer">
@@ -180,7 +181,7 @@ function NewFlightModalContent({
                     onChange={() => setFlightType(t)}
                     className="accent-primary"
                   />
-                  {t === 'arrival' ? 'Arrival' : t === 'departure' ? 'Departure' : 'Turnaround'}
+                  {t === 'arrival' ? 'Đến' : t === 'departure' ? 'Đi' : 'Cặp chuyến'}
                 </label>
               ))}
             </div>
@@ -188,18 +189,18 @@ function NewFlightModalContent({
 
           {/* Common Fields */}
           <div>
-            <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">GENERAL</h3>
+            <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">THÔNG TIN CHUNG</h3>
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="text-xs text-on-surface-variant mb-1 block">Airline</label>
+                <label className="text-xs text-on-surface-variant mb-1 block">Hãng bay</label>
                 <input type="text" placeholder="VJ" value={airline} onChange={e => setAirline(e.target.value)} maxLength={3} className="w-full bg-surface-container-low border border-outline-variant rounded p-2 text-sm font-data-tabular uppercase placeholder:opacity-40" />
               </div>
               <div>
-                <label className="text-xs text-on-surface-variant mb-1 block">Aircraft</label>
+                <label className="text-xs text-on-surface-variant mb-1 block">Tàu bay</label>
                 <input type="text" placeholder="321" value={aircraft} onChange={e => setAircraft(e.target.value)} className="w-full bg-surface-container-low border border-outline-variant rounded p-2 text-sm font-data-tabular placeholder:opacity-40" />
               </div>
               <div>
-                <label className="text-xs text-on-surface-variant mb-1 block">Category</label>
+                <label className="text-xs text-on-surface-variant mb-1 block">Loại chuyến</label>
                 <select value={category} onChange={e => setCategory(e.target.value)} className="w-full bg-surface-container-low border border-outline-variant rounded p-2 text-sm">
                   {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
@@ -212,24 +213,24 @@ function NewFlightModalContent({
             <div className="border border-blue-200 bg-blue-50/30 dark:bg-blue-900/10 rounded-lg p-4">
               <h3 className="font-label-caps text-label-caps text-blue-700 dark:text-blue-300 mb-2 flex items-center gap-2">
                 <span className="material-symbols-outlined text-[16px]">flight_land</span>
-                ARRIVAL
+                CHUYẾN ĐẾN
               </h3>
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="text-xs text-on-surface-variant mb-1 block">Flight No.</label>
+                  <label className="text-xs text-on-surface-variant mb-1 block">Số hiệu</label>
                   <input type="text" placeholder="511" value={arrFlightNum} onChange={e => setArrFlightNum(e.target.value)} className="w-full bg-surface border border-outline-variant rounded p-2 text-sm font-data-tabular placeholder:opacity-40" />
                 </div>
                 <div>
-                  <label className="text-xs text-on-surface-variant mb-1 block">Route (From)</label>
+                  <label className="text-xs text-on-surface-variant mb-1 block">Chặng (từ)</label>
                   <input type="text" placeholder="SGN" value={arrRoute} onChange={e => setArrRoute(e.target.value)} className="w-full bg-surface border border-outline-variant rounded p-2 text-sm font-data-tabular uppercase placeholder:opacity-40" />
                 </div>
                 <div>
-                  <label className="text-xs text-on-surface-variant mb-1 block">STA</label>
+                  <label className="text-xs text-on-surface-variant mb-1 block">Giờ đến</label>
                   <input type="time" value={arrTime} onChange={e => setArrTime(e.target.value)} className="w-full bg-surface border border-outline-variant rounded p-2 text-sm font-data-tabular" />
                 </div>
               </div>
               <div className="mt-2">
-                <label className="text-xs text-on-surface-variant mb-1 block">CodeShares</label>
+                <label className="text-xs text-on-surface-variant mb-1 block">Liên danh</label>
                 <input type="text" placeholder="VN123,KE321" value={arrCodeShares} onChange={e => setArrCodeShares(e.target.value)} className="w-full bg-surface border border-outline-variant rounded p-2 text-sm font-data-tabular placeholder:opacity-40" />
               </div>
             </div>
@@ -240,24 +241,24 @@ function NewFlightModalContent({
             <div className="border border-emerald-200 bg-emerald-50/30 dark:bg-emerald-900/10 rounded-lg p-4">
               <h3 className="font-label-caps text-label-caps text-emerald-700 dark:text-emerald-300 mb-2 flex items-center gap-2">
                 <span className="material-symbols-outlined text-[16px]">flight_takeoff</span>
-                DEPARTURE
+                CHUYẾN ĐI
               </h3>
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="text-xs text-on-surface-variant mb-1 block">Flight No.</label>
+                  <label className="text-xs text-on-surface-variant mb-1 block">Số hiệu</label>
                   <input type="text" placeholder="512" value={depFlightNum} onChange={e => setDepFlightNum(e.target.value)} className="w-full bg-surface border border-outline-variant rounded p-2 text-sm font-data-tabular placeholder:opacity-40" />
                 </div>
                 <div>
-                  <label className="text-xs text-on-surface-variant mb-1 block">Route (To)</label>
+                  <label className="text-xs text-on-surface-variant mb-1 block">Chặng (đến)</label>
                   <input type="text" placeholder="SGN" value={depRoute} onChange={e => setDepRoute(e.target.value)} className="w-full bg-surface border border-outline-variant rounded p-2 text-sm font-data-tabular uppercase placeholder:opacity-40" />
                 </div>
                 <div>
-                  <label className="text-xs text-on-surface-variant mb-1 block">STD</label>
+                  <label className="text-xs text-on-surface-variant mb-1 block">Giờ đi</label>
                   <input type="time" value={depTime} onChange={e => setDepTime(e.target.value)} className="w-full bg-surface border border-outline-variant rounded p-2 text-sm font-data-tabular" />
                 </div>
               </div>
               <div className="mt-2">
-                <label className="text-xs text-on-surface-variant mb-1 block">CodeShares</label>
+                <label className="text-xs text-on-surface-variant mb-1 block">Liên danh</label>
                 <input type="text" placeholder="VN456,KE654" value={depCodeShares} onChange={e => setDepCodeShares(e.target.value)} className="w-full bg-surface border border-outline-variant rounded p-2 text-sm font-data-tabular placeholder:opacity-40" />
               </div>
             </div>
@@ -266,18 +267,18 @@ function NewFlightModalContent({
           {/* Seasonal: Validity & Days */}
           {mode === 'seasonal' && (
             <div>
-              <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">VALIDITY PERIOD</h3>
+              <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">THỜI GIAN HIỆU LỰC</h3>
               <div className="flex gap-4 mb-4">
                 <div className="flex-1">
-                  <label className="text-xs text-on-surface-variant mb-1 block">Effective</label>
+                  <label className="text-xs text-on-surface-variant mb-1 block">Từ ngày</label>
                   <input type="date" value={effective} onChange={e => setEffective(e.target.value)} className="w-full bg-surface-container-low border border-outline-variant rounded p-2 text-sm" />
                 </div>
                 <div className="flex-1">
-                  <label className="text-xs text-on-surface-variant mb-1 block">Discontinue</label>
+                  <label className="text-xs text-on-surface-variant mb-1 block">Đến ngày</label>
                   <input type="date" value={discontinue} onChange={e => setDiscontinue(e.target.value)} className="w-full bg-surface-container-low border border-outline-variant rounded p-2 text-sm" />
                 </div>
               </div>
-              <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">OPERATING DAYS</h3>
+              <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">NGÀY KHAI THÁC</h3>
               <div className="flex gap-2 justify-between">
                 {DAYS.map((day, idx) => (
                   <label key={day} className="flex flex-col items-center gap-1 cursor-pointer">
@@ -301,7 +302,7 @@ function NewFlightModalContent({
           {/* Detailed: Date Selection */}
           {mode === 'detailed' && (
             <div>
-              <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">FLIGHT DATES</h3>
+              <h3 className="font-label-caps text-label-caps text-on-surface-variant mb-2">NGÀY BAY</h3>
               <input
                 type="text"
                 placeholder="2026-06-01, 2026-06-05, 2026-06-10"
@@ -310,7 +311,7 @@ function NewFlightModalContent({
                 className="w-full bg-surface-container-low border border-outline-variant rounded p-2 text-sm font-data-tabular placeholder:opacity-40"
               />
               <p className="text-xs text-on-surface-variant mt-1 opacity-70">
-                {normalizeNewFlightDateSelection(undefined, flightDates).length} selected date(s). Comma-separated dates in YYYY-MM-DD format.
+                Đã chọn {normalizeNewFlightDateSelection(undefined, flightDates).length} ngày. Nhập các ngày cách nhau bằng dấu phẩy, định dạng YYYY-MM-DD.
               </p>
             </div>
           )}
@@ -321,7 +322,7 @@ function NewFlightModalContent({
         {/* Footer */}
         <div className="p-4 border-t border-surface-variant bg-surface-container-low flex justify-between gap-3">
           <button onClick={onClose} disabled={submitting} className="px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-variant rounded transition-colors disabled:opacity-40">
-            Cancel
+            Hủy
           </button>
           <button
             onClick={handleSubmit}
@@ -329,7 +330,7 @@ function NewFlightModalContent({
             className="px-6 py-2 text-sm font-medium bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container rounded transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
           >
             <span className="material-symbols-outlined text-[18px]">add</span>
-            {submitting ? 'Saving…' : mode === 'seasonal' ? 'Create Schedule' : 'Add Flights'}
+            {submitting ? 'Đang lưu…' : mode === 'seasonal' ? 'Tạo lịch bay' : 'Thêm chuyến bay'}
           </button>
         </div>
 

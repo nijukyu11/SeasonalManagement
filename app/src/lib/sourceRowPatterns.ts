@@ -226,7 +226,7 @@ export function planGranularUnlink(
         addSet(arrivalOnly(selectedRow));
         addSet(departureOnly({ ...selectedRow, rowIndex: nextIndex++ }));
       }
-      preview.push(`Split ${row.airline}${row.arrFlight}/${row.airline}${row.depFlight}: ${selectedDates.length} date(s) unlinked`);
+      preview.push(`Tách ${row.airline}${row.arrFlight}/${row.airline}${row.depFlight}: hủy liên kết ${selectedDates.length} ngày`);
       continue;
     }
 
@@ -278,7 +278,7 @@ export function planGranularUnlink(
       nextIndex += partnerSelectedRows.length;
       for (const partnerSelectedRow of partnerSelectedRows) addSet(partnerSelectedRow);
 
-      preview.push(`Unlinked ${selectedDates.length} date(s) for linked source rows ${row.rowIndex}/${partner.rowIndex}`);
+      preview.push(`Hủy liên kết ${selectedDates.length} ngày cho các dòng nguồn liên kết ${row.rowIndex}/${partner.rowIndex}`);
     }
   }
 

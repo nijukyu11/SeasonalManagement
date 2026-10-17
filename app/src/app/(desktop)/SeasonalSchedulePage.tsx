@@ -5,14 +5,10 @@ import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { parseSeasonalSchedule, enrichRows } from '@/lib/parser';
 import {
-  cancelSeasonalImportV3,
-  commitSeasonalImportV3,
   findSeasonByCode,
   getSeasons,
-  getSeasonalImportV3Status,
   getSeasonalExportSnapshot,
   loadSeasonWorkspaceWindow,
-  stageSeasonalImportV3,
   type RemoteSeasonalExportSnapshot,
 } from '@/lib/remoteStore';
 import { validateFlightLegsForSeasonalExport } from '@/lib/exporter';
@@ -34,28 +30,22 @@ import {
 import { buildImportProgress, buildLoadProgress, type ImportProgress, type LoadProgress } from '@/lib/importProgress';
 import { buildSeasonDisplayLabel, getDirtyImportGuard } from '@/lib/importSeasonRules';
 import {
-  buildSeasonalImportCommittedRefreshFailure,
-} from '@/lib/seasonalImportRpcContract';
-import {
-  buildSeasonalImportStatusUnknownNotice,
-  checkSeasonalImportV3RecoveryStatusOnce,
-} from '@/lib/seasonalImportRecovery';
-import {
-  buildSeasonalImportV3RecoveryReceipt,
-  clearSeasonalImportV3RecoveryReceipt,
-  committedSeasonalImportV3FromRecoveryReceipt,
-  loadSeasonalImportV3RecoveryReceipt,
-  markSeasonalImportV3RecoveryCommitted,
-  persistSeasonalImportV3RecoveryReceipt,
-  type SeasonalImportV3RecoveryReceipt,
-} from '@/lib/seasonalImportReceipt';
-import {
-  prepareSeasonalImportV3Attempt,
-  type SeasonalImportV3Attempt,
-  type SeasonalImportV3CommittedResult,
-  type SeasonalImportV3StageResult,
-  type SeasonalImportV3Strategy,
-} from '@/lib/seasonalImportV3Contract';
+  buildSeasonalDraftImportRecoveryReceipt,
+  clearLegacySeasonalImportReceipts,
+  clearSeasonalDraftImportRecoveryReceipt,
+  draftImportResponseToPreview,
+  hasLegacySeasonalImportPendingReceipt,
+  loadSeasonalDraftImportRecoveryReceipt,
+  markSeasonalDraftImportRecoveryCommitted,
+  persistSeasonalDraftImportRecoveryReceipt,
+  prepareSeasonalDraftImportStageInput,
+  type SeasonalDraftImportCommittedResult,
+  type SeasonalDraftImportPreviewResult,
+  type SeasonalDraftImportRecoveryReceipt,
+  type SeasonalDraftImportResponse,
+  type SeasonalDraftImportStageInput,
+} from '@/lib/seasonalDraftImportContract';
+import { getCurrentOperatorAccess } from '@/lib/operatorUserManagement';
 import {
   canCommitSeasonalImportPreview,
   type SeasonalImportPreviewState,
@@ -65,11 +55,11 @@ import {
   createSeasonalFileActionController,
   getSeasonalFileActionBlock,
   reconcileSeasonalSelection,
+  type SeasonalFileActionBlock,
   type SeasonalFileActionInvalidation,
   type SeasonalFileActionOperation,
   type SeasonalMutationOperation,
 } from '@/lib/seasonalFileActionGuard';
-import { setSeasonalFileActionRuntimeState } from '@/lib/seasonalFileActionRuntimeState';
 import {
   getCachedSeasons,
   publishSeasonWorkspaceChanged,
@@ -109,6 +99,7 @@ import NewFlightModal from './components/NewFlightModal';
 import SeasonalImportPreviewDialog from './components/SeasonalImportPreviewDialog';
 import LoadingStatusPanel from './components/LoadingStatusPanel';
 import SeasonalPublishModal from './components/SeasonalPublishModal';
+import SeasonalVersionHistoryModal from './components/SeasonalVersionHistoryModal';
 import { isSeasonalPlanningV1Enabled, seasonalDraftToFlightRecord, type SeasonalDraftChangeInput, type SeasonalDraftRecord } from '@/lib/seasonalPlanningContract';
 import {
   applyModificationsToFlightRecords,
@@ -142,6 +133,7 @@ import { useSeasonWorkspaceRefresh } from './hooks/useSeasonWorkspaceRefresh';
 import {
   runNativeScheduleMutation,
 } from '@/lib/nativeSeasonRepository';
+import { formatUiError, formatUiFieldLabel, formatUiValue } from '@/lib/uiDisplayText';
 
 const PAGE_SIZE = 50;
 const DAY_LABELS = ['1', '2', '3', '4', '5', '6', '7'];
@@ -174,10 +166,10 @@ interface SeasonalScheduleDraftState {
 }
 
 function describeSeasonalExportFailure(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error ?? 'Unknown export error.');
-  if (/version|data version/i.test(message)) return `Version: ${message}`;
-  if (/snapshot|array|totalCount|truncated|season mismatch/i.test(message)) return `Snapshot: ${message}`;
-  return `Server: ${message}`;
+  const message = formatUiError(error, 'Lỗi xuất dữ liệu không xác định.');
+  if (/version|data version|phiên bản/i.test(message)) return `Phiên bản: ${message}`;
+  if (/snapshot|array|totalCount|truncated|season mismatch|bản lưu/i.test(message)) return `Bản lưu: ${message}`;
+  return `Máy chủ: ${message}`;
 }
 
 function countSeasonalDraftChanges(draft: SeasonalScheduleDraftState | null): number {
@@ -185,15 +177,46 @@ function countSeasonalDraftChanges(draft: SeasonalScheduleDraftState | null): nu
 }
 
 function getLoadErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === 'string' && error.trim()) return error;
-  if (error && typeof error === 'object') {
-    try {
-      const serialized = JSON.stringify(error);
-      if (serialized && serialized !== '{}') return serialized;
-    } catch {}
+  return formatUiError(error, 'Không thể tải dữ liệu lịch bay từ máy chủ.');
+}
+
+function formatSeasonalFileActionBlockMessage(block: SeasonalFileActionBlock): string {
+  switch (block.code) {
+    case 'busy':
+      return 'Một thao tác Lịch mùa khác đang được xử lý.';
+    case 'draft':
+      return 'Lưu hoặc hủy thay đổi bản nháp Lịch mùa trước khi thực hiện thao tác tệp.';
+    case 'stale-selection':
+      return 'Một số chuyến bay đã chọn không còn khả dụng. Vui lòng kiểm tra lại lựa chọn trước khi xuất.';
+    case 'no-selection':
+      return 'Vui lòng chọn ít nhất một chuyến bay trước khi xuất dữ liệu.';
+    default:
+      return formatUiError(block.message, 'Thao tác tệp Lịch mùa bị chặn.');
   }
-  return 'Could not load schedule data from the server.';
+}
+
+function formatImportStatusLabel(status: string | null | undefined): string {
+  if (!status) return 'không khả dụng';
+  const formatted = formatUiValue(status, 'status');
+  if (formatted !== status) return formatted;
+  switch (status.toLowerCase()) {
+    case 'validated':
+      return 'Đã xác thực';
+    case 'committed':
+      return 'Đã hoàn tất';
+    case 'terminal':
+      return 'Đã kết thúc';
+    case 'aborted':
+      return 'Đã hủy';
+    case 'expired':
+      return 'Đã hết hạn';
+    case 'staging':
+      return 'Đang chuẩn bị';
+    case 'refreshing':
+      return 'Đang làm mới';
+    default:
+      return status;
+  }
 }
 
 function buildPatternRowsFromRecords(
@@ -228,60 +251,6 @@ function noOpModificationForRecord(record: FlightRecord): FlightModification {
   };
 }
 
-interface SeasonalDraftImportResponse {
-  batchId: string;
-  requestId?: string;
-  seasonId?: string;
-  status?: string;
-  previewHash: string;
-  expiresAt?: string;
-  preview?: {
-    seasonId?: string;
-    seasonCode?: string;
-    valid?: boolean;
-    expectedDataVersion?: number;
-    counts?: Record<string, number>;
-    diagnostics?: unknown[];
-    warnings?: unknown[];
-  };
-  counts?: Record<string, number>;
-  diagnostics?: unknown[];
-  warnings?: unknown[];
-  result?: {
-    draftEpoch?: string;
-    draftRevision?: string | number;
-    counts?: Record<string, number>;
-  } | null;
-}
-
-function draftImportResponseToPreview(
-  response: SeasonalDraftImportResponse,
-  fallback: { requestId: string; seasonId: string; seasonCode: string; strategy: SeasonalImportV3Strategy; expectedDataVersion: number },
-): SeasonalImportV3StageResult {
-  const counts = response.counts || response.preview?.counts || {};
-  const diagnostics = (response.diagnostics || response.preview?.diagnostics || []) as SeasonalImportV3StageResult['diagnostics'];
-  const warnings = (response.warnings || response.preview?.warnings || []) as SeasonalImportV3StageResult['warnings'];
-  const status = (response.status as SeasonalImportV3StageResult['status']) || 'validated';
-  return {
-    batchId: response.batchId,
-    requestId: response.requestId || fallback.requestId,
-    seasonId: response.seasonId || response.preview?.seasonId || fallback.seasonId,
-    seasonCode: response.preview?.seasonCode || fallback.seasonCode,
-    strategy: fallback.strategy,
-    status,
-    valid: Boolean(response.preview?.valid ?? (status === 'validated')),
-    expectedDataVersion: response.preview?.expectedDataVersion ?? fallback.expectedDataVersion,
-    previewHash: response.previewHash,
-    counts: counts as unknown as SeasonalImportV3StageResult['counts'],
-    diagnosticCount: diagnostics.length,
-    diagnosticsTruncated: false,
-    diagnostics,
-    warningCount: warnings.length,
-    warningsTruncated: false,
-    warnings,
-    expiresAt: response.expiresAt || new Date(Date.now() + 7200000).toISOString(),
-  };
-}
 
 export default function HomePage() {
   const router = useRouter();
@@ -290,9 +259,12 @@ export default function HomePage() {
   const fetchServerDataRequestRef = useRef(0);
   const fileActionControllerRef = useRef(createSeasonalFileActionController());
   const latestActiveSeasonRef = useRef<Season | null>(null);
-  const pendingImportAttemptRef = useRef<SeasonalImportV3RecoveryReceipt | null>(null);
-  const pendingPreparedImportRef = useRef<SeasonalImportV3Attempt | null>(null);
-  const pendingCommittedImportRef = useRef<SeasonalImportV3CommittedResult | null>(null);
+  const pendingImportAttemptRef = useRef<SeasonalDraftImportRecoveryReceipt | null>(null);
+  const pendingCommittedImportRef = useRef<SeasonalDraftImportCommittedResult | null>(null);
+  const [canWriteSeasonal, setCanWriteSeasonal] = useState(false);
+  const [legacyPendingReceiptFound, setLegacyPendingReceiptFound] = useState(false);
+  const currentOperatorUserIdRef = useRef<string>('');
+  const restoreFileActionOpRef = useRef<SeasonalFileActionOperation | null>(null);
   const latestDraftStateRef = useRef<{
     value: SeasonalScheduleDraftState | null;
     revision: number;
@@ -319,12 +291,12 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
-    buildLoadProgress('Loading seasons...', 10, 'Preparing seasonal schedule')
+    buildLoadProgress('Đang tải danh sách mùa...', 10, 'Đang chuẩn bị lịch mùa')
   );
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<ImportProgress | null>(null);
-  const [pendingImportAttempt, setPendingImportAttemptState] = useState<SeasonalImportV3RecoveryReceipt | null>(null);
-  const [pendingCommittedImport, setPendingCommittedImportState] = useState<SeasonalImportV3CommittedResult | null>(null);
+  const [pendingImportAttempt, setPendingImportAttemptState] = useState<SeasonalDraftImportRecoveryReceipt | null>(null);
+  const [pendingCommittedImport, setPendingCommittedImportState] = useState<SeasonalDraftImportCommittedResult | null>(null);
   const [importPreviewState, setImportPreviewState] = useState<SeasonalImportPreviewState>({ kind: 'idle' });
   const [isExporting, setIsExporting] = useState(false);
   const [isNewFlightOpen, setIsNewFlightOpen] = useState(false);
@@ -338,32 +310,36 @@ export default function HomePage() {
   const [isUndoing, setIsUndoing] = useState(false);
   const [activeFileActionToken, setActiveFileActionToken] = useState<number | null>(null);
   const [activeMutationToken, setActiveMutationToken] = useState<number | null>(null);
-  const setPendingImportAttempt = useCallback((attempt: SeasonalImportV3RecoveryReceipt | null) => {
+  const setPendingImportAttempt = useCallback((attempt: SeasonalDraftImportRecoveryReceipt | null) => {
     pendingImportAttemptRef.current = attempt;
     setPendingImportAttemptState(attempt);
   }, []);
-  const setPendingCommittedImport = useCallback((result: SeasonalImportV3CommittedResult | null) => {
+  const setPendingCommittedImport = useCallback((result: SeasonalDraftImportCommittedResult | null) => {
     pendingCommittedImportRef.current = result;
     setPendingCommittedImportState(result);
   }, []);
   useEffect(() => {
     let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled) return;
-      const receipt = loadSeasonalImportV3RecoveryReceipt(sessionStorage);
-      if (!receipt) return;
-      setPendingImportAttempt(receipt);
-      if (receipt.status === 'committed') {
-        try {
-          const committed = committedSeasonalImportV3FromRecoveryReceipt(receipt);
-          setPendingCommittedImport(committed);
-          setImportPreviewState({ kind: 'committed-refresh-pending', result: committed });
-        } catch {
-          clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-          setPendingImportAttempt(null);
+    const operatorSessionEpoch = getOperatorSessionEpoch();
+    getCurrentOperatorAccess()
+      .then((access) => {
+        if (cancelled || !isOperatorSessionEpochCurrent(operatorSessionEpoch) || !access.userId) return;
+        currentOperatorUserIdRef.current = access.userId;
+        setCanWriteSeasonal(access.permissions.has('seasonal.write'));
+        setLegacyPendingReceiptFound(hasLegacySeasonalImportPendingReceipt(sessionStorage));
+        const receipt = loadSeasonalDraftImportRecoveryReceipt(sessionStorage, { ownerUserId: access.userId });
+        if (!receipt) return;
+        setPendingImportAttempt(receipt);
+        if (receipt.status === 'committed' && receipt.committedResult) {
+          setPendingCommittedImport(receipt.committedResult);
+          setImportPreviewState({ kind: 'committed-refresh-pending', result: receipt.committedResult });
         }
-      }
-    });
+      })
+      .catch((err) => {
+        if (!cancelled && isOperatorSessionEpochCurrent(operatorSessionEpoch)) {
+          console.warn('Failed to load operator permissions:', err);
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -387,7 +363,7 @@ export default function HomePage() {
   const [fetchingServerData, setFetchingServerData] = useState(false);
   const syncInProgress = syncStatus.status === 'syncing';
   const syncProgress = syncStatus.progress ?? (syncStatus.status === 'failed' ? syncStatus.message : null);
-  const fetchProgress = fetchingServerData ? 'Fetching server data' : syncStatus.message;
+  const fetchProgress = fetchingServerData ? 'Đang tải dữ liệu máy chủ' : syncStatus.message;
   const syncPendingCount = getSeasonSyncPendingCount(syncStatus, syncSummary.pendingCount);
   const syncLabel = getSeasonSyncLabel(syncStatus, syncSummary.pendingCount);
   const syncTone = getSeasonSyncTone(syncStatus, syncSummary.pendingCount);
@@ -395,15 +371,11 @@ export default function HomePage() {
   const hasDraftChanges = draftChangeCount > 0;
 
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [restoreFileActionToken, setRestoreFileActionToken] = useState<number | null>(null);
+  const [historyDraftTokens, setHistoryDraftTokens] = useState<{ revision: string | number; epoch: string | null }>({ revision: 0, epoch: null });
   const latestDraftRevisionRef = useRef<number | string>(0);
   const latestDraftEpochRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!activeSeason?.id) return;
-    setSeasonalFileActionRuntimeState(activeSeason.id, {
-      hasDraftChanges,
-      draftRevision: latestDraftStateRef.current.revision,
-    });
-  }, [activeSeason?.id, draftState, hasDraftChanges]);
 
 
   useEffect(() => {
@@ -466,9 +438,24 @@ export default function HomePage() {
     action: SeasonalFileActionOperation['action'],
     invalidation: SeasonalFileActionInvalidation,
   ) => {
+    let detail = '';
+    switch (invalidation.code) {
+      case 'season-changed':
+        detail = 'Mùa đang chọn đã thay đổi trong khi thao tác tệp đang diễn ra.';
+        break;
+      case 'draft-changed':
+        detail = 'Bản nháp Lịch mùa đã thay đổi trong khi thao tác tệp đang diễn ra.';
+        break;
+      case 'operation-replaced':
+        detail = 'Thao tác tệp Lịch mùa này không còn là phiên bản hiện tại.';
+        break;
+      default:
+        detail = formatUiError(invalidation.message, 'Thao tác tệp Lịch mùa bị gián đoạn.');
+        break;
+    }
     void showAlert({
-      title: action === 'import' ? 'Import Interrupted' : 'Cannot Export',
-      message: `${invalidation.message} Review the current season and try again.`,
+      title: action === 'import' ? 'Nhập tệp bị gián đoạn' : 'Không thể xuất dữ liệu',
+      message: `${detail} Vui lòng kiểm tra lại mùa hiện tại và thử lại.`,
       tone: 'warning',
     });
   }, [showAlert]);
@@ -574,158 +561,6 @@ export default function HomePage() {
     });
   }, []);
 
-  const applyTargetedCommittedImportRefresh = useCallback(async (
-    remoteImport: SeasonalImportV3CommittedResult,
-    operation: SeasonalFileActionOperation,
-    operatorSessionEpoch: number,
-  ): Promise<boolean> => {
-    const windowKey = buildSeasonalWindowKey({
-      dateFrom: debouncedFilters.dateFrom || null,
-      dateTo: debouncedFilters.dateTo || null,
-      flight: debouncedFilters.flight || null,
-      route: debouncedFilters.route || null,
-    });
-    const [refreshedSeasons, refreshedWindow] = await Promise.all([
-      getSeasons({ operatorSessionEpoch }),
-      revalidateSeasonWorkspaceAfterMutation({
-        seasonId: remoteImport.seasonId,
-        dateFrom: debouncedFilters.dateFrom || null,
-        dateTo: debouncedFilters.dateTo || null,
-        resourceType: 'schedule',
-        limit: 100000,
-      }, {
-        operatorSessionEpoch,
-        generationAlreadyAdvanced: false,
-        expectedSnapshot: {
-          dataVersion: remoteImport.dataVersion,
-          serverHighWater: remoteImport.serverHighWater,
-        },
-      }),
-    ]);
-    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return false;
-    if (!refreshedWindow) throw new Error('Server seasonal schedule window is unavailable after import.');
-    const refreshedSeason = refreshedSeasons.find((season) => season.id === remoteImport.seasonId);
-    if (!refreshedSeason) throw new Error(`Committed season ${remoteImport.seasonId} is missing from the authoritative season list.`);
-    if (refreshedSeason.dataVersion !== remoteImport.dataVersion) {
-      throw new Error(`Committed refresh dataVersion mismatch for season ${remoteImport.seasonId}.`);
-    }
-    const refreshedRecords = refreshedWindow.records;
-    const refreshedModifications = refreshedWindow.modifications;
-    const patternRows = buildPatternRowsFromRecords(refreshedRecords, refreshedModifications);
-    const affectedRecordIds = refreshedRecords.map((record) => record.id);
-    const applyInvalidation = validateSeasonalFileAction(operation);
-    if (applyInvalidation) {
-      showSeasonalFileActionInvalidation('import', applyInvalidation);
-      return false;
-    }
-
-    setCachedSeasons(refreshedSeasons);
-    setCachedSeasonData(remoteImport.seasonId, {
-      rows: patternRows,
-      records: refreshedRecords,
-      modifications: refreshedModifications,
-      seasonDataVersion: refreshedSeason.dataVersion,
-    });
-    useSeasonWorkspaceStore.getState().setSeasons(refreshedSeasons, operatorSessionEpoch);
-
-    const finalApplyInvalidation = validateSeasonalFileAction(operation);
-    if (finalApplyInvalidation) {
-      showSeasonalFileActionInvalidation('import', finalApplyInvalidation);
-      return false;
-    }
-    loadedWindowKeyRef.current = windowKey;
-    setSeasons(refreshedSeasons);
-    setActiveSeason(refreshedSeason);
-    sessionStorage.setItem('activeSeasonId', remoteImport.seasonId);
-    applySeasonData(patternRows, refreshedRecords, refreshedModifications);
-    setSelectedRecordIds(new Set());
-    setModHistory([]);
-    setDraftState(null);
-    setSyncSummary({
-      pendingCount: refreshedWindow.syncMeta?.pendingCount ?? 0,
-      lastLocalChangeAt: refreshedWindow.syncMeta?.lastLocalChangeAt ?? null,
-    });
-    setLoadError(null);
-    setLoading(false);
-    setPage(0);
-    setPendingCommittedImport(null);
-    setPendingImportAttempt(null);
-    pendingPreparedImportRef.current = null;
-    if (typeof window !== 'undefined') clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-    setImportPreviewState({ kind: 'idle' });
-    setUploadProgress(buildImportProgress(
-      'Import complete',
-      100,
-      `${remoteImport.counts.sourceRowCount} source rows, ${remoteImport.importedRecordCount} imported records`,
-    ));
-    void appendAuditLogEntry({
-      seasonId: remoteImport.seasonId,
-      seasonCode: remoteImport.seasonCode,
-      module: 'import',
-      category: 'import',
-      operation: `Imported season ${remoteImport.seasonCode}: ${remoteImport.importedRecordCount} imported records`,
-      targetFlightIds: affectedRecordIds,
-      targetFlightLabels: Array.from(new Set(
-        refreshedRecords.map((record) => `${record.airline}${record.flightNumber}`),
-      )).slice(0, 200),
-      deltas: [{
-        targetType: 'sync',
-        targetId: remoteImport.seasonId,
-        targetLabel: remoteImport.seasonCode,
-        field: 'importSummary',
-        before: null,
-        after: {
-          sourceRows: remoteImport.counts.sourceRowCount,
-          flightRecords: remoteImport.importedRecordCount,
-          totalEffectiveRecords: remoteImport.totalEffectiveRecordCount,
-          preservedOperationalRecords: remoteImport.counts.preservedOverlayCount,
-          removedImportedRecords: remoteImport.counts.removeImportedCount,
-          removedSeasonRecords: remoteImport.strategy === 'replace'
-            ? remoteImport.counts.removeImportedCount
-            : 0,
-          dataVersion: remoteImport.dataVersion,
-          fileName: refreshedSeason.fileName,
-          batchId: remoteImport.batchId,
-        },
-      }],
-      metadata: {
-        sourceRows: remoteImport.counts.sourceRowCount,
-        flightRecords: remoteImport.importedRecordCount,
-        totalEffectiveRecords: remoteImport.totalEffectiveRecordCount,
-        preservedOperationalRecords: remoteImport.counts.preservedOverlayCount,
-        removedImportedRecords: remoteImport.counts.removeImportedCount,
-        removedSeasonRecords: remoteImport.strategy === 'replace'
-          ? remoteImport.counts.removeImportedCount
-          : 0,
-        dataVersion: remoteImport.dataVersion,
-        serverHighWater: remoteImport.serverHighWater,
-        checksum: remoteImport.checksum,
-        batchId: remoteImport.batchId,
-      },
-    });
-    void showAlert({
-      title: 'Import Completed',
-      message:
-        `${remoteImport.counts.sourceRowCount} source rows generated ${remoteImport.importedRecordCount} imported records. ` +
-        `${remoteImport.counts.preservedOverlayCount} operational overlays preserved; ` +
-        `${remoteImport.counts.removeImportedCount} ${remoteImport.strategy === 'replace' ? 'prior season records' : 'prior imported records'} removed.`,
-      tone: 'success',
-    });
-    return true;
-  }, [
-    applySeasonData,
-    debouncedFilters.dateFrom,
-    debouncedFilters.dateTo,
-    debouncedFilters.flight,
-    debouncedFilters.route,
-    setActiveSeason,
-    setDraftState,
-    setPendingCommittedImport,
-    setPendingImportAttempt,
-    showAlert,
-    showSeasonalFileActionInvalidation,
-    validateSeasonalFileAction,
-  ]);
 
   const loadSeasonRows = useCallback(async (
     season: Season,
@@ -748,7 +583,7 @@ export default function HomePage() {
       latestDraftStateRef.current.value === null
     );
     if (isSeasonalPlanningV1Enabled()) {
-      setLoadProgress(buildLoadProgress('Loading seasonal draft workspace', 25, season.seasonCode));
+      setLoadProgress(buildLoadProgress('Đang tải không gian làm việc bản nháp', 25, season.seasonCode));
       try {
         const draftData = await loadFullSeasonalDraftRecords(season.id, getSeasonalDraftWindowV1);
         if (!requestIsCurrent()) return;
@@ -759,7 +594,7 @@ export default function HomePage() {
         const records = draftData.records;
         const mods = new Map<string, FlightModification>();
         const rows = buildPatternRowsFromRecords(records, mods);
-        setLoadProgress(buildLoadProgress('Rendering seasonal schedule', 80, `${records.length} records`));
+        setLoadProgress(buildLoadProgress('Đang kết xuất lịch mùa', 80, `${records.length} chuyến bay`));
         setCachedSeasonData(season.id, {
           rows,
           records,
@@ -820,7 +655,7 @@ export default function HomePage() {
       });
       return;
     }
-    setLoadProgress(buildLoadProgress('Loading server workspace', 25, season.seasonCode));
+    setLoadProgress(buildLoadProgress('Đang tải không gian làm việc từ máy chủ', 25, season.seasonCode));
     const serverWindow = await loadSeasonWorkspaceWindow({
       seasonId: season.id,
       dateFrom: debouncedFilters.dateFrom || null,
@@ -834,7 +669,7 @@ export default function HomePage() {
       const records = serverWindow.records;
       const mods = serverWindow.modifications;
       const rows = buildPatternRowsFromRecords(records, mods);
-      setLoadProgress(buildLoadProgress('Rendering seasonal schedule', 80, `${records.length} records`));
+      setLoadProgress(buildLoadProgress('Đang kết xuất lịch mùa', 80, `${records.length} chuyến bay`));
       setCachedSeasonData(season.id, {
         rows,
         records,
@@ -927,7 +762,7 @@ export default function HomePage() {
     (async () => {
       try {
         setLoadError(null);
-        setLoadProgress(buildLoadProgress('Loading seasons...', 10, 'Checking available schedules'));
+        setLoadProgress(buildLoadProgress('Đang tải danh sách mùa...', 10, 'Kiểm tra lịch bay hiện có'));
         const cachedList = getCachedSeasons();
         const list = cachedList ?? await getSeasons();
         if (!cachedList) setCachedSeasons(list);
@@ -968,7 +803,7 @@ export default function HomePage() {
     sessionStorage.setItem('activeSeasonId', seasonId);
     setLoading(true);
     setLoadError(null);
-    setLoadProgress(buildLoadProgress('Loading seasons...', 10, found.seasonCode));
+    setLoadProgress(buildLoadProgress('Đang tải danh sách mùa...', 10, found.seasonCode));
     try {
       await loadSeasonRows(found);
     } catch (err) {
@@ -1210,10 +1045,10 @@ export default function HomePage() {
     });
     if (initialBlock) {
       void showAlert({
-        title: initialBlock.code === 'no-selection' ? 'Select flights to export' : 'Cannot Export',
+        title: initialBlock.code === 'no-selection' ? 'Chọn chuyến bay để xuất' : 'Không thể xuất dữ liệu',
         message: initialBlock.code === 'no-selection'
-          ? 'Tick the flight rows you want to export. To export the full schedule, select all rows first.'
-          : initialBlock.message,
+          ? 'Tích chọn các dòng chuyến bay cần xuất. Để xuất toàn bộ lịch mùa, hãy chọn tất cả các dòng.'
+          : formatSeasonalFileActionBlockMessage(initialBlock),
         tone: initialBlock.code === 'no-selection' ? 'info' : 'warning',
       });
       return;
@@ -1221,8 +1056,8 @@ export default function HomePage() {
     const operation = beginSeasonalFileAction('export');
     if (!operation) {
       void showAlert({
-        title: 'Cannot Export',
-        message: 'Another Seasonal operation is still running.',
+        title: 'Không thể xuất dữ liệu',
+        message: 'Một thao tác Lịch mùa khác đang được xử lý.',
         tone: 'warning',
       });
       return;
@@ -1284,10 +1119,29 @@ export default function HomePage() {
         const issueLeg = issue?.recordId
           ? effectiveSnapshotLegs.find((leg) => leg.id === issue.recordId)
           : null;
-        const flightLabel = issueLeg ? `${issueLeg.flightNumber} on ${issueLeg.date}: ` : '';
+        const flightLabel = issueLeg ? `${issueLeg.flightNumber} vào ngày ${issueLeg.date}: ` : '';
+        const issueLabel = issue?.code ? formatUiFieldLabel(issue.code) : 'Lựa chọn xuất';
+        let detailMessage = '';
+        switch (issue?.code) {
+          case 'season-mismatch':
+            detailMessage = 'Mùa được chọn không khớp với mùa của bản lưu dữ liệu.';
+            break;
+          case 'version-mismatch':
+            detailMessage = 'Phiên bản dữ liệu được chọn không khớp với phiên bản máy chủ.';
+            break;
+          case 'zero-selection':
+            detailMessage = 'Không có chuyến bay hiệu lực nào trong lựa chọn để xuất.';
+            break;
+          case 'unknown-record-id':
+            detailMessage = `Chuyến bay ${issue.recordId ?? ''} không tồn tại trong bản lưu máy chủ.`;
+            break;
+          default:
+            detailMessage = formatUiError(issue?.message, 'Lựa chọn xuất không hợp lệ.');
+            break;
+        }
         void showAlert({
-          title: 'Cannot Export',
-          message: `${issue?.code ?? 'selection'}: ${flightLabel}${issue?.message ?? 'Invalid export selection.'}`,
+          title: 'Không thể xuất dữ liệu',
+          message: `${issueLabel}: ${flightLabel}${detailMessage}`,
           tone: 'error',
         });
         return;
@@ -1300,7 +1154,7 @@ export default function HomePage() {
         staleSelectionCount: selectedSnapshot.issues.filter((issue) => issue.code === 'unknown-record-id').length,
       });
       if (snapshotBlock) {
-        void showAlert({ title: 'Cannot Export', message: snapshotBlock.message, tone: 'warning' });
+        void showAlert({ title: 'Không thể xuất dữ liệu', message: formatSeasonalFileActionBlockMessage(snapshotBlock), tone: 'warning' });
         return;
       }
       const exportLegs = selectedSnapshot.legs;
@@ -1312,8 +1166,8 @@ export default function HomePage() {
       const violations = findDuplicateFlightNumberViolations(exportLegs);
       if (violations.length > 0) {
         void showAlert({
-          title: 'Cannot Export',
-          message: `Duplicate flight number ${violations[0].flightNumber} on ${violations[0].date}.`,
+          title: 'Không thể xuất dữ liệu',
+          message: `Trùng số hiệu chuyến bay ${violations[0].flightNumber} vào ngày ${violations[0].date}.`,
           tone: 'error',
         });
         return;
@@ -1322,23 +1176,47 @@ export default function HomePage() {
       if (!exportValidation.valid) {
         const issue = exportValidation.issues[0];
         const issueLeg = exportLegs.find((leg) => leg.id === issue.legId);
+        const flightLabel = issueLeg ? `${issueLeg.flightNumber} vào ngày ${issueLeg.date}: ` : '';
+        const issueLabel = formatUiFieldLabel(issue.code);
+        let detailMessage = '';
+        switch (issue.code) {
+          case 'date-metadata-mismatch':
+            detailMessage = 'Ngày bay không khớp với dữ liệu gốc của chuyến bay.';
+            break;
+          case 'invalid-linked-pair':
+            detailMessage = 'Cặp chuyến bay liên kết không hợp lệ hoặc thiếu thông tin đối ứng.';
+            break;
+          default:
+            detailMessage = formatUiError(issue.message, 'Dữ liệu chuyến bay không hợp lệ để xuất.');
+            break;
+        }
         void showAlert({
-          title: 'Cannot Export',
-          message: `${issue.code}: ${issueLeg ? `${issueLeg.flightNumber} on ${issueLeg.date}: ` : ''}${issue.message}`,
+          title: 'Không thể xuất dữ liệu',
+          message: `${issueLabel}: ${flightLabel}${detailMessage}`,
           tone: 'error',
         });
         return;
       }
       if (!canonicalExport.validation.valid) {
+        const issue = canonicalExport.validation.issues[0];
+        const issueLabel = issue?.code ? formatUiFieldLabel(issue.code) : 'Kiểm tra khứ hồi';
+        let detail = issue?.message ?? 'Xuất lịch mùa không bảo toàn định dạng hai chiều.';
+        if (issue?.code === 'missing-occurrence') {
+          detail = `Thiếu ${issue.count} lượt bay: ${issue.signature}`;
+        } else if (issue?.code === 'extra-occurrence') {
+          detail = `Dư ${issue.count} lượt bay: ${issue.signature}`;
+        } else if (issue?.message) {
+          detail = formatUiError(issue.message, 'Xuất lịch mùa không bảo toàn định dạng hai chiều.');
+        }
         void showAlert({
-          title: 'Cannot Export',
-          message: `round-trip: ${canonicalExport.validation.issues[0]?.message ?? 'Canonical seasonal export does not round-trip.'}`,
+          title: 'Không thể xuất dữ liệu',
+          message: `Khứ hồi (${issueLabel}): ${detail}`,
           tone: 'error',
         });
         return;
       }
       if (canonicalExport.rows.length === 0) {
-        void showAlert({ title: 'Cannot Export', message: 'zero-selection: Export would create a blank workbook.', tone: 'error' });
+        void showAlert({ title: 'Không thể xuất dữ liệu', message: 'Lựa chọn xuất: Dữ liệu xuất sẽ tạo tệp trống.', tone: 'error' });
         return;
       }
       const downloadInvalidation = validateSeasonalFileAction(operation);
@@ -1349,7 +1227,7 @@ export default function HomePage() {
       const result = await downloadCanonicalSeasonalExcel(canonicalExport.rows, exportSeason.seasonCode);
       notifyExportCompleted(result);
     } catch (err) {
-      void showAlert({ title: 'Cannot Export', message: describeSeasonalExportFailure(err), tone: 'error' });
+      void showAlert({ title: 'Không thể xuất dữ liệu', message: describeSeasonalExportFailure(err), tone: 'error' });
     } finally {
       setIsExporting(false);
       finishSeasonalFileAction(operation);
@@ -1455,7 +1333,7 @@ export default function HomePage() {
           {
             id: `LOCAL_UNDO_${undoTimestamp}`,
             timestamp: undoTimestamp,
-            description: `Undid ${targetEntry.description}`,
+            description: `Đã hoàn tác: ${targetEntry.description}`,
           },
           [],
           'seasonal'
@@ -1498,7 +1376,7 @@ export default function HomePage() {
       }));
       setIsUndoOpen(false);
     } catch (err) {
-      void showAlert({ title: 'Undo Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Hoàn tác thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       setIsUndoing(false);
       finishSeasonalMutation(mutation);
@@ -1752,7 +1630,7 @@ export default function HomePage() {
       } catch (err) {
         void showAlert({
           title: 'Chưa thể công bố',
-          message: `Lưu thay đổi nháp thất bại: ${(err as Error).message}. Vui lòng kiểm tra lại.`,
+          message: `Lưu thay đổi nháp thất bại: ${formatUiError(err)}. Vui lòng kiểm tra lại.`,
           tone: 'error',
         });
         return;
@@ -1760,6 +1638,71 @@ export default function HomePage() {
     }
     setIsPublishModalOpen(true);
   }, [commitDraftBeforeSave, draftSaveState.hasUnconfirmedChanges, draftSaveState.status, hasDraftChanges, showAlert, syncInProgress]);
+
+  const handleDraftRestored = useCallback(async () => {
+    if (!activeSeason) throw new Error('Season context unavailable during restore reload');
+    try {
+      const draftData = await loadFullSeasonalDraftRecords(activeSeason.id, getSeasonalDraftWindowV1);
+      latestDraftRevisionRef.current = draftData.revision;
+      latestDraftEpochRef.current = draftData.epoch;
+      setDraftSaveState(createInitialDraftSaveState(draftData.revision));
+      setHistoryDraftTokens({
+        revision: draftData.revision,
+        epoch: draftData.epoch,
+      });
+      const patternRows = buildPatternRowsFromRecords(draftData.records, new Map());
+      applySeasonData(patternRows, draftData.records, new Map());
+      setModifications(new Map());
+      setDraftState(null);
+      setModHistory([]);
+      publishSeasonalWorkspaceChange(activeSeason.id, Number(draftData.revision), [], {
+        seasonId: activeSeason.id,
+        localRevision: Number(draftData.revision),
+        pendingCount: 0,
+        lastLocalChangeAt: Date.now(),
+        baseServerVersion: activeSeason.dataVersion ?? 0,
+        syncStatus: 'synced',
+      });
+      void showAlert({
+        title: 'Khôi phục Thành công',
+        message: `Đã khôi phục thành công dữ liệu lịch bay mùa ${activeSeason.seasonCode || activeSeason.code} vào bản nháp. Dữ liệu đã sẵn sàng để kiểm tra hoặc công bố lại.`,
+        tone: 'success',
+      });
+    } catch (err: unknown) {
+      void showAlert({
+        title: 'Lỗi nạp lại bản nháp',
+        message: formatUiError(err),
+        tone: 'error',
+      });
+      throw err;
+    }
+  }, [activeSeason, applySeasonData, publishSeasonalWorkspaceChange, setDraftState, showAlert]);
+
+  const handleBeginRestore = useCallback(() => {
+    if (restoreFileActionOpRef.current && activeFileActionToken === restoreFileActionOpRef.current.token) {
+      setRestoreFileActionToken(restoreFileActionOpRef.current.token);
+      return true;
+    }
+    const block = getSeasonalFileActionBlock({
+      action: 'import',
+      hasDraftChanges: latestDraftStateRef.current.hasDraftChanges,
+      busy: isSeasonalFileActionBusyNow(),
+    });
+    if (block) return false;
+    const op = beginSeasonalFileAction('import');
+    if (!op) return false;
+    restoreFileActionOpRef.current = op;
+    setRestoreFileActionToken(op.token);
+    return true;
+  }, [activeFileActionToken, beginSeasonalFileAction, isSeasonalFileActionBusyNow]);
+
+  const handleFinishRestore = useCallback(() => {
+    if (restoreFileActionOpRef.current) {
+      finishSeasonalFileAction(restoreFileActionOpRef.current);
+      restoreFileActionOpRef.current = null;
+      setRestoreFileActionToken(null);
+    }
+  }, [finishSeasonalFileAction]);
 
   const handleDeleteGroup = useCallback(async (group: DisplayGroup) => {
     if (!activeSeason || syncInProgress) return;
@@ -1774,13 +1717,13 @@ export default function HomePage() {
       let targetIds = deletionTargets.selectedIds;
       if (deletionTargets.hasActiveCounterpart) {
         const choice = await showChoice({
-          title: 'Delete Linked Flight Pair',
-          message: `${flightLabel} is linked to ${deletionTargets.counterpartIds.length} active counterpart occurrence(s).\n\nChoose whether to delete the full turnaround pair or only the selected leg.`,
+          title: 'Xóa cặp chuyến bay liên kết',
+          message: `${flightLabel} đang liên kết với ${deletionTargets.counterpartIds.length} lượt bay đối ứng còn hiệu lực.\n\nChọn xóa toàn bộ cặp chuyến bay hay chỉ xóa chặng bay đã chọn.`,
           tone: 'warning',
           choices: [
-            { value: 'pair', label: `Delete Entire Flight Pair (${deletionTargets.pairIds.length})`, tone: 'warning' },
-            { value: 'selected', label: `Delete Selected Leg Only (${deletionTargets.selectedIds.length})` },
-            { value: 'cancel', label: 'Cancel' },
+            { value: 'pair', label: `Xóa toàn bộ cặp chuyến bay (${deletionTargets.pairIds.length})`, tone: 'warning' },
+            { value: 'selected', label: `Chỉ xóa chặng đã chọn (${deletionTargets.selectedIds.length})` },
+            { value: 'cancel', label: 'Hủy' },
           ],
         });
         if (choice === 'pair') targetIds = deletionTargets.pairIds;
@@ -1788,10 +1731,10 @@ export default function HomePage() {
         else return;
       } else {
         const shouldDelete = await showConfirm({
-          title: 'Delete Flight Group',
-          message: `Delete ${ids.length} flight occurrence(s) for ${flightLabel}?`,
+          title: 'Xóa nhóm chuyến bay',
+          message: `Xóa ${ids.length} lượt bay của ${flightLabel}?`,
           tone: 'warning',
-          confirmLabel: 'Delete',
+          confirmLabel: 'Xóa',
         });
         if (!shouldDelete) return;
       }
@@ -1803,7 +1746,7 @@ export default function HomePage() {
         const historyEntry: ModHistoryEntry = {
           id: `LOCAL_DEL_${historyTimestamp}`,
           timestamp: historyTimestamp,
-          description: `Deleted ${targetIds.length} flight occurrence(s) for ${flightLabel}`,
+          description: `Đã xóa ${targetIds.length} lượt bay của ${flightLabel}`,
           changes: [],
           recordChanges: deletedRecords.map((record) => ({
             recordId: record.id,
@@ -1903,7 +1846,7 @@ export default function HomePage() {
         return next;
       });
     } catch (err) {
-      void showAlert({ title: 'Delete Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Xóa thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       finishSeasonalMutation(mutation);
     }
@@ -1925,12 +1868,12 @@ export default function HomePage() {
 
       const flightLabel = `${group.airline}${group.arrFlightNumber || group.depFlightNumber}`;
       const counterpartCount = Math.max(0, result.updatedRecords.length - linkedIds.length);
-      const counterpartText = counterpartCount > 0 ? ` and ${counterpartCount} counterpart record(s)` : '';
+      const counterpartText = counterpartCount > 0 ? ` và ${counterpartCount} bản ghi đối ứng` : '';
       const shouldUnlink = await showConfirm({
-        title: 'Unlink Flight Group',
-        message: `Unlink ${linkedIds.length} linked occurrence(s) for ${flightLabel}${counterpartText}?\nThis applies to the full Seasonal row. Use Detailed Schedule for a narrower period.`,
+        title: 'Hủy liên kết nhóm chuyến bay',
+        message: `Hủy liên kết ${linkedIds.length} lượt bay của ${flightLabel}${counterpartText}?\nThao tác này áp dụng cho toàn bộ dòng Lịch mùa. Dùng Lịch chi tiết nếu chỉ muốn áp dụng cho khoảng thời gian hẹp hơn.`,
         tone: 'warning',
-        confirmLabel: 'Unlink',
+        confirmLabel: 'Hủy liên kết',
       });
       if (!shouldUnlink) return;
 
@@ -1938,7 +1881,7 @@ export default function HomePage() {
       const historyEntry = buildFlightRecordHistoryEntry({
         id: `LOCAL_RECORD_${historyTimestamp}`,
         timestamp: historyTimestamp,
-        description: `Unlinked ${result.updatedRecords.length} flight occurrence(s) for ${flightLabel}`,
+        description: `Đã hủy liên kết ${result.updatedRecords.length} lượt bay của ${flightLabel}`,
         beforeRecords: flightRecords,
         afterRecords: result.records,
       });
@@ -2026,7 +1969,7 @@ export default function HomePage() {
         return next;
       });
     } catch (err) {
-      void showAlert({ title: 'Unlink Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Hủy liên kết thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       finishSeasonalMutation(mutation);
     }
@@ -2044,7 +1987,7 @@ export default function HomePage() {
       const historyEntry = buildFlightRecordHistoryEntry({
         id: `LOCAL_RECORD_${historyTimestamp}`,
         timestamp: historyTimestamp,
-        description: `Linked ${result.updatedRecords.length} ${candidate.linkType} flight occurrence(s)`,
+        description: `Đã liên kết ${result.updatedRecords.length} lượt bay ${candidate.linkType === 'overnight' ? 'qua đêm' : 'trong ngày'}`,
         beforeRecords: flightRecords,
         afterRecords: result.records,
       });
@@ -2128,7 +2071,7 @@ export default function HomePage() {
       }));
       setLinkModalGroupKey(null);
     } catch (err) {
-      void showAlert({ title: 'Link Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Liên kết thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       setLinkingCandidateKey(null);
       finishSeasonalMutation(mutation);
@@ -2140,12 +2083,12 @@ export default function HomePage() {
     try {
       const result = await syncNow();
       void showAlert({
-        title: result.status === 'synced' ? 'Save Complete' : 'Save Failed',
-        message: result.message ?? 'No pending local changes to save.',
+        title: result.status === 'synced' ? 'Lưu hoàn tất' : 'Lưu thất bại',
+        message: result.message ?? 'Không có thay đổi cục bộ nào cần lưu.',
         tone: result.status === 'synced' ? 'success' : 'error',
       });
     } catch (err) {
-      void showAlert({ title: 'Save Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Lưu thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [activeSeason, showAlert, syncInProgress, syncNow]);
 
@@ -2167,7 +2110,7 @@ export default function HomePage() {
         windowKey,
       });
     } catch (err) {
-      void showAlert({ title: 'Fetch data failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Tải dữ liệu thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       setFetchingServerData(false);
     }
@@ -2175,10 +2118,26 @@ export default function HomePage() {
 
   // Import handler
   const handleImportClick = useCallback(() => {
+    if (!isSeasonalPlanningV1Enabled()) {
+      void showAlert({
+        title: 'Nhập tệp không khả dụng',
+        message: 'Cần bật không gian Planning để nhập lịch mùa.',
+        tone: 'warning',
+      });
+      return;
+    }
+    if (!canWriteSeasonal) {
+      void showAlert({
+        title: 'Không có quyền thực hiện',
+        message: 'Bạn không có quyền biên tập lịch mùa (seasonal.write).',
+        tone: 'warning',
+      });
+      return;
+    }
     if (pendingImportAttemptRef.current || pendingCommittedImportRef.current) {
       void showAlert({
-        title: 'Import Recovery Pending',
-        message: 'Finish the pending Resume/Check or committed import Refresh before importing another file.',
+        title: 'Đang chờ xử lý khôi phục nhập tệp',
+        message: 'Hoàn tất bước Tiếp tục/Kiểm tra hoặc Tải lại sau khi nhập trước khi nhập tệp khác.',
         tone: 'warning',
       });
       return;
@@ -2189,11 +2148,85 @@ export default function HomePage() {
       busy: isSeasonalFileActionBusyNow(),
     });
     if (block) {
-      void showAlert({ title: 'Import Blocked', message: block.message, tone: 'warning' });
+      void showAlert({ title: 'Nhập tệp bị chặn', message: formatSeasonalFileActionBlockMessage(block), tone: 'warning' });
       return;
     }
     fileInputRef.current?.click();
-  }, [isSeasonalFileActionBusyNow, showAlert]);
+  }, [canWriteSeasonal, isSeasonalFileActionBusyNow, showAlert]);
+
+  const applyCommittedSeasonalDraftImport = useCallback(async (
+    response: SeasonalDraftImportResponse,
+    seasonId: string,
+    seasonCode: string,
+    fallbackSourceRowCount: number,
+  ) => {
+    setUploadProgress(buildImportProgress('Đang nạp lại bản nháp lịch bay', 85, seasonCode));
+    const operatorSessionEpoch = getOperatorSessionEpoch();
+    const refreshedSeasons = await getSeasons({ operatorSessionEpoch });
+    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+    let targetSeason = refreshedSeasons.find((s) => s.id === seasonId || s.code === seasonCode || s.seasonCode === seasonCode);
+    if (!targetSeason) {
+      targetSeason = (await findSeasonByCode(seasonCode, { operatorSessionEpoch })) ?? undefined;
+      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+    }
+    const resolvedSeasonId = targetSeason?.id || seasonId;
+
+    const draftData = await loadFullSeasonalDraftRecords(resolvedSeasonId, getSeasonalDraftWindowV1);
+    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+    latestDraftRevisionRef.current = draftData.revision;
+    latestDraftEpochRef.current = draftData.epoch;
+    setHistoryDraftTokens({ revision: draftData.revision, epoch: draftData.epoch });
+
+    const patternRows = buildPatternRowsFromRecords(draftData.records, new Map());
+    applySeasonData(patternRows, draftData.records, new Map());
+    setCachedSeasonData(resolvedSeasonId, {
+      rows: patternRows,
+      records: draftData.records,
+      modifications: new Map(),
+      seasonDataVersion: targetSeason?.dataVersion,
+    });
+    setCachedSeasons(refreshedSeasons);
+    useSeasonWorkspaceStore.getState().setSeasons(refreshedSeasons, operatorSessionEpoch);
+
+    if (targetSeason) {
+      setActiveSeason(targetSeason);
+      sessionStorage.setItem('activeSeasonId', targetSeason.id);
+    }
+
+    useSeasonWorkspaceStore.getState().replaceSeasonWindow({
+      seasonId: resolvedSeasonId,
+      season: targetSeason ?? activeSeason!,
+      rows: patternRows,
+      records: draftData.records,
+      modifications: new Map(),
+      syncMeta: {
+        seasonId: resolvedSeasonId,
+        localRevision: Number(draftData.revision) || 0,
+        pendingCount: 0,
+        lastLocalChangeAt: Date.now(),
+        baseServerVersion: targetSeason?.dataVersion ?? 0,
+        syncStatus: 'synced',
+      },
+      windowKey: currentSeasonalWindowKey,
+    });
+
+    setDraftState(null);
+    setSelectedRecordIds(new Set());
+    setModHistory([]);
+    setModifications(new Map());
+
+    // Clear receipt ONLY AFTER successful authoritative refresh!
+    clearSeasonalDraftImportRecoveryReceipt(sessionStorage);
+    setPendingImportAttempt(null);
+    setPendingCommittedImport(null);
+    setImportPreviewState({ kind: 'idle' });
+
+    const sourceRowCount = response.result?.counts?.sourceRowCount ?? fallbackSourceRowCount;
+    void showAlert({
+      title: 'Nhập kế hoạch thành công',
+      message: `Đã nạp thành công ${sourceRowCount} dòng vào bản nháp mùa ${seasonCode}. Dữ liệu đã sẵn sàng để kiểm tra và Công bố (Publish) sang Vận hành.`,
+    });
+  }, [activeSeason, applySeasonData, currentSeasonalWindowKey, setActiveSeason, setDraftState, setPendingCommittedImport, setPendingImportAttempt, showAlert]);
 
   const handlePendingCommittedRefresh = useCallback(async () => {
     const committedImport = pendingCommittedImportRef.current;
@@ -2204,87 +2237,54 @@ export default function HomePage() {
       busy: isSeasonalFileActionBusyNow(),
     });
     if (block) {
-      void showAlert({ title: 'Refresh Blocked', message: block.message, tone: 'warning' });
+      void showAlert({ title: 'Tải lại bị chặn', message: formatSeasonalFileActionBlockMessage(block), tone: 'warning' });
       return;
     }
     const operation = beginSeasonalFileAction('import');
     if (!operation) return;
-    const operatorSessionEpoch = getOperatorSessionEpoch();
     setUploading(true);
-    setUploadProgress(buildImportProgress('Refreshing committed import', 90, committedImport.seasonCode));
+    setUploadProgress(buildImportProgress('Đang làm mới dữ liệu đã nhập', 80, committedImport.seasonCode));
     try {
-      await applyTargetedCommittedImportRefresh(committedImport, operation, operatorSessionEpoch);
+      await applyCommittedSeasonalDraftImport(
+        {
+          contractVersion: 4,
+          batchId: committedImport.batchId,
+          requestId: committedImport.requestId,
+          seasonId: committedImport.seasonId,
+          status: 'committed',
+          previewHash: pendingImportAttemptRef.current?.previewHash ?? '',
+          result: {
+            status: 'committed',
+            batchId: committedImport.batchId,
+            seasonId: committedImport.seasonId,
+            draftEpoch: committedImport.draftEpoch,
+            draftRevision: committedImport.draftRevision,
+            counts: committedImport.counts,
+            serverHighWater: committedImport.serverHighWater,
+          },
+        },
+        committedImport.seasonId,
+        committedImport.seasonCode,
+        committedImport.counts.sourceRowCount,
+      );
     } catch (error) {
-      const failure = buildSeasonalImportCommittedRefreshFailure(committedImport, error);
-      void showAlert({ title: failure.title, message: failure.message, tone: 'warning' });
+      void showAlert({
+        title: 'Làm mới dữ liệu thất bại',
+        message: `Không thể hoàn tất làm mới bản nháp mùa ${committedImport.seasonCode}: ${getLoadErrorMessage(error)}. Biên nhận vẫn được giữ lại để bạn thử lại.`,
+        tone: 'warning',
+      });
     } finally {
       setUploading(false);
       setUploadProgress(null);
       finishSeasonalFileAction(operation);
     }
   }, [
-    applyTargetedCommittedImportRefresh,
+    applyCommittedSeasonalDraftImport,
     beginSeasonalFileAction,
     finishSeasonalFileAction,
     isSeasonalFileActionBusyNow,
     showAlert,
   ]);
-
-  const applyCommittedSeasonalDraftImport = useCallback(async (
-    response: SeasonalDraftImportResponse,
-    seasonId: string,
-    seasonCode: string,
-    fallbackSourceRowCount: number,
-  ) => {
-    if (response.result?.draftRevision !== undefined) {
-      latestDraftRevisionRef.current = response.result.draftRevision;
-    }
-    if (response.result?.draftEpoch !== undefined) {
-      latestDraftEpochRef.current = response.result.draftEpoch;
-    }
-
-    clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-    setPendingImportAttempt(null);
-    pendingPreparedImportRef.current = null;
-    setImportPreviewState({ kind: 'idle' });
-
-    setUploadProgress(buildImportProgress('Reloading draft schedule', 90, seasonCode));
-    const draftData = await loadFullSeasonalDraftRecords(seasonId, getSeasonalDraftWindowV1);
-    latestDraftRevisionRef.current = draftData.revision;
-    latestDraftEpochRef.current = draftData.epoch;
-    const patternRows = buildPatternRowsFromRecords(draftData.records, new Map());
-    applySeasonData(patternRows, draftData.records, new Map());
-    setCachedSeasonData(seasonId, {
-      rows: patternRows,
-      records: draftData.records,
-      modifications: new Map(),
-      seasonDataVersion: activeSeason?.dataVersion,
-    });
-    useSeasonWorkspaceStore.getState().replaceSeasonWindow({
-      seasonId,
-      season: activeSeason!,
-      rows: patternRows,
-      records: draftData.records,
-      modifications: new Map(),
-      syncMeta: {
-        seasonId,
-        localRevision: Number(draftData.revision) || 0,
-        pendingCount: 0,
-        lastLocalChangeAt: Date.now(),
-        baseServerVersion: activeSeason?.dataVersion ?? 0,
-        syncStatus: 'synced',
-      },
-      windowKey: currentSeasonalWindowKey,
-    });
-    setDraftState(null);
-
-    const sourceRowCount = response.result?.counts?.sourceRowCount ?? fallbackSourceRowCount;
-    void showAlert({
-      title: 'Import Kế Hoạch Thành Công',
-      message: `Đã nạp thành công ${sourceRowCount} dòng vào bản nháp mùa ${seasonCode}. Dữ liệu đã sẵn sàng để kiểm tra và Công bố (Publish) sang Vận hành.`,
-      tone: 'success',
-    });
-  }, [activeSeason, applySeasonData, currentSeasonalWindowKey, setDraftState, setPendingImportAttempt, showAlert]);
 
   const handleResumeImportAttempt = useCallback(async () => {
     const receipt = pendingImportAttemptRef.current;
@@ -2295,83 +2295,72 @@ export default function HomePage() {
       busy: isSeasonalFileActionBusyNow(),
     });
     if (block) {
-      void showAlert({ title: 'Resume Blocked', message: block.message, tone: 'warning' });
+      void showAlert({ title: 'Tiếp tục bị chặn', message: formatSeasonalFileActionBlockMessage(block), tone: 'warning' });
       return;
     }
     const operation = beginSeasonalFileAction('import');
     if (!operation) return;
     const operatorSessionEpoch = getOperatorSessionEpoch();
     setUploading(true);
-    setUploadProgress(buildImportProgress('Checking import status', 55, receipt.requestId));
+    setUploadProgress(buildImportProgress('Đang kiểm tra trạng thái nhập tệp', 50, receipt.requestId));
     try {
       const statusInvalidation = validateSeasonalFileAction(operation);
       if (statusInvalidation) {
         showSeasonalFileActionInvalidation('import', statusInvalidation);
         return;
       }
-      if (isSeasonalPlanningV1Enabled()) {
-        // Planning imports are contract-v4 batches; the V3 status RPC cannot see them.
-        const status = await getSeasonalDraftImportStatusV1(receipt.requestId, { operatorSessionEpoch }) as SeasonalDraftImportResponse;
-        if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-        if (status.status === 'committed') {
-          await applyCommittedSeasonalDraftImport(status, receipt.seasonId, receipt.seasonCode, 0);
-          return;
-        }
-        if (status.status === 'validated') {
-          const preview = draftImportResponseToPreview(status, receipt);
-          const nextReceipt = buildSeasonalImportV3RecoveryReceipt(preview);
-          persistSeasonalImportV3RecoveryReceipt(sessionStorage, nextReceipt);
-          setPendingImportAttempt(nextReceipt);
-          setImportPreviewState({ kind: 'preview', result: preview, confirmation: '' });
-          return;
-        }
-        await showAlert({
-          title: 'Seasonal import unavailable',
-          message: `Import batch is ${status.status ?? 'unavailable'}.`,
-          tone: 'warning',
-        });
-        clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-        setPendingImportAttempt(null);
-        pendingPreparedImportRef.current = null;
-        setImportPreviewState({ kind: 'idle' });
-        return;
-      }
-      const recovery = await checkSeasonalImportV3RecoveryStatusOnce(
-        receipt,
-        (requestId) => getSeasonalImportV3Status(requestId, { operatorSessionEpoch }),
-      );
+      const status = await getSeasonalDraftImportStatusV1(receipt.requestId, { operatorSessionEpoch });
       if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      if (recovery.kind === 'preview') {
-        const nextReceipt = buildSeasonalImportV3RecoveryReceipt(recovery.result);
-        persistSeasonalImportV3RecoveryReceipt(sessionStorage, nextReceipt);
+      if (status.status === 'committed') {
+        const committedResult: SeasonalDraftImportCommittedResult = {
+          batchId: status.batchId,
+          requestId: receipt.requestId,
+          seasonId: receipt.seasonId,
+          seasonCode: receipt.seasonCode,
+          draftRevision: status.result?.draftRevision ? String(status.result.draftRevision) : '0',
+          draftEpoch: status.result?.draftEpoch ?? receipt.expectedEpoch ?? '',
+          counts: status.result?.counts ?? receipt.counts,
+          serverHighWater: status.result?.serverHighWater,
+        };
+        const committedReceipt = markSeasonalDraftImportRecoveryCommitted(receipt, committedResult);
+        persistSeasonalDraftImportRecoveryReceipt(sessionStorage, committedReceipt);
+        setPendingImportAttempt(committedReceipt);
+        setPendingCommittedImport(committedResult);
+        setImportPreviewState({ kind: 'committed-refresh-pending', result: committedResult });
+        try {
+          await applyCommittedSeasonalDraftImport(status, receipt.seasonId, receipt.seasonCode, receipt.counts.sourceRowCount);
+        } catch (refreshErr) {
+          void showAlert({
+            title: 'Làm mới dữ liệu thất bại',
+            message: `Lô nhập đã hoàn tất trên máy chủ, nhưng không thể làm mới dữ liệu: ${getLoadErrorMessage(refreshErr)}. Bấm "Làm mới dữ liệu" để thử lại.`,
+            tone: 'warning',
+          });
+        }
+        return;
+      }
+      if (status.status === 'validated') {
+        const preview = draftImportResponseToPreview(status, receipt);
+        const nextReceipt = buildSeasonalDraftImportRecoveryReceipt(preview, currentOperatorUserIdRef.current);
+        persistSeasonalDraftImportRecoveryReceipt(sessionStorage, nextReceipt);
         setPendingImportAttempt(nextReceipt);
-        setImportPreviewState({ kind: 'preview', result: recovery.result, confirmation: '' });
+        setImportPreviewState({ kind: 'preview', result: preview, confirmation: '' });
         return;
       }
-      if (recovery.kind === 'terminal') {
-        await showAlert({
-          title: 'Seasonal import unavailable',
-          message: recovery.result.diagnostics[0]?.message
-            ?? `Import batch is ${recovery.result.status}.`,
-          tone: 'warning',
-        });
-        clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-        setPendingImportAttempt(null);
-        pendingPreparedImportRef.current = null;
-        setImportPreviewState({ kind: 'idle' });
-        return;
-      }
-      const committedReceipt = markSeasonalImportV3RecoveryCommitted(receipt, recovery.result);
-      persistSeasonalImportV3RecoveryReceipt(sessionStorage, committedReceipt);
-      setPendingImportAttempt(committedReceipt);
-      setPendingCommittedImport(recovery.result);
-      setImportPreviewState({ kind: 'committed-refresh-pending', result: recovery.result });
-      setUploadProgress(buildImportProgress('Refreshing schedule', 90, recovery.result.seasonCode));
-      await applyTargetedCommittedImportRefresh(recovery.result, operation, operatorSessionEpoch);
+      await showAlert({
+        title: 'Nhập lịch mùa không khả dụng',
+        message: `Lô nhập đang ở trạng thái ${formatImportStatusLabel(status.status)}.`,
+        tone: 'warning',
+      });
+      clearSeasonalDraftImportRecoveryReceipt(sessionStorage);
+      setPendingImportAttempt(null);
+      setImportPreviewState({ kind: 'idle' });
     } catch (error) {
       setPendingImportAttempt(receipt);
-      const notice = buildSeasonalImportStatusUnknownNotice(receipt, error);
-      void showAlert({ title: notice.title, message: notice.message, tone: 'warning' });
+      void showAlert({
+        title: 'Không thể kiểm tra trạng thái nhập',
+        message: `Yêu cầu ${receipt.requestId}: ${getLoadErrorMessage(error)}`,
+        tone: 'warning',
+      });
     } finally {
       setUploading(false);
       setUploadProgress(null);
@@ -2379,7 +2368,6 @@ export default function HomePage() {
     }
   }, [
     applyCommittedSeasonalDraftImport,
-    applyTargetedCommittedImportRefresh,
     beginSeasonalFileAction,
     finishSeasonalFileAction,
     isSeasonalFileActionBusyNow,
@@ -2391,7 +2379,7 @@ export default function HomePage() {
   ]);
 
   const stagePreparedSeasonalImport = useCallback(async (
-    attemptedImport: SeasonalImportV3Attempt,
+    attemptedImport: SeasonalDraftImportStageInput,
     operation: SeasonalFileActionOperation,
     operatorSessionEpoch: number,
   ) => {
@@ -2400,50 +2388,46 @@ export default function HomePage() {
       showSeasonalFileActionInvalidation('import', stageInvalidation);
       return;
     }
-    setImportPreviewState({ kind: 'staging', strategy: attemptedImport.strategy });
+    setImportPreviewState({ kind: 'staging' });
     setUploadProgress(buildImportProgress(
-      'Staging seasonal import',
+      'Đang chuẩn bị nhập toàn bộ lịch mùa',
       55,
-      `${attemptedImport.sourceRows.length} source rows`,
+      `${attemptedImport.sourceRows.length} dòng nguồn`,
     ));
-    let preview: SeasonalImportV3StageResult;
-    if (isSeasonalPlanningV1Enabled()) {
-      const stageRes = (await stageSeasonalDraftImportV1({
-        ...attemptedImport,
-        expectedRevision: String(latestDraftRevisionRef.current ?? '0'),
-        expectedEpoch: latestDraftEpochRef.current ?? null,
-      })) as SeasonalDraftImportResponse;
-      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      preview = draftImportResponseToPreview(stageRes, {
-        requestId: attemptedImport.requestId,
-        seasonId: attemptedImport.seasonId || activeSeason?.id || '',
-        seasonCode: attemptedImport.seasonCode || activeSeason?.code || '',
-        strategy: attemptedImport.strategy,
-        expectedDataVersion: activeSeason?.dataVersion ?? 0,
-      });
-    } else {
-      preview = await stageSeasonalImportV3(attemptedImport, { operatorSessionEpoch });
-      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-    }
-    const receipt = buildSeasonalImportV3RecoveryReceipt(preview);
-    persistSeasonalImportV3RecoveryReceipt(sessionStorage, receipt);
-    pendingPreparedImportRef.current = attemptedImport;
+    const stageRes = await stageSeasonalDraftImportV1(attemptedImport);
+    if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+    const preview = draftImportResponseToPreview(stageRes, attemptedImport);
+    const receipt = buildSeasonalDraftImportRecoveryReceipt(preview, currentOperatorUserIdRef.current);
+    persistSeasonalDraftImportRecoveryReceipt(sessionStorage, receipt);
     setPendingImportAttempt(receipt);
     setImportPreviewState({ kind: 'preview', result: preview, confirmation: '' });
   }, [
-    activeSeason?.code,
-    activeSeason?.dataVersion,
-    activeSeason?.id,
     setPendingImportAttempt,
     showSeasonalFileActionInvalidation,
     validateSeasonalFileAction,
   ]);
 
   const handleFile = useCallback(async (file: File) => {
+    if (!isSeasonalPlanningV1Enabled()) {
+      void showAlert({
+        title: 'Nhập tệp không khả dụng',
+        message: 'Cần bật không gian Planning để nhập lịch mùa.',
+        tone: 'warning',
+      });
+      return;
+    }
+    if (!canWriteSeasonal) {
+      void showAlert({
+        title: 'Không có quyền thực hiện',
+        message: 'Bạn không có quyền biên tập lịch mùa (seasonal.write).',
+        tone: 'warning',
+      });
+      return;
+    }
     if (pendingImportAttemptRef.current || pendingCommittedImportRef.current) {
       void showAlert({
-        title: 'Import Recovery Pending',
-        message: 'Finish the pending Resume/Check or committed import Refresh before importing another file.',
+        title: 'Đang chờ xử lý khôi phục nhập tệp',
+        message: 'Hoàn tất bước Tiếp tục/Kiểm tra hoặc Tải lại sau khi nhập trước khi nhập tệp khác.',
         tone: 'warning',
       });
       return;
@@ -2454,23 +2438,23 @@ export default function HomePage() {
       busy: isSeasonalFileActionBusyNow(),
     });
     if (block) {
-      void showAlert({ title: 'Import Blocked', message: block.message, tone: 'warning' });
+      void showAlert({ title: 'Nhập tệp bị chặn', message: formatSeasonalFileActionBlockMessage(block), tone: 'warning' });
       return;
     }
     const operation = beginSeasonalFileAction('import');
     if (!operation) {
       void showAlert({
-        title: 'Import Blocked',
-        message: 'Another Seasonal operation is still running.',
+        title: 'Nhập tệp bị chặn',
+        message: 'Một thao tác Lịch mùa khác đang được xử lý.',
         tone: 'warning',
       });
       return;
     }
     const operatorSessionEpoch = getOperatorSessionEpoch();
     setUploading(true);
-    let attemptedImport: SeasonalImportV3Attempt | null = null;
+    let attemptedImport: SeasonalDraftImportStageInput | null = null;
     try {
-      setUploadProgress(buildImportProgress('Parsing file', 5));
+      setUploadProgress(buildImportProgress('Đang đọc tệp', 5));
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: 'array' });
       const { seasonCode, rows: parsedRows, issues } = parseSeasonalSchedule(workbook);
@@ -2478,9 +2462,9 @@ export default function HomePage() {
       if (issues.length > 0) {
         const visibleIssues = issues.slice(0, 10).map((issue) => issue.message);
         const remainingCount = issues.length - visibleIssues.length;
-        const remainingMessage = remainingCount > 0 ? `\n...and ${remainingCount} more issue(s).` : '';
+        const remainingMessage = remainingCount > 0 ? `\n...và ${remainingCount} vấn đề khác.` : '';
         void showAlert({
-          title: 'Import Failed',
+          title: 'Nhập tệp thất bại',
           message: `${visibleIssues.join('\n')}${remainingMessage}`,
           tone: 'warning',
         });
@@ -2488,13 +2472,17 @@ export default function HomePage() {
       }
 
       if (parsedRows.length === 0) {
-        void showAlert({ title: 'Import Failed', message: 'File contains no valid data.', tone: 'warning' });
+        void showAlert({ title: 'Nhập tệp thất bại', message: 'Tệp không chứa dữ liệu hợp lệ.', tone: 'warning' });
         return;
       }
 
-      setUploadProgress(buildImportProgress('Checking local changes', 24));
+      setUploadProgress(buildImportProgress('Kiểm tra mùa mục tiêu', 20));
       const existing = await findSeasonByCode(seasonCode, { operatorSessionEpoch });
       if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+
+      let expectedEpoch: string | null = null;
+      let expectedRevision = '0';
+
       if (existing) {
         const targetPendingCount = existing.id === activeSeason?.id ? syncPendingCount : 0;
         const dirtyGuard = getDirtyImportGuard({
@@ -2507,30 +2495,43 @@ export default function HomePage() {
 
         if (dirtyGuard.shouldBlock) {
           void showAlert({
-            title: 'Import Blocked',
-            message: `${dirtyGuard.message}\n\nSave pending changes before importing this season.`,
+            title: 'Nhập tệp bị chặn',
+            message: `${dirtyGuard.message}\n\nLưu các thay đổi đang chờ trước khi nhập mùa này.`,
             tone: 'warning',
           });
           return;
         }
+
+        if (activeSeason?.id === existing.id) {
+          expectedEpoch = latestDraftEpochRef.current ?? null;
+          expectedRevision = String(latestDraftRevisionRef.current ?? '0');
+        } else {
+          const targetDraftWindow = await getSeasonalDraftWindowV1({ seasonId: existing.id });
+          if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
+          expectedEpoch = targetDraftWindow.epoch;
+          expectedRevision = String(targetDraftWindow.revision);
+        }
+      } else {
+        expectedEpoch = null;
+        expectedRevision = '0';
       }
 
-      setUploadProgress(buildImportProgress('Preparing source rows', 30, `${parsedRows.length} source rows`));
-      attemptedImport = await prepareSeasonalImportV3Attempt({
+      setUploadProgress(buildImportProgress('Đang chuẩn bị dữ liệu nguồn', 35, `${parsedRows.length} dòng nguồn`));
+      attemptedImport = await prepareSeasonalDraftImportStageInput({
         seasonId: existing?.id ?? null,
         seasonCode,
-        expectedDataVersion: existing ? existing.dataVersion ?? null : 0,
-        strategy: 'merge',
+        expectedEpoch,
+        expectedRevision,
         fileName: file.name,
         uploadedAt: Date.now(),
         sourceRows: parsedRows,
       });
+      if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
       await stagePreparedSeasonalImport(attemptedImport, operation, operatorSessionEpoch);
     } catch (err) {
       console.error('Upload error:', err);
-      pendingPreparedImportRef.current = null;
       setImportPreviewState({ kind: 'idle' });
-      void showAlert({ title: 'Import Failed', message: getLoadErrorMessage(err), tone: 'error' });
+      void showAlert({ title: 'Nhập tệp thất bại', message: getLoadErrorMessage(err), tone: 'error' });
     } finally {
       setUploading(false);
       setUploadProgress(null);
@@ -2539,57 +2540,12 @@ export default function HomePage() {
   }, [
     activeSeason,
     beginSeasonalFileAction,
+    canWriteSeasonal,
     finishSeasonalFileAction,
     isSeasonalFileActionBusyNow,
     stagePreparedSeasonalImport,
     showAlert,
     syncPendingCount,
-  ]);
-
-  const handleImportStrategyChange = useCallback(async (strategy: SeasonalImportV3Strategy) => {
-    if (importPreviewState.kind !== 'preview' || importPreviewState.result.strategy === strategy) return;
-    const prepared = pendingPreparedImportRef.current;
-    if (!prepared) {
-      void showAlert({
-        title: 'Restage required',
-        message: 'Choose the source file again to change the import strategy.',
-        tone: 'warning',
-      });
-      return;
-    }
-    const operation = beginSeasonalFileAction('import');
-    if (!operation) return;
-    const operatorSessionEpoch = getOperatorSessionEpoch();
-    setUploading(true);
-    try {
-      const nextAttempt = await prepareSeasonalImportV3Attempt({
-        seasonId: prepared.seasonId,
-        seasonCode: prepared.seasonCode,
-        expectedDataVersion: prepared.expectedDataVersion,
-        strategy,
-        fileName: prepared.fileName,
-        uploadedAt: prepared.uploadedAt,
-        sourceRows: prepared.sourceRows,
-      });
-      await stagePreparedSeasonalImport(nextAttempt, operation, operatorSessionEpoch);
-    } catch (error) {
-      setImportPreviewState({
-        kind: 'preview',
-        result: importPreviewState.result,
-        confirmation: '',
-      });
-      void showAlert({ title: 'Import Restage Failed', message: getLoadErrorMessage(error), tone: 'error' });
-    } finally {
-      setUploading(false);
-      setUploadProgress(null);
-      finishSeasonalFileAction(operation);
-    }
-  }, [
-    beginSeasonalFileAction,
-    finishSeasonalFileAction,
-    importPreviewState,
-    showAlert,
-    stagePreparedSeasonalImport,
   ]);
 
   const handleCancelImportPreview = useCallback(async () => {
@@ -2598,21 +2554,17 @@ export default function HomePage() {
     setUploading(true);
     try {
       if (preview.status === 'validated') {
-        if (isSeasonalPlanningV1Enabled()) {
-          await cancelSeasonalDraftImportV1(preview.batchId);
-        } else {
-          await cancelSeasonalImportV3(preview.batchId, {
-            operatorSessionEpoch: getOperatorSessionEpoch(),
-          });
-        }
+        await cancelSeasonalDraftImportV1(preview.batchId);
       }
-      clearSeasonalImportV3RecoveryReceipt(sessionStorage);
+      clearSeasonalDraftImportRecoveryReceipt(sessionStorage);
       setPendingImportAttempt(null);
-      pendingPreparedImportRef.current = null;
       setImportPreviewState({ kind: 'idle' });
     } catch (error) {
-      const notice = buildSeasonalImportStatusUnknownNotice(preview, error);
-      void showAlert({ title: notice.title, message: notice.message, tone: 'warning' });
+      void showAlert({
+        title: 'Hủy nhập tệp thất bại',
+        message: getLoadErrorMessage(error),
+        tone: 'warning',
+      });
     } finally {
       setUploading(false);
     }
@@ -2636,7 +2588,7 @@ export default function HomePage() {
       busy: isSeasonalFileActionBusyNow(),
     });
     if (block) {
-      void showAlert({ title: 'Import Blocked', message: block.message, tone: 'warning' });
+      void showAlert({ title: 'Nhập tệp bị chặn', message: formatSeasonalFileActionBlockMessage(block), tone: 'warning' });
       return;
     }
     const operation = beginSeasonalFileAction('import');
@@ -2644,97 +2596,59 @@ export default function HomePage() {
     const operatorSessionEpoch = getOperatorSessionEpoch();
     setUploading(true);
     setImportPreviewState({ kind: 'committing', result: preview });
-    setUploadProgress(buildImportProgress('Committing seasonal import', 75, preview.seasonCode));
-    if (isSeasonalPlanningV1Enabled()) {
-      setUploading(true);
-      setImportPreviewState({ kind: 'committing', result: preview });
-      setUploadProgress(buildImportProgress('Committing seasonal draft import', 75, preview.seasonCode));
-      try {
-        const commitRes = (await commitSeasonalDraftImportV1({
-          batchId: preview.batchId,
-          previewHash: preview.previewHash,
-        })) as SeasonalDraftImportResponse;
-        if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-        await applyCommittedSeasonalDraftImport(commitRes, preview.seasonId, preview.seasonCode, preview.counts.sourceRowCount);
-      } catch (error) {
-        const message = getLoadErrorMessage(error);
-        if (/stale|changed|expired/i.test(message)) {
-          clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-          setPendingImportAttempt(null);
-          pendingPreparedImportRef.current = null;
-          setImportPreviewState({ kind: 'idle' });
-          void showAlert({
-            title: 'Bản nháp đã thay đổi',
-            message: 'Bản nháp mùa đã thay đổi hoặc phiên bản hết hạn. Vui lòng thử nạp lại file.',
-            tone: 'warning',
-          });
-        } else {
-          setPendingImportAttempt(receipt);
-          setImportPreviewState({ kind: 'preview', result: preview, confirmation: '' });
-          void showAlert({
-            title: 'Lỗi nạp bản nháp',
-            message: message || 'Lỗi không xác định khi commit bản nháp mùa.',
-            tone: 'warning',
-          });
-        }
-      } finally {
-        setUploading(false);
-        setUploadProgress(null);
-        finishSeasonalFileAction(operation);
-      }
-      return;
-    }
-
+    setUploadProgress(buildImportProgress('Đang áp dụng toàn bộ lịch mùa vào bản nháp', 75, preview.seasonCode));
+    let committed = false;
+    let committedResult: SeasonalDraftImportCommittedResult | null = null;
     try {
-      const committed = await commitSeasonalImportV3({
+      const commitRes = await commitSeasonalDraftImportV1({
         batchId: preview.batchId,
-        expectedDataVersion: preview.expectedDataVersion,
         previewHash: preview.previewHash,
-      }, { operatorSessionEpoch });
+      });
       if (!isOperatorSessionEpochCurrent(operatorSessionEpoch)) return;
-      const committedReceipt = markSeasonalImportV3RecoveryCommitted(receipt, committed);
-      persistSeasonalImportV3RecoveryReceipt(sessionStorage, committedReceipt);
+
+      committedResult = {
+        batchId: preview.batchId,
+        requestId: receipt.requestId,
+        seasonId: preview.seasonId,
+        seasonCode: preview.seasonCode,
+        draftRevision: commitRes.result?.draftRevision ? String(commitRes.result.draftRevision) : String(preview.expectedRevision ?? '0'),
+        draftEpoch: commitRes.result?.draftEpoch ?? preview.expectedEpoch ?? '',
+        counts: commitRes.result?.counts ?? preview.counts,
+        serverHighWater: commitRes.result?.serverHighWater,
+      };
+      const committedReceipt = markSeasonalDraftImportRecoveryCommitted(receipt, committedResult);
       setPendingImportAttempt(committedReceipt);
-      setPendingCommittedImport(committed);
-      setImportPreviewState({ kind: 'committed-refresh-pending', result: committed });
-      setUploadProgress(buildImportProgress('Refreshing schedule', 90, committed.seasonCode));
-      try {
-        await applyTargetedCommittedImportRefresh(committed, operation, operatorSessionEpoch);
-      } catch (refreshError) {
-        const failure = buildSeasonalImportCommittedRefreshFailure(committed, refreshError);
-        void showAlert({ title: failure.title, message: failure.message, tone: 'warning' });
-      }
+      setPendingCommittedImport(committedResult);
+      setImportPreviewState({ kind: 'committed-refresh-pending', result: committedResult });
+      committed = true;
+      persistSeasonalDraftImportRecoveryReceipt(sessionStorage, committedReceipt);
+
+      await applyCommittedSeasonalDraftImport(commitRes, preview.seasonId, preview.seasonCode, preview.counts.sourceRowCount);
     } catch (error) {
       const message = getLoadErrorMessage(error);
-      if (/stale seasonal data version|changed after preview staging|created after preview staging|has expired/i.test(message)) {
-        clearSeasonalImportV3RecoveryReceipt(sessionStorage);
-        setPendingImportAttempt(null);
-        pendingPreparedImportRef.current = null;
-        setImportPreviewState({ kind: 'idle' });
-        try {
-          await revalidateSeasonWorkspaceAfterMutation({
-            seasonId: preview.seasonId,
-            dateFrom: debouncedFilters.dateFrom || null,
-            dateTo: debouncedFilters.dateTo || null,
-            resourceType: 'schedule',
-            limit: 100000,
-          }, {
-            operatorSessionEpoch,
-            generationAlreadyAdvanced: false,
-          });
-        } catch (refreshError) {
-          console.error('Seasonal import stale-preview revalidation failed:', refreshError);
-        }
+      if (committed && committedResult) {
         void showAlert({
-          title: 'Preview expired',
-          message: 'Preview expired because the season changed. Stage the file again.',
+          title: 'Làm mới dữ liệu thất bại',
+          message: `Lô nhập đã ghi nhận thành công vào bản nháp mùa ${preview.seasonCode}, nhưng không thể làm mới dữ liệu giao diện: ${message}. Vui lòng bấm "Làm mới dữ liệu" để thử lại.`,
+          tone: 'warning',
+        });
+      } else if (/stale|changed|expired/i.test(message)) {
+        clearSeasonalDraftImportRecoveryReceipt(sessionStorage);
+        setPendingImportAttempt(null);
+        setImportPreviewState({ kind: 'idle' });
+        void showAlert({
+          title: 'Bản nháp đã thay đổi',
+          message: 'Bản nháp mùa đã thay đổi hoặc phiên bản hết hạn. Vui lòng thử nạp lại file.',
           tone: 'warning',
         });
       } else {
         setPendingImportAttempt(receipt);
         setImportPreviewState({ kind: 'preview', result: preview, confirmation: '' });
-        const notice = buildSeasonalImportStatusUnknownNotice(receipt, error);
-        void showAlert({ title: notice.title, message: notice.message, tone: 'warning' });
+        void showAlert({
+          title: 'Lỗi nạp bản nháp',
+          message: message || 'Lỗi không xác định khi commit bản nháp mùa.',
+          tone: 'warning',
+        });
       }
     } finally {
       setUploading(false);
@@ -2743,10 +2657,7 @@ export default function HomePage() {
     }
   }, [
     applyCommittedSeasonalDraftImport,
-    applyTargetedCommittedImportRefresh,
     beginSeasonalFileAction,
-    debouncedFilters.dateFrom,
-    debouncedFilters.dateTo,
     finishSeasonalFileAction,
     importPreviewState,
     isSeasonalFileActionBusyNow,
@@ -2772,8 +2683,8 @@ export default function HomePage() {
     <div className="flex h-full min-w-0 flex-col bg-surface">
       <div className="flex min-h-0 flex-1 flex-col bg-surface">
         <WorkspacePageHeader
-          title="Seasonal Schedule"
-          subtitle={activeSeason ? buildSeasonDisplayLabel(activeSeason) : 'Manage and review master flight schedules for the upcoming season.'}
+          title="Lịch mùa"
+          subtitle={activeSeason ? buildSeasonDisplayLabel(activeSeason) : 'Quản lý và rà soát lịch bay tổng thể cho mùa sắp tới.'}
           seasonControl={seasons.length > 0 && (
             <div className="relative group">
               <div className="pointer-events-none absolute inset-y-0 left-3 flex items-center">
@@ -2875,14 +2786,14 @@ export default function HomePage() {
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-amber-900">
               <span className="material-symbols-outlined text-[18px]">edit_note</span>
               <span className="text-xs font-semibold">
-                {draftChangeCount} draft changes
+                {draftChangeCount} thay đổi nháp
               </span>
               <button
                 onClick={handleDiscardSeasonalDraft}
                 disabled={syncInProgress || seasonalFileActionActive}
                 className="rounded px-3 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
               >
-                Discard
+                Hủy bỏ
               </button>
             </div>
           )}
@@ -2894,27 +2805,27 @@ export default function HomePage() {
                   if (!fileActionControllerRef.current.isFileActionActive()) setIsNewFlightOpen(true);
                 }}
                 disabled={syncInProgress || hasDraftChanges || seasonalFileActionActive}
-                title="Create a new seasonal flight"
+                title="Tạo mới chuyến bay mùa"
               >
                 <span className="material-symbols-outlined text-[16px]">add</span>
-                New Flight
+                Thêm chuyến bay
               </button>
               <div className="relative">
                 <button
                   className="flex items-center gap-2 rounded-lg border border-outline-variant px-3 py-1.5 font-label-caps text-label-caps text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-40"
                   disabled={syncInProgress || hasDraftChanges || modHistory.length === 0 || isUndoing || seasonalFileActionActive}
                   onClick={() => setIsUndoOpen(!isUndoOpen)}
-                  title="Undo local changes"
+                  title="Hoàn tác thay đổi cục bộ"
                 >
                   <span className={`material-symbols-outlined text-[16px] ${isUndoing ? 'animate-spin' : ''}`}>{isUndoing ? 'sync' : 'undo'}</span>
-                  Undo{modHistory.length > 0 ? ` (${modHistory.length})` : ''}
+                  Hoàn tác{modHistory.length > 0 ? ` (${modHistory.length})` : ''}
                 </button>
                 {isUndoOpen && modHistory.length > 0 && (
                   <>
                     <div className="fixed inset-0 z-30" onClick={() => setIsUndoOpen(false)} />
                     <div className="absolute left-0 top-full z-40 mt-2 w-80 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-lg sm:left-auto sm:right-0">
                       <div className="border-b border-surface-variant bg-surface-container-low px-4 py-3">
-                        <h3 className="font-label-caps text-label-caps text-on-surface-variant">Change History</h3>
+                        <h3 className="font-label-caps text-label-caps text-on-surface-variant">Lịch sử thay đổi</h3>
                       </div>
                       <div className="max-h-64 overflow-y-auto">
                         {modHistory.map((entry, idx) => (
@@ -2922,7 +2833,7 @@ export default function HomePage() {
                             <div className="mr-3 min-w-0 flex-1">
                               <p className="truncate text-sm font-medium text-on-surface">{entry.description}</p>
                               <p className="text-xs text-on-surface-variant">
-                                {new Date(entry.timestamp).toLocaleString()} - {countHistoryEntryLegs(entry)} leg(s)
+                                {new Date(entry.timestamp).toLocaleString('vi-VN')} - {countHistoryEntryLegs(entry)} chặng
                               </p>
                             </div>
                             <button
@@ -2930,7 +2841,7 @@ export default function HomePage() {
                               disabled={isUndoing || seasonalFileActionActive}
                               className="flex-shrink-0 rounded-lg bg-error-container px-3 py-1.5 text-xs font-medium text-on-error-container transition-colors hover:bg-error/20 disabled:opacity-50"
                             >
-                              {idx === 0 ? 'Undo' : 'Revert'}
+                              {idx === 0 ? 'Hoàn tác' : 'Khôi phục'}
                             </button>
                           </div>
                         ))}
@@ -2950,6 +2861,22 @@ export default function HomePage() {
                   Công bố lịch bay
                 </button>
               )}
+              {isSeasonalPlanningV1Enabled() && (
+                <button
+                  className="flex items-center gap-1.5 rounded-lg border border-outline-variant bg-surface px-3 py-1.5 font-label-caps text-label-caps text-on-surface shadow-sm transition-colors hover:bg-surface-variant/30 disabled:cursor-not-allowed disabled:opacity-40"
+                  onClick={() => {
+                    setHistoryDraftTokens({
+                      revision: latestDraftRevisionRef.current,
+                      epoch: latestDraftEpochRef.current,
+                    });
+                    setIsHistoryModalOpen(true);
+                  }}
+                  title="Xem lịch sử các phiên bản đã công bố, so sánh và khôi phục"
+                >
+                  <span className="material-symbols-outlined text-[16px]">history</span>
+                  Lịch sử phiên bản
+                </button>
+              )}
             </div>
           )}
         />
@@ -2963,12 +2890,33 @@ export default function HomePage() {
 
         {/* Main Canvas */}
         <main className="min-h-0 flex-1 overflow-y-auto p-lg bg-surface">
+          {legacyPendingReceiptFound && !uploading && (
+            <div className="mb-4 flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold">Phát hiện biên nhận nhập từ phiên bản cũ không tương thích</div>
+                <div className="mt-1 text-xs text-amber-900">
+                  Hệ thống tìm thấy biên nhận nhập cũ (V3). Biên nhận này không thuộc luồng Kế hoạch (Planning) mới và không thể tự động khôi phục. Vui lòng bấm &ldquo;Xóa biên nhận cũ&rdquo; và thực hiện nạp tệp trực tiếp vào Planning.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  clearLegacySeasonalImportReceipts(sessionStorage);
+                  setLegacyPendingReceiptFound(false);
+                }}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-amber-900 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-800"
+              >
+                <span className="material-symbols-outlined text-[16px]">delete</span>
+                Xóa biên nhận cũ
+              </button>
+            </div>
+          )}
           {pendingImportAttempt && !uploading && importPreviewState.kind === 'idle' && (
             <div className="mb-4 flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
-                <div className="text-sm font-semibold">Import status unknown</div>
+                <div className="text-sm font-semibold">Chưa hoàn tất nhập bản nháp lịch mùa</div>
                 <div className="mt-1 break-all text-xs text-amber-900">
-                  Request {pendingImportAttempt.requestId} requires an explicit server check.
+                  Yêu cầu {pendingImportAttempt.requestId} (mùa {pendingImportAttempt.seasonCode} · {pendingImportAttempt.counts.sourceRowCount} dòng nguồn) cần kiểm tra trực tiếp từ máy chủ.
                 </div>
               </div>
               <button
@@ -2978,16 +2926,16 @@ export default function HomePage() {
                 className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-amber-900 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <span className="material-symbols-outlined text-[16px]">sync</span>
-                Resume/Check
+                Tiếp tục/Kiểm tra ({pendingImportAttempt.counts.sourceRowCount} dòng)
               </button>
             </div>
           )}
           {pendingCommittedImport && !uploading && (
             <div className="mb-4 flex flex-col gap-3 rounded-lg border border-sky-300 bg-sky-50 p-4 text-sky-950 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
-                <div className="text-sm font-semibold">Import committed, refresh pending</div>
+                <div className="text-sm font-semibold">Đã nhập bản nháp, đang chờ làm mới</div>
                 <div className="mt-1 text-xs text-sky-900">
-                  {pendingCommittedImport.seasonCode} was committed as batch {pendingCommittedImport.batchId}.
+                  Mùa {pendingCommittedImport.seasonCode} ({pendingCommittedImport.counts.sourceRowCount} dòng nguồn) đã được ghi nhận trong lô {pendingCommittedImport.batchId}.
                 </div>
               </div>
               <button
@@ -2997,7 +2945,7 @@ export default function HomePage() {
                 className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-sky-800 px-3 py-2 text-xs font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <span className="material-symbols-outlined text-[16px]">refresh</span>
-                Refresh
+                Làm mới dữ liệu ({pendingCommittedImport.counts.sourceRowCount} dòng)
               </button>
             </div>
           )}
@@ -3007,7 +2955,7 @@ export default function HomePage() {
                 <span className="material-symbols-outlined animate-spin text-primary">sync</span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium text-primary truncate">{uploadProgress?.label ?? 'Importing'}</span>
+                    <span className="text-sm font-medium text-primary truncate">{uploadProgress?.label ?? 'Đang nhập tệp'}</span>
                     <span className="text-sm font-semibold tabular-nums text-primary">{uploadProgress?.percent ?? 0}%</span>
                   </div>
                   {uploadProgress?.detail && (
@@ -3035,22 +2983,22 @@ export default function HomePage() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-gutter mb-md" aria-label="Seasonal schedule KPI summary">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-gutter mb-md" aria-label="Tóm tắt chỉ số lịch mùa">
             <div className="bg-surface-container-lowest p-md rounded-xl border border-surface-variant shadow-sm flex flex-col justify-center">
-              <span className="font-label-caps text-label-caps text-on-surface-variant mb-1">Total Flight</span>
+              <span className="font-label-caps text-label-caps text-on-surface-variant mb-1">Tổng số chuyến bay</span>
               <div className="flex items-baseline gap-2">
                 <span className="font-h2 text-h2 text-on-surface">{flightStats.total.toLocaleString()}</span>
                 <span className="text-sm text-on-surface-variant">
-                  (ARR: {flightStats.arr.toLocaleString()} / DEP: {flightStats.dep.toLocaleString()})
+                  (Đến: {flightStats.arr.toLocaleString()} / Đi: {flightStats.dep.toLocaleString()})
                 </span>
               </div>
             </div>
             <div className="bg-surface-container-lowest p-md rounded-xl border border-surface-variant shadow-sm flex flex-col justify-center">
-              <span className="font-label-caps text-label-caps text-on-surface-variant mb-1">Active Routes</span>
+              <span className="font-label-caps text-label-caps text-on-surface-variant mb-1">Đường bay đang bay</span>
               <span className="font-h2 text-h2 text-on-surface">{flightStats.uniqueRoutes.toLocaleString()}</span>
             </div>
             <div className="bg-surface-container-lowest p-md rounded-xl border border-surface-variant shadow-sm flex flex-col justify-center">
-              <span className="font-label-caps text-label-caps text-on-surface-variant mb-1">Season Validity</span>
+              <span className="font-label-caps text-label-caps text-on-surface-variant mb-1">Hiệu lực mùa</span>
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-outline text-[18px]">date_range</span>
                 <span className="font-body-sm text-body-sm text-on-surface">
@@ -3060,37 +3008,38 @@ export default function HomePage() {
             </div>
           </div>
 
-          <div className="mb-lg flex flex-col gap-3 rounded-xl border border-surface-variant bg-surface-container-lowest px-4 py-3 shadow-sm md:flex-row md:items-center md:justify-between" aria-label="Seasonal schedule table toolbar">
+          <div className="mb-lg flex flex-col gap-3 rounded-xl border border-surface-variant bg-surface-container-lowest px-4 py-3 shadow-sm md:flex-row md:items-center md:justify-between" aria-label="Thanh công cụ bảng lịch mùa">
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 className="flex items-center gap-1.5 bg-primary text-on-primary text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-40"
                 onClick={handleImportClick}
-                disabled={seasonalFileActionBusy || hasDraftChanges || seasonalImportRecoveryPending || (isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges))}
+                disabled={seasonalFileActionBusy || hasDraftChanges || seasonalImportRecoveryPending || !canWriteSeasonal || (isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges))}
+                title={!canWriteSeasonal ? 'Bạn không có quyền biên tập lịch mùa (seasonal.write)' : 'Nhập toàn bộ lịch mùa vào bản nháp'}
               >
                 <span className="material-symbols-outlined text-[16px]">cloud_upload</span>
-                Import
+                Nhập tệp
               </button>
               <button
                 className="flex items-center gap-1.5 border border-outline-variant text-on-surface text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-surface-container-low transition-colors"
                 onClick={() => setFilters({flight: '', type: '', route: '', aircraft: '', time: '', dateFrom: '', dateTo: ''})}
               >
                 <span className="material-symbols-outlined text-[16px]">filter_alt_off</span>
-                Clear Filters
+                Xóa bộ lọc
               </button>
               <button
                 className="flex items-center gap-1.5 bg-tertiary-container text-on-tertiary-container text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-tertiary-container/80 transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={handleExportUpdated}
                 disabled={(!exportAllSelected && (activeDisplayLegs.length === 0 || selectedRecordIds.size === 0)) || seasonalFileActionBusy || hasDraftChanges || (isSeasonalPlanningV1Enabled() && (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges))}
-                title={isExporting ? 'Exporting selected flights' : exportAllSelected ? 'Export all flights in season' : selectedRecordIds.size === 0 ? 'Select flights to export' : 'Export selected flights'}
+                title={isExporting ? 'Đang xuất các chuyến bay đã chọn' : exportAllSelected ? 'Xuất toàn bộ chuyến bay trong mùa' : selectedRecordIds.size === 0 ? 'Chọn chuyến bay để xuất' : 'Xuất các chuyến bay đã chọn'}
               >
                 <span className={`material-symbols-outlined text-[16px] ${isExporting ? 'animate-spin' : ''}`}>{isExporting ? 'sync' : 'download'}</span>
-                {isExporting ? 'Exporting...' : exportAllSelected ? 'Export All' : selectedRecordIds.size > 0 ? `Export (${selectedRecordIds.size})` : 'Export'}
+                {isExporting ? 'Đang xuất...' : exportAllSelected ? 'Xuất tất cả' : selectedRecordIds.size > 0 ? `Xuất (${selectedRecordIds.size})` : 'Xuất'}
               </button>
             </div>
             <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-on-surface-variant">
-              <span>{filteredGroups.length.toLocaleString()} groups after filters</span>
-              <span>{exportAllSelected ? 'All season flights selected' : `${selectedRecordIds.size.toLocaleString()} selected for export`}</span>
+              <span>{filteredGroups.length.toLocaleString()} nhóm sau khi lọc</span>
+              <span>{exportAllSelected ? 'Đã chọn toàn bộ chuyến bay trong mùa' : `Đã chọn ${selectedRecordIds.size.toLocaleString()} để xuất`}</span>
             </div>
           </div>
 
@@ -3099,7 +3048,7 @@ export default function HomePage() {
               <LoadingStatusPanel progress={loadProgress} className="min-h-[320px]" />
             ) : loadError ? (
               <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 p-8 text-center">
-                <div className="font-title-sm text-title-sm text-error">Cannot load schedule data</div>
+                <div className="font-title-sm text-title-sm text-error">Không thể tải dữ liệu lịch bay</div>
                 <div className="max-w-xl font-body-sm text-body-sm text-on-surface-variant">{loadError}</div>
                 {activeSeason && (
                   <div className="flex flex-wrap items-center justify-center gap-2">
@@ -3116,14 +3065,14 @@ export default function HomePage() {
                       className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 font-label-md text-label-md text-on-primary shadow-sm hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <span className="material-symbols-outlined text-[18px]">refresh</span>
-                      Retry
+                      Thử lại
                     </button>
                   </div>
                 )}
               </div>
             ) : activeDisplayLegs.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-3 p-8 text-center text-on-surface-variant">
-                <div>{hasActiveFilters ? 'No flights match the current filters.' : 'No data available. Please import a seasonal schedule file.'}</div>
+                <div>{hasActiveFilters ? 'Không có chuyến bay nào khớp với bộ lọc hiện tại.' : 'Chưa có dữ liệu. Vui lòng nhập tệp lịch bay mùa.'}</div>
                 {hasActiveFilters ? (
                   <button
                     type="button"
@@ -3131,7 +3080,7 @@ export default function HomePage() {
                     onClick={() => setFilters({flight: '', type: '', route: '', aircraft: '', time: '', dateFrom: '', dateTo: ''})}
                   >
                     <span className="material-symbols-outlined text-[18px]">filter_alt_off</span>
-                    Clear Filters
+                    Xóa bộ lọc
                   </button>
                 ) : activeSeason && (
                   <FetchServerUpdatesButton
@@ -3158,17 +3107,17 @@ export default function HomePage() {
                               }}
                               onChange={toggleAllSeasonSelection}
                               disabled={!activeSeason}
-                              aria-label="Select all flights in season for export"
+                              aria-label="Chọn toàn bộ chuyến bay trong mùa để xuất"
                               className="h-4 w-4 rounded border-outline text-primary focus:ring-primary disabled:opacity-40"
                             />
-                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Export</span>
+                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Xuất</span>
                           </div>
                         </th>
                         <th className="py-3 px-4 align-top w-[15%]">
                           <div className="flex flex-col gap-2">
-                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Flight No</span>
+                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Số hiệu</span>
                             <input 
-                              placeholder="Filter..." 
+                              placeholder="Lọc..." 
                               value={filters.flight}
                               onChange={e => setFilters({...filters, flight: e.target.value})}
                               className="w-full bg-surface-container-highest border border-surface-variant rounded px-2 py-1 text-xs font-normal focus:outline-none focus:border-primary" 
@@ -3177,9 +3126,9 @@ export default function HomePage() {
                         </th>
                         <th className="py-3 px-4 align-top w-[10%]">
                           <div className="flex flex-col gap-2">
-                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Type</span>
+                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Loại</span>
                             <input 
-                              placeholder="ARR/DEP..." 
+                              placeholder="Đến/Đi..." 
                               value={filters.type}
                               onChange={e => setFilters({...filters, type: e.target.value})}
                               className="w-full bg-surface-container-highest border border-surface-variant rounded px-2 py-1 text-xs font-normal focus:outline-none focus:border-primary" 
@@ -3188,9 +3137,9 @@ export default function HomePage() {
                         </th>
                         <th className="py-3 px-4 align-top w-[15%]">
                           <div className="flex flex-col gap-2">
-                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Route</span>
+                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Đường bay</span>
                             <input 
-                              placeholder="Filter..." 
+                              placeholder="Lọc..." 
                               value={filters.route}
                               onChange={e => setFilters({...filters, route: e.target.value})}
                               className="w-full bg-surface-container-highest border border-surface-variant rounded px-2 py-1 text-xs font-normal focus:outline-none focus:border-primary" 
@@ -3199,9 +3148,9 @@ export default function HomePage() {
                         </th>
                         <th className="py-3 px-4 align-top w-[10%]">
                           <div className="flex flex-col gap-2">
-                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">A/C Type</span>
+                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Loại tàu bay</span>
                             <input 
-                              placeholder="Filter..." 
+                              placeholder="Lọc..." 
                               value={filters.aircraft}
                               onChange={e => setFilters({...filters, aircraft: e.target.value})}
                               className="w-full bg-surface-container-highest border border-surface-variant rounded px-2 py-1 text-xs font-normal focus:outline-none focus:border-primary" 
@@ -3210,9 +3159,9 @@ export default function HomePage() {
                         </th>
                         <th className="py-3 px-4 align-top w-[15%]">
                           <div className="flex flex-col gap-2">
-                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Time (STA/STD)</span>
+                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Giờ (STA/STD)</span>
                             <input 
-                              placeholder="Filter..." 
+                              placeholder="Lọc..." 
                               value={filters.time}
                               onChange={e => setFilters({...filters, time: e.target.value})}
                               className="w-full bg-surface-container-highest border border-surface-variant rounded px-2 py-1 text-xs font-normal focus:outline-none focus:border-primary" 
@@ -3221,20 +3170,20 @@ export default function HomePage() {
                         </th>
                         <th className="py-3 px-4 align-top w-[15%]">
                           <div className="flex flex-col gap-2 h-full justify-between">
-                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Op. Days</span>
+                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Ngày bay</span>
                             <div className="h-[26px]"></div> {/* spacer to align with inputs */}
                           </div>
                         </th>
                         <th className="py-3 px-4 align-top w-[20%]">
                           <div className="flex flex-col gap-2 h-full justify-between">
-                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Validity Period</span>
+                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Thời hạn hiệu lực</span>
                             <div className="flex items-center gap-1">
                               <input 
                                 type="date"
                                 value={filters.dateFrom}
                                 onChange={e => setFilters({...filters, dateFrom: e.target.value})}
                                 className="w-full bg-surface-container-highest border border-surface-variant rounded px-1 py-1 text-xs font-normal focus:outline-none focus:border-primary" 
-                                title="Start Date"
+                                title="Ngày bắt đầu"
                               />
                               <span className="text-outline-variant text-xs">-</span>
                               <input 
@@ -3242,14 +3191,14 @@ export default function HomePage() {
                                 value={filters.dateTo}
                                 onChange={e => setFilters({...filters, dateTo: e.target.value})}
                                 className="w-full bg-surface-container-highest border border-surface-variant rounded px-1 py-1 text-xs font-normal focus:outline-none focus:border-primary" 
-                                title="End Date"
+                                title="Ngày kết thúc"
                               />
                             </div>
                           </div>
                         </th>
-                        <th className="py-3 px-2 align-top w-[8%]" aria-label="Actions column">
+                        <th className="py-3 px-2 align-top w-[8%]" aria-label="Cột thao tác">
                           <div className="flex flex-col gap-2 h-full justify-between">
-                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Actions</span>
+                            <span className="font-label-caps text-label-caps text-on-surface-variant whitespace-nowrap">Thao tác</span>
                             <div className="h-[26px]"></div>
                           </div>
                         </th>
@@ -3280,7 +3229,7 @@ export default function HomePage() {
                                   toggleGroupSelection(group);
                                 }}
                                 onClick={(e) => e.stopPropagation()}
-                                aria-label={`Select ${combinedFlight ?? 'flight'} for export`}
+                                aria-label={`Chọn ${combinedFlight ?? 'chuyến bay'} để xuất`}
                                 className="h-4 w-4 rounded border-outline text-primary focus:ring-primary"
                               />
                             </td>
@@ -3301,10 +3250,10 @@ export default function HomePage() {
                             <td className="py-3 px-4 whitespace-nowrap">
                               <div className="flex gap-2">
                                 {hasArr && (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-primary-container text-on-primary-container">ARR</span>
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-primary-container text-on-primary-container">ĐẾN</span>
                                 )}
                                 {hasDep && (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-secondary-container text-on-secondary-container">DEP</span>
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-secondary-container text-on-secondary-container">ĐI</span>
                                 )}
                               </div>
                             </td>
@@ -3340,7 +3289,7 @@ export default function HomePage() {
                                 {linkAction.canLink && (
                                   <button
                                     className="inline-flex h-6 items-center gap-0.5 rounded px-1.5 text-[11px] font-semibold text-primary hover:bg-primary-container/40 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-                                    title="Show matching flight legs to link"
+                                    title="Hiện các chặng bay phù hợp để liên kết"
                                     disabled={seasonalFileActionActive}
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -3348,23 +3297,23 @@ export default function HomePage() {
                                     }}
                                   >
                                     <span className="material-symbols-outlined text-[14px]">link</span>
-                                    Link
+                                    Liên kết
                                   </button>
                                 )}
                                 {linkAction.canUnlink && (
                                   <button
                                     className="inline-flex h-6 items-center gap-0.5 rounded px-1.5 text-[11px] font-semibold text-tertiary hover:bg-tertiary-container/40 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-                                    title="Unlink this full Seasonal row"
+                                    title="Hủy liên kết toàn bộ dòng Lịch mùa này"
                                     disabled={seasonalFileActionActive}
                                     onClick={(e) => { e.stopPropagation(); handleUnlinkGroup(group); }}
                                   >
                                     <span className="material-symbols-outlined text-[14px]">link_off</span>
-                                    Unlink
+                                    Hủy liên kết
                                   </button>
                                 )}
                                 <button
                                   className="inline-flex h-6 w-6 items-center justify-center rounded text-outline hover:bg-error-container hover:text-error transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-                                  title="Delete flight group"
+                                  title="Xóa nhóm chuyến bay"
                                   disabled={seasonalFileActionActive}
                                   onClick={(e) => { e.stopPropagation(); handleDeleteGroup(group); }}
                                 >
@@ -3379,15 +3328,15 @@ export default function HomePage() {
                   </table>
                 </div>
                 <div className="bg-surface-container-low border-t border-surface-variant px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <span className="font-body-sm text-body-sm text-on-surface-variant">Showing {page * PAGE_SIZE + 1} to {Math.min((page + 1) * PAGE_SIZE, filteredGroups.length)} of {filteredGroups.length.toLocaleString()} groups</span>
+                  <span className="font-body-sm text-body-sm text-on-surface-variant">Hiển thị {page * PAGE_SIZE + 1} đến {Math.min((page + 1) * PAGE_SIZE, filteredGroups.length)} trong tổng số {filteredGroups.length.toLocaleString()} nhóm</span>
                   <div className="flex items-center gap-2">
-                    <span className="font-body-sm text-body-sm text-on-surface-variant">Page {page + 1} of {totalPages}</span>
+                    <span className="font-body-sm text-body-sm text-on-surface-variant">Trang {page + 1} / {totalPages}</span>
                     <div className="flex gap-1">
                       <button
                         className="p-1 rounded hover:bg-surface-variant text-outline disabled:cursor-not-allowed disabled:opacity-50"
                         disabled={page === 0}
                         onClick={() => setPage(0)}
-                        title="First page"
+                        title="Trang đầu"
                       >
                         <span className="material-symbols-outlined text-[20px]">first_page</span>
                       </button>
@@ -3395,7 +3344,7 @@ export default function HomePage() {
                         className="p-1 rounded hover:bg-surface-variant text-outline disabled:cursor-not-allowed disabled:opacity-50"
                         disabled={page === 0}
                         onClick={() => setPage(p => Math.max(0, p - 1))}
-                        title="Previous page"
+                        title="Trang trước"
                       >
                         <span className="material-symbols-outlined text-[20px]">chevron_left</span>
                       </button>
@@ -3403,7 +3352,7 @@ export default function HomePage() {
                         className="p-1 rounded hover:bg-surface-variant text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
                         disabled={page >= totalPages - 1}
                         onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-                        title="Next page"
+                        title="Trang sau"
                       >
                         <span className="material-symbols-outlined text-[20px]">chevron_right</span>
                       </button>
@@ -3411,7 +3360,7 @@ export default function HomePage() {
                         className="p-1 rounded hover:bg-surface-variant text-on-surface disabled:cursor-not-allowed disabled:opacity-50"
                         disabled={page >= totalPages - 1}
                         onClick={() => setPage(totalPages - 1)}
-                        title="Last page"
+                        title="Trang cuối"
                       >
                         <span className="material-symbols-outlined text-[20px]">last_page</span>
                       </button>
@@ -3428,7 +3377,7 @@ export default function HomePage() {
           <div className="w-full max-w-2xl overflow-hidden rounded-xl bg-surface shadow-xl border border-outline-variant" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-surface-variant px-5 py-4 bg-surface-container-low">
               <div>
-                <h2 className="font-h3 text-h3 text-on-surface">Matching flight legs</h2>
+                <h2 className="font-h3 text-h3 text-on-surface">Chặng bay phù hợp</h2>
                 <p className="font-body-sm text-body-sm text-on-surface-variant">
                   {linkModalGroup.airline}{linkModalGroup.arrFlightNumber ?? linkModalGroup.depFlightNumber}
                 </p>
@@ -3436,7 +3385,7 @@ export default function HomePage() {
               <button
                 className="p-1 rounded hover:bg-surface-variant text-outline hover:text-on-surface transition-colors"
                 onClick={() => setLinkModalGroupKey(null)}
-                aria-label="Close link candidates"
+                aria-label="Đóng danh sách liên kết"
               >
                 <span className="material-symbols-outlined text-[20px]">close</span>
               </button>
@@ -3444,7 +3393,7 @@ export default function HomePage() {
             <div className="max-h-[60vh] overflow-y-auto p-4">
               {seasonalLinkCandidates.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-outline-variant bg-surface-container-low px-4 py-8 text-center text-on-surface-variant">
-                  No matching unlinked counterpart found.
+                  Không tìm thấy chặng bay đối ứng chưa liên kết phù hợp.
                 </div>
               ) : (
                 <div className="flex flex-col gap-2">
@@ -3457,10 +3406,10 @@ export default function HomePage() {
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-bold text-primary">{candidate.flightNumber}</span>
                           <span className="rounded bg-surface-variant px-1.5 py-0.5 text-[11px] font-semibold uppercase text-on-surface-variant">
-                            {candidate.linkType}
+                            {candidate.linkType === 'overnight' ? 'Qua đêm' : 'Trong ngày'}
                           </span>
                           <span className="font-body-sm text-body-sm text-on-surface-variant">
-                            {candidate.matchCount} occurrence{candidate.matchCount === 1 ? '' : 's'}
+                            {candidate.matchCount} lượt bay
                           </span>
                         </div>
                         <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-body-sm text-body-sm text-on-surface-variant">
@@ -3475,7 +3424,7 @@ export default function HomePage() {
                         disabled={linkingCandidateKey !== null || seasonalFileActionActive}
                         onClick={() => handleApplySeasonalLinkCandidate(candidate)}
                       >
-                        {linkingCandidateKey === candidate.key ? 'Linking' : `Link ${candidate.matchCount}`}
+                        {linkingCandidateKey === candidate.key ? 'Đang liên kết' : `Liên kết ${candidate.matchCount}`}
                       </button>
                     </div>
                   ))}
@@ -3539,7 +3488,7 @@ export default function HomePage() {
               const historyEntry: ModHistoryEntry = {
                 id: `LOCAL_ADD_${historyTimestamp}`,
                 timestamp: historyTimestamp,
-                description: `Added flight ${candidateRecords[0]?.airline ?? savedRow.airline}${candidateRecords[0]?.flightNumber ?? (savedRow.arrFlight || savedRow.depFlight || '')}`,
+                description: `Đã thêm chuyến bay ${candidateRecords[0]?.airline ?? savedRow.airline}${candidateRecords[0]?.flightNumber ?? (savedRow.arrFlight || savedRow.depFlight || '')}`,
                 changes: [],
                 recordChanges: candidateRecords.map((record) => ({
                   recordId: record.id,
@@ -3578,7 +3527,7 @@ export default function HomePage() {
             setIsNewFlightOpen(false);
           } catch (err) {
             console.error(err);
-            void showAlert({ title: 'Add Flight Failed', message: (err as Error).message, tone: 'error' });
+            void showAlert({ title: 'Thêm chuyến bay thất bại', message: formatUiError(err), tone: 'error' });
           } finally {
             finishSeasonalMutation(mutation);
           }
@@ -3593,7 +3542,6 @@ export default function HomePage() {
         }
         hasDraftChanges={hasDraftChanges}
         busy={uploading || seasonalFileActionActive || seasonalMutationActive}
-        onStrategyChange={(strategy) => { void handleImportStrategyChange(strategy); }}
         onConfirmationChange={(confirmation) => {
           setImportPreviewState((current) => current.kind === 'preview'
             ? { ...current, confirmation }
@@ -3608,6 +3556,36 @@ export default function HomePage() {
           seasonId={activeSeason.id}
           seasonCode={activeSeason.seasonCode || activeSeason.code || ''}
           onClose={() => setIsPublishModalOpen(false)}
+        />
+      )}
+      {activeSeason && isSeasonalPlanningV1Enabled() && (
+        <SeasonalVersionHistoryModal
+          isOpen={isHistoryModalOpen}
+          seasonId={activeSeason.id}
+          seasonCode={activeSeason.seasonCode || activeSeason.code || ''}
+          onClose={() => setIsHistoryModalOpen(false)}
+          isRestricted={
+            syncInProgress ||
+            (seasonalFileActionActive && (!restoreFileActionToken || activeFileActionToken !== restoreFileActionToken)) ||
+            (draftSaveState.status === 'saving' || draftSaveState.hasUnconfirmedChanges) ||
+            modifications.size > 0
+          }
+          restrictedReason={
+            syncInProgress
+              ? 'Đang đồng bộ dữ liệu'
+              : seasonalFileActionActive && (!restoreFileActionToken || activeFileActionToken !== restoreFileActionToken)
+              ? 'Đang xử lý tệp lịch bay'
+              : draftSaveState.status === 'saving'
+              ? 'Đang lưu bản nháp'
+              : draftSaveState.hasUnconfirmedChanges || modifications.size > 0
+              ? 'Có thay đổi chưa lưu trong bản nháp'
+              : undefined
+          }
+          currentDraftRevision={historyDraftTokens.revision}
+          currentDraftEpoch={historyDraftTokens.epoch}
+          onBeginRestore={handleBeginRestore}
+          onFinishRestore={handleFinishRestore}
+          onDraftRestored={handleDraftRestored}
         />
       )}
 

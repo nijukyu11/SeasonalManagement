@@ -11,9 +11,9 @@ function NativeAppRequiredPlaceholder() {
         <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-xl bg-primary-container text-primary">
           <span className="material-symbols-outlined text-[30px]">desktop_windows</span>
         </div>
-        <h1 className="text-xl font-semibold">Native app required</h1>
+        <h1 className="text-xl font-semibold">Cần mở bằng ứng dụng máy tính</h1>
         <p className="mt-3 text-sm leading-6 text-on-surface-variant">
-          Seasonal Management uses authenticated Supabase as the operational data source. Open this workspace in the Tauri desktop app to load schedules and make allocation changes with the supported native runtime.
+          Quản lý lịch mùa lấy dữ liệu khai thác từ máy chủ sau khi đăng nhập. Vui lòng mở không gian làm việc này trong ứng dụng máy tính để tải lịch và thay đổi phân bổ.
         </p>
       </div>
     </div>

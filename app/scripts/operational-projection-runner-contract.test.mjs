@@ -14,17 +14,18 @@ const stale = {...fresh,is_fresh:false};
 // Execute the unmodified shell runner. Only external host adapters are replaced:
 // PostgreSQL responses, syslog, and flock's busy result. This does not prove
 // real PostgreSQL notification delivery or systemd timer scheduling.
-async function run({statuses,refreshFailure=false,busy=false,listen=false}) {
+async function run({statuses,refreshFailure=false,reconcileFailure=false,busy=false,listen=false}) {
   const dir = await mkdtemp(join(tmpdir(),'operational-runner-'));
   try {
     const statePath=join(dir,'state.json');
-    await writeFile(statePath,JSON.stringify({statuses,refreshFailure,statusReads:0,refreshes:0,listen,connections:0}));
+    await writeFile(statePath,JSON.stringify({statuses,refreshFailure,reconcileFailure,statusReads:0,refreshes:0,listen,connections:0}));
     const dbPath=join(dir,'database.cjs');
     await writeFile(dbPath,`const fs=require('node:fs'); const p=process.env.RUNNER_STATE; const s=JSON.parse(fs.readFileSync(p,'utf8')); const q=process.argv.at(-1); let failed=false;
 if(s.listen) {
   process.stdin.once('data',()=>{s.connections++;fs.writeFileSync(p,JSON.stringify(s));process.exit(2);});
 } else {
 if(q.includes('operational_projection_status_v1')) { const value=s.statuses[Math.min(s.statusReads,s.statuses.length-1)]; s.statusReads++; if(value!==null)console.log(JSON.stringify(value)); }
+else if(q.includes('operational_projection_reconcile_due_v1')) { failed=s.reconcileFailure; if(!failed) { const value=s.statuses[Math.min(Math.max(0, s.statusReads-1),s.statuses.length-1)]; console.log(value?.needs_reconcile ? 'true' : 'false'); } }
 else if(q.includes('refresh_operational_canonical_legs_v1')) {s.refreshes++; failed=s.refreshFailure;}
 else throw Error('Unexpected SQL: '+q);
 fs.writeFileSync(p,JSON.stringify(s)); if(failed)process.exit(1);
@@ -68,6 +69,11 @@ test('fresh state skips a full refresh',async()=>{
   const r=await run({statuses:[fresh]});
   assert.equal(r.exit,0,r.output); assert.equal(r.refreshes,0); assert.equal(r.statusReads,1);
 });
+test('fresh state requiring periodic reconcile executes refresh',async()=>{
+  const reconcileDue = {...fresh, needs_reconcile: true};
+  const r=await run({statuses:[reconcileDue, fresh]});
+  assert.equal(r.exit,0,r.output); assert.equal(r.refreshes,1); assert.equal(r.statusReads,2);
+});
 test('stale projection is refreshed and checked again',async()=>{
   const r=await run({statuses:[stale,fresh]});
   assert.equal(r.exit,0,r.output); assert.equal(r.refreshes,1); assert.equal(r.statusReads,2);
@@ -85,6 +91,11 @@ test('failed refresh and missing status fail closed',async()=>{
   assert.equal(failed.exit,1,failed.output); assert.equal(failed.refreshes,1); assert.equal(failed.statusReads,1);
   const missing=await run({statuses:[null]});
   assert.equal(missing.exit,1,missing.output); assert.equal(missing.refreshes,0);
+});
+test('failed reconciliation check never reports a fresh success',async()=>{
+  const r=await run({statuses:[fresh],reconcileFailure:true});
+  assert.equal(r.exit,1,r.output); assert.equal(r.refreshes,0);
+  assert.doesNotMatch(r.output,/code=projection_fresh/);
 });
 test('busy lock exits without querying or refreshing',async()=>{
   const r=await run({statuses:[stale],busy:true});

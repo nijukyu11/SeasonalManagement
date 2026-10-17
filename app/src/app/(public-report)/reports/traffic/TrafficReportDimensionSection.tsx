@@ -17,6 +17,7 @@ import {
   fetchTrafficReportV2DimensionPage,
   TrafficReportVersionChangedError,
 } from '@/lib/trafficReportDataAdapter';
+import { formatUiError } from '@/lib/uiDisplayText';
 import { ScopeSelector } from './TrafficReportTrend';
 
 const numberFormat = new Intl.NumberFormat('vi-VN');
@@ -83,7 +84,7 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     try {
       const payload = readVersion === 'v2'
         ? expectedWatermark === undefined || !readVersionToken
-          ? (() => { throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.'); })()
+          ? (() => { throw new Error('Phiên bản dữ liệu mới nhất chưa sẵn sàng.'); })()
           : await fetchTrafficReportV2DimensionPage(filter, dimension, scope, sort, page, 50, expectedWatermark, readVersionToken, { signal: controller.signal })
         : await (async () => {
           const response = await fetch(buildDimensionUrl(filter, dimension, scope, sort, page, 50), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
@@ -96,7 +97,7 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     } catch (reason) {
       if (!controller.signal.aborted) {
         if (reason instanceof TrafficReportVersionChangedError) onVersionChanged?.();
-        setError(reason instanceof Error ? reason.message : 'Không thể tải bảng dữ liệu.');
+        setError(formatUiError(reason, 'Không thể tải bảng dữ liệu.'));
       }
     } finally {
       if (!controller.signal.aborted) setLoading(false);
@@ -112,7 +113,7 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     try {
       const payload = readVersion === 'v2'
         ? expectedWatermark === undefined || !readVersionToken
-          ? (() => { throw new Error('Phiên bản dữ liệu live chưa sẵn sàng.'); })()
+          ? (() => { throw new Error('Phiên bản dữ liệu mới nhất chưa sẵn sàng.'); })()
           : await fetchTrafficReportV2DimensionPage(filter, dimension, scope, 'flights', 1, 50, expectedWatermark, readVersionToken, { signal: controller.signal })
         : await (async () => {
           const response = await fetch(buildDimensionUrl(filter, dimension, scope, 'flights', 1, 50), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
@@ -125,7 +126,7 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     } catch (reason) {
       if (!controller.signal.aborted) {
         if (reason instanceof TrafficReportVersionChangedError) onVersionChanged?.();
-        setChartError(reason instanceof Error ? reason.message : 'Không thể tải xếp hạng.');
+        setChartError(formatUiError(reason, 'Không thể tải xếp hạng.'));
       }
     } finally {
       if (!controller.signal.aborted) setChartLoading(false);
@@ -186,13 +187,16 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
           {chartLoading ? <div className="mt-5 space-y-3" role="status">{Array.from({ length: 6 }, (_, index) => <div key={index} className="h-9 animate-pulse rounded bg-slate-100" />)}<span className="sr-only">Đang tải biểu đồ {title.toLocaleLowerCase('vi-VN')}</span></div> : null}
           {chartError ? <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900" role="alert"><p className="font-semibold">Không thể tải xếp hạng</p><p className="mt-1">{chartError}</p><button className="report-focus mt-3 min-h-11 rounded-lg bg-rose-800 px-4 font-bold text-white focus-visible:outline-blue-900 focus-visible:ring-2 focus-visible:ring-blue-900 focus-visible:ring-offset-2" type="button" onClick={() => void loadChart()}>Thử lại</button></div> : null}
           {!chartLoading && !chartError && chartRows.length === 0 ? <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"><p className="font-semibold">Chưa có dữ liệu để xếp hạng.</p><p className="mt-1">Hãy chọn phạm vi khác.</p></div> : null}
-          {!chartLoading && !chartError && chartRows.length > 0 ? <ol className="mt-5 space-y-5">{chartRows.map((row) => <li key={row.key} aria-label={`${row.label}: tỷ trọng chuyến bay ${formatShare(row.flight_share)}, tỷ trọng sản lượng khách ${formatShare(row.pax_share)}`}>
-            <div className="truncate text-sm font-semibold text-slate-800" title={row.label} aria-label={row.label}>{row.label}</div>
-            <div className="mt-2 grid grid-cols-2 gap-4" aria-hidden="true">
-              <ShareMetric value={row.flight_share} tone="flights" />
-              <ShareMetric value={row.pax_share} tone="pax" />
-            </div>
-          </li>)}</ol> : null}
+          {!chartLoading && !chartError && chartRows.length > 0 ? <ol className="mt-5 space-y-5">{chartRows.map((row) => {
+            const displayLabel = /^unknown$/i.test(row.label.trim()) ? 'Chưa xác định' : row.label;
+            return <li key={row.key} aria-label={`${displayLabel}: tỷ trọng chuyến bay ${formatShare(row.flight_share)}, tỷ trọng sản lượng khách ${formatShare(row.pax_share)}`}>
+              <div className="truncate text-sm font-semibold text-slate-800" title={displayLabel} aria-label={displayLabel}>{displayLabel}</div>
+              <div className="mt-2 grid grid-cols-2 gap-4" aria-hidden="true">
+                <ShareMetric value={row.flight_share} tone="flights" />
+                <ShareMetric value={row.pax_share} tone="pax" />
+              </div>
+            </li>;
+          })}</ol> : null}
         </article>
 
         <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -225,7 +229,10 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
               <caption className="sr-only">{title} theo {groupLabel.toLocaleLowerCase('vi-VN')}</caption>
               <thead><tr className="border-b border-slate-300 text-slate-600"><th className="p-2">{groupLabel}</th><th className="p-2 text-right">Chuyến bay</th><th className="p-2 text-right">Tỷ trọng chuyến bay</th><th className="p-2 text-right">Sản lượng khách</th><th className="p-2 text-right">Tỷ trọng sản lượng khách</th></tr></thead>
               <tbody>
-                {!loading && !error && visibleRows.map((row) => <tr key={row.key} className="border-b border-slate-100"><td className="p-2 font-semibold text-slate-800" title={row.label}>{row.label}</td><td className="p-2 text-right tabular-nums">{formatNumber(row.flights)}</td><td className="p-2 text-right tabular-nums">{formatShare(row.flight_share)}</td><td className="p-2 text-right tabular-nums">{formatNumber(row.reported_pax)}</td><td className="p-2 text-right tabular-nums">{formatShare(row.pax_share)}</td></tr>)}
+                {!loading && !error && visibleRows.map((row) => {
+                  const displayLabel = /^unknown$/i.test(row.label.trim()) ? 'Chưa xác định' : row.label;
+                  return <tr key={row.key} className="border-b border-slate-100"><td className="p-2 font-semibold text-slate-800" title={displayLabel}>{displayLabel}</td><td className="p-2 text-right tabular-nums">{formatNumber(row.flights)}</td><td className="p-2 text-right tabular-nums">{formatShare(row.flight_share)}</td><td className="p-2 text-right tabular-nums">{formatNumber(row.reported_pax)}</td><td className="p-2 text-right tabular-nums">{formatShare(row.pax_share)}</td></tr>;
+                })}
                 {!loading && !error && visibleRows.length === 0 ? <tr><td className="p-4 text-sm text-slate-600" colSpan={5}>Chưa có dữ liệu trong phạm vi này.</td></tr> : null}
               </tbody>
             </table>

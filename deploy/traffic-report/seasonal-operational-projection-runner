@@ -45,6 +45,9 @@ projection_status() {
   "${psql[@]}" -Atc "select to_jsonb(status) from reporting.operational_projection_status_v1() status"
 }
 
+reconcile_due() {
+  "${psql[@]}" -Atc "select case when reporting.operational_projection_reconcile_due_v1() then 'true' else 'false' end"
+}
 wake_runner() {
   log info projection_wake "operational store write notification received"
   if ! /usr/bin/systemctl start --no-block "$runner_service"; then
@@ -74,7 +77,7 @@ listen_forever() {
 }
 
 refresh_until_fresh() {
-  local attempt status is_fresh source_watermark observed_watermark
+  local attempt status is_fresh source_watermark observed_watermark needs_reconcile
   for attempt in $(/usr/bin/seq 1 "$max_attempts"); do
     status="$(projection_status)"
     if [[ -z "$status" ]]; then
@@ -82,12 +85,17 @@ refresh_until_fresh() {
       return 1
     fi
     is_fresh="$(json_field "$status" is_fresh)"
-    if [[ "$is_fresh" == "true" ]]; then
+    needs_reconcile="$(reconcile_due)"
+    if [[ "$is_fresh" == "true" && "$needs_reconcile" != "true" ]]; then
       log info projection_fresh "attempt=$attempt source_watermark=$(json_field "$status" source_watermark)"
       return 0
     fi
 
-    log info projection_stale "attempt=$attempt source_watermark=$(json_field "$status" source_watermark) current_watermark=$(json_field "$status" current_watermark)"
+    if [[ "$needs_reconcile" == "true" && "$is_fresh" == "true" ]]; then
+      log info projection_reconcile "attempt=$attempt source_watermark=$(json_field "$status" source_watermark)"
+    else
+      log info projection_stale "attempt=$attempt source_watermark=$(json_field "$status" source_watermark) current_watermark=$(json_field "$status" current_watermark)"
+    fi
     if ! "${psql[@]}" -Atc 'select reporting.refresh_operational_canonical_legs_v1()' >/dev/null; then
       emit_alert err projection_refresh_failed "attempt=$attempt"
       return 1
@@ -95,9 +103,10 @@ refresh_until_fresh() {
 
     status="$(projection_status)"
     is_fresh="$(json_field "$status" is_fresh)"
+    needs_reconcile="$(reconcile_due)"
     source_watermark="$(json_field "$status" source_watermark)"
     observed_watermark="$(json_field "$status" observed_watermark)"
-    if [[ "$is_fresh" == "true" ]]; then
+    if [[ "$is_fresh" == "true" && "$needs_reconcile" != "true" ]]; then
       log info projection_refreshed "attempt=$attempt source_watermark=$source_watermark observed_watermark=$observed_watermark"
       return 0
     fi

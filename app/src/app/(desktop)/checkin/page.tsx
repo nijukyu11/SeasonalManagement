@@ -121,6 +121,7 @@ import { useSessionScrollRestoration } from '../hooks/useSessionScrollRestoratio
 import { useSessionState } from '../hooks/useSessionState';
 import { useSeasonWorkspaceRefresh } from '../hooks/useSeasonWorkspaceRefresh';
 import { useGanttDragScroll } from '../hooks/useGanttDragScroll';
+import { formatUiError } from '@/lib/uiDisplayText';
 import {
   formatCheckInCommitFailure,
   getCheckInCommitFailureSource,
@@ -555,7 +556,7 @@ const CheckInResourceBarButton = memo(function CheckInResourceBarButton({
     >
       <button
         type="button"
-        aria-label="Resize start"
+        aria-label="Kéo chỉnh giờ bắt đầu"
         disabled={syncing}
         className="absolute left-0 top-0 h-full w-2 cursor-ew-resize disabled:cursor-not-allowed"
         onPointerDown={(event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -586,14 +587,14 @@ const CheckInResourceBarButton = memo(function CheckInResourceBarButton({
       {lockConflict && (
         <span
           className="material-symbols-outlined pointer-events-none absolute bottom-0.5 right-3 text-[11px] text-error"
-          title={`LockConflict ${lockConflict.lock.name}`}
+          title={`Xung đột khóa: ${lockConflict.lock.name}`}
         >
           lock
         </span>
       )}
       <button
         type="button"
-        aria-label="Resize end"
+        aria-label="Kéo chỉnh giờ kết thúc"
         disabled={syncing}
         className="absolute right-0 top-0 h-full w-2 cursor-ew-resize disabled:cursor-not-allowed"
         onPointerDown={(event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -841,7 +842,7 @@ function CheckInPdfPreviewPanel({
   if (preview.pages.length === 0) {
     return (
       <div className="flex min-h-72 items-center justify-center rounded border border-surface-variant bg-surface-container-low p-6 text-center text-sm text-on-surface-variant">
-        Select at least one Counter Group to preview the final PDF pages.
+        Chọn ít nhất một Nhóm quầy để xem trước các trang PDF.
       </div>
     );
   }
@@ -850,9 +851,9 @@ function CheckInPdfPreviewPanel({
     <div className="grid min-h-0 min-w-0 gap-3">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-on-surface">PDF Preview</h3>
+          <h3 className="text-sm font-semibold text-on-surface">Xem trước PDF</h3>
           <p className="text-xs text-on-surface-variant">
-            {preview.pages.length} page{preview.pages.length === 1 ? '' : 's'} - A4 landscape - fit-to-page
+            {preview.pages.length} trang · A4 ngang · Khớp trang
           </p>
         </div>
         <span className="min-w-0 truncate rounded border border-surface-variant bg-surface-container px-2 py-1 text-xs font-semibold text-on-surface-variant">
@@ -864,10 +865,10 @@ function CheckInPdfPreviewPanel({
           <section key={`${page.sectionId}-${page.pageIndex}`} className="grid min-w-0 gap-2">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-on-surface-variant">
               <span className="font-semibold text-on-surface">
-                Page {page.pageIndex + 1}: {page.sectionName}
+                Trang {page.pageIndex + 1}: {page.sectionName}
               </span>
               <span>
-                {page.scaleMode === 'width' ? 'Width fit' : 'Height fit'} - bar text {page.barFontSizePt.toFixed(1)}pt
+                {page.scaleMode === 'width' ? 'Khớp chiều rộng' : 'Khớp chiều cao'} · Cỡ chữ vạch {page.barFontSizePt.toFixed(1)}pt
               </span>
             </div>
             {page.warning && (
@@ -928,7 +929,7 @@ function CheckInAllocationContent() {
   const [checkInLocalCommitPending, setCheckInLocalCommitPending] = useState(false);
   const [loading, setLoading] = useState(() => !initialCheckInRouteState);
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
-    buildLoadProgress('Loading check-in allocation...', 10, 'Preparing workspace')
+    buildLoadProgress('Đang tải phân bổ quầy...', 10, 'Đang chuẩn bị không gian làm việc')
   );
   const [loadError, setLoadError] = useState<string | null>(null);
   const [hoveredGroupId, setHoveredGroupId] = useState<string | null>(null);
@@ -1412,7 +1413,7 @@ function CheckInAllocationContent() {
           const loadedSettings = await getOperationalSettings().catch(() => null);
           if (cancelled || operationalRequestIdRef.current !== requestId || !isRouteActive) return;
           if (loadedSettings) setSettings(loadedSettings);
-          setLoadProgress(buildLoadProgress('Loading operational check-in window', 40, `${startDate}..${endDate}`));
+          setLoadProgress(buildLoadProgress('Đang tải khoảng ngày vận hành', 40, `${startDate}..${endDate}`));
           const operationalResult = await loadFullOperationalScheduleWindow({
             startDate,
             endDate,
@@ -1435,9 +1436,9 @@ function CheckInAllocationContent() {
         } catch (err) {
           console.error('Error loading operational checkin schedule', err);
           if (!cancelled && operationalRequestIdRef.current === requestId && isRouteActive) {
-            const message = err instanceof Error && err.message ? err.message : 'Could not load operational check-in schedule.';
+            const message = formatUiError(err, 'Không thể tải Lịch phân bổ quầy vận hành.');
             setLoadError(message);
-            void showAlert({ title: 'Load Failed', message, tone: 'error' });
+            void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
           }
           return;
         } finally {
@@ -1450,7 +1451,7 @@ function CheckInAllocationContent() {
       if (cachedState === 'fresh') return;
       setLoading(cachedState !== 'stale');
       setLoadError(null);
-      setLoadProgress(buildLoadProgress('Loading seasons and settings', 15, 'Preparing check-in allocation'));
+      setLoadProgress(buildLoadProgress('Đang tải mùa bay và cấu hình', 15, 'Đang chuẩn bị Phân bổ quầy'));
       try {
         const [cachedSeasons, loadedSettings] = await Promise.all([
           Promise.resolve(getCachedSeasons()),
@@ -1498,7 +1499,7 @@ function CheckInAllocationContent() {
           setLoading(false);
         }
 
-        setLoadProgress(buildLoadProgress('Loading server workspace', 35, targetSeason.seasonCode));
+        setLoadProgress(buildLoadProgress('Đang tải không gian làm việc máy chủ', 35, targetSeason.seasonCode));
         const serverWindow = await loadSeasonWorkspaceWindow({
           seasonId: targetSeason.id,
           dateFrom: fromDateTime.slice(0, 10),
@@ -1510,9 +1511,9 @@ function CheckInAllocationContent() {
         if (serverWindow) {
           loadedWindowKeyRef.current = windowKey;
           setLoadProgress(buildLoadProgress(
-            'Preparing Check-in Allocation',
+            'Đang chuẩn bị Phân bổ quầy',
             80,
-            `${serverWindow.records.length} records`
+            `${serverWindow.records.length} bản ghi`
           ));
           setFlightRecords(serverWindow.records);
           replaceCheckInModifications(serverWindow.modifications);
@@ -1546,11 +1547,11 @@ function CheckInAllocationContent() {
 
         throw new Error('Server check-in allocation window is unavailable.');
       } catch (err) {
-        const message = (err as Error).message;
+        const message = formatUiError(err, 'Không thể tải Lịch phân bổ quầy từ máy chủ.');
         console.error('Error loading check-in allocation', err);
         if (!cancelled) {
           setLoadError(message);
-          void showAlert({ title: 'Load Failed', message, tone: 'error' });
+          void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -1985,7 +1986,7 @@ function CheckInAllocationContent() {
       publishWorkspaceChange(season.id, null, 'checkin', queuedWinners.map((mod) => mod.legId), null, 'direct');
     }
     void showAlert({
-      title: 'Check-in Update Failed',
+      title: 'Cập nhật phân bổ quầy thất bại',
       message: formatCheckInCommitFailure({
         error,
         description: entry.description,
@@ -2175,12 +2176,12 @@ function CheckInAllocationContent() {
     try {
       const outcome = await useOperationalScheduleStore.getState().retryPendingMutation();
       if (outcome && 'refreshError' in outcome && outcome.refreshError) {
-        void showAlert({ title: 'Saved; refresh failed', message: outcome.refreshError, tone: 'warning' });
+        void showAlert({ title: 'Đã lưu nhưng chưa tải lại được', message: formatUiError(outcome.refreshError), tone: 'warning' });
       } else {
         await refreshCheckInWindow({ revalidate: true });
       }
     } catch (err) {
-      void showAlert({ title: 'Retry Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Thử lại thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       setOperationalMutating(false);
     }
@@ -2213,7 +2214,7 @@ function CheckInAllocationContent() {
 
       if (patches.length === 0) {
         if (options.trackUndo === false) {
-          throw new Error('Undo cannot be applied: target flight occurrence is not in current view.');
+          throw new Error('Không thể hoàn tác: chuyến bay mục tiêu không nằm trong phạm vi hiển thị hiện tại.');
         }
         return;
       }
@@ -2227,7 +2228,7 @@ function CheckInAllocationContent() {
         requestId = pending.requestId;
         expectedRevision = pending.expectedRevision;
       } else if (pending) {
-        throw new Error('The previous operational write is unconfirmed. Retry that write unchanged before submitting another.');
+        throw new Error('Thao tác vận hành trước đó chưa được xác nhận. Hãy thử lại yêu cầu đó trước khi thực hiện thao tác mới.');
       } else {
         setPendingOperationalMutation({
           kind: 'apply_resource',
@@ -2269,8 +2270,8 @@ function CheckInAllocationContent() {
               unknownFailureCount += 1;
               if (unknownFailureCount > 1) {
                 await showAlert({
-                  title: 'Check-in Update Status Unknown',
-                  message: 'The outcome of your update is unknown due to a connection interruption. Click OK to retry the exact same request.',
+                  title: 'Chưa rõ trạng thái cập nhật quầy',
+                  message: 'Không thể xác định kết quả cập nhật do gián đoạn kết nối. Bấm OK để gửi lại đúng yêu cầu này.',
                   tone: 'warning',
                 });
               }
@@ -2287,8 +2288,8 @@ function CheckInAllocationContent() {
           clearOptimisticAllocationView();
           void refreshCheckInWindow().catch(() => undefined);
           void showAlert({
-            title: 'Check-in Update Failed',
-            message: (rpcErr as Error).message,
+            title: 'Cập nhật phân bổ quầy thất bại',
+            message: formatUiError(rpcErr),
             tone: 'error',
           });
           return;
@@ -2301,8 +2302,8 @@ function CheckInAllocationContent() {
           clearOptimisticAllocationView();
           void refreshCheckInWindow().catch(() => undefined);
           void showAlert({
-            title: 'Check-in Update Failed',
-            message: receipt.message || `Mutation ${receipt.status}`,
+            title: 'Cập nhật phân bổ quầy thất bại',
+            message: formatUiError(receipt.message || `Thao tác ${receipt.status}`),
             tone: 'error',
           });
           return;
@@ -2324,8 +2325,8 @@ function CheckInAllocationContent() {
         } catch (refreshErr) {
           console.error('Failed to refresh checkin window after commit', refreshErr);
           void showAlert({
-            title: 'Refresh Failed',
-            message: `Changes were saved (revision ${receipt.revision}), but the check-in display could not be refreshed: ${(refreshErr as Error).message}`,
+            title: 'Tải lại giao diện thất bại',
+            message: `Các thay đổi đã được lưu (phiên bản ${receipt.revision}), nhưng không thể tải lại màn hình phân bổ quầy: ${formatUiError(refreshErr)}`,
             tone: 'warning',
           });
         }
@@ -2366,7 +2367,7 @@ function CheckInAllocationContent() {
     } catch (err) {
       checkInUndoStackRef.current.push(entry);
       persistCheckInUndoStack(checkInUndoStackRef.current);
-      void showAlert({ title: 'Undo Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Hoàn tác thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [commitCheckInModificationBatch, isWriteInProgress, showAlert]);
 
@@ -2494,10 +2495,10 @@ function CheckInAllocationContent() {
     try {
       const result = await syncNow();
       if (result.status !== 'synced') {
-        void showAlert({ title: 'Save Failed', message: result.message ?? 'Save failed.', tone: 'error' });
+        void showAlert({ title: 'Lưu thất bại', message: formatUiError(result.message ?? 'Lưu thất bại.'), tone: 'error' });
       }
     } catch (err) {
-      void showAlert({ title: 'Save Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Lưu thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [season, showAlert, syncInProgress, syncNow]);
 
@@ -2511,8 +2512,8 @@ function CheckInAllocationContent() {
     const windowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
     if (checkInCommitAccumulatorRef.current || checkInCommitFlushTimerRef.current != null) {
       void showAlert({
-        title: 'Fetch data blocked',
-        message: 'Save pending check-in changes before fetching server data.',
+        title: 'Tải dữ liệu bị chặn',
+        message: 'Hãy lưu các thay đổi phân bổ quầy trước khi tải dữ liệu từ máy chủ.',
         tone: 'warning',
       });
       return;
@@ -2523,7 +2524,7 @@ function CheckInAllocationContent() {
     setResizeState(null);
     setFetchingServerData(true);
     if (!hasRouteDataLoaded) setLoadError(null);
-    setLoadProgress(buildLoadProgress('Loading server workspace', 35, season.seasonCode));
+    setLoadProgress(buildLoadProgress('Đang tải không gian làm việc máy chủ', 35, season.seasonCode));
     try {
       await currentMutationRef.current;
       await commitQueueRef.current;
@@ -2546,7 +2547,7 @@ function CheckInAllocationContent() {
         return;
       }
       loadedWindowKeyRef.current = windowKey;
-      setLoadProgress(buildLoadProgress('Preparing Check-in Allocation', 80, `${serverWindow.records.length} records`));
+      setLoadProgress(buildLoadProgress('Đang chuẩn bị Phân bổ quầy', 80, `${serverWindow.records.length} bản ghi`));
       setFlightRecords(serverWindow.records);
       replaceCheckInModifications(serverWindow.modifications);
       setSyncSummary({
@@ -2575,9 +2576,9 @@ function CheckInAllocationContent() {
         syncMeta: serverWindow.syncMeta,
       });
     } catch (err) {
-      const message = err instanceof Error && err.message ? err.message : 'Could not fetch check-in data from the server.';
+      const message = formatUiError(err, 'Không thể tải dữ liệu phân bổ quầy từ máy chủ.');
       if (!hasRouteDataLoaded) setLoadError(message);
-      void showAlert({ title: 'Fetch data failed', message, tone: 'error' });
+      void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
     } finally {
       setFetchingServerData(false);
     }
@@ -2606,16 +2607,16 @@ function CheckInAllocationContent() {
     if ((!isOperationalScheduleV1Enabled() && !season) || !settings || !exportDraft) return;
     if (!isValidCheckInExportRange(exportDraft)) {
       void showAlert({
-        title: 'Export PDF Failed',
-        message: 'Choose a valid export range where To is later than From.',
+        title: 'Xuất PDF thất bại',
+        message: 'Hãy chọn khoảng thời gian hợp lệ với mốc Đến sau mốc Từ.',
         tone: 'error',
       });
       return;
     }
     if (exportDraft.selectedGroupIds.length === 0) {
       void showAlert({
-        title: 'Export PDF Failed',
-        message: 'Select at least one Counter Group before exporting.',
+        title: 'Xuất PDF thất bại',
+        message: 'Hãy chọn ít nhất một Nhóm quầy trước khi xuất.',
         tone: 'error',
       });
       return;
@@ -2634,7 +2635,7 @@ function CheckInAllocationContent() {
       notifyExportCompleted(result.saveResult);
       setExportDraft(null);
     } catch (err) {
-      void showAlert({ title: 'Export PDF Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Xuất PDF thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       setExportingPdf(false);
     }
@@ -2655,9 +2656,9 @@ function CheckInAllocationContent() {
         resources: view.resourceRows,
         startCounter,
       });
-      await commitOneModification(mod, `Allocated ${formatCheckInFlightLabel(record)} to counter ${displayCheckInCounter(startCounter)}`);
+      await commitOneModification(mod, `Đã phân bổ ${formatCheckInFlightLabel(record)} vào quầy ${displayCheckInCounter(startCounter)}`);
     } catch (err) {
-      void showAlert({ title: 'Allocate Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Phân bổ thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [commitOneModification, displayAllocationView, flightRecords, getEffectiveRecord, settings, showAlert]);
 
@@ -2682,9 +2683,9 @@ function CheckInAllocationContent() {
         records: flightRecords,
         modifications: latestCheckInModificationsRef.current,
       });
-      await commitOneModification(mod, `Moved ${formatCheckInFlightLabel(record)} check-in allocation`);
+      await commitOneModification(mod, `Đã di chuyển phân bổ quầy của ${formatCheckInFlightLabel(record)}`);
     } catch (err) {
-      void showAlert({ title: 'Move Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Di chuyển thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [commitOneModification, displayAllocationView, flightRecords, getEffectiveRecord, settings, showAlert]);
 
@@ -2713,9 +2714,9 @@ function CheckInAllocationContent() {
         resources: view.resourceRows,
         settings,
       });
-      await commitOneModification(mod, `Resized ${formatCheckInFlightLabel(record)} check-in allocation`);
+      await commitOneModification(mod, `Đã kéo chỉnh thời gian phân bổ của ${formatCheckInFlightLabel(record)}`);
     } catch (err) {
-      void showAlert({ title: 'Resize Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Kéo chỉnh thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [commitOneModification, displayAllocationView, flightRecords, getEffectiveRecord, isWriteInProgress, settings, showAlert, timeline.width, timelinePixelsPerMinute]);
 
@@ -2793,7 +2794,7 @@ function CheckInAllocationContent() {
         await wrapper.requestFullscreen();
       }
     } catch (err) {
-      void showAlert({ title: 'Fullscreen Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Toàn màn hình thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [showAlert]);
 
@@ -2825,13 +2826,13 @@ function CheckInAllocationContent() {
       mod = unallocateCheckInRecord(record);
     }
     const description = shouldRemoveBrokenCounter
-      ? `Removed counter ${displayCheckInCounter(drag.counter)} from ${formatCheckInFlightLabel(record)} by pool drop`
-      : `Unallocated ${formatCheckInFlightLabel(record)} by pool drop`;
+      ? `Đã bớt quầy ${displayCheckInCounter(drag.counter)} khỏi ${formatCheckInFlightLabel(record)}`
+      : `Đã hủy phân bổ ${formatCheckInFlightLabel(record)}`;
     void commitOneModification(
       mod,
       description
     ).catch((err) => {
-      void showAlert({ title: 'Unallocate Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Hủy phân bổ thất bại', message: formatUiError(err), tone: 'error' });
     });
   }, [commitOneModification, displayAllocationView, getEffectiveRecord, isWriteInProgress, settings, showAlert]);
 
@@ -3026,9 +3027,9 @@ function CheckInAllocationContent() {
     if (!record) return;
     try {
       const mod = breakCheckInAllocation({ record, currentCounter: record.counter });
-      await commitOneModification(mod, `Broke ${formatCheckInFlightLabel(record)} check-in shape`);
+      await commitOneModification(mod, `Đã tách dải quầy của ${formatCheckInFlightLabel(record)}`);
     } catch (err) {
-      void showAlert({ title: 'Break Shape Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Tách quầy thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [commitOneModification, getEffectiveRecord, showAlert]);
 
@@ -3046,9 +3047,9 @@ function CheckInAllocationContent() {
         records: flightRecords,
         modifications: latestCheckInModificationsRef.current,
       });
-      await commitOneModification(mod, `Reshaped ${formatCheckInFlightLabel(record)} check-in shape`);
+      await commitOneModification(mod, `Đã gộp dải quầy của ${formatCheckInFlightLabel(record)}`);
     } catch (err) {
-      void showAlert({ title: 'Reshape Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Gộp quầy thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [commitOneModification, displayAllocationView, flightRecords, getEffectiveRecord, settings, showAlert]);
 
@@ -3066,9 +3067,9 @@ function CheckInAllocationContent() {
         records: flightRecords,
         modifications: latestCheckInModificationsRef.current,
       });
-      await commitOneModification(mod, `Added counter to ${formatCheckInFlightLabel(record)}`);
+      await commitOneModification(mod, `Đã thêm quầy cho ${formatCheckInFlightLabel(record)}`);
     } catch (err) {
-      void showAlert({ title: 'Add Counter Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Thêm quầy thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [commitOneModification, displayAllocationView, flightRecords, getEffectiveRecord, settings, showAlert]);
 
@@ -3084,9 +3085,9 @@ function CheckInAllocationContent() {
         resources: view.resourceRows,
         settings,
       });
-      await commitOneModification(mod, `Removed counter from ${formatCheckInFlightLabel(record)}`);
+      await commitOneModification(mod, `Đã bớt quầy khỏi ${formatCheckInFlightLabel(record)}`);
     } catch (err) {
-      void showAlert({ title: 'Remove Counter Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Bớt quầy thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [commitOneModification, displayAllocationView, getEffectiveRecord, settings, showAlert]);
 
@@ -3118,10 +3119,10 @@ function CheckInAllocationContent() {
         resources: view.resourceRows,
         settings,
       });
-      await commitOneModification(mod, `Overrode ${formatCheckInFlightLabel(record)} check-in times`);
+      await commitOneModification(mod, `Đã ghi đè thời gian phân bổ của ${formatCheckInFlightLabel(record)}`);
       setOverrideDraft(null);
     } catch (err) {
-      void showAlert({ title: 'Override Times Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Ghi đè thời gian thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [commitOneModification, displayAllocationView, flightRecords, getEffectiveRecord, overrideDraft, settings, showAlert]);
 
@@ -3129,9 +3130,9 @@ function CheckInAllocationContent() {
     const record = getEffectiveRecord(recordId);
     if (!record) return;
     try {
-      await commitOneModification(unallocateCheckInRecord(record), `Unallocated ${formatCheckInFlightLabel(record)}`);
+      await commitOneModification(unallocateCheckInRecord(record), `Đã hủy phân bổ ${formatCheckInFlightLabel(record)}`);
     } catch (err) {
-      void showAlert({ title: 'Unallocate Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Hủy phân bổ thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [commitOneModification, getEffectiveRecord, showAlert]);
 
@@ -3153,10 +3154,10 @@ function CheckInAllocationContent() {
     try {
       await commitCheckInModificationBatch(
         mods,
-        `Unallocated all check-in counters from ${formatLocalDateTimeLabel(fromDateTime)} to ${formatLocalDateTimeLabel(toDateTime)}`
+        `Unallocated all counters from ${formatLocalDateTimeLabel(fromDateTime)} to ${formatLocalDateTimeLabel(toDateTime)}`
       );
     } catch (err) {
-      void showAlert({ title: 'Unallocate All Failed', message: (err as Error).message, tone: 'error' });
+      void showAlert({ title: 'Hủy phân bổ toàn bộ thất bại', message: formatUiError(err), tone: 'error' });
     }
   }, [commitCheckInModificationBatch, displayAllocationView, fromDateTime, getEffectiveRecord, isWriteInProgress, settings, showAlert, toDateTime]);
 
@@ -3310,9 +3311,9 @@ function CheckInAllocationContent() {
       <div className="flex h-dvh min-w-0 flex-1 flex-col bg-surface">
         <header className="z-30 flex flex-none items-center justify-between border-b border-slate-200 bg-white/80 px-6 py-3 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
           <div>
-            <h1 className="font-h3 text-h3 text-on-surface">Check-in Allocation</h1>
+            <h1 className="font-h3 text-h3 text-on-surface">Phân bổ quầy</h1>
             <p className="font-body-sm text-body-sm text-on-surface-variant">
-              {isOperationalScheduleV1Enabled() ? 'Operational Turns' : (season ? buildSeasonDisplayLabel(season) : 'No season selected')}
+              {isOperationalScheduleV1Enabled() ? 'Lịch ngày vận hành' : (season ? buildSeasonDisplayLabel(season) : 'Chưa chọn mùa bay')}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -3324,7 +3325,7 @@ function CheckInAllocationContent() {
                 className="min-w-[200px] cursor-pointer rounded-lg border border-outline-variant bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface shadow-sm transition-colors hover:bg-surface-container-high focus:outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {seasons.length === 0 ? (
-                  <option value="">No seasons</option>
+                  <option value="">Không có mùa bay</option>
                 ) : seasons.map((item) => (
                   <option key={item.id} value={item.id}>{buildSeasonDisplayLabel(item)}</option> 
                 ))}
@@ -3383,7 +3384,7 @@ function CheckInAllocationContent() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-surface-variant px-4 py-3">
               <fieldset disabled={isOperationalScheduleV1Enabled() && isWriteInProgress} className="flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-xs font-label-caps text-on-surface-variant">
-                  From
+                  Từ
                   <input
                     type="datetime-local"
                     value={fromDateTime}
@@ -3397,7 +3398,7 @@ function CheckInAllocationContent() {
                   />
                 </label>
                 <label className="flex items-center gap-2 text-xs font-label-caps text-on-surface-variant">
-                  To
+                  Đến
                   <input
                     type="datetime-local"
                     value={toDateTime}
@@ -3420,7 +3421,7 @@ function CheckInAllocationContent() {
                       className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high"
                     >
                       <span className="material-symbols-outlined text-[16px]">today</span>
-                      Today
+                      Hôm nay
                     </button>
                     <button
                       onClick={() => {
@@ -3431,7 +3432,7 @@ function CheckInAllocationContent() {
                       }}
                       className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant transition-colors hover:bg-surface-container-high"
                     >
-                      Tomorrow
+                      Ngày mai
                     </button>
                     <button
                       onClick={() => {
@@ -3442,7 +3443,7 @@ function CheckInAllocationContent() {
                       }}
                       className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant transition-colors hover:bg-surface-container-high"
                     >
-                      7 Days
+                      7 ngày
                     </button>
                   </>
                 ) : (
@@ -3452,7 +3453,7 @@ function CheckInAllocationContent() {
                       className="inline-flex items-center gap-1.5 rounded border border-outline-variant bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high"
                     >
                       <span className="material-symbols-outlined text-[16px]">today</span>
-                      Today
+                      Hôm nay
                     </button>
                     {[1, 2, 3].map((days) => (
                       <button
@@ -3460,7 +3461,7 @@ function CheckInAllocationContent() {
                         onClick={() => handleQuickRange(days)}
                         className="rounded-full border border-outline-variant px-3 py-1 text-xs font-semibold text-on-surface-variant transition-colors hover:bg-surface-container-high"
                       >
-                        {days}D
+                        {days}N
                       </button>
                     ))}
                   </>
@@ -3478,13 +3479,13 @@ function CheckInAllocationContent() {
                   <span className="material-symbols-outlined text-[18px] text-primary">
                     {groupByCounterGroup ? 'toggle_on' : 'toggle_off'}
                   </span>
-                  Group by island
+                  Gộp theo đảo quầy
                 </label>
               </fieldset>
               <div className="flex items-center gap-2">
-                <span className="rounded-full bg-primary-container px-3 py-1 text-xs font-bold text-on-primary-container">UNALLOC {summary.unallocated}</span>
-                <span className="rounded-full bg-secondary-container px-3 py-1 text-xs font-bold text-on-secondary-container">ALLOC {summary.allocatedFlights}</span>
-                <span className="rounded-full bg-tertiary-container px-3 py-1 text-xs font-bold text-on-tertiary-container">BLOCKS {summary.counterBlocks}</span>
+                <span className="rounded-full bg-primary-container px-3 py-1 text-xs font-bold text-on-primary-container">CHƯA XẾP {summary.unallocated}</span>
+                <span className="rounded-full bg-secondary-container px-3 py-1 text-xs font-bold text-on-secondary-container">ĐÃ PHÂN BỔ {summary.allocatedFlights}</span>
+                <span className="rounded-full bg-tertiary-container px-3 py-1 text-xs font-bold text-on-tertiary-container">KHỐI QUẦY {summary.counterBlocks}</span>
               </div>
             </div>
             {(allocationResult.error || timeline.error) && (
@@ -3502,7 +3503,7 @@ function CheckInAllocationContent() {
               <div className="flex h-10 flex-none items-center justify-between border-b border-surface-variant bg-surface-container-low px-3">
                 <div className="flex items-center gap-2 text-xs font-semibold text-on-surface">
                   <span className="material-symbols-outlined text-[18px]">view_timeline</span>
-                  Check-in Gantt
+                  Gantt phân bổ quầy
                 </div>
                 <div className="flex items-center gap-1">
                   <button
@@ -3513,11 +3514,11 @@ function CheckInAllocationContent() {
                     }}
                     disabled={isWriteInProgress || summary.counterBlocks === 0}
                     className="flex h-7 items-center gap-1.5 rounded border border-outline-variant bg-surface-container-lowest px-2 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label="Unallocate all counters in selected period"
-                    title="Unallocate all counters in selected period"
+                    aria-label="Hủy phân bổ toàn bộ quầy trong khoảng thời gian đã chọn"
+                    title="Hủy phân bổ toàn bộ quầy trong khoảng thời gian đã chọn"
                   >
                     <span className="material-symbols-outlined text-[18px]">playlist_remove</span>
-                    Unallocate All
+                    Hủy phân bổ tất cả
                   </button>
                   <button
                     type="button"
@@ -3527,11 +3528,11 @@ function CheckInAllocationContent() {
                     }}
                     disabled={(!isOperationalScheduleV1Enabled() && !season) || !settings || loading || exportingPdf || isWriteInProgress}
                     className="flex h-7 items-center gap-1.5 rounded border border-outline-variant bg-surface-container-lowest px-2 text-xs font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label="Export PDF"
-                    title="Export PDF"
+                    aria-label="Xuất PDF"
+                    title="Xuất PDF"
                   >
                     <span className={`material-symbols-outlined text-[18px] ${exportingPdf ? 'animate-spin' : ''}`}>{exportingPdf ? 'sync' : 'picture_as_pdf'}</span>
-                    Export PDF
+                    Xuất PDF
                   </button>
                   <button
                     type="button"
@@ -3541,8 +3542,8 @@ function CheckInAllocationContent() {
                     }}
                     disabled={!canZoomOut}
                     className="flex h-7 w-7 items-center justify-center rounded border border-outline-variant bg-surface-container-lowest text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label="Zoom out timeline"
-                    title="Zoom out"
+                    aria-label="Thu nhỏ dòng thời gian"
+                    title="Thu nhỏ"
                   >
                     <span className="material-symbols-outlined text-[18px]">remove</span>
                   </button>
@@ -3554,8 +3555,8 @@ function CheckInAllocationContent() {
                     }}
                     disabled={!canZoomIn}
                     className="flex h-7 w-7 items-center justify-center rounded border border-outline-variant bg-surface-container-lowest text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label="Zoom in timeline"
-                    title="Zoom in"
+                    aria-label="Phóng to dòng thời gian"
+                    title="Phóng to"
                   >
                     <span className="material-symbols-outlined text-[18px]">add</span>
                   </button>
@@ -3566,8 +3567,8 @@ function CheckInAllocationContent() {
                       void handleGanttFullscreenToggle();
                     }}
                     className="flex h-7 w-7 items-center justify-center rounded border border-outline-variant bg-surface-container-lowest text-on-surface transition-colors hover:bg-surface-container-high"
-                    aria-label={isGanttFullscreen ? 'Exit Gantt fullscreen' : 'Enter Gantt fullscreen'}
-                    title={isGanttFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                    aria-label={isGanttFullscreen ? 'Thoát toàn màn hình Gantt' : 'Toàn màn hình Gantt'}
+                    title={isGanttFullscreen ? 'Thoát toàn màn hình' : 'Toàn màn hình'}
                   >
                     <span className="material-symbols-outlined text-[18px]">{isGanttFullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
                   </button>
@@ -3578,7 +3579,7 @@ function CheckInAllocationContent() {
               <LoadingStatusPanel progress={loadProgress} className="h-full min-h-[320px]" />
             ) : loadError ? (
               <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 p-6 text-center">
-                <div className="text-sm font-semibold text-error">Cannot load check-in data</div>
+                <div className="text-sm font-semibold text-error">Không thể tải dữ liệu phân bổ quầy</div>
                 <div className="max-w-xl text-sm text-on-surface-variant">{loadError}</div>
                 {syncSeasonId && (
                   <FetchServerUpdatesButton
@@ -3591,7 +3592,7 @@ function CheckInAllocationContent() {
               </div>
             ) : !isOperationalScheduleV1Enabled() && !season ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-on-surface-variant">
-                <div>No season data.</div>
+                <div>Không có dữ liệu mùa bay.</div>
                 {syncSeasonId && (
                   <FetchServerUpdatesButton
                     fetching={fetchingServerData}
@@ -3603,7 +3604,7 @@ function CheckInAllocationContent() {
               </div>
             ) : !displayAllocationView || !timeline.ticks ? (
               <div className="flex h-full items-center justify-center text-sm text-error">
-                {allocationResult.error ?? timeline.error ?? 'Check-in allocation view is unavailable.'}
+                {allocationResult.error ?? timeline.error ?? 'Màn hình phân bổ quầy hiện không khả dụng.'}
               </div>
             ) : (
               <div
@@ -3639,10 +3640,10 @@ function CheckInAllocationContent() {
                         style={{ width: LABEL_COLUMN_WIDTH }}
                       >
                         <span className="material-symbols-outlined text-[17px]">inventory_2</span>
-                        Unallocated
+                        Chưa phân bổ
                       </div>
                       <div className="flex h-full shrink-0 items-center justify-between px-3 text-xs font-data-tabular text-on-surface-variant" style={{ width: timeline.width }}>
-                        <span>{summary.unallocated} departure flights | {packedUnallocated.laneCount} packed lane{packedUnallocated.laneCount === 1 ? '' : 's'}</span>
+                        <span>{summary.unallocated} chuyến bay đi | {packedUnallocated.laneCount} luồng xếp gọn</span>
                         <button
                           type="button"
                           onClick={(event) => {
@@ -3650,7 +3651,7 @@ function CheckInAllocationContent() {
                             setPoolCollapsed((current) => !current);
                           }}
                           className="flex h-7 w-7 items-center justify-center rounded border border-outline-variant bg-surface-container-lowest text-on-surface hover:bg-surface-container-high"
-                          aria-label={poolCollapsed ? 'Expand unallocated pool' : 'Collapse unallocated pool'}
+                          aria-label={poolCollapsed ? 'Mở rộng khu vực chưa phân bổ' : 'Thu gọn khu vực chưa phân bổ'}
                         >
                           <span className="material-symbols-outlined text-[17px]">{poolCollapsed ? 'unfold_more' : 'unfold_less'}</span>
                         </button>
@@ -3659,7 +3660,7 @@ function CheckInAllocationContent() {
                     {poolCollapsed ? null : displayAllocationView.unallocated.length === 0 ? (
                       <div className="flex" style={{ height: poolBodyHeight, minWidth: LABEL_COLUMN_WIDTH + timeline.width }}>
                         <div className="sticky left-0 z-20 flex shrink-0 items-center border-r border-surface-variant bg-surface-container-lowest px-3 text-xs text-on-surface-variant" style={{ width: LABEL_COLUMN_WIDTH }}>
-                          Empty
+                          Trống
                         </div>
                         <div className="relative shrink-0" style={{ width: timeline.width, height: poolBodyHeight }}>
                           <TimelineGridBackground ticks={timeline.ticks} />
@@ -3671,7 +3672,7 @@ function CheckInAllocationContent() {
                           className="sticky left-0 z-20 flex shrink-0 items-center border-r border-surface-variant bg-surface-container-lowest px-3 text-xs text-on-surface-variant"
                           style={{ width: LABEL_COLUMN_WIDTH }}
                         >
-                          Pool
+                          Chờ phân bổ
                         </div>
                         <div className="relative shrink-0 overflow-y-auto" style={{ width: timeline.width, height: poolBodyHeight }}>
                           <div className="relative" style={{ height: Math.max(poolBodyHeight, packedPoolHeight) }}>
@@ -3684,7 +3685,7 @@ function CheckInAllocationContent() {
                     {!poolCollapsed && (
                       <button
                         type="button"
-                        aria-label="Resize unallocated pool"
+                        aria-label="Kéo đổi kích thước khu vực chưa phân bổ"
                         className="absolute bottom-0 left-0 right-0 z-40 h-2 cursor-ns-resize border-t border-outline-variant bg-surface-container-high hover:bg-primary-container"
                         onPointerDown={(event) => {
                           if (!isRouteActive) return;
@@ -3715,10 +3716,10 @@ function CheckInAllocationContent() {
                         style={{ width: LABEL_COLUMN_WIDTH }}
                       >
                         <span className="material-symbols-outlined text-[17px]">countertops</span>
-                        Resource Grid
+                        Lưới quầy
                       </div>
                       <div className="flex h-full shrink-0 items-center px-3 text-xs font-data-tabular text-on-surface-variant" style={{ width: timeline.width }}>
-                        {displayAllocationView.resourceRows.length} counters
+                        {displayAllocationView.resourceRows.length} quầy
                       </div>
                     </div>
                     {displayAllocationView.resourceSections.map((section) => {
@@ -3738,7 +3739,7 @@ function CheckInAllocationContent() {
                                 <span className="min-w-0 truncate">{section.name}</span>
                               </div>
                               <div className="flex h-full shrink-0 items-center px-3 font-data-tabular" style={{ width: timeline.width }}>
-                                {section.bhs ? `BHS ${section.bhs}` : 'No BHS'}
+                                {section.bhs ? `BHS ${section.bhs}` : 'Không có BHS'}
                               </div>
                             </div>
                           )}
@@ -3806,12 +3807,12 @@ function CheckInAllocationContent() {
                 }}
               >
                 {[
-                  ['break', 'call_split', 'Break Shape'],
-                  ['reshape', 'dataset_linked', 'Reshape'],
-                  ['add', 'add', 'Add Counter'],
-                  ['remove', 'remove', 'Remove Counter'],
-                  ['override', 'edit_calendar', 'Override Times'],
-                  ['unallocate', 'backspace', 'Unallocate'],
+                  ['break', 'call_split', 'Tách dải quầy'],
+                  ['reshape', 'dataset_linked', 'Gộp dải quầy'],
+                  ['add', 'add', 'Thêm quầy'],
+                  ['remove', 'remove', 'Bớt quầy'],
+                  ['override', 'edit_calendar', 'Ghi đè thời gian'],
+                  ['unallocate', 'backspace', 'Hủy phân bổ'],
                 ].map(([action, icon, label]) => (
                   <button
                     key={action}
@@ -3857,21 +3858,21 @@ function CheckInAllocationContent() {
                 >
                   <div className="flex items-center justify-between border-b border-surface-variant px-4 py-3">
                     <div>
-                      <h2 className="text-sm font-semibold text-on-surface">Override Times</h2>
+                      <h2 className="text-sm font-semibold text-on-surface">Ghi đè thời gian</h2>
                       <p className="font-data-tabular text-xs text-on-surface-variant">{overrideDraft.flightLabel}</p>
                     </div>
                     <button
                       type="button"
                       onClick={() => setOverrideDraft(null)}
                       className="flex h-8 w-8 items-center justify-center rounded border border-outline-variant hover:bg-surface-container-high"
-                      aria-label="Close override times"
+                      aria-label="Đóng ghi đè thời gian"
                     >
                       <span className="material-symbols-outlined text-[18px]">close</span>
                     </button>
                   </div>
                   <div className="grid gap-3 px-4 py-4">
                     <label className="grid gap-1 text-xs font-label-caps text-on-surface-variant">
-                      Start
+                      Bắt đầu
                       <input
                         type="datetime-local"
                         value={overrideDraft.start}
@@ -3880,7 +3881,7 @@ function CheckInAllocationContent() {
                       />
                     </label>
                     <label className="grid gap-1 text-xs font-label-caps text-on-surface-variant">
-                      End
+                      Kết thúc
                       <input
                         type="datetime-local"
                         value={overrideDraft.end}
@@ -3895,14 +3896,14 @@ function CheckInAllocationContent() {
                       onClick={() => setOverrideDraft(null)}
                       className="rounded border border-outline-variant px-3 py-1.5 text-sm font-semibold text-on-surface hover:bg-surface-container-high"
                     >
-                      Cancel
+                      Hủy
                     </button>
                     <button
                       type="submit"
                       disabled={isWriteInProgress}
                       className="rounded bg-primary px-3 py-1.5 text-sm font-semibold text-on-primary hover:bg-primary-container hover:text-on-primary-container disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      Apply
+                      Áp dụng
                     </button>
                   </div>
                 </form>
@@ -3921,15 +3922,15 @@ function CheckInAllocationContent() {
                 >
                   <div className="flex items-center justify-between border-b border-surface-variant px-4 py-3">
                     <div>
-                      <h2 className="text-sm font-semibold text-on-surface">Export PDF</h2>
-                      <p className="text-xs text-on-surface-variant">A4 landscape, one counter group per page</p>
+                      <h2 className="text-sm font-semibold text-on-surface">Xuất PDF</h2>
+                      <p className="text-xs text-on-surface-variant">Khổ A4 ngang, mỗi nhóm quầy một trang</p>
                     </div>
                     <button
                       type="button"
                       onClick={() => setExportDraft(null)}
                       disabled={exportingPdf}
                       className="flex h-8 w-8 items-center justify-center rounded border border-outline-variant hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
-                      aria-label="Close export PDF"
+                      aria-label="Đóng xuất PDF"
                     >
                       <span className="material-symbols-outlined text-[18px]">close</span>
                     </button>
@@ -3938,11 +3939,11 @@ function CheckInAllocationContent() {
                     <div className="grid min-w-0 content-start gap-4 overflow-y-auto overflow-x-hidden pr-1">
                       <section className="grid min-w-0 gap-3">
                         <div className="min-w-0">
-                          <h3 className="text-sm font-semibold text-on-surface">Configuration</h3>
-                          <p className="text-xs text-on-surface-variant">Set an export-only operational window.</p>
+                          <h3 className="text-sm font-semibold text-on-surface">Cấu hình</h3>
+                          <p className="text-xs text-on-surface-variant">Thiết lập khoảng thời gian vận hành chỉ dùng cho xuất tệp.</p>
                         </div>
                         <label className="grid min-w-0 gap-1 text-xs font-label-caps text-on-surface-variant">
-                          Start Datetime
+                          Thời gian bắt đầu
                           <input
                             type="datetime-local"
                             value={exportDraft.from}
@@ -3952,7 +3953,7 @@ function CheckInAllocationContent() {
                           />
                         </label>
                         <label className="grid min-w-0 gap-1 text-xs font-label-caps text-on-surface-variant">
-                          End Datetime
+                          Thời gian kết thúc
                           <input
                             type="datetime-local"
                             value={exportDraft.to}
@@ -3968,8 +3969,8 @@ function CheckInAllocationContent() {
                       <section className="grid min-w-0 gap-3">
                         <div className="flex min-w-0 items-center justify-between gap-2">
                           <div className="min-w-0">
-                            <h3 className="text-sm font-semibold text-on-surface">Counter Groups</h3>
-                            <p className="text-xs text-on-surface-variant">Each selected group renders as one PDF page.</p>
+                            <h3 className="text-sm font-semibold text-on-surface">Nhóm quầy</h3>
+                            <p className="text-xs text-on-surface-variant">Mỗi nhóm được chọn sẽ hiển thị trên một trang PDF.</p>
                           </div>
                           <div className="flex shrink-0 gap-1">
                             <button
@@ -3978,7 +3979,7 @@ function CheckInAllocationContent() {
                               disabled={exportingPdf || exportGroups.length === 0}
                               className="rounded border border-outline-variant px-2 py-1 text-xs font-semibold text-on-surface hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                              All
+                              Tất cả
                             </button>
                             <button
                               type="button"
@@ -3986,13 +3987,13 @@ function CheckInAllocationContent() {
                               disabled={exportingPdf || exportGroups.length === 0}
                               className="rounded border border-outline-variant px-2 py-1 text-xs font-semibold text-on-surface hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                              None
+                              Bỏ chọn
                             </button>
                           </div>
                         </div>
                         <div className="grid max-h-64 min-w-0 gap-2 overflow-y-auto overflow-x-hidden rounded border border-surface-variant bg-surface-container-low p-2">
                           {exportGroups.length === 0 ? (
-                            <p className="px-1 py-2 text-xs text-on-surface-variant">Choose a valid timeframe to load Counter Groups.</p>
+                            <p className="px-1 py-2 text-xs text-on-surface-variant">Chọn khoảng thời gian hợp lệ để tải Nhóm quầy.</p>
                           ) : exportGroups.map((group) => (
                             <label key={group.id} className="flex items-center gap-2 rounded border border-transparent px-2 py-1.5 text-sm text-on-surface hover:border-outline-variant hover:bg-surface-container">
                               <input
@@ -4009,7 +4010,7 @@ function CheckInAllocationContent() {
                                 className="h-4 w-4 accent-primary"
                               />
                               <span className="min-w-0 flex-1 truncate font-semibold">{group.name}</span>
-                              <span className="shrink-0 font-data-tabular text-xs text-on-surface-variant">{group.rowCount} rows</span>
+                              <span className="shrink-0 font-data-tabular text-xs text-on-surface-variant">{group.rowCount} dòng</span>
                             </label>
                           ))}
                         </div>
@@ -4029,7 +4030,7 @@ function CheckInAllocationContent() {
                       disabled={exportingPdf}
                       className="rounded border border-outline-variant px-3 py-1.5 text-sm font-semibold text-on-surface hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      Cancel
+                      Hủy
                     </button>
                     <button
                       type="submit"
@@ -4037,7 +4038,7 @@ function CheckInAllocationContent() {
                       className="inline-flex items-center gap-2 rounded bg-primary px-3 py-1.5 text-sm font-semibold text-on-primary hover:bg-primary-container hover:text-on-primary-container disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <span className={`material-symbols-outlined text-[18px] ${exportingPdf ? 'animate-spin' : ''}`}>{exportingPdf ? 'sync' : 'download'}</span>
-                      {exportingPdf ? 'Exporting' : 'Export PDF'}
+                      {exportingPdf ? 'Đang xuất…' : 'Xuất PDF'}
                     </button>
                   </div>
                 </form>
@@ -4062,7 +4063,7 @@ export default function CheckInAllocationPage() {
   return (
     <Suspense fallback={
       <LoadingStatusPanel
-        progress={buildLoadProgress('Loading check-in allocation...', 20, 'Preparing route')}
+        progress={buildLoadProgress('Đang tải phân bổ quầy...', 20, 'Đang chuẩn bị giao diện')}
         mode="fullscreen"
       />
     }>

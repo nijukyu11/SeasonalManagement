@@ -21,6 +21,7 @@ const ctx = await buildM0Fixture();
 const { db } = ctx;
 
 try {
+  await db.exec(await readFile(new URL('../migrations/20261009100000_operational_incremental_projection_v1.rollback.sql', import.meta.url), 'utf8'));
   // --- 0. Rollback Clean State Check ---------------------------------------
   console.log('Testing rollback cleanliness prior to applying migration...');
   await db.exec(await readFile(MIGRATION_URL, 'utf8'));

@@ -20,31 +20,31 @@ const fields: Array<{
 }> = [
   {
     key: 'arrivalBucketFlights',
-    label: 'ARR bucket threshold',
-    hint: 'Chuyến đến mỗi bucket',
+    label: 'Ngưỡng chuyến đến theo khung giờ',
+    hint: 'Số chuyến đến tối đa mỗi khung giờ',
     min: 1,
     max: 999,
     step: '1',
   },
   {
     key: 'departureBucketFlights',
-    label: 'DEP bucket threshold',
-    hint: 'Chuyến đi mỗi bucket',
+    label: 'Ngưỡng chuyến đi theo khung giờ',
+    hint: 'Số chuyến đi tối đa mỗi khung giờ',
     min: 1,
     max: 999,
     step: '1',
   },
   {
     key: 'adGapFlights',
-    label: 'A-D gap threshold',
-    hint: 'Chênh lệch đến/đi',
+    label: 'Ngưỡng chênh lệch chuyến đến/đi',
+    hint: 'Chênh lệch số chuyến đến và đi',
     min: 1,
     max: 999,
     step: '1',
   },
   {
     key: 'ctgAbsPct',
-    label: 'CTG threshold',
+    label: 'Ngưỡng CTG',
     hint: 'Ví dụ 0.2 = 20%',
     min: 0,
     max: 10,
@@ -52,7 +52,7 @@ const fields: Array<{
   },
   {
     key: 'paxCoverageMinPct',
-    label: 'Pax coverage minimum',
+    label: 'Tỷ lệ phủ hành khách tối thiểu',
     hint: 'Ví dụ 0.9 = 90%',
     min: 0,
     max: 1,
@@ -82,7 +82,7 @@ export default function DashboardAlertsTab({
       },
       updatedAt: now,
     }));
-    setStatus('Unsaved Dashboard Alerts change');
+    setStatus('Thay đổi cảnh báo tổng quan chưa được lưu');
   };
 
   return (

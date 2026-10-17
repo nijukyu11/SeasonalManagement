@@ -32,19 +32,19 @@ export default function AcGroupTab({
   return (
     <section className="grid gap-5 xl:grid-cols-[360px_1fr]">
       <div className="rounded-lg border border-surface-variant bg-surface-container-lowest p-4 shadow-sm">
-        <h2 className="font-title-md text-title-md text-on-surface">Create A/C Group</h2>
+        <h2 className="font-title-md text-title-md text-on-surface">Tạo nhóm tàu bay</h2>
         <div className="mt-4 space-y-3">
           <label className="block text-sm font-semibold text-on-surface">
-            Group name
+            Tên nhóm
             <input
               value={groupName}
               onChange={(event) => setGroupName(event.target.value)}
-              placeholder="Big"
+              placeholder="Tàu lớn"
               className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
             />
           </label>
           <label className="block text-sm font-semibold text-on-surface">
-            Aircraft types
+            Loại tàu bay
             <input
               value={groupAircraftTypes}
               onChange={(event) => setGroupAircraftTypes(event.target.value)}
@@ -58,22 +58,22 @@ export default function AcGroupTab({
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-on-primary hover:bg-primary-container hover:text-on-primary-container"
           >
             <span className="material-symbols-outlined text-[18px]">add</span>
-            Add Group
+            Thêm nhóm
           </button>
         </div>
       </div>
 
       <div className="rounded-lg border border-surface-variant bg-surface-container-lowest shadow-sm">
         <div className="border-b border-surface-variant px-4 py-3">
-          <h2 className="font-title-md text-title-md text-on-surface">A/C Groups</h2>
+          <h2 className="font-title-md text-title-md text-on-surface">Nhóm tàu bay</h2>
         </div>
         <div className="hidden grid-cols-[220px_1fr_56px] gap-3 border-b border-surface-variant bg-surface-container px-4 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-on-surface-variant lg:grid">
-          <span>Group</span>
-          <span>Aircraft types</span>
-          <span>Action</span>
+          <span>Nhóm</span>
+          <span>Loại tàu bay</span>
+          <span>Thao tác</span>
         </div>
         {settings.aircraftGroups.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-on-surface-variant">No A/C groups yet</div>
+          <div className="px-4 py-10 text-center text-sm text-on-surface-variant">Chưa có nhóm tàu bay</div>
         ) : (
           <div className="divide-y divide-surface-variant">
             {settings.aircraftGroups.map((group) => (
@@ -81,16 +81,16 @@ export default function AcGroupTab({
                 <input
                   value={group.name}
                   onChange={(event) => updateGroup(group.id, { name: event.target.value })}
-                  aria-label={`${group.name || 'A/C group'} name`}
+                  aria-label={`Tên ${group.name || 'nhóm tàu bay'}`}
                   className="rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
                 />
                 <input
                   value={joinCodes(group.aircraftTypes)}
                   onChange={(event) => updateGroup(group.id, { aircraftTypes: splitCodes(event.target.value) })}
-                  aria-label={`${group.name || 'A/C group'} aircraft types`}
+                  aria-label={`Loại tàu bay của ${group.name || 'nhóm tàu bay'}`}
                   className="rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none"
                 />
-                <DeleteIconButton label={`Delete ${group.name || 'A/C group'}`} onClick={() => void deleteGroup(group.id)} />
+                <DeleteIconButton label={`Xóa ${group.name || 'nhóm tàu bay'}`} onClick={() => void deleteGroup(group.id)} />
               </div>
             ))}
           </div>
