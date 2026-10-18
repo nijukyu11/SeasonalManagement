@@ -294,7 +294,29 @@ Phương án đã đề xuất (ghi lại để đối chiếu, xem kết quả 
 | Còn tồn tại (đã có trước khi gộp) | `tsc`: 3 lỗi `trafficHtmlPivotRuntime.ts` (giống nhánh Production); `test:dashboard-contract`: 2 test câu chữ Report Mode; `test:rules`: assertion thông báo sai tên sheet mùa (cùng lỗi ở `f3d32ab`). | đối chứng worktree `f3d32ab` |
 | Rủi ro thứ tự migration | PGlite v1 chạy migration nhánh report cùng chuỗi live-v2 của `main` → pass. Chuỗi đầy đủ (`createSeasonalOperationalSeparationDb`, mọi migration ≥ `20260828083000`, gồm `20260925121500_…acceleration` + `20260929120000_…reader_cutover`) + fixture M0 (`buildM0Fixture`) → `public.get_public_traffic_html_export_v2` + `validateHtmlEnvelope` + `renderTrafficHtmlReport` chạy được cho `WEEKLY_DETAIL`, `PERIOD_ANALYSIS`, `BAO_CAO_SAN_LUONG` (W26): KPI `flights` = 8 = số dòng `reporting.canonical_flight_legs`; Pax `null` đúng vì fixture có chặng `pax: null`. Lưu ý: checkout CRLF làm `20260911120000_…coverage_counts` từ chối chạy; phải chuẩn hóa LF trước khi chạy PGlite. `test:seasonal-operational-m1` fail (`commit_seasonal_publish_v1(...) does not exist`) — fail y hệt ở `f3d32ab` (trước gộp, đã chuẩn hóa LF), không do gộp. | script tạm ngoài repo, đã xóa |
 | 4. Nguồn phát hành | Từ nay build từ `main`. Skill `seasonalmanagement-traffic-report-release` đã cập nhật. | — |
-| 5. Variance | `codex/traffic-html-variance` = 2 commit rebase sạch lên `main` (`36276fd`, `18563c4`); contract suite, HTML export PGlite, `test-traffic-html-variance-regression.mjs` đều pass. Vẫn **chưa phát hành**, còn phải sửa L3/L7–L9 + in đủ 4 tab. | worktree `SeasonalManagement-report-merge` |
+| 5. Variance | `codex/traffic-html-variance` rebase lên `main` (`baddaba`): `ba71881` (WIP) + `595c6d2` (sửa audit). Contract suite, HTML export PGlite, `test-traffic-html-variance-regression.mjs`, `tsc` đều sạch. Vẫn **chưa phát hành**. | worktree `SeasonalManagement-report-merge` |
+
+### 6.2 Kết quả triển khai Nhóm 1–3 (2026-10-18)
+
+| Phạm vi | Mục audit | Commit | File chính |
+|---|---|---|---|
+| Desktop So sánh | 1.1, 1.2, 1.5, 1.7, 2.4, 2.5, 2.6, 3.6 | `baddaba` (`main`) | `dashboardAnalysis.ts` (formatter tỷ lệ ×100, chặn non-finite, loại pax `null` khỏi tổng + cảnh báo chặng thiếu), `dashboardReportExport.ts` (nhóm theo ngày khai thác), `(desktop)/reports/page.tsx`, test mới `dashboardAnalysis.test.ts` |
+| HTML offline | 1.4, 1.6, L3, 2.2, 2.7, 2.8, 3.2–3.4 | `baddaba` (`main`) | `trafficHtml{Pivot,Monthly,Report}Runtime.ts` + styles: `divisorOf` dùng chung cho TB/ngày và lời bình, formatter `-` cho non-finite, heatmap tương phản, `<details>` mở khi in rồi khôi phục, chia trang cột cho `BAO_CAO_SAN_LUONG`, Grand Total `100,00%` thống nhất |
+| Web công khai | 1.6, 2.3, 2.9, 3.4, 3.5 | `baddaba` (`main`) | `report.css` (sticky `thead` dưới thanh lọc, print CSS), các component `TrafficReport*`, `AnnualPassengerKpiDashboard.tsx` |
+| Variance | 1.3, 1.6, L7–L9, 2.1, 2.4, 2.9, 2.10, 3.1 | `595c6d2` (`codex/traffic-html-variance`) | `trafficHtmlVarianceRuntime.ts`/`Styles.ts`: nhóm mới/ngừng có Δ, khóa có quốc gia, Radar sắp theo \|ΔPax\|, in đủ 4 tab |
+
+Kiểm chứng đã chạy:
+
+| Kiểm tra | Kết quả |
+|---|---|
+| `test:traffic-report-contract`, `public_traffic_html_export_pglite`, unit HTML/pivot/workbook, `dashboardAnalysis.test.ts` | pass |
+| `tsc --noEmit` (`main` và nhánh Variance) | 0 lỗi (đã xử lý luôn 3 lỗi có sẵn ở `trafficHtmlPivotRuntime.ts`) |
+| `build:traffic-report` | pass (50 file) |
+| Smoke HTML offline (Edge headless, fixture PGlite) | `thead` sticky khi cuộn ở Weekly/Monthly/Báo cáo sản lượng; heatmap `hot-5` nền `rgb(29,78,216)` chữ trắng; `<details>` đều mở khi in và đóng lại sau đó; PDF A4 ngang 2/2/7 trang; không có `NaN`/`Infinity` |
+| Smoke web công khai (bản build + API Production, 1440×900) | `thead` bảng thị trường dính ở top 72px, ngay dưới thanh lọc (đáy 61px), khi bảng đã cuộn qua 398px; không có `NaN`/`Infinity` |
+| `test-traffic-html-variance-regression.mjs` | pass toàn bộ AC 2–5, L7, L8, 2.1/3.1, 2.4 |
+| Còn tồn tại (có sẵn trước khi sửa) | `test:dashboard-contract` 2 test câu chữ Report Mode; `test:rules` thông báo tên sheet mùa; 4 script Playwright `test-traffic-{pivot-improvements,pivot-layout,weekly-layout,monthly-layout}` fail giống hệt ở HEAD trước khi sửa |
+| Chưa kiểm được trực quan | Desktop `/reports` cần đăng nhập — dev server chỉ tới màn hình login; phần này mới được chứng minh bằng unit test |
 
 ---
 
