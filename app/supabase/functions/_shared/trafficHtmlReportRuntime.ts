@@ -432,5 +432,19 @@ export function mountTrafficHtmlReport(data: HtmlEnvelope, helpers: {
     comparisonTable(upcoming,allRows.filter(r=>r.period!=='previous'),'next','current');main.append(upcoming);
     if(rows.some(r=>r.pax_status!=='complete'||r.flight_coverage!=='complete'))main.append(el('p','Một phần số liệu còn thiếu. Dấu — không phải số 0; chênh lệch khách chỉ tính khi cả hai kỳ đủ dữ liệu.','notice'));
   }
+  let detailsState: Map<HTMLDetailsElement, boolean> | null = null;
+  window.addEventListener('beforeprint', () => {
+    detailsState = new Map();
+    document.querySelectorAll<HTMLDetailsElement>('details').forEach(d => {
+      detailsState!.set(d, d.open);
+      d.open = true;
+    });
+  });
+  window.addEventListener('afterprint', () => {
+    if (detailsState) {
+      detailsState.forEach((open, d) => { d.open = open; });
+      detailsState = null;
+    }
+  });
   render();
 }

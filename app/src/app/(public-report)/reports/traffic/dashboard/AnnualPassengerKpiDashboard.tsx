@@ -58,15 +58,15 @@ const dateTimeFormat = new Intl.DateTimeFormat('vi-VN', {
 });
 
 function displayNumber(value: number | null | undefined): string {
-  return value == null ? '—' : numberFormat.format(value);
+  return Number.isFinite(value) ? numberFormat.format(value as number) : '—';
 }
 
 function displayDecimal(value: number | null | undefined, suffix = ''): string {
-  return value == null ? '—' : `${decimalFormat.format(value)}${suffix}`;
+  return Number.isFinite(value) ? `${decimalFormat.format(value as number)}${suffix}` : '—';
 }
 
 function displayMillions(value: number | null | undefined): string {
-  return value == null ? '—' : `${millionFormat.format(value)}M`;
+  return Number.isFinite(value) ? `${millionFormat.format(value as number)}M` : '—';
 }
 
 function displayDate(value: string | null | undefined): string {
@@ -123,10 +123,13 @@ function statusLabel(status: AnnualKpiStatus): string {
   } as const)[status];
 }
 
-function statusTone(status: AnnualKpiStatus): 'amber' | 'cyan' | 'emerald' | 'muted' {
+type StatusTone = 'amber' | 'cyan' | 'emerald' | 'muted' | 'rose';
+
+function statusTone(status: AnnualKpiStatus): StatusTone {
   if (['ahead', 'achieved', 'exceeded'].includes(status)) return 'emerald';
   if (status === 'on_track') return 'cyan';
-  if (['at_risk', 'not_achieved'].includes(status)) return 'amber';
+  if (status === 'not_achieved') return 'rose';
+  if (status === 'at_risk') return 'amber';
   return 'muted';
 }
 
@@ -158,8 +161,9 @@ function DepartureIcon(props: SVGProps<SVGSVGElement>) {
   return <IconBase {...props}><path d="M2 16h20M5 12l4-2-1-7 2-1 3 6 5-2c2-.8 3 0 3 0s-1 2-3 3l-5 3-6 1-2-1Z" /></IconBase>;
 }
 
-function StatusIcon({ tone, ...props }: SVGProps<SVGSVGElement> & { tone: ReturnType<typeof statusTone> }) {
+function StatusIcon({ tone, ...props }: SVGProps<SVGSVGElement> & { tone: StatusTone }) {
   if (tone === 'muted') return <IconBase {...props}><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 17h.01" /></IconBase>;
+  if (tone === 'rose') return <IconBase {...props}><circle cx="12" cy="12" r="9" /><path d="m15 9-6 6M9 9l6 6" /></IconBase>;
   return <IconBase {...props}><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></IconBase>;
 }
 
@@ -557,7 +561,7 @@ export default function AnnualPassengerKpiDashboard() {
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0 flex-1">
                       <p className="status-heading text-base font-bold uppercase text-slate-900">Đánh giá tiến độ</p>
-                      <div className={cn('status-value mt-1.5 flex items-center gap-2.5', tone === 'amber' ? 'text-amber-800' : tone === 'cyan' ? 'text-sky-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-700')}>
+                      <div className={cn('status-value mt-1.5 flex items-center gap-2.5', tone === 'amber' ? 'text-amber-800' : tone === 'rose' ? 'text-rose-700' : tone === 'cyan' ? 'text-sky-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-700')}>
                         <StatusIcon tone={tone} className="size-9" />
                         <p className="text-4xl font-bold leading-none">{statusLabel(snapshot.status)}</p>
                       </div>

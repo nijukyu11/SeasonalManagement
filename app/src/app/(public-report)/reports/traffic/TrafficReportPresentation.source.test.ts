@@ -258,3 +258,29 @@ test('workbook dialog exposes all report families and accessible period/comparis
   assert.match(workbookDialogSource, /aria-labelledby="traffic-workbook-export-title"/);
   assert.match(workbookDialogSource, /safe-area-inset-bottom/);
 });
+
+test('public web formatters use Number.isFinite and render dash for non-finite values', () => {
+  assert.match(clientSource, /Number\.isFinite\(value\) \? numberFormat\.format\(value as number\) : '—'/);
+  assert.match(dimensionSource, /Number\.isFinite\(value\) \? numberFormat\.format\(value as number\) : '—'/);
+  assert.match(dimensionSource, /Number\.isFinite\(value\) \? `\$\{percentFormat\.format\(\(value as number\) \* 100\)\}%` : '—'/);
+  assert.match(trendSource, /Number\.isFinite\(value\) \? numberFormat\.format\(value as number\) : '—'/);
+  assert.match(advancedChartsSource, /Number\.isFinite\(value\) \? numberFormat\.format\(value\) : '—'/);
+});
+
+test('traffic report client handles comparison edge cases with neutral zero and new badge', () => {
+  assert.match(clientSource, /previous === 0\) \{\s*if \(current > 0\) return 'new';\s*if \(current === 0\) return 0;/);
+  assert.match(clientSource, /value === 'new'/);
+  assert.match(clientSource, /label \? `Mới · \$\{label\}` : 'Mới'/);
+  assert.match(clientSource, /isZero\s*\?\s*'bg-slate-100 text-slate-700'/);
+  assert.match(clientSource, /window\.addEventListener\('beforeprint', handleBeforePrint\)/);
+  assert.match(clientSource, /window\.addEventListener\('afterprint', handleAfterPrint\)/);
+});
+
+test('dimension section uses sticky thead with filter bar offset and fixed numeric widths', () => {
+  assert.match(dimensionSource, /sticky top-\[var\(--report-filter-bar-height,72px\)\]/);
+  assert.match(dimensionSource, /w-28 bg-white p-2 text-right tabular-nums/);
+  assert.match(dimensionSource, /w-36 bg-white p-2 text-right tabular-nums/);
+  assert.match(dimensionSource, /w-32 bg-white p-2 text-right tabular-nums/);
+  assert.match(dimensionSource, /w-40 bg-white p-2 text-right tabular-nums/);
+  assert.match(dimensionSource, /lg:overflow-visible/);
+});

@@ -1,5 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,600&display=swap');
 :root {
+  --report-filter-bar-height: 72px;
   --report-navy: #081322;
   --report-navy-soft: #10243b;
   --report-cyan: #00b4d8;
@@ -713,5 +714,81 @@ body:has(.kpi-admin-dialog[open]) {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+@page {
+  size: A4 landscape;
+  margin: 10mm;
+}
+
+@media print {
+  body.report-body,
+  #traffic-report-root {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    min-height: auto !important;
+    overflow: visible !important;
+  }
+
+  #traffic-report-root > header {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    border-bottom: 1px solid #cbd5e1 !important;
+  }
+
+  #traffic-report-root > header a,
+  #traffic-report-root > header span {
+    color: #0f172a !important;
+  }
+
+  .report-no-print,
+  .print\:hidden,
+  [data-report-sticky-bar],
+  .report-filter-dialog,
+  .kpi-admin-dialog,
+  dialog,
+  button,
+  select,
+  a[href*="export"] {
+    display: none !important;
+  }
+
+  table,
+  table[class*="min-w-"],
+  table.min-w-\[720px\],
+  table.min-w-\[1216px\] {
+    min-width: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    table-layout: auto !important;
+  }
+
+  div:has(> table),
+  [role="region"]:has(> table),
+  .overflow-x-auto,
+  .overflow-auto {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tr,
+  figure,
+  .report-card,
+  article,
+  section {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 }

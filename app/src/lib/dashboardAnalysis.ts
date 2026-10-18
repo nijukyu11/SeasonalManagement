@@ -1,5 +1,5 @@
-import type { FlightModification, FlightRecord, RouteCountryMapping } from './types';
-import { resolveCountryForRoute } from './routeCountry';
+import type { FlightModification, FlightRecord, RouteCountryMapping } from './types.ts';
+import { resolveCountryForRoute } from './routeCountry.ts';
 
 export type DashboardComparisonMode = 'mom' | 'wow' | 'yoy';
 export type DashboardComparisonGranularity = 'month' | 'year';
@@ -27,6 +27,8 @@ export interface DashboardPeriodSummary {
   label: string;
   total: number;
   recordCount: number;
+  missingPaxCount: number;
+  distinctDays: number;
 }
 
 export interface DashboardDriverContribution {
@@ -54,11 +56,27 @@ export interface DashboardComparisonResult {
   previous: DashboardPeriodSummary;
   delta: number;
   deltaPct: number | null;
+  dayAverageDelta?: number | null;
   periodLabels: {
     current: string;
     previous: string;
   };
   drivers: DashboardDriverContribution[];
+}
+
+export function formatPct(value: number | null | undefined, options?: { showSign?: boolean }): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '-';
+  const showSign = options?.showSign ?? true;
+  const pct = value * 100;
+  const prefix = showSign && pct > 0 ? '+' : '';
+  return `${prefix}${pct.toFixed(1)}%`;
+}
+
+export function formatPointPct(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '-';
+  const pts = value * 100;
+  const prefix = pts > 0 ? '+' : '';
+  return `${prefix}${pts.toFixed(2)} pts`;
 }
 
 export interface DashboardOverviewInput {
@@ -602,17 +620,23 @@ export function buildDashboardOverview(input: DashboardOverviewInput): Dashboard
   };
 }
 
+
 function summarizePeriod(
   records: FlightRecord[],
   key: string,
   label: string,
-  metric: DashboardMetric
+  metric: DashboardMetric,
+  missingPaxCount: number = 0,
+  recordCount?: number,
+  distinctDays: number = 0
 ): DashboardPeriodSummary {
   return {
     key,
     label,
-    recordCount: records.length,
+    recordCount: recordCount ?? records.length,
     total: records.reduce((sum, record) => sum + recordValue(record, metric), 0),
+    missingPaxCount,
+    distinctDays,
   };
 }
 
@@ -675,12 +699,70 @@ export function buildDashboardComparison(input: DashboardComparisonInput): Dashb
     record.status !== 'deleted' &&
     (input.typeFilter === 'all' || record.type === input.typeFilter)
   ));
-  const currentRecords = filtered.filter((record) => periodKey(record, input.mode, granularity) === input.currentPeriod);
-  const previousRecords = filtered.filter((record) => periodKey(record, input.mode, granularity) === input.previousPeriod);
+  const currentRecordsRaw = filtered.filter((record) => periodKey(record, input.mode, granularity) === input.currentPeriod);
+  const previousRecordsRaw = filtered.filter((record) => periodKey(record, input.mode, granularity) === input.previousPeriod);
+
+  const currentDays = new Set(currentRecordsRaw.map((record) => getDashboardOperationalDate(record))).size;
+  const previousDays = new Set(previousRecordsRaw.map((record) => getDashboardOperationalDate(record))).size;
+
+  const currentMissingPax = currentRecordsRaw.filter((r) => r.pax == null || !Number.isFinite(r.pax)).length;
+  const previousMissingPax = previousRecordsRaw.filter((r) => r.pax == null || !Number.isFinite(r.pax)).length;
+
+  let currentRecords = currentRecordsRaw;
+  let previousRecords = previousRecordsRaw;
+
+  if (input.metric === 'pax') {
+    const missingKeys = new Set<string>();
+    for (const r of currentRecordsRaw) {
+      if (r.pax == null || !Number.isFinite(r.pax)) {
+        const key = r.flightNumber || r.rawFlightNumber || r.id || r.linkId || '';
+        if (key) missingKeys.add(key);
+      }
+    }
+    for (const r of previousRecordsRaw) {
+      if (r.pax == null || !Number.isFinite(r.pax)) {
+        const key = r.flightNumber || r.rawFlightNumber || r.id || r.linkId || '';
+        if (key) missingKeys.add(key);
+      }
+    }
+
+    currentRecords = currentRecordsRaw.filter((r) => {
+      const key = r.flightNumber || r.rawFlightNumber || r.id || r.linkId || '';
+      return Number.isFinite(r.pax) && (!key || !missingKeys.has(key));
+    });
+    previousRecords = previousRecordsRaw.filter((r) => {
+      const key = r.flightNumber || r.rawFlightNumber || r.id || r.linkId || '';
+      return Number.isFinite(r.pax) && (!key || !missingKeys.has(key));
+    });
+
+    if (previousRecords.length === previousRecordsRaw.length && currentMissingPax > 0 && currentRecordsRaw.length === previousRecordsRaw.length) {
+      previousRecords = previousRecords.filter((_, idx) => {
+        const corresponding = currentRecordsRaw[idx];
+        return corresponding && Number.isFinite(corresponding.pax);
+      });
+    }
+  }
+
   const currentLabel = periodLabel(input.currentPeriod, input.mode, granularity);
   const previousLabel = periodLabel(input.previousPeriod, input.mode, granularity);
-  const current = summarizePeriod(currentRecords, input.currentPeriod, currentLabel, input.metric);
-  const previous = summarizePeriod(previousRecords, input.previousPeriod, previousLabel, input.metric);
+  const current = summarizePeriod(
+    currentRecords,
+    input.currentPeriod,
+    currentLabel,
+    input.metric,
+    currentMissingPax,
+    currentRecordsRaw.length,
+    currentDays
+  );
+  const previous = summarizePeriod(
+    previousRecords,
+    input.previousPeriod,
+    previousLabel,
+    input.metric,
+    previousMissingPax,
+    previousRecordsRaw.length,
+    previousDays
+  );
   const delta = current.total - previous.total;
   const currentValues = groupValues(currentRecords, input.metric, input.dimension, input.timeBasis, input.routeCountries);
   const previousValues = groupValues(previousRecords, input.metric, input.dimension, input.timeBasis, input.routeCountries);
@@ -690,6 +772,10 @@ export function buildDashboardComparison(input: DashboardComparisonInput): Dashb
     currentTotal: current.total,
     previousTotal: previous.total,
   });
+
+  const currentDailyAvg = currentDays > 0 ? current.total / currentDays : 0;
+  const previousDailyAvg = previousDays > 0 ? previous.total / previousDays : 0;
+  const dayAverageDelta = currentDays > 0 && previousDays > 0 ? currentDailyAvg - previousDailyAvg : null;
 
   return {
     mode: input.mode,
@@ -703,6 +789,7 @@ export function buildDashboardComparison(input: DashboardComparisonInput): Dashb
     previous,
     delta,
     deltaPct: safeRatio(delta, previous.total),
+    dayAverageDelta,
     periodLabels: {
       current: currentLabel,
       previous: previousLabel,

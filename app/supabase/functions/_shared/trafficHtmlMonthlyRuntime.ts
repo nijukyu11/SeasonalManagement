@@ -11,9 +11,9 @@ export function mountTrafficHtmlMonthly(data:HtmlEnvelope,helpers:{sum:typeof su
   const el=<K extends keyof HTMLElementTagNameMap>(tag:K,text?:string,cls?:string)=>{
     const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;
   };
-  const fmt=(n:number|null,decimals=0)=>n===null?'—':new Intl.NumberFormat('vi-VN',{maximumFractionDigits:decimals}).format(n);
-  const signed=(n:number|null)=>n===null?'—':`${n>0?'+':''}${fmt(n,1)}`;
-  const pct=(n:number|null)=>n===null?'—':`${signed(n*100)}%`;
+  const fmt=(n:number|null|undefined,decimals=0)=>typeof n==='number'&&Number.isFinite(n)?new Intl.NumberFormat('vi-VN',{maximumFractionDigits:decimals}).format(n):'—';
+  const signed=(n:number|null|undefined)=>typeof n==='number'&&Number.isFinite(n)?`${n>0?'+':''}${fmt(n,1)}`:'—';
+  const pct=(n:number|null|undefined)=>typeof n==='number'&&Number.isFinite(n)?`${signed(n*100)}%`:'—';
   const date=(v:string)=>`${v.slice(8,10)}/${v.slice(5,7)}/${v.slice(0,4)}`;
   const month=(id:string)=>{const p=periods.get(id);return p?`T${Number(p.from.slice(5,7))}/${p.from.slice(0,4)}`:'Chưa chọn';};
   const names={flights:'Chuyến bay',reported_pax:'Hành khách'},units={flights:'chuyến',reported_pax:'khách'},directions={all:'Tổng',A:'Đến',D:'Đi'};
@@ -102,12 +102,15 @@ export function mountTrafficHtmlMonthly(data:HtmlEnvelope,helpers:{sum:typeof su
     const dates = new Set(timelineRows.filter(r => r.period === periodId && (r.reported_pax !== null || (r.due_legs ?? 0) > 0)).map(r => r.grain.date));
     return dates.size > 0 ? dates.size : p.calendar_days;
   };
+  const divisorOf = (p: {id: string; calendar_days: number; contains_future?: boolean}, key: Metric) => {
+    const elapsed = elapsedDaysOf(p.id);
+    return (key === 'reported_pax' && p.contains_future && elapsed < p.calendar_days) ? elapsed : p.calendar_days;
+  };
 
   function metricCells(tr:HTMLTableRowElement,get:(p:string)=>HtmlMetric,key:Metric,averages=false){
     for(const id of ordered){const m=get(id),td=el('td',fmt(m[key]),`number ${id==='current'?'monthly-current':''}`);
       if(averages){
-        const p=periods.get(id)!, elapsed=elapsedDaysOf(id);
-        const divisor=(key==='reported_pax'&&p.contains_future&&elapsed<p.calendar_days)?elapsed:p.calendar_days;
+        const p=periods.get(id)!, divisor=divisorOf(p,key);
         td.append(el('small',`TB/ngày: ${m[key]===null?'—':fmt(m[key]!/divisor)}${divisor!==p.calendar_days?` (${divisor} ngày)`:''}`));
       }
       if(key==='reported_pax'&&m.pax_status==='partial'){
@@ -135,7 +138,7 @@ export function mountTrafficHtmlMonthly(data:HtmlEnvelope,helpers:{sum:typeof su
   }
   const headers=(grouped=false)=>[grouped?'Nhóm':'Chỉ tiêu',...(grouped?['Sản lượng']:[]),...ordered.map(month),...baselines.map(id=>`So ${month(id)} · Δ / %`)];
   const narrative=(get:(p:string)=>HtmlMetric,key:Metric)=>{
-    const value=get('current')[key];let text=`${names[key]}: ${fmt(value)} ${units[key]}; bình quân ${value===null?'—':fmt(value/current.calendar_days)} ${units[key]}/ngày.`;
+    const value=get('current')[key], divisor=divisorOf(current,key);let text=`${names[key]}: ${fmt(value)} ${units[key]}; bình quân ${value===null?'—':fmt(value/divisor)} ${units[key]}/ngày${divisor!==current.calendar_days?` (${divisor} ngày)`:''}.`;
     for(const b of baselines){const c=helpers.compare(get('current'),get(b),key);text+=c.delta===null?` Chưa đủ dữ liệu so với ${month(b)}.`:` So ${month(b)}: ${signed(c.delta)} ${units[key]} (${pct(c.percent)}).`;}
     return text;
   };
@@ -302,5 +305,19 @@ export function mountTrafficHtmlMonthly(data:HtmlEnvelope,helpers:{sum:typeof su
     if(rows.some(r=>r.pax_status!=='complete'||r.flight_coverage!=='complete'))main.append(el('p','Một phần số liệu chưa đầy đủ. Không tính chênh lệch hành khách khi một trong hai kỳ còn thiếu dữ liệu.','notice'));
     restoreFocus();
   }
+  let detailsState: Map<HTMLDetailsElement, boolean> | null = null;
+  window.addEventListener('beforeprint', () => {
+    detailsState = new Map();
+    document.querySelectorAll<HTMLDetailsElement>('details').forEach(d => {
+      detailsState!.set(d, d.open);
+      d.open = true;
+    });
+  });
+  window.addEventListener('afterprint', () => {
+    if (detailsState) {
+      detailsState.forEach((open, d) => { d.open = open; });
+      detailsState = null;
+    }
+  });
   render();
 }

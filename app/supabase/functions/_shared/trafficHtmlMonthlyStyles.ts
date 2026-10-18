@@ -8,7 +8,7 @@ export const trafficHtmlMonthlyStyles=`
 .monthly-report h3{font-size:16px;margin:0 0 10px}
 .monthly-report h4{font-size:14px;margin:10px 0 4px}
 .monthly-report th,.monthly-report td{padding:8px 10px}
-.monthly-report .table-scroll{max-height:none}
+.monthly-report .table-scroll{max-height:calc(100vh - 180px);max-height:70dvh}
 .monthly-report thead th{min-width:90px;font-size:13px}
 .monthly-report .name{min-width:175px;max-width:240px}
 .monthly-report .monthly-metric{text-align:left;font-weight:400;min-width:105px;font-size:13px}
@@ -42,7 +42,7 @@ export const trafficHtmlMonthlyStyles=`
 .monthly-swatch{display:inline-block;width:12px;height:12px;margin-right:6px}
 .monthly-report .charts{grid-template-columns:repeat(2,minmax(0,1fr))}
 @media(max-width:700px){.monthly-impact,.monthly-highlights,.monthly-report .charts{grid-template-columns:1fr}.monthly-report .name{min-width:145px;max-width:180px}.monthly-tools label{max-width:100%}.monthly-tools input{min-width:0}.monthly-report .pagination{gap:8px;flex-wrap:wrap}}
-@media print{.monthly-report .monthly-matrix table{min-width:0}.monthly-report th,.monthly-report td{padding:4px}.monthly-report thead th,.monthly-report .monthly-metric{font-size:9px;min-width:0}.monthly-report .number small{font-size:8px;white-space:normal}.monthly-report .name{min-width:0}.monthly-disclosure:not([open]){display:none}.monthly-impact{grid-template-columns:1fr 1fr}.monthly-reading p,.monthly-impact p,.monthly-impact li{font-size:10px}.monthly-footnote,.monthly-trend p{font-size:9px}.monthly-disclosure textarea,.monthly-disclosure>button{display:none}}
+@media print{.monthly-report .table-scroll{max-height:none!important;overflow:visible!important}.monthly-report .monthly-matrix table{min-width:0}.monthly-report th,.monthly-report td{padding:4px}.monthly-report thead th,.monthly-report .monthly-metric{font-size:9px;min-width:0}.monthly-report .number small{font-size:8px;white-space:normal}.monthly-report .name{min-width:0}.monthly-impact{grid-template-columns:1fr 1fr}.monthly-reading p,.monthly-impact p,.monthly-impact li{font-size:10px}.monthly-footnote,.monthly-trend p{font-size:9px}.monthly-disclosure textarea,.monthly-disclosure>button{display:none}.monthly-report .grand-total td,.monthly-report .grand-total th,.monthly-current,.diff-pos,.diff-neg,.diff-zero{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 .diff-pos{color:#15803d!important;font-weight:600}.diff-neg{color:#b91c1c!important;font-weight:600}.diff-zero{color:#64748b!important}
 .number small.diff-pos{color:#15803d!important}.number small.diff-neg{color:#b91c1c!important}.number small.diff-zero{color:#64748b!important}
 `;

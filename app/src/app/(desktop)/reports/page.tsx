@@ -5,6 +5,8 @@ import { useSearchParams } from 'next/navigation';
 import { TrafficReportModePanel } from '@/app/(desktop)/dashboard/components/TrafficReportModePanel';
 import {
   buildDashboardComparison,
+  formatPct,
+  formatPointPct,
   getDashboardOperationalDate,
   listDashboardPeriods,
   type DashboardComparisonGranularity,
@@ -78,26 +80,14 @@ const WATERFALL_DIMENSIONS: Array<{ value: DashboardDimension; label: string }> 
 const numberFormat = new Intl.NumberFormat('en-US');
 
 function formatValue(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+  if (value === null || value === undefined || !Number.isFinite(value)) return '-';
   return numberFormat.format(Math.round(value));
 }
 
 function formatDelta(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
+  if (value === null || value === undefined || !Number.isFinite(value)) return '-';
   const prefix = value > 0 ? '+' : '';
   return `${prefix}${numberFormat.format(Math.round(value))}`;
-}
-
-function formatPct(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  const prefix = value > 0 ? '+' : '';
-  return `${prefix}${value.toFixed(1)}%`;
-}
-
-function formatPointPct(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  const prefix = value > 0 ? '+' : '';
-  return `${prefix}${value.toFixed(2)} pts`;
 }
 
 function parseIsoDate(date: string): Date | null {
@@ -306,6 +296,10 @@ function ReportsContent() {
   const [currentPeriod, setCurrentPeriod] = useState<string>('');
   const [previousPeriod, setPreviousPeriod] = useState<string>('');
   const [selectedDriverKey, setSelectedDriverKey] = useState<string>('');
+  const [driverSortField, setDriverSortField] = useState<'ctg' | 'delta' | 'current'>('ctg');
+  const [driverSortDirection, setDriverSortDirection] = useState<'desc' | 'asc'>('desc');
+  const [showAllDrivers, setShowAllDrivers] = useState(false);
+  const [showAllRecords, setShowAllRecords] = useState(false);
   const [comparisonTrendMonth, setComparisonTrendMonth] = useState<string>('');
 
   // Initial load of seasons & mappings
@@ -536,15 +530,37 @@ function ReportsContent() {
     ...waterfallRows.map((row) => Math.abs(row.topDriver?.delta ?? 0))
   );
 
-  const ctgRankedDrivers = useMemo(() => {
-    return [...(comparison?.drivers ?? [])]
-      .filter((driver) => driver.ctgPct != null)
-      .sort((a, b) => Math.abs(b.ctgPct ?? 0) - Math.abs(a.ctgPct ?? 0) || Math.abs(b.delta) - Math.abs(a.delta));
-  }, [comparison]);
+  const handleDriverSortClick = useCallback((field: 'ctg' | 'delta' | 'current') => {
+    if (driverSortField === field) {
+      setDriverSortDirection((prev) => (prev === 'desc' ? 'asc' : 'desc'));
+    } else {
+      setDriverSortField(field);
+      setDriverSortDirection('desc');
+    }
+  }, [driverSortField]);
+
+  const sortedDrivers = useMemo(() => {
+    const list = [...(comparison?.drivers ?? [])];
+    return list.sort((a, b) => {
+      let cmp = 0;
+      if (driverSortField === 'ctg') {
+        cmp = Math.abs(b.ctgPct ?? 0) - Math.abs(a.ctgPct ?? 0) || Math.abs(b.delta) - Math.abs(a.delta);
+      } else if (driverSortField === 'delta') {
+        cmp = Math.abs(b.delta) - Math.abs(a.delta) || Math.abs(b.currentValue) - Math.abs(a.currentValue);
+      } else if (driverSortField === 'current') {
+        cmp = b.currentValue - a.currentValue;
+      }
+      return driverSortDirection === 'desc' ? cmp : -cmp;
+    });
+  }, [comparison?.drivers, driverSortField, driverSortDirection]);
+
+  const displayedDrivers = useMemo(() => {
+    return showAllDrivers ? sortedDrivers : sortedDrivers.slice(0, 15);
+  }, [showAllDrivers, sortedDrivers]);
 
   const selectedDriver = useMemo(() => {
-    return comparison?.drivers.find((driver) => driver.key === selectedDriverKey) ?? ctgRankedDrivers[0] ?? comparison?.drivers[0] ?? null;
-  }, [comparison, ctgRankedDrivers, selectedDriverKey]);
+    return comparison?.drivers.find((driver) => driver.key === selectedDriverKey) ?? sortedDrivers[0] ?? comparison?.drivers[0] ?? null;
+  }, [comparison, sortedDrivers, selectedDriverKey]);
 
   const selectedDriverRecords = useMemo(() => {
     if (!selectedDriver) return [];
@@ -585,7 +601,15 @@ function ReportsContent() {
 
   const topGain = comparison?.drivers.find((driver) => driver.delta > 0) ?? null;
   const topDrag = comparison?.drivers.find((driver) => driver.delta < 0) ?? null;
-  const topCtg = ctgRankedDrivers[0] ?? null;
+  const topCtg = useMemo(() => {
+    return [...(comparison?.drivers ?? [])]
+      .filter((driver) => driver.ctgPct != null)
+      .sort((a, b) => Math.abs(b.ctgPct ?? 0) - Math.abs(a.ctgPct ?? 0))[0] ?? null;
+  }, [comparison?.drivers]);
+
+  const displayedSelectedRecords = useMemo(() => {
+    return showAllRecords ? selectedDriverRecords : selectedDriverRecords.slice(0, 100);
+  }, [showAllRecords, selectedDriverRecords]);
   const topMixRows = comparison?.drivers.slice(0, 6) ?? [];
   const maxMixShare = Math.max(0.01, ...topMixRows.flatMap((driver) => [driver.currentShare, driver.previousShare]));
 
@@ -667,9 +691,9 @@ function ReportsContent() {
   }, [effectiveRecords, routeCountries, seasons, selectedSeasonId, timeBasis]);
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-100">
+    <div className="flex h-dvh flex-col overflow-hidden bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-100 print:h-auto print:overflow-visible">
       {/* Top Header & Sub-tab Switcher */}
-      <header className="flex-none border-b border-slate-200 bg-white px-5 py-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <header className="flex-none border-b border-slate-200 bg-white px-5 py-3 shadow-sm dark:border-slate-800 dark:bg-slate-900 print:hidden">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <span className="material-symbols-outlined text-[24px] text-primary">assessment</span>
@@ -712,13 +736,13 @@ function ReportsContent() {
       </header>
 
       {/* Main Body */}
-      <main className="flex-1 overflow-y-auto p-4 sm:p-5">
+      <main className="flex-1 overflow-y-auto p-4 sm:p-5 print:h-auto print:overflow-visible">
         {activeTab === 'traffic-report' ? (
           <TrafficReportModePanel />
         ) : (
           <div className="space-y-4">
             {/* Season & Control Bar for Comparison */}
-            <section className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <section className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm dark:border-slate-800 dark:bg-slate-900 print:hidden">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-3">
                   <label className="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-slate-300">
@@ -932,11 +956,36 @@ function ReportsContent() {
               </div>
             )}
 
-            {/* Pax coverage banner */}
+            {/* Incomplete period banner */}
+            {comparison && comparison.current.distinctDays !== comparison.previous.distinctDays && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-[18px] text-amber-600 dark:text-amber-400">warning</span>
+                  <span>
+                    Kỳ không đầy đủ: hiện tại {comparison.current.distinctDays} ngày, kỳ trước {comparison.previous.distinctDays} ngày — so sánh tổng có thể lệch
+                  </span>
+                </div>
+                {comparison.dayAverageDelta !== null && comparison.dayAverageDelta !== undefined && (
+                  <span className="font-semibold">
+                    Chênh lệch bình quân/ngày: {formatDelta(Math.round(comparison.dayAverageDelta * 10) / 10)} {metric === 'pax' ? 'khách/ngày' : 'chuyến/ngày'}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Pax coverage banner and missing pax warning chip */}
             {metric === 'pax' && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs font-medium text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
-                Tỷ lệ phủ số liệu khách khả dụng: <span className="font-bold">{formatPct(comparisonPaxCoverage.coveragePct)}</span>.
-                Khách thiếu số liệu &gt; 1 ngày: <span className="font-bold">{formatValue(comparisonPaxCoverage.missingAfterOneDay)}</span>.
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs font-medium text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+                <div>
+                  Tỷ lệ phủ số liệu khách khả dụng: <span className="font-bold">{formatPct(comparisonPaxCoverage.coveragePct, { showSign: false })}</span>.
+                  {' '}Khách thiếu số liệu &gt; 1 ngày: <span className="font-bold">{formatValue(comparisonPaxCoverage.missingAfterOneDay)}</span>.
+                </div>
+                {comparison && (comparison.current.missingPaxCount > 0 || comparison.previous.missingPaxCount > 0) && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-900/50 dark:text-amber-200">
+                    <span className="material-symbols-outlined text-[13px]">info</span>
+                    Tạm tính: {comparison.current.missingPaxCount > 0 && comparison.previous.missingPaxCount > 0 ? `hiện tại ${comparison.current.missingPaxCount}, kỳ trước ${comparison.previous.missingPaxCount}` : (comparison.current.missingPaxCount || comparison.previous.missingPaxCount)} chặng chưa có số khách
+                  </span>
+                )}
               </div>
             )}
 
@@ -995,12 +1044,12 @@ function ReportsContent() {
                           </span>
                           <span className="block h-2 rounded-full bg-slate-100 dark:bg-slate-800">
                             <span
-                              className={`block h-2 rounded-full ${delta >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                              className={`block h-2 rounded-full ${delta > 0 ? 'bg-emerald-500' : delta < 0 ? 'bg-rose-500' : 'bg-slate-400'}`}
                               style={{ width }}
                             />
                           </span>
                         </span>
-                        <span className={`text-right text-sm font-bold ${delta >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        <span className={`text-right text-sm font-bold ${delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
                           {formatDelta(delta)}
                         </span>
                       </button>
@@ -1069,7 +1118,7 @@ function ReportsContent() {
                   <h2 className="text-sm font-bold text-slate-900 dark:text-white">Xếp hạng CTG</h2>
                   <p className="text-xs text-slate-400">Hiện tại, kỳ trước, chênh lệch, CTG và dịch chuyển cơ cấu</p>
                 </div>
-                <div className="flex flex-wrap gap-1" aria-label="Nhóm tác nhân">
+                <div className="flex flex-wrap gap-1 print:hidden" aria-label="Nhóm tác nhân">
                   {DRIVER_TABS.map((tab) => (
                     <button
                       key={tab.value}
@@ -1087,21 +1136,48 @@ function ReportsContent() {
                   ))}
                 </div>
               </div>
-              <div className="max-h-[380px] overflow-auto rounded-lg border border-slate-200 dark:border-slate-800">
+              <div className="max-h-[380px] overflow-auto rounded-lg border border-slate-200 dark:border-slate-800 print:max-h-none print:overflow-visible">
                 <table className="min-w-[800px] w-full border-collapse text-xs">
                   <thead className="sticky top-0 z-10 bg-slate-100 text-[11px] font-bold uppercase tracking-wider text-slate-500 shadow-xs dark:bg-slate-800 dark:text-slate-400">
                     <tr>
                       <th className="px-3 py-2 text-left">Tác nhân</th>
-                      <th className="px-3 py-2 text-right">Hiện tại</th>
                       <th className="px-3 py-2 text-right">Kỳ trước</th>
-                      <th className="px-3 py-2 text-right">Chênh lệch</th>
+                      <th
+                        className="cursor-pointer select-none px-3 py-2 text-right hover:text-slate-800 dark:hover:text-slate-200"
+                        onClick={() => handleDriverSortClick('current')}
+                        aria-sort={driverSortField === 'current' ? (driverSortDirection === 'desc' ? 'descending' : 'ascending') : 'none'}
+                      >
+                        Hiện tại
+                        <span className="ml-1 inline-block text-[10px] text-slate-400">
+                          {driverSortField === 'current' ? (driverSortDirection === 'desc' ? '↓' : '↑') : '↕'}
+                        </span>
+                      </th>
+                      <th
+                        className="cursor-pointer select-none px-3 py-2 text-right hover:text-slate-800 dark:hover:text-slate-200"
+                        onClick={() => handleDriverSortClick('delta')}
+                        aria-sort={driverSortField === 'delta' ? (driverSortDirection === 'desc' ? 'descending' : 'ascending') : 'none'}
+                      >
+                        Chênh lệch
+                        <span className="ml-1 inline-block text-[10px] text-slate-400">
+                          {driverSortField === 'delta' ? (driverSortDirection === 'desc' ? '↓' : '↑') : '↕'}
+                        </span>
+                      </th>
                       <th className="px-3 py-2 text-right">Chênh lệch %</th>
-                      <th className="px-3 py-2 text-right">CTG</th>
-                      <th className="px-3 py-2 text-right">Dịch chuyển cơ cấu</th>
+                      <th
+                        className="cursor-pointer select-none px-3 py-2 text-right hover:text-slate-800 dark:hover:text-slate-200"
+                        onClick={() => handleDriverSortClick('ctg')}
+                        aria-sort={driverSortField === 'ctg' ? (driverSortDirection === 'desc' ? 'descending' : 'ascending') : 'none'}
+                      >
+                        CTG
+                        <span className="ml-1 inline-block text-[10px] text-slate-400">
+                          {driverSortField === 'ctg' ? (driverSortDirection === 'desc' ? '↓' : '↑') : '↕'}
+                        </span>
+                      </th>
+                      <th className="px-3 py-2 text-right">Δ cơ cấu</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {ctgRankedDrivers.slice(0, 15).map((driver) => (
+                    {displayedDrivers.map((driver) => (
                       <tr
                         key={driver.key}
                         onClick={() => setSelectedDriverKey(driver.key)}
@@ -1113,14 +1189,14 @@ function ReportsContent() {
                           {driver.label}
                         </td>
                         <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-300">
-                          {formatValue(driver.currentValue)}
+                          {formatValue(driver.previousValue)}
                         </td>
                         <td className="px-3 py-2 text-right text-slate-700 dark:text-slate-300">
-                          {formatValue(driver.previousValue)}
+                          {formatValue(driver.currentValue)}
                         </td>
                         <td
                           className={`px-3 py-2 text-right font-bold ${
-                            driver.delta >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                            driver.delta > 0 ? 'text-emerald-600' : driver.delta < 0 ? 'text-rose-600' : 'text-slate-500'
                           }`}
                         >
                           {formatDelta(driver.delta)}
@@ -1130,7 +1206,7 @@ function ReportsContent() {
                         <td className="px-3 py-2 text-right text-slate-500">{formatPointPct(driver.shareShift)}</td>
                       </tr>
                     ))}
-                    {ctgRankedDrivers.length === 0 && (
+                    {sortedDrivers.length === 0 && (
                       <tr>
                         <td colSpan={7} className="px-3 py-6 text-center text-slate-400">
                           Không có dòng xếp hạng cho kỳ đã chọn.
@@ -1139,6 +1215,17 @@ function ReportsContent() {
                     )}
                   </tbody>
                 </table>
+                {sortedDrivers.length > 15 && (
+                  <div className="flex justify-center border-t border-slate-100 p-2 dark:border-slate-800 print:hidden">
+                    <button
+                      type="button"
+                      onClick={() => setShowAllDrivers((prev) => !prev)}
+                      className="text-xs font-semibold text-primary hover:underline dark:text-primary-light"
+                    >
+                      {showAllDrivers ? 'Thu gọn' : `Xem tất cả (${sortedDrivers.length})`}
+                    </button>
+                  </div>
+                )}
               </div>
             </section>
 
@@ -1242,7 +1329,7 @@ function ReportsContent() {
                   {/* Daily breakdown of selected driver */}
                   <div className="lg:col-span-1">
                     <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Theo ngày vận hành</h3>
-                    <div className="max-h-[300px] overflow-auto rounded-lg border border-slate-200 text-xs dark:border-slate-800">
+                    <div className="max-h-[300px] overflow-auto rounded-lg border border-slate-200 text-xs dark:border-slate-800 print:max-h-none print:overflow-visible">
                       <table className="w-full border-collapse">
                         <thead className="sticky top-0 bg-slate-100 text-[10px] font-bold uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                           <tr>
@@ -1271,7 +1358,7 @@ function ReportsContent() {
                     <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">
                       Danh sách chuyến bay ({selectedDriverRecords.length} chuyến)
                     </h3>
-                    <div className="max-h-[300px] overflow-auto rounded-lg border border-slate-200 text-xs dark:border-slate-800">
+                    <div className="max-h-[300px] overflow-auto rounded-lg border border-slate-200 text-xs dark:border-slate-800 print:max-h-none print:overflow-visible">
                       <table className="min-w-[500px] w-full border-collapse">
                         <thead className="sticky top-0 bg-slate-100 text-[10px] font-bold uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                           <tr>
@@ -1285,7 +1372,7 @@ function ReportsContent() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                          {selectedDriverRecords.slice(0, 100).map((r, i) => (
+                          {displayedSelectedRecords.map((r, i) => (
                             <tr key={`${r.id}-${i}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                               <td className="px-2 py-1 text-slate-600 dark:text-slate-400">{r.date}</td>
                               <td className="px-2 py-1 font-bold text-slate-900 dark:text-white">{r.flightNumber}</td>
@@ -1299,6 +1386,17 @@ function ReportsContent() {
                         </tbody>
                       </table>
                     </div>
+                    {selectedDriverRecords.length > 100 && (
+                      <div className="flex justify-center border-t border-slate-100 p-2 dark:border-slate-800 print:hidden">
+                        <button
+                          type="button"
+                          onClick={() => setShowAllRecords((prev) => !prev)}
+                          className="text-xs font-semibold text-primary hover:underline dark:text-primary-light"
+                        >
+                          {showAllRecords ? 'Thu gọn' : `Xem tất cả (${selectedDriverRecords.length})`}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </section>

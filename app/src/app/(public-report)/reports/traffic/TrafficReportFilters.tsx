@@ -115,7 +115,7 @@ export function TrafficReportFilters({ filter, minOpsDate, maxOpsDate, latestCom
   };
 
   return (
-    <div className="sticky top-0 z-30 border-b border-slate-200 bg-white shadow-sm" data-report-sticky-bar>
+    <div className="sticky top-0 z-30 border-b border-slate-200 bg-white shadow-sm print:hidden report-no-print" data-report-sticky-bar>
       <div className="mx-auto flex min-h-12 max-w-[1400px] flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 sm:px-8">
         <p className="order-1 shrink-0 text-sm font-bold text-slate-900 tabular-nums">
           {formatDate(filter.from)}–{formatDate(filter.to)}

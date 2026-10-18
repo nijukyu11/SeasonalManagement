@@ -116,3 +116,19 @@ test('hidden editor uses server-side PIN session endpoints', () => {
   assert.match(source, /setTarget\(String\(savedConfig\.target_reported_pax\)\)/);
   assert.match(source, /await onSaved\(payload\.snapshot\)/);
 });
+
+test('wallboard maps not_achieved status to rose tone and guards formatters with Number.isFinite', () => {
+  assert.match(source, /status === 'not_achieved'\) return 'rose'/);
+  assert.match(source, /tone === 'rose' \? 'text-rose-700'/);
+  assert.match(source, /Number\.isFinite\(value\) \? numberFormat\.format\(value/);
+  assert.match(source, /Number\.isFinite\(value\) \? `\$\{decimalFormat\.format\(value/);
+  assert.match(source, /Number\.isFinite\(value\) \? `\$\{millionFormat\.format\(value/);
+});
+
+test('report.css defines A4 landscape print layout and hides interactive elements', () => {
+  assert.match(styles, /@page[\s\S]*?size:\s*A4 landscape/);
+  assert.match(styles, /@media print[\s\S]*?\[data-report-sticky-bar\]/);
+  assert.match(styles, /@media print[\s\S]*?table\[class\*="min-w-"\]/);
+  assert.match(styles, /thead[\s\S]*?display:\s*table-header-group/);
+  assert.match(styles, /break-inside:\s*avoid/);
+});

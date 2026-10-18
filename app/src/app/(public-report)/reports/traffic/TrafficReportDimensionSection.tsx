@@ -26,11 +26,11 @@ import { TrafficDimensionShareDonut } from './TrafficDimensionShareDonut';
 const numberFormat = new Intl.NumberFormat('vi-VN');
 const percentFormat = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
 
-function formatNumber(value: number | null): string {
-  return value == null ? '—' : numberFormat.format(value);
+function formatNumber(value: number | null | undefined): string {
+  return Number.isFinite(value) ? numberFormat.format(value as number) : '—';
 }
-function formatShare(value: number | null): string {
-  return value == null ? '—' : `${percentFormat.format(value * 100)}%`;
+function formatShare(value: number | null | undefined): string {
+  return Number.isFinite(value) ? `${percentFormat.format((value as number) * 100)}%` : '—';
 }
 
 function legacyDimensionShare(
@@ -214,7 +214,7 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
         <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div><h3 className="text-balance text-lg font-bold text-slate-950">Bảng dữ liệu {groupLabel.toLocaleLowerCase('vi-VN')}</h3><p className="mt-1 text-xs text-slate-600">Số liệu được tổng hợp theo đúng phạm vi đang chọn.</p></div>
-            <div className="flex flex-wrap items-end gap-2">
+            <div className="flex flex-wrap items-end gap-2 print:hidden report-no-print">
               <label className="text-xs font-semibold text-slate-700">Sắp xếp
                 <select className="report-focus ml-2 min-h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm focus-visible:outline-blue-900 focus-visible:ring-2 focus-visible:ring-blue-900 focus-visible:ring-offset-2" value={sort} onChange={(event) => { setSort(event.target.value as TrafficDimensionSort); setPage(1); }}>
                   <option value="flights">Số chuyến</option>
@@ -229,9 +229,9 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
           </div>
 
           {error ? <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900" role="alert"><p className="font-semibold">Không thể tải bảng dữ liệu</p><p className="mt-1">{error}</p><button className="report-focus mt-3 min-h-11 rounded-lg bg-rose-800 px-4 font-bold text-white focus-visible:outline-blue-900 focus-visible:ring-2 focus-visible:ring-blue-900 focus-visible:ring-offset-2" type="button" onClick={() => void loadTable()}>Thử lại</button></div> : null}
-          <p id={tableScrollHintId} className="mt-4 text-xs text-slate-600 sm:sr-only">Vuốt ngang để xem đầy đủ các cột.</p>
+          <p id={tableScrollHintId} className="mt-4 text-xs text-slate-600 sm:sr-only print:hidden report-no-print">Vuốt ngang để xem đầy đủ các cột.</p>
           <div
-            className="report-focus mt-2 overflow-x-auto rounded-lg focus-visible:outline-blue-900 focus-visible:ring-2 focus-visible:ring-blue-900 focus-visible:ring-offset-2 sm:mt-4"
+            className="report-focus mt-2 overflow-x-auto rounded-lg focus-visible:outline-blue-900 focus-visible:ring-2 focus-visible:ring-blue-900 focus-visible:ring-offset-2 sm:mt-4 lg:overflow-visible"
             role="region"
             tabIndex={0}
             aria-label={`Bảng dữ liệu ${groupLabel.toLocaleLowerCase('vi-VN')}, có thể cuộn ngang trên màn hình nhỏ`}
@@ -239,17 +239,33 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
           >
             <table className="w-full min-w-[720px] border-collapse text-left text-sm">
               <caption className="sr-only">{title} theo {groupLabel.toLocaleLowerCase('vi-VN')}</caption>
-              <thead><tr className="border-b border-slate-300 text-slate-600"><th className="p-2">{groupLabel}</th><th className="p-2 text-right">Chuyến bay</th><th className="p-2 text-right">Tỷ trọng chuyến bay</th><th className="p-2 text-right">Sản lượng khách</th><th className="p-2 text-right">Tỷ trọng sản lượng khách</th></tr></thead>
+              <thead className="sticky top-[var(--report-filter-bar-height,72px)] z-20 bg-white">
+                <tr className="border-b border-slate-300 bg-white text-slate-600 shadow-[0_1px_0_0_#cbd5e1]">
+                  <th className="bg-white p-2">{groupLabel}</th>
+                  <th className="w-28 bg-white p-2 text-right tabular-nums">Chuyến bay</th>
+                  <th className="w-36 bg-white p-2 text-right tabular-nums">Tỷ trọng chuyến bay</th>
+                  <th className="w-32 bg-white p-2 text-right tabular-nums">Sản lượng khách</th>
+                  <th className="w-40 bg-white p-2 text-right tabular-nums">Tỷ trọng sản lượng khách</th>
+                </tr>
+              </thead>
               <tbody>
                 {!loading && !error && visibleRows.map((row) => {
                   const displayLabel = /^unknown$/i.test(row.label.trim()) ? 'Chưa xác định' : row.label;
-                  return <tr key={row.key} className="border-b border-slate-100"><td className="p-2 font-semibold text-slate-800" title={displayLabel}>{displayLabel}</td><td className="p-2 text-right tabular-nums">{formatNumber(row.flights)}</td><td className="p-2 text-right tabular-nums">{formatShare(row.flight_share)}</td><td className="p-2 text-right tabular-nums">{formatNumber(row.reported_pax)}</td><td className="p-2 text-right tabular-nums">{formatShare(row.pax_share)}</td></tr>;
+                  return (
+                    <tr key={row.key} className="border-b border-slate-100">
+                      <td className="p-2 font-semibold text-slate-800" title={displayLabel}>{displayLabel}</td>
+                      <td className="w-28 p-2 text-right tabular-nums">{formatNumber(row.flights)}</td>
+                      <td className="w-36 p-2 text-right tabular-nums">{formatShare(row.flight_share)}</td>
+                      <td className="w-32 p-2 text-right tabular-nums">{formatNumber(row.reported_pax)}</td>
+                      <td className="w-40 p-2 text-right tabular-nums">{formatShare(row.pax_share)}</td>
+                    </tr>
+                  );
                 })}
                 {!loading && !error && visibleRows.length === 0 ? <tr><td className="p-4 text-sm text-slate-600" colSpan={5}>Chưa có dữ liệu trong phạm vi này.</td></tr> : null}
               </tbody>
             </table>
           </div>
-          {!loading && !error && data ? <div className="mt-4 flex items-center justify-between gap-3">
+          {!loading && !error && data ? <div className="mt-4 flex items-center justify-between gap-3 print:hidden report-no-print">
             <p className="text-xs text-slate-600">Trang {data.page} · {numberFormat.format(data.total_rows)} nhóm</p>
             <div className="flex gap-2">
               <button className="report-focus min-h-11 rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-700 focus-visible:outline-blue-900 focus-visible:ring-2 focus-visible:ring-blue-900 focus-visible:ring-offset-2 disabled:opacity-40" type="button" disabled={page <= 1 || loading} onClick={() => setPage((current) => Math.max(1, current - 1))}>Trang trước</button>

@@ -26,7 +26,7 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
   const labels: Record<string,string> = { airline:'Hãng hàng không',country:'Thị trường',route:'Chặng bay',date:'Ngày',month:'Tháng' };
   const metricLabels = { flights:'Chuyến bay',reported_pax:'Hành khách',flights_per_day:'TB Chuyến / Ngày',pax_per_flight:'Khách / Chuyến' };
   const dirLabels = { A:'Đến',D:'Đi',all:'Tổng' };
-  const fmt = (n: number | null, decimal = false) => n === null ? '—' : new Intl.NumberFormat('vi-VN',{maximumFractionDigits:decimal?2:0}).format(n);
+  const fmt = (n: number | null | undefined, decimal = false) => typeof n === 'number' && Number.isFinite(n) ? new Intl.NumberFormat('vi-VN',{maximumFractionDigits:decimal?2:0}).format(n) : '—';
   const date = (s: string) => `${s.slice(8,10)}/${s.slice(5,7)}/${s.slice(0,4)}`;
   const range = (p: {from:string;to:string}) => `${date(p.from)} – ${date(p.to)}`;
   const name = (field: string, value: unknown) => {
@@ -367,9 +367,23 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
   let observers:ResizeObserver[]=[];
   let printColumns:Column[]=[],printWidth=1;
 
+  let detailsState: Map<HTMLDetailsElement, boolean> | null = null;
+  function openAllDetails() {
+    detailsState = new Map();
+    document.querySelectorAll<HTMLDetailsElement>('details').forEach(d => {
+      detailsState!.set(d, d.open);
+      d.open = true;
+    });
+  }
+  function restoreDetails() {
+    if (detailsState) {
+      detailsState.forEach((open, d) => { d.open = open; });
+      detailsState = null;
+    }
+  }
   function clearPrint(){content.querySelector('.pivot-print-pages')?.remove();content.classList.remove('print-ready');}
   function preparePrint(){
-    clearPrint();if(bao||printColumns.length*printWidth<=8)return;
+    clearPrint();openAllDetails();if(printColumns.length*printWidth<=8)return;
     const source=content.querySelector('table');if(!source)return;
     const pages=el('div',undefined,'pivot-print-pages'),perPage=Math.max(1,Math.floor(8/printWidth));
     const context=content.querySelector('.print-context');
@@ -387,7 +401,7 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     }
     content.append(pages);content.classList.add('print-ready');
   }
-  window.onbeforeprint=preparePrint;window.onafterprint=clearPrint;
+  window.onbeforeprint=preparePrint;window.onafterprint=()=>{clearPrint();restoreDetails();};
 
   // Flyout Drawer Drill-down
   function showDrilldown(titleText: string, filterFn: (r: HtmlRow) => boolean) {
@@ -690,13 +704,13 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
       for(const c of colsShown)for(const k of keys(s))for(const d of dirs(s)){
         const kId = `${c.id}/${k}/${d}`;
         const m = measure(n.rows.filter(r=>r.flights!==null), c, d);
-        const v = k === 'reported_pax' ? (m.unreported_legs !== 0 ? null : m.reported_pax) : m[k];
+        const v = k === 'reported_pax' ? (m.unreported_legs !== 0 ? null : m.reported_pax) : k === 'flights' ? m.flights : null;
         if(v !== null && v > (colMaxMap.get(kId) ?? 0)) colMaxMap.set(kId, v);
       }
     }
     const values=(tr:HTMLTableRowElement,rs:Row[],nodeParts?:unknown[])=>{let firstValBlock=true;for(const c of colsShown){const valStart=!firstValBlock&&!c.total;const valCur=c.period===current.id&&!c.total;firstValBlock=false;for(const k of keys(s))for(const d of dirs(s)){
       const intersects=active.id!=='days'||rs.some(r=>r.period===c.period&&String(r.grain.date)>=c.from&&String(r.grain.date)<=c.to);
-      const m=intersects?measure(rs.filter(r=>r.flights!==null),c,d):sum([]);
+      const m=intersects?measure(rs.filter(r=>r.flights!==null),c,d):sum([],coverage(c,d));
       const drillFilter = (nodeParts && nodeParts.length) ? (r:HtmlRow) => {
         const field=String(nodeParts.at(-2)),val=nodeParts.at(-1);
         const matchField = field==='date' ? String(r.grain.date)===String(val) : String(r.grain[field])===String(val);
@@ -761,11 +775,11 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     const q=s.search.toLocaleLowerCase('vi');
     const allDays = data.calendar.filter(d=>d.period_id==='current'&&(!month||d.month===month)).map(d=>d.date).sort();
     const dailyMaxMap = new Map<string,number>();
-    for(const k of ['flights','reported_pax'] as Metric[])for(const d of ['A','D','all'] as Direction[]){
+    for(const k of ['flights','reported_pax'] as BaseMetric[])for(const d of ['A','D','all'] as Direction[]){
       let mx = 0;
       for(const day of allDays){
         const m = measure(rows,{id:day,period:'current',from:day,to:day,label:day},d);
-        const val = k==='reported_pax'?(m.unreported_legs!==0?null:m.reported_pax):m[k];
+        const val = k==='reported_pax'?(m.unreported_legs!==0?null:m.reported_pax):m.flights;
         if(val!==null&&val>mx) mx=val;
       }
       if(mx>0) dailyMaxMap.set(`${k}/${d}`, mx);
@@ -795,11 +809,11 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     const q=s.search.toLocaleLowerCase('vi');
     const buckets=new Map<string,string[]>();for(const d of data.calendar.filter(d=>d.period_id==='current')){const dates=buckets.get(d.business_week)??[];dates.push(d.date);buckets.set(d.business_week,dates);}
     const weeklyMaxMap = new Map<string,number>();
-    for(const k of ['flights','reported_pax'] as Metric[])for(const d of ['A','D','all'] as Direction[]){
+    for(const k of ['flights','reported_pax'] as BaseMetric[])for(const d of ['A','D','all'] as Direction[]){
       let mx = 0;
       for(const [,dates] of buckets){
         const m = measure(rows,{id:dates[0],period:'current',from:dates[0],to:dates.at(-1)!,label:dates[0]},d);
-        const val = k==='reported_pax'?(m.unreported_legs!==0?null:m.reported_pax):m[k];
+        const val = k==='reported_pax'?(m.unreported_legs!==0?null:m.reported_pax):m.flights;
         if(val!==null&&val>mx) mx=val;
       }
       if(mx>0) weeklyMaxMap.set(`${k}/${d}`, mx);
@@ -907,10 +921,10 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
       el('th', 'Grand Total', 'name'),
       el('td', fmt(Array.from(hourMap.values()).reduce((a,b)=>a+b.fA,0)), 'number'),
       el('td', fmt(Array.from(hourMap.values()).reduce((a,b)=>a+b.fD,0)), 'number'),
-      el('td', fmt(totF), 'number'), el('td', '100.00%', 'number'),
+      el('td', fmt(totF), 'number'), el('td', totF > 0 ? `${fmt(100, true)}%` : '—', 'number'),
       el('td', fmt(Array.from(hourMap.values()).reduce((a,b)=>a+b.pA,0)), 'number'),
       el('td', fmt(Array.from(hourMap.values()).reduce((a,b)=>a+b.pD,0)), 'number'),
-      el('td', fmt(totP), 'number'), el('td', '100.00%', 'number')
+      el('td', fmt(totP), 'number'), el('td', totP > 0 ? `${fmt(100, true)}%` : '—', 'number')
     );
     foot.append(tFoot);
     section.append(el('p', 'Phân bổ chuyến bay và hành khách theo 24 khung giờ. Màu nền thể hiện nồng độ cao điểm.', 'pivot-note'));

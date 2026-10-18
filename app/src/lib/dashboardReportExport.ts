@@ -1,8 +1,8 @@
 import * as XLSX from 'xlsx';
-import type { DashboardComparisonMode, DashboardComparisonResult, DashboardDimension, DashboardDriverContribution, DashboardMetric, DashboardTimeBasis, DashboardTypeFilter } from './dashboardAnalysis';
-import { saveWorkbookAsXlsx, workbookToXlsxBlob as sharedWorkbookToXlsxBlob, type ExportSaveResult } from './exportSave';
-import type { FlightRecord, RouteCountryMapping } from './types';
-import { resolveCountryForRoute } from './routeCountry';
+import { getDashboardOperationalDate, type DashboardComparisonMode, type DashboardComparisonResult, type DashboardDimension, type DashboardDriverContribution, type DashboardMetric, type DashboardTimeBasis, type DashboardTypeFilter } from './dashboardAnalysis.ts';
+import { saveWorkbookAsXlsx, workbookToXlsxBlob as sharedWorkbookToXlsxBlob, type ExportSaveResult } from './exportSave.ts';
+import type { FlightRecord, RouteCountryMapping } from './types.ts';
+import { resolveCountryForRoute } from './routeCountry.ts';
 
 export type DashboardReportTemplateId = 'mom-wow-analysis' | 'sanluong-summary';
 
@@ -101,7 +101,8 @@ export function buildDashboardReportRows(input: BuildDashboardReportRowsInput): 
       const localDateTime = formatLocalDateTime(record.date, record.schedule);
       const utcDateTime = formatUtcDateTime(record.date, record.schedule);
       const utcHour = utcDateTime ? Number(utcDateTime.slice(11, 13)) : null;
-      const parsedDate = parseIsoDate(record.date);
+      const opsDate = getDashboardOperationalDate(record);
+      const parsedOpsDate = parseIsoDate(opsDate);
       return {
         Type: record.type,
         Flight: record.flightNumber || `${record.airline}${record.rawFlightNumber}`,
@@ -111,15 +112,15 @@ export function buildDashboardReportRows(input: BuildDashboardReportRowsInput): 
         Pax: normalizeNumber(record.pax),
         Note: record.type === 'A' ? 'Bags Delivered' : 'Departed',
         Airlines: record.airline || 'Unknown',
-        'Ops Date': `${record.date} 00:00:00`,
+        'Ops Date': `${opsDate} 00:00:00`,
         Country: resolveCountryForRoute(record.route, input.routeCountries ?? undefined),
-        Weeknum: isoWeekNumber(record.date),
+        Weeknum: isoWeekNumber(opsDate),
         UTC: utcDateTime,
         HourUTC: Number.isFinite(utcHour) ? utcHour : null,
         'A/C Type': record.aircraft || 'Unknown',
-        DayIndex: parsedDate ? parsedDate.getUTCDate() : null,
-        Weekday: parsedDate ? WEEKDAY_LABELS[parsedDate.getUTCDay()] : 'Unknown',
-        IsoWeek: isoWeekKey(record.date),
+        DayIndex: parsedOpsDate ? parsedOpsDate.getUTCDate() : null,
+        Weekday: parsedOpsDate ? WEEKDAY_LABELS[parsedOpsDate.getUTCDay()] : 'Unknown',
+        IsoWeek: isoWeekKey(opsDate),
       };
     });
 }

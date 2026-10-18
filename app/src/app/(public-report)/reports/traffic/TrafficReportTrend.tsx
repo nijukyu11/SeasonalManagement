@@ -39,7 +39,7 @@ const scopeLabels: Record<TrafficType, string> = {
 };
 
 function formatNumber(value: number | null | undefined): string {
-  return value == null ? '—' : numberFormat.format(value);
+  return Number.isFinite(value) ? numberFormat.format(value as number) : '—';
 }
 function formatDate(value: string): string {
   return dateFormat.format(new Date(`${value}T12:00:00+07:00`));

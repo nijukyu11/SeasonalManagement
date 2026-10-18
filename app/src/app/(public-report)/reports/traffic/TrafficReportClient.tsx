@@ -37,7 +37,7 @@ const TRAFFIC_REPORT_V2_ENABLED = process.env.NEXT_PUBLIC_TRAFFIC_REPORT_V2_ENAB
 const workbookExportEnabled = process.env.NEXT_PUBLIC_TRAFFIC_WORKBOOK_EXPORT_ENABLED === 'true';
 
 function formatNumber(value: number | null | undefined): string {
-  return value == null ? '—' : numberFormat.format(value);
+  return Number.isFinite(value) ? numberFormat.format(value as number) : '—';
 }
 
 function formatDate(value: string | null | undefined): string {
@@ -45,15 +45,38 @@ function formatDate(value: string | null | undefined): string {
   return dateFormat.format(new Date(`${value}T12:00:00+07:00`));
 }
 
-function comparisonDelta(current: number | null, previous: number | null, available: boolean): number | null {
-  if (!available || current == null || previous == null || previous === 0) return null;
+type ComparisonDelta = number | 'new' | null;
+
+function comparisonDelta(current: number | null, previous: number | null, available: boolean): ComparisonDelta {
+  if (!available || current == null || previous == null) return null;
+  if (previous === 0) {
+    if (current > 0) return 'new';
+    if (current === 0) return 0;
+    return null;
+  }
   return ((current - previous) / previous) * 100;
 }
 
-function DeltaPill({ value, label }: { value: number; label: string }) {
+function DeltaPill({ value, label }: { value: ComparisonDelta; label: string }) {
+  if (value == null) return null;
+  if (value === 'new') {
+    return (
+      <span className="inline-flex min-h-7 max-w-full items-center rounded-full bg-emerald-50 px-2.5 text-pretty text-xs font-semibold leading-4 text-emerald-800">
+        {label ? `Mới · ${label}` : 'Mới'}
+      </span>
+    );
+  }
+  const isZero = value === 0;
+  const colorClass = isZero
+    ? 'bg-slate-100 text-slate-700'
+    : value > 0
+      ? 'bg-emerald-50 text-emerald-800'
+      : 'bg-rose-50 text-rose-800';
+  const prefix = isZero ? '' : value > 0 ? '+' : '';
+  const formatted = `${prefix}${percentFormat.format(value)}%`;
   return (
-    <span className={cn('inline-flex min-h-7 max-w-full items-center rounded-full px-2.5 text-pretty text-xs font-semibold leading-4', value >= 0 ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800')}>
-      {`${value >= 0 ? '+' : ''}${percentFormat.format(value)}% · ${label}`}
+    <span className={cn('inline-flex min-h-7 max-w-full items-center rounded-full px-2.5 text-pretty text-xs font-semibold leading-4', colorClass)}>
+      {label ? `${formatted} · ${label}` : formatted}
     </span>
   );
 }
@@ -61,7 +84,7 @@ function DeltaPill({ value, label }: { value: number; label: string }) {
 function KpiMetric({ label, value, delta, comparisonLabel, divided = false }: {
   label: string;
   value: number | null;
-  delta: number | null;
+  delta: ComparisonDelta;
   comparisonLabel: string;
   divided?: boolean;
 }) {
@@ -78,13 +101,13 @@ function KpiCard({ label, flights, pax, flightDelta, paxDelta, comparisonLabel, 
   label: string;
   flights: number | null;
   pax: number | null;
-  flightDelta: number | null;
-  paxDelta: number | null;
+  flightDelta: ComparisonDelta;
+  paxDelta: ComparisonDelta;
   comparisonLabel: string;
   insight?: string | null;
 }) {
   return (
-    <article className="flex min-w-0 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-label={`${label}: ${formatNumber(flights)} chuyến bay, sản lượng khách ${formatNumber(pax)}`}>
+    <article className="report-card flex min-w-0 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-label={`${label}: ${formatNumber(flights)} chuyến bay, sản lượng khách ${formatNumber(pax)}`}>
       <div>
         <h3 className="text-balance text-lg font-bold text-blue-950">{label}</h3>
         <dl className="mt-4 grid grid-cols-2 gap-4">
@@ -324,6 +347,29 @@ export default function TrafficReportClient() {
       reloadInFlightRef.current = false;
     });
   }, [normalizedFilter, requestBundle]);
+  useEffect(() => {
+    const openStates = new Map<HTMLDetailsElement, boolean>();
+    const handleBeforePrint = () => {
+      openStates.clear();
+      const detailsList = document.querySelectorAll<HTMLDetailsElement>('#traffic-report-root details, details');
+      detailsList.forEach((el) => {
+        openStates.set(el, el.open);
+        el.open = true;
+      });
+    };
+    const handleAfterPrint = () => {
+      openStates.forEach((wasOpen, el) => {
+        el.open = wasOpen;
+      });
+      openStates.clear();
+    };
+    window.addEventListener('beforeprint', handleBeforePrint);
+    window.addEventListener('afterprint', handleAfterPrint);
+    return () => {
+      window.removeEventListener('beforeprint', handleBeforePrint);
+      window.removeEventListener('afterprint', handleAfterPrint);
+    };
+  }, []);
   return (
     <>
       <h1 className="sr-only">Báo cáo sản lượng khai thác</h1>
@@ -479,7 +525,7 @@ export default function TrafficReportClient() {
             <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-balance text-2xl font-bold text-slate-950">Tải dữ liệu và cách đọc</h2>
               <p className="mt-3 text-pretty text-sm leading-6 text-slate-600">File tải xuống chỉ chứa dữ liệu tổng hợp theo bộ lọc đang áp dụng, không chứa thông tin từng chuyến bay.</p>
-              <div className="mt-5 flex flex-wrap gap-3">
+              <div className="mt-5 flex flex-wrap gap-3 print:hidden report-no-print">
                 {workbookExportEnabled ? <TrafficWorkbookExportDialog filter={normalizedFilter} minOpsDate={bundle.metadata.min_ops_date} maxOpsDate={bundle.metadata.max_ops_date} /> : null}
               </div>
               <details className="mt-5 rounded-xl bg-slate-50 p-4"><summary className="report-focus cursor-pointer rounded-sm font-semibold text-blue-900">Ghi chú dữ liệu</summary><ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600"><li>• Sản lượng khách chỉ tính số khách đã báo cáo; dấu — nghĩa là chưa có số liệu.</li><li>• Quốc gia chưa xác định được hiển thị là Unknown.</li><li>• File tải xuống sử dụng cùng phạm vi và bộ lọc với trang báo cáo.</li></ul></details>

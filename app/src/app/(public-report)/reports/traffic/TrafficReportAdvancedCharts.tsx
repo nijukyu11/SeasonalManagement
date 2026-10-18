@@ -32,12 +32,12 @@ type FleetMixRow = TrafficBreakdownRow & {
   children?: readonly TrafficBreakdownRow[];
 };
 
-function valueOrDash(value: number | null): string {
-  return value == null ? '—' : numberFormat.format(value);
+function valueOrDash(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? numberFormat.format(value) : '—';
 }
 
-function averageOrDash(value: number | null): string {
-  return value == null ? '—' : numberFormat.format(Math.round(value));
+function averageOrDash(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? numberFormat.format(Math.round(value)) : '—';
 }
 
 function regularFlightCode(flight: TrafficRegularFlight): string {
