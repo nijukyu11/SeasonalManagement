@@ -20,6 +20,8 @@ begin
   end if;
   for rel, priv in
     select t, unnest(p) from (values
+      ('reporting.canonical_flight_legs'::regclass, array['INSERT','DELETE']),
+      ('reporting.canonical_flight_legs_quarantine'::regclass, array['INSERT','DELETE']),
       ('reporting.operational_canonical_flight_legs'::regclass, array['SELECT','INSERT','DELETE']),
       ('reporting.operational_canonical_flight_legs_quarantine'::regclass, array['SELECT','INSERT','DELETE']),
       ('reporting.operational_canonical_flight_legs_state'::regclass, array['SELECT','INSERT','UPDATE'])
