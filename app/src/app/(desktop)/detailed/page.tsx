@@ -278,8 +278,8 @@ function DetailedScheduleContent() {
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [historyDraftTokens, setHistoryDraftTokens] = useState<{ revision: string | number; epoch: string | null }>({ revision: 0, epoch: null });
   const currentDetailedWindow = buildDetailedScheduleQueryWindow({
-    dateFrom: targetDateFrom || fromDate || null,
-    dateTo: targetDateTo || toDate || null,
+    dateFrom: fromDate || targetDateFrom || null,
+    dateTo: toDate || targetDateTo || null,
     targetArrFlight,
     targetDepFlight,
   });
@@ -349,8 +349,8 @@ function DetailedScheduleContent() {
     setAllLegs(finalAllLegs);
     setLegs(finalLegs);
     const companionMap = buildOvernightCompanionMap(finalLegs, finalAllLegs);
-    const visibleStart = targetDateFrom || fromDate || null;
-    const visibleEnd = targetDateTo || toDate || null;
+    const visibleStart = fromDate || targetDateFrom || null;
+    const visibleEnd = toDate || targetDateTo || null;
     const filteredCompanionMap = new Map<string, OvernightCompanionState>();
     for (const [key, comp] of companionMap.entries()) {
       const isOutside = Boolean(
@@ -402,7 +402,8 @@ function DetailedScheduleContent() {
   const syncCanonicalDraftAfterCommit = useCallback(async (
     targetSeason: NonNullable<typeof season>,
     committedRevision: string | number,
-    affectedIds: string[]
+    affectedIds: string[],
+    resetRowDates = false
   ): Promise<boolean> => {
     try {
       const draftData = await loadFullSeasonalDraftRecords(targetSeason.id, getSeasonalDraftWindowV1);
@@ -1593,7 +1594,18 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           ]);
           if (saveResult.result.receipt) {
             latestDraftRevisionRef.current = saveResult.result.receipt.revision;
-            await syncCanonicalDraftAfterCommit(season, saveResult.result.receipt.revision, affectedIds);
+            const scope = readDetailedRowScope(detailedScopeToken);
+            if (scope && scope.seasonId === season.id && detailedScopeToken) {
+              const ids = new Set(scope.recordIds);
+              for (const entry of entriesToUndo) {
+                const changes = entry.recordChanges ?? [];
+                if (changes.some(change => ids.has(change.recordId))) {
+                  for (const change of changes) ids.add(change.recordId);
+                }
+              }
+              extendDetailedRowScope(detailedScopeToken, [...ids]);
+            }
+            await syncCanonicalDraftAfterCommit(season, saveResult.result.receipt.revision, affectedIds, true);
           }
           setIsUndoOpen(false);
           void appendAuditLogEntry(createFlightActionAuditFromHistory({
@@ -1664,6 +1676,7 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
   }, [
     canonicalReloadError,
     captureDetailedOptimisticRollbackState,
+    detailedScopeToken,
     currentMods,
     flightRecords,
     isMutationBlocked,
@@ -2976,8 +2989,8 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
                                     <span className="opacity-70 truncate ml-1">{companion.flightNumber}</span>
                                   </div>
                                   {(() => {
-                                    const visibleStart = targetDateFrom || fromDate || null;
-                                    const visibleEnd = targetDateTo || toDate || null;
+                                    const visibleStart = fromDate || targetDateFrom || null;
+                                    const visibleEnd = toDate || targetDateTo || null;
                                     const isOutside = Boolean(
                                       (visibleStart && companion.date < visibleStart) ||
                                       (visibleEnd && companion.date > visibleEnd)
@@ -3047,8 +3060,8 @@ function LinkCandidateItem({ candidate, onApply }: LinkCandidateItemProps) {
           proposedMods={proposedMods} 
           recordsById={confirmRecordsById}
           nativeChangeCount={proposedMods.length}
-          fromDate={targetDateFrom || fromDate || null}
-          toDate={targetDateTo || toDate || null}
+          fromDate={fromDate || targetDateFrom || null}
+          toDate={toDate || targetDateTo || null}
           onConfirm={handleAddToDraft}
           isSaving={isSaving} 
           confirmLabel="LƯU VÀO BẢN NHÁP"
