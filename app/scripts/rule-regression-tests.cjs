@@ -8031,13 +8031,20 @@ async function run() {
       detailedPageSource.includes('prefillDateSelection={newFlightDateSelection}'),
     'Detailed Add Flight modal must accept a date selection vector instead of a single prefill date'
   );
-  assert(
-    detailedPageSource.includes('const hasExplicitDetailedFlightSelection = Boolean(targetArrFlight || targetDepFlight);') &&
-      detailedPageSource.includes('if (!hasExplicitDetailedFlightSelection) {') &&
-      detailedPageSource.includes("sessionStorage.setItem('detailed_arr', hasExplicitDetailedFlightSelection ? activeArr || '' : '');") &&
-      detailedPageSource.includes("sessionStorage.setItem('detailed_dep', hasExplicitDetailedFlightSelection ? activeDep || '' : '');"),
-    'Detailed season-only routes must not restore or persist stale ARR/DEP flight filters'
-  );
+  const { openDetailedRowScope, readDetailedRowScope } = await import('../src/lib/detailedRowScope.ts');
+  const scopeLegs = [
+    { id: 'arrival', date: '2026-11-01', linkedRecordId: 'departure' },
+    { id: 'departure', date: '2026-11-02', linkedRecordId: 'arrival' },
+    { id: 'other', date: '2026-11-03' },
+  ];
+  const firstScope = openDetailedRowScope('W26', new Set(['arrival']), scopeLegs);
+  require('node:assert/strict').deepEqual(readDetailedRowScope(firstScope.token), {
+    seasonId: 'W26', recordIds: ['arrival', 'departure'], dateFrom: '2026-11-01', dateTo: '2026-11-02',
+  });
+  const nextScope = openDetailedRowScope('W26', new Set(['other']), scopeLegs);
+  require('node:assert/strict').deepEqual(readDetailedRowScope(nextScope.token).recordIds, ['other']);
+  assert(readDetailedRowScope(firstScope.token) === null && readDetailedRowScope(null) === null,
+    'A previous row or direct route must not restore stale flights');
   assert(
     detailedPageSource.includes('runNativeScheduleMutation') &&
       detailedPageSource.includes('const detailedCommitSeqRef = useRef(0);') &&
@@ -8201,7 +8208,8 @@ async function run() {
     ) &&
       [detailedPageSource, dailyPageSource, checkInPageSource, gatePageSource].every((source) => !source.includes('saveLocalSeasonWorkspace')) &&
       (!seasonalPageSource.includes('saveLocalSeasonWorkspace') || seasonalPageSource.includes("nativeFullSaveReason: 'import-reset'")) &&
-      operationalRouteSources.every((source) => source.includes('loadSeasonWorkspaceWindow')) &&
+      [dailyPageSource, seasonalPageSource, checkInPageSource, gatePageSource].every((source) => source.includes('loadSeasonWorkspaceWindow')) &&
+      !detailedPageSource.includes('loadSeasonWorkspaceWindow') &&
       operationalRouteSources.every((source) => !/\bqueryNative(?:Schedule|Allocation|SourceRows)Window\b/.test(source)) &&
       checkInPageSource.includes('runNativeLocalModificationBatchDelta') &&
       gatePageSource.includes('runNativeLocalModificationBatchDelta'),
@@ -9957,13 +9965,6 @@ async function run() {
       detailedPageSource.includes('showAlert({') &&
       detailedPageSource.includes("title: 'Keyboard Shortcuts'"),
     'Detailed route must expose a Shortcuts action that documents the existing keyboard interactions'
-  );
-  assert(
-    detailedPageSource.includes('buildDetailedScheduleQueryWindow({') &&
-      detailedPageSource.includes('filterDetailedLegsForView(') &&
-      !detailedPageSource.includes('flightNumberFilter: targetArrFlight || targetDepFlight || null') &&
-      !detailedPageSource.includes('flightNumberFilter: activeArr || activeDep || null'),
-    'Detailed route must load enough schedule context to render linked-flight counterparts instead of filtering them out at the native query boundary'
   );
   assert(
     detailedPageSource.includes('assertNoDuplicateFlightNumbersForEffectiveRecords(') &&
