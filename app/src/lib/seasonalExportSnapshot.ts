@@ -33,6 +33,15 @@ export interface SeasonalExportSnapshotRows {
   modificationAddedLegs: JsonObject[];
 }
 
+export function isSeasonalExportSnapshotStaleError(error: unknown, planning: boolean): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const rpcError = error as { code?: unknown; message?: unknown };
+  if (rpcError.code !== 'PT409' || typeof rpcError.message !== 'string') return false;
+  return planning
+    ? /^get seasonal draft export snapshot v1: draft snapshot changed\b/i.test(rpcError.message)
+    : /^load strict seasonal export snapshot: stale seasonal export snapshot:/i.test(rpcError.message);
+}
+
 const SNAPSHOT_ARRAYS = [
   'flightRecords',
   'flightRecordCounters',

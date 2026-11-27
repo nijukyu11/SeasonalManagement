@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { cleanFlightNumber } from './parser';
 import { assertNoDuplicateFlightNumbers, linkFlightRecordPairs } from './atomicSchedule';
-import { buildOperationalFlightMetadata, getOperationalDate } from './iataSeason';
+import { buildOperationalFlightMetadata, getOperationalDate, getIataSeasonForOperationalDate } from './iataSeason';
 import {
   normalizeDailyCarouselValue,
   normalizeDailyCounterValue,
@@ -424,6 +424,9 @@ function parseImportedLeg(row: DailyImportRawRow, side: 'ARR' | 'DEP', rowNumber
   const flight = normalizeFlightIdentity(readColumn(row, [`${prefix}-AIRLINE_FLIGHT_SUFFIX`]).value);
   const scheduled = parseScheduled(readColumn(row, [`${prefix}-Scheduled`]).value);
   if (!flight || !scheduled) return null;
+  if (Object.prototype.hasOwnProperty.call(row, 'Summary-Type')) {
+    if (row['Summary-Type'] !== type) throw new Error('Summary Type phải là A hoặc D.');
+  }
 
   const updates: ImportedDailyLeg['updates'] = {
     schedule: scheduled.schedule,
@@ -451,6 +454,13 @@ function parseImportedLeg(row: DailyImportRawRow, side: 'ARR' | 'DEP', rowNumber
     flightNumber: flight.flightNumber,
     route,
   });
+  const explicitOpsDate = readColumn(row, [`${prefix}-OperationalDate`]);
+  if (explicitOpsDate.present) {
+    const parsed = parseDailyImportDateTime(explicitOpsDate.value);
+    if (!parsed?.date || parsed.time !== '00:00') throw new Error('Ops Date phải là ngày hợp lệ, không có giờ.');
+    metadata.operationalDate = parsed.date;
+    metadata.iataSeasonCode = getIataSeasonForOperationalDate(parsed.date).code;
+  }
 
   return {
     side,

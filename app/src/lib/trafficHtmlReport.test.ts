@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeHtmlRequest,sumHtmlMetrics,compareHtmlMetrics,type HtmlEnvelope } from '../../supabase/functions/_shared/trafficHtmlReportContract.ts';
+import { normalizeHtmlRequest,sumHtmlMetrics,compareHtmlMetrics,classifyHtmlChange,type HtmlEnvelope,type HtmlMetric } from '../../supabase/functions/_shared/trafficHtmlReportContract.ts';
 import { validateHtmlEnvelope } from '../../supabase/functions/_shared/trafficHtmlReportModel.ts';
 import { renderTrafficHtmlReport } from '../../supabase/functions/_shared/trafficHtmlReportRenderer.ts';
 import { createHtmlTestDatabase,htmlFixture } from '../../supabase/tests/public_traffic_html_export_pglite.mjs';
@@ -21,6 +21,21 @@ test('offline math preserves missing, true zero and computes provisional Pax com
   assert.deepEqual(compareHtmlMetrics({...zero,unreported_legs:1},zero,'reported_pax'),{delta:0,percent:null,provisional:true});
   assert.deepEqual(compareHtmlMetrics({...zero,reported_legs:0},zero,'reported_pax'),{delta:null,percent:null,provisional:false});
   assert.deepEqual(compareHtmlMetrics({...zero,flights:10,flight_coverage:'partial'},{...zero,flights:5},'flights'),{delta:5,percent:1,provisional:true});
+});
+test('zero aggregates require complete coverage and partial baselines remain unknown',()=>{
+  const zero=sumHtmlMetrics([],'complete');
+  const partial=sumHtmlMetrics([zero,{...zero,flights:null,unreported_legs:null,flight_coverage:'partial'}]);
+  const complete=sumHtmlMetrics([zero,zero]);
+  assert.equal(partial.flight_coverage,'partial');
+  assert.equal(partial.flights,null);
+  assert.equal(partial.unreported_legs,null);
+  assert.equal(complete.flight_coverage,'complete');
+  assert.equal(complete.flights,0);
+  assert.equal(complete.unreported_legs,0);
+  const current:HtmlMetric={...zero,flights:1,reported_pax:180,reported_legs:1,due_legs:1,unreported_legs:0,pax_status:'complete'};
+  assert.deepEqual(compareHtmlMetrics(current,partial,'flights'),{delta:null,percent:null,provisional:false});
+  assert.deepEqual(compareHtmlMetrics(current,partial,'reported_pax'),{delta:null,percent:null,provisional:false});
+  assert.deepEqual(compareHtmlMetrics(current,complete,'reported_pax'),{delta:180,percent:null,provisional:false});
 });
 test('monthly has four calendar months and prior-year MoM only when both comparisons are selected',async()=>{
   const db=await createHtmlTestDatabase();
@@ -219,4 +234,123 @@ test('traffic HTML offline improvements: divisor equality, fmt non-finite safety
     globalScope.document = originalDoc;
     globalScope.window = originalWin;
   }
+});
+
+test('classifyHtmlChange handles new, dropped, changed, unchanged, and missing semantics', () => {
+  const baseMetric: HtmlMetric = {
+    flights: 10,
+    reported_pax: 1000,
+    reported_legs: 10,
+    due_legs: 10,
+    missing_due_legs: 0,
+    true_zero_reported_legs: 0,
+    unreported_legs: 0,
+    flight_coverage: 'complete',
+    pax_status: 'complete'
+  };
+  const zeroFlightMetric: HtmlMetric = {
+    ...baseMetric,
+    flights: 0,
+    reported_pax: null,
+    reported_legs: 0,
+    due_legs: 0,
+    flight_coverage: 'complete',
+    pax_status: 'complete'
+  };
+  const missingMetric: HtmlMetric = {
+    ...baseMetric,
+    flights: null,
+    reported_pax: null,
+    flight_coverage: 'missing',
+    pax_status: 'missing'
+  };
+
+  // 1. flights semantics
+  assert.equal(classifyHtmlChange(baseMetric, zeroFlightMetric, 'flights'), 'new');
+  assert.equal(classifyHtmlChange(zeroFlightMetric, baseMetric, 'flights'), 'dropped');
+  assert.equal(classifyHtmlChange(baseMetric, baseMetric, 'flights'), 'unchanged');
+  assert.equal(classifyHtmlChange({ ...baseMetric, flights: 12 }, baseMetric, 'flights'), 'changed');
+  assert.equal(classifyHtmlChange(baseMetric, missingMetric, 'flights'), 'missing');
+  assert.equal(classifyHtmlChange(missingMetric, baseMetric, 'flights'), 'missing');
+
+  // 2. reported_pax semantics
+  // New route: baseline had 0 flights, current has reported pax
+  assert.equal(classifyHtmlChange(baseMetric, zeroFlightMetric, 'reported_pax'), 'new');
+  // Dropped route: current has 0 flights, baseline had reported pax
+  assert.equal(classifyHtmlChange(zeroFlightMetric, baseMetric, 'reported_pax'), 'dropped');
+  // Unchanged
+  assert.equal(classifyHtmlChange(baseMetric, baseMetric, 'reported_pax'), 'unchanged');
+  // Changed
+  assert.equal(classifyHtmlChange({ ...baseMetric, reported_pax: 1200 }, baseMetric, 'reported_pax'), 'changed');
+  // Missing legs/pax
+  assert.equal(classifyHtmlChange({ ...baseMetric, reported_legs: 0 }, baseMetric, 'reported_pax'), 'missing');
+  assert.equal(classifyHtmlChange(baseMetric, { ...baseMetric, reported_pax: null }, 'reported_pax'), 'missing');
+  // 0 pax to >0 pax
+  const zeroPaxMetric: HtmlMetric = { ...baseMetric, reported_pax: 0 };
+  assert.equal(classifyHtmlChange(baseMetric, zeroPaxMetric, 'reported_pax'), 'new');
+  assert.equal(classifyHtmlChange(zeroPaxMetric, baseMetric, 'reported_pax'), 'dropped');
+});
+
+test('compareHtmlMetrics compares reported_pax against 0-flight baseline as delta with null percent and handles dropped route', () => {
+  const cur: HtmlMetric = {
+    flights: 5,
+    reported_pax: 750,
+    reported_legs: 5,
+    due_legs: 5,
+    missing_due_legs: 0,
+    true_zero_reported_legs: 0,
+    unreported_legs: 0,
+    flight_coverage: 'complete',
+    pax_status: 'complete'
+  };
+  const baseZeroFlights: HtmlMetric = {
+    flights: 0,
+    reported_pax: null,
+    reported_legs: 0,
+    due_legs: 0,
+    missing_due_legs: 0,
+    true_zero_reported_legs: 0,
+    unreported_legs: 0,
+    flight_coverage: 'complete',
+    pax_status: 'complete'
+  };
+  // New route: baseline 0 flights -> current pax delta = +750, percent = null, provisional = false
+  const resNew = compareHtmlMetrics(cur, baseZeroFlights, 'reported_pax');
+  assert.deepEqual(resNew, { delta: 750, percent: null, provisional: false });
+
+  // If current is provisional (e.g. unreported_legs > 0)
+  const resNewProv = compareHtmlMetrics({ ...cur, unreported_legs: 1 }, baseZeroFlights, 'reported_pax');
+  assert.deepEqual(resNewProv, { delta: 750, percent: null, provisional: true });
+
+  // Dropped route: current 0 flights -> delta = -750, percent = -1
+  const resDropped = compareHtmlMetrics(baseZeroFlights, cur, 'reported_pax');
+  assert.deepEqual(resDropped, { delta: -750, percent: -1, provisional: false });
+
+  // If flights > 0 but reported_legs === 0 -> null delta
+  const noLegs: HtmlMetric = { ...cur, reported_legs: 0, reported_pax: null };
+  assert.deepEqual(compareHtmlMetrics(noLegs, cur, 'reported_pax'), { delta: null, percent: null, provisional: false });
+});
+
+test('Word draft print styling and diff-warn styles are present in HTML styles and renderer', () => {
+  // Monthly word print hidden on screen and visible on print
+  assert.match(trafficHtmlMonthlyStyles, /\.monthly-word-print\{display:none\}/);
+  assert.match(trafficHtmlMonthlyStyles, /\.monthly-word-print\{display:block!important;white-space:pre-line;font-size:12px;margin-top:6px\}/);
+  assert.match(trafficHtmlMonthlyStyles, /\.monthly-disclosure textarea,\.monthly-disclosure button\{display:none!important\}/);
+
+  // diff-warn present in Monthly and Pivot styles
+  assert.match(trafficHtmlMonthlyStyles, /\.diff-warn\{color:#b45309!important;font-weight:600\}/);
+  assert.match(trafficHtmlPivotStyles, /\.diff-warn\{color:#b45309!important;font-weight:600\}/);
+  assert.match(trafficHtmlMonthlyStyles, /\.diff-warn\{-webkit-print-color-adjust:exact;print-color-adjust:exact\}/);
+  assert.match(trafficHtmlPivotStyles, /\.diff-warn\{-webkit-print-color-adjust:exact;print-color-adjust:exact\}/);
+});
+
+test('Unified Report Shell and PivotStyleLight16 (Option A) styles and runtime parity', () => {
+  assert.match(trafficHtmlMonthlyStyles, /\.monthly-report #report\{max-width:1680px\}/);
+  assert.match(trafficHtmlPivotStyles, /\.pivot-report #report\{max-width:1680px;padding:12px 16px\}/);
+  assert.match(trafficHtmlPivotStyles, /tr\.pivot-group\.pivot-has-children th,\.pivot-report tbody tr\.pivot-group\.pivot-has-children td\{background-color:#f1f5f9;font-weight:700/);
+  assert.match(trafficHtmlPivotStyles, /tr\.pivot-child\.pivot-subgroup th,\.pivot-report tbody tr\.pivot-child\.pivot-subgroup td\{background-color:#f8fafc;font-weight:600/);
+  assert.match(trafficHtmlPivotStyles, /tr\.pivot-leaf th,\.pivot-report tbody tr\.pivot-leaf td\{background-color:#ffffff;color:#334155\}/);
+  assert.match(trafficHtmlPivotStyles, /tr\.pivot-leaf td\.is-peak\{background-color:#eff6ff;color:#1e40af;font-weight:600\}/);
+  assert.match(trafficHtmlPivotStyles, /\.grand-total>\*\{background:#dbeafe;color:#1e3a8a;font-weight:700/);
+  assert.doesNotMatch(trafficHtmlPivotStyles, /\.pivot-cell-bar/);
 });

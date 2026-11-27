@@ -7,13 +7,14 @@ import PbbIcon from './PbbIcon';
 import { isOperationalScheduleV1Enabled } from '@/lib/operationalScheduleContract';
 import { useOperationalScheduleStore } from '@/lib/operationalScheduleAdapter';
 import { isSeasonalRestoreBlockedSync, useSeasonalRestoreBlocked } from '@/lib/seasonalRestoreJournal';
+import { isSeasonalPlanningV1Enabled } from '@/lib/seasonalPlanningContract';
+import { isSeasonalPlanningBlockedSync, useSeasonalPlanningBlocked } from '@/lib/seasonalPlanningSaveManager';
 const SIDEBAR_COLLAPSED_KEY = 'appSidebarCollapsed';
 const APP_SIDEBAR_LAST_MODULE_ROUTE_PREFIX = 'appSidebarLastModuleRoute:';
 
 const NAV_ITEMS = [
   { href: '/', label: 'Tổng quan', icon: 'dashboard' },
   { href: '/seasonal', label: 'Lịch mùa', icon: 'table_chart' },
-  { href: '/detailed', label: 'Lịch chi tiết', icon: 'calendar_month' },
   { href: '/daily', label: 'Lịch ngày', icon: 'view_list' },
   { href: '/checkin', label: 'Phân bổ quầy', icon: 'countertops' },
   { href: '/gate', label: 'Phân bổ cửa', icon: 'pbb' },
@@ -113,7 +114,8 @@ export default function AppSidebar() {
   const currentSearch = searchParams.toString();
   const operationalWritePending = useOperationalScheduleStore((state) => state.mutating || state.importing || Boolean(state.unresolvedAttempt));
   const seasonalRestoreBlocked = useSeasonalRestoreBlocked();
-  const navigationBlocked = (isOperationalScheduleV1Enabled() && operationalWritePending) || seasonalRestoreBlocked;
+  const seasonalPlanningBlocked = useSeasonalPlanningBlocked();
+  const navigationBlocked = (isOperationalScheduleV1Enabled() && operationalWritePending) || seasonalRestoreBlocked || (isSeasonalPlanningV1Enabled() && seasonalPlanningBlocked);
   useEffect(() => {
     if (!navigationBlocked) return;
     const preventUnload = (event: BeforeUnloadEvent) => {
@@ -156,6 +158,7 @@ export default function AppSidebar() {
     const pending = useOperationalScheduleStore.getState();
     if (isOperationalScheduleV1Enabled() && (pending.mutating || pending.importing || pending.unresolvedAttempt)) return;
     if (isSeasonalRestoreBlockedSync()) return;
+    if (isSeasonalPlanningV1Enabled() && isSeasonalPlanningBlockedSync()) return;
     router.push(href);
   }, [router]);
 
@@ -272,11 +275,14 @@ export default function AppSidebar() {
           {collapsed ? (
             <button
               type="button"
-              onClick={() => void operatorAuth.signOut()}
+              onClick={() => {
+                if (navigationBlocked) return;
+                void operatorAuth.signOut();
+              }}
               className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white"
               title={`Đăng xuất ${operatorAuth.operatorLabel}`}
               aria-label="Đăng xuất"
-              disabled={operatorAuth.signingOut}
+              disabled={navigationBlocked || operatorAuth.signingOut}
             >
               <span className="material-symbols-outlined text-[20px]">logout</span>
             </button>
@@ -290,9 +296,12 @@ export default function AppSidebar() {
               </div>
               <button
                 type="button"
-                onClick={() => void operatorAuth.signOut()}
+                onClick={() => {
+                  if (navigationBlocked) return;
+                  void operatorAuth.signOut();
+                }}
                 className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                disabled={operatorAuth.signingOut}
+                disabled={navigationBlocked || operatorAuth.signingOut}
               >
                 <span className="material-symbols-outlined text-[17px]">logout</span>
                 {operatorAuth.signingOut ? 'Đang đăng xuất...' : 'Đăng xuất'}

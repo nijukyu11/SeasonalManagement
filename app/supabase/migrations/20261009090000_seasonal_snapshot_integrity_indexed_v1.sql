@@ -10,6 +10,8 @@
 -- ============================================================================
 
 begin;
+set local lock_timeout = '15s';
+set local statement_timeout = '300s';
 
 -- ---------------------------------------------------------------------------
 -- 1. Certified active_flight_count column on seasonal_publish_snapshots

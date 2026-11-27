@@ -103,6 +103,24 @@ export function TrafficTrendTable({
     setLoadingMonths(new Set());
   }, [filter, scope, readVersionToken]);
 
+  const openAllMonths = useCallback(() => {
+    const allMonths = monthlyRows.map((m) => m.month);
+    setOpenMonths(new Set(allMonths));
+    for (const month of allMonths) {
+      if (!detailsByMonth[month]) void loadMonth(month);
+    }
+  }, [detailsByMonth, loadMonth, monthlyRows]);
+
+  useEffect(() => {
+    const handleBeforePrint = () => {
+      openAllMonths();
+    };
+    window.addEventListener('beforeprint', handleBeforePrint);
+    return () => {
+      window.removeEventListener('beforeprint', handleBeforePrint);
+    };
+  }, [openAllMonths]);
+
   const onToggle = (month: string, event: SyntheticEvent<HTMLDetailsElement>) => {
     const isOpen = event.currentTarget.open;
     setOpenMonths((current) => {
@@ -118,6 +136,17 @@ export function TrafficTrendTable({
     <details className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
       <summary className="report-focus min-h-11 cursor-pointer rounded-sm py-2 font-semibold text-blue-900 focus-visible:outline-blue-900 focus-visible:ring-2 focus-visible:ring-blue-900 focus-visible:ring-offset-2">Bảng dữ liệu xu hướng theo tháng</summary>
       <div className="mt-4 space-y-3">
+        {monthlyRows.length > 0 ? (
+          <div className="flex justify-end print:hidden report-no-print">
+            <button
+              type="button"
+              onClick={openAllMonths}
+              className="report-focus rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-blue-900 focus-visible:ring-2 focus-visible:ring-blue-900 focus-visible:ring-offset-2"
+            >
+              Mở toàn bộ chi tiết tháng
+            </button>
+          </div>
+        ) : null}
         {monthlyRows.map((month) => <details key={month.month} open={openMonths.has(month.month)} onToggle={(event) => onToggle(month.month, event)} className="rounded-lg border border-slate-200 bg-white">
           <summary className="report-focus min-h-11 cursor-pointer rounded-lg p-3 focus-visible:outline-blue-900 focus-visible:ring-2 focus-visible:ring-blue-900 focus-visible:ring-offset-2">
             <span className="grid gap-1 text-sm sm:grid-cols-[1.5fr_1fr_1fr_auto] sm:items-center sm:gap-4">

@@ -77,7 +77,7 @@ listen_forever() {
 }
 
 refresh_until_fresh() {
-  local attempt status is_fresh source_watermark observed_watermark needs_reconcile
+  local attempt status is_fresh was_fresh source_watermark observed_watermark needs_reconcile
   for attempt in $(/usr/bin/seq 1 "$max_attempts"); do
     status="$(projection_status)"
     if [[ -z "$status" ]]; then
@@ -91,12 +91,13 @@ refresh_until_fresh() {
       return 0
     fi
 
+    was_fresh="$is_fresh"
     if [[ "$needs_reconcile" == "true" && "$is_fresh" == "true" ]]; then
       log info projection_reconcile "attempt=$attempt source_watermark=$(json_field "$status" source_watermark)"
     else
       log info projection_stale "attempt=$attempt source_watermark=$(json_field "$status" source_watermark) current_watermark=$(json_field "$status" current_watermark)"
     fi
-    if ! "${psql[@]}" -Atc 'select reporting.refresh_operational_canonical_legs_v1()' >/dev/null; then
+    if ! "${psql[@]}" -Atc "begin; set local lock_timeout = '5s'; set local statement_timeout = '240s'; select reporting.refresh_operational_canonical_legs_v1(); commit;" >/dev/null; then
       emit_alert err projection_refresh_failed "attempt=$attempt"
       return 1
     fi
@@ -108,6 +109,11 @@ refresh_until_fresh() {
     observed_watermark="$(json_field "$status" observed_watermark)"
     if [[ "$is_fresh" == "true" && "$needs_reconcile" != "true" ]]; then
       log info projection_refreshed "attempt=$attempt source_watermark=$source_watermark observed_watermark=$observed_watermark"
+      return 0
+    fi
+    if [[ "$was_fresh" == "false" && "$is_fresh" == "true" && "$needs_reconcile" == "true" ]]; then
+      # Dirty dates caught up. Leave hourly maintenance due for the next wake/timer.
+      log info projection_maintenance_pending "attempt=$attempt source_watermark=$source_watermark"
       return 0
     fi
     if [[ "$source_watermark" != "$observed_watermark" ]]; then

@@ -14,6 +14,8 @@ import type {
   SeasonalDraftWindowResult,
   SeasonalPublishedSnapshotPageResult,
 } from './seasonalPlanningContract.ts';
+import { buildEffectiveDashboardRecords } from './dashboardAnalysis.ts';
+import type { FlightRecord, FlightModification } from './types.ts';
 
 export type { PlanningSourceIdentity, PlanningSourceKind };
 
@@ -55,6 +57,94 @@ export type PlanningSourcePublishedTransport = (input: {
   afterDraftId?: string | null;
   pageSize?: number;
 }) => Promise<SeasonalPublishedSnapshotPageResult>;
+
+export type LegacyDashboardTransport = (seasonId: string) => Promise<{
+  records: FlightRecord[];
+  modifications: Map<string, FlightModification>;
+}>;
+
+export function buildLegacyDashboardFlights(
+  seasonId: string,
+  records: FlightRecord[],
+  modifications: Map<string, FlightModification>,
+): SeasonalDraftRecord[] {
+  return buildEffectiveDashboardRecords(records, modifications).map((record) => ({
+    draft_id: record.draftId ?? record.id,
+    season_id: seasonId,
+    link_id: record.linkId,
+    type: record.type,
+    airline: record.airline,
+    flight_number: record.flightNumber,
+    raw_flight_number: record.rawFlightNumber,
+    request_status_code: record.requestStatusCode,
+    route: record.route,
+    schedule: record.schedule,
+    aircraft: record.aircraft,
+    category: record.category,
+    code_shares: record.codeShares,
+    int_dom_ind: record.intDomInd,
+    pax: record.pax,
+    gate: record.gate,
+    stand: record.stand,
+    carousel: record.carousel,
+    mct: record.mct,
+    fb: record.fb,
+    lb: record.lb,
+    bhs: record.bhs,
+    ghs: record.ghs,
+    date: record.date,
+    scheduled_date: record.scheduledDate ?? record.date,
+    scheduled_time: record.scheduledTime ?? record.schedule,
+    operational_date: record.operationalDate ?? null,
+    day_of_week: record.dayOfWeek,
+    action: record.action === 'deleted' ? null : record.action,
+    source_row_index: record.sourceRowIndex,
+    linked_draft_id: record.linkedRecordId ?? null,
+    link_type: record.linkType ?? null,
+    pair_anchor_date: record.pairAnchorDate ?? null,
+    turnaround_id: record.turnaroundId ?? null,
+    source_kind: record.sourceKind === 'manual' || record.sourceKind === 'added' ? 'manual' : 'imported',
+    source_side: record.sourceSide,
+    status: 'active',
+    check_in_start: record.checkInStart ?? null,
+    check_in_end: record.checkInEnd ?? null,
+    check_in_allocation_mode: record.checkInAllocationMode ?? null,
+  }));
+}
+
+export async function loadDashboardOverviewSource(params: {
+  seasonId: string;
+  planningV1Enabled: boolean;
+  sourceKind: PlanningSourceKind;
+  versionId?: string;
+  draftTransportFn?: PlanningSourceDraftTransport;
+  publishedTransportFn?: PlanningSourcePublishedTransport;
+  legacyTransportFn?: LegacyDashboardTransport;
+}): Promise<PlanningSourceLoadResult> {
+  if (params.planningV1Enabled) {
+    const result = await loadSeasonalPlanningSource(params);
+    if (result.status === 'error') {
+      throw new Error(result.error || 'Không thể tải dữ liệu kế hoạch V1');
+    }
+    return result;
+  }
+  if (params.sourceKind !== 'draft') {
+    throw new Error('Published planning sources are unavailable in legacy workspace mode.');
+  }
+  const fetchLegacy = params.legacyTransportFn || (await import('./remoteStore.ts')).getDashboardSeasonData;
+  const legacy = await fetchLegacy(params.seasonId);
+  const flights = buildLegacyDashboardFlights(params.seasonId, legacy.records, legacy.modifications);
+  return {
+    identity: { seasonId: params.seasonId, sourceKind: 'draft' },
+    seasonId: params.seasonId,
+    flights,
+    status: 'success',
+    error: null,
+    isStale: false,
+    isEmpty: flights.length === 0,
+    totalCount: flights.length,
+  };
+}
 
 /**
  * Loads all draft flight records for a season with epoch/revision fencing.

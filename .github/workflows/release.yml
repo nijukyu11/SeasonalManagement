@@ -24,6 +24,8 @@ jobs:
       NEXT_PUBLIC_REMOTE_BACKEND: supabase
       NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      NEXT_PUBLIC_SEASONAL_PLANNING_V1_ENABLED: ${{ vars.NEXT_PUBLIC_SEASONAL_PLANNING_V1_ENABLED }}
+      NEXT_PUBLIC_OPERATIONAL_SCHEDULE_V1_ENABLED: ${{ vars.NEXT_PUBLIC_OPERATIONAL_SCHEDULE_V1_ENABLED }}
 
     steps:
       - name: Checkout
@@ -52,19 +54,55 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $required = @(
+            "TAURI_SIGNING_PRIVATE_KEY",
             "NEXT_PUBLIC_REMOTE_BACKEND",
             "NEXT_PUBLIC_SUPABASE_URL",
-            "NEXT_PUBLIC_SUPABASE_ANON_KEY"
+            "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+            "NEXT_PUBLIC_SEASONAL_PLANNING_V1_ENABLED",
+            "NEXT_PUBLIC_OPERATIONAL_SCHEDULE_V1_ENABLED"
           )
           foreach ($name in $required) {
             if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              throw "Missing required public runtime env: $name"
+              throw "Missing required runtime env/secret: $name"
             }
           }
           if ($env:NEXT_PUBLIC_REMOTE_BACKEND -ne "supabase") {
             throw "Native release must be built with NEXT_PUBLIC_REMOTE_BACKEND=supabase"
           }
+          $supabaseUri = $null
+          if (-not [System.Uri]::TryCreate($env:NEXT_PUBLIC_SUPABASE_URL, [System.UriKind]::Absolute, [ref]$supabaseUri)) {
+            throw "NEXT_PUBLIC_SUPABASE_URL must be a valid absolute URL"
+          }
+          if ($supabaseUri.Scheme -ne "https" -or $supabaseUri.IsLoopback -or $supabaseUri.UserInfo -or $supabaseUri.Query -or $supabaseUri.Fragment) {
+            throw "NEXT_PUBLIC_SUPABASE_URL must be an HTTPS backend URL without loopback, credentials, query or fragment"
+          }
+          foreach ($name in @("NEXT_PUBLIC_SEASONAL_PLANNING_V1_ENABLED", "NEXT_PUBLIC_OPERATIONAL_SCHEDULE_V1_ENABLED")) {
+            if ([Environment]::GetEnvironmentVariable($name) -cnotmatch '^[01]$') {
+              throw "$name must explicitly be 0 or 1; enable only after the coordinated database cutover is approved"
+            }
+          }
+          if ($env:NEXT_PUBLIC_SEASONAL_PLANNING_V1_ENABLED -ne $env:NEXT_PUBLIC_OPERATIONAL_SCHEDULE_V1_ENABLED) {
+            throw "Planning and Operations must use the same approved release mode"
+          }
 
+      - name: Validate release version and repository
+        shell: pwsh
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:GITHUB_REF_NAME -like "app-v*") {
+            $tagVersion = $env:GITHUB_REF_NAME.Substring(5)
+            node scripts/sync-release-version.cjs --check $tagVersion
+          } else {
+            node scripts/sync-release-version.cjs --check
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Release version validation failed" }
+          if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_REPOSITORY)) {
+            node scripts/configure-release-repo.cjs --check $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw "Updater repository validation failed" }
+          }
       - name: Run updater tests
         run: npm run test:updater
 
@@ -80,16 +118,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
           $ErrorActionPreference = "Stop"
           $version = (Get-Content -Raw -LiteralPath "src-tauri/tauri.conf.json" | ConvertFrom-Json).version
-          $tag = if ($env:GITHUB_REF_NAME -like "app-v*") { $env:GITHUB_REF_NAME } else { "app-v$version" }
+          $tag = "app-v$version"
           $nsisDir = Join-Path "src-tauri" "target/release/bundle/nsis"
-          $installer = Get-ChildItem -LiteralPath $nsisDir -Filter "*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $installer) { throw "No NSIS installer found in $nsisDir" }
+          $installerName = "SeasonalManagement_${version}_x64-setup.exe"
+          $installer = Get-Item -LiteralPath (Join-Path $nsisDir $installerName) -ErrorAction Stop
           $signaturePath = "$($installer.FullName).sig"
           if (-not (Test-Path -LiteralPath $signaturePath)) { throw "No updater signature found: $signaturePath" }
           $signature = (Get-Content -Raw -LiteralPath $signaturePath).Trim()
+          if ([string]::IsNullOrWhiteSpace($signature)) { throw "Updater signature is empty" }
           $assetName = $installer.Name
           $assetUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$tag/$assetName"
           $latest = [ordered]@{
@@ -104,9 +144,20 @@ jobs:
             }
           }
           $latestPath = Join-Path $PWD "latest.json"
-          $latest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $latestPath -Encoding UTF8
-          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --repo $env:GITHUB_REPOSITORY --title "Seasonal Management $version" --notes "Seasonal Management $version" --latest
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText($latestPath, ($latest | ConvertTo-Json -Depth 10), $utf8)
+          gh api "repos/$env:GITHUB_REPOSITORY" --silent *> $null
+          if ($LASTEXITCODE -ne 0) { throw "Could not verify release repository access" }
+          $releaseResponse = @(gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --include 2>$null)
+          $releaseExitCode = $LASTEXITCODE
+          $statusLine = $releaseResponse | Select-String -Pattern '^HTTP/\S+\s+(\d{3})\b' | Select-Object -Last 1
+          if ($releaseExitCode -eq 0) { throw "Release $tag already exists; choose a new version instead of overwriting installed artifacts" }
+          if (-not $statusLine -or $statusLine.Matches[0].Groups[1].Value -ne "404") {
+            throw "Could not verify that release $tag is absent; refusing to create a release"
           }
-          gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber $installer.FullName $signaturePath $latestPath
+          gh release create $tag --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "Seasonal Management $version" --notes "Seasonal Management $version" --draft
+          if ($LASTEXITCODE -ne 0) { throw "Could not create draft release $tag" }
+          gh release upload $tag --repo $env:GITHUB_REPOSITORY $installer.FullName $signaturePath $latestPath
+          if ($LASTEXITCODE -ne 0) { throw "Artifact upload failed; release remains draft" }
+          gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish draft release $tag" }

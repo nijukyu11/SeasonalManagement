@@ -9,6 +9,9 @@ import {
   getDailyUploadJournalByFingerprint,
   getActiveDailyUploadJournal,
   clearDailyUploadJournal,
+  resolveOperatorId,
+  getDailyJournalStorageKey,
+  DailyImportStorageError,
   isTransportError,
   type ChunkedUploadClient,
   type DailyImportUploadProgress,
@@ -224,6 +227,7 @@ test('uploadDailyImportInChunksV2 orchestrates begin -> append -> finalize with 
   };
 
   const result = await uploadDailyImportInChunksV2(mockPayload, {
+    operatorId: 'test-operator',
     client: mockClient,
     chunkSize: 50,
     onProgress: (p) => progressSnapshots.push({ ...p }),
@@ -336,6 +340,7 @@ test('uploadDailyImportInChunksV2 retries ONLY transport errors with backoff and
   };
 
   const result = await uploadDailyImportInChunksV2(mockPayload, {
+    operatorId: 'test-operator',
     client: mockClient,
     chunkSize: 50,
     maxRetriesPerChunk: 2,
@@ -355,7 +360,7 @@ test('uploadDailyImportInChunksV2 retries ONLY transport errors with backoff and
   };
 
   await assert.rejects(
-    uploadDailyImportInChunksV2(mockPayload, { client: failingClient, chunkSize: 50, maxRetriesPerChunk: 3 }),
+    uploadDailyImportInChunksV2(mockPayload, { operatorId: 'test-operator', client: failingClient, chunkSize: 50, maxRetriesPerChunk: 3 }),
     /HTTP 400 Bad Request/,
   );
   assert.equal(nonTransportAttempts, 1, 'Non-transport error must not retry');
@@ -412,7 +417,42 @@ test('parseDailyImportStageResultV2 and parseDailyImportCommittedResultV2 normal
   assert.equal(parsedCommit.status, 'committed');
 });
 
-test('Operator-scoped journal stores and restores session by fingerprint and active pointer', () => {
+function setupMockStorage() {
+  const memory = new Map<string, string>();
+  const mockStorage: Storage = {
+    getItem: (k: string) => memory.get(k) ?? null,
+    setItem: (k: string, v: string) => { memory.set(k, v); },
+    removeItem: (k: string) => { memory.delete(k); },
+    clear: () => { memory.clear(); },
+    key: (i: number) => Array.from(memory.keys())[i] ?? null,
+    get length() { return memory.size; },
+  };
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: mockStorage,
+    writable: true,
+    configurable: true,
+  });
+  return { memory, mockStorage };
+}
+
+async function dailyImportPayloadFingerprint(payload: DailyImportStagePayloadV2): Promise<string> {
+  const fingerprintInput = { ...payload, requestId: undefined };
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(JSON.stringify(fingerprintInput)),
+  );
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+const originalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+test.beforeEach(() => { setupMockStorage(); });
+test.after(() => {
+  if (originalStorageDescriptor) Object.defineProperty(globalThis, 'localStorage', originalStorageDescriptor);
+  else Reflect.deleteProperty(globalThis, 'localStorage');
+});
+
+test('Operator-scoped journal stores and restores session by fingerprint and active pointer in durable localStorage', () => {
+  const { mockStorage } = setupMockStorage();
   const operatorId = 'test-operator-007';
   const rawChecksum = 'hash-abc-123';
 
@@ -430,23 +470,6 @@ test('Operator-scoped journal stores and restores session by fingerprint and act
     savedAt: 12345678,
   };
 
-  if (typeof globalThis.sessionStorage === 'undefined') {
-    const memory = new Map<string, string>();
-    const mockStorage: Storage = {
-      getItem: (k: string) => memory.get(k) ?? null,
-      setItem: (k: string, v: string) => { memory.set(k, v); },
-      removeItem: (k: string) => { memory.delete(k); },
-      clear: () => { memory.clear(); },
-      key: () => null,
-      length: 0,
-    };
-    Object.defineProperty(globalThis, 'sessionStorage', {
-      value: mockStorage,
-      writable: true,
-      configurable: true,
-    });
-  }
-
   saveDailyUploadJournal(entry);
 
   const byFp = getDailyUploadJournalByFingerprint(operatorId, rawChecksum);
@@ -455,12 +478,364 @@ test('Operator-scoped journal stores and restores session by fingerprint and act
   const active = getActiveDailyUploadJournal(operatorId);
   assert.deepEqual(active, entry);
 
+  // Simulating native startup / session reset clearing sessionStorage must NOT affect localStorage journal
+  if (typeof globalThis.sessionStorage !== 'undefined') {
+    globalThis.sessionStorage.clear();
+  }
+  assert.deepEqual(getActiveDailyUploadJournal(operatorId), entry);
+
   // Clear by fingerprint
   clearDailyUploadJournal(operatorId, rawChecksum);
   assert.equal(getDailyUploadJournalByFingerprint(operatorId, rawChecksum), null);
   assert.equal(getActiveDailyUploadJournal(operatorId), null);
 });
 
+test('daily import journal rejects anonymous recovery and operatorless operations', () => {
+  setupMockStorage();
+  assert.equal(resolveOperatorId(null), null);
+  assert.equal(resolveOperatorId(''), null);
+  assert.equal(getActiveDailyUploadJournal(''), null);
+  assert.equal(getDailyUploadJournalByFingerprint('', 'some-fp'), null);
+
+  const anonymousEntry: DailyImportUploadJournalEntry = {
+    operatorId: '',
+    rawChecksum: 'fp-1',
+    requestId: 'req-1',
+    totalChunks: 1,
+    legCount: 1,
+    nextChunkIndex: 0,
+    status: 'uploading',
+    savedAt: Date.now(),
+  };
+  assert.throws(() => saveDailyUploadJournal(anonymousEntry), DailyImportStorageError);
+});
+
+test('clearing daily upload journal never clears another operator journal', () => {
+  setupMockStorage();
+  const entryA: DailyImportUploadJournalEntry = {
+    operatorId: 'operator-alice',
+    rawChecksum: 'fp-alice',
+    requestId: 'req-alice',
+    totalChunks: 2,
+    legCount: 50,
+    nextChunkIndex: 1,
+    status: 'uploading',
+    savedAt: 1000,
+  };
+  const entryB: DailyImportUploadJournalEntry = {
+    operatorId: 'operator-bob',
+    rawChecksum: 'fp-bob',
+    requestId: 'req-bob',
+    totalChunks: 2,
+    legCount: 50,
+    nextChunkIndex: 1,
+    status: 'uploading',
+    savedAt: 2000,
+  };
+  saveDailyUploadJournal(entryA);
+  saveDailyUploadJournal(entryB);
+
+  assert.ok(getActiveDailyUploadJournal('operator-alice'));
+  assert.ok(getActiveDailyUploadJournal('operator-bob'));
+
+  // Clear Alice's journal
+  clearDailyUploadJournal('operator-alice');
+  assert.equal(getActiveDailyUploadJournal('operator-alice'), null);
+  // Bob's journal remains completely untouched!
+  assert.deepEqual(getActiveDailyUploadJournal('operator-bob'), entryB);
+});
+
+test('daily import journal throws DailyImportStorageError on quota exceeded without promising recoverability', () => {
+  const failingStorage: Storage = {
+    getItem: () => null,
+    setItem: () => {
+      const err = new Error('QuotaExceededError');
+      err.name = 'QuotaExceededError';
+      throw err;
+    },
+    removeItem: () => {},
+    clear: () => {},
+    key: () => null,
+    length: 0,
+  };
+  const entry: DailyImportUploadJournalEntry = {
+    operatorId: 'operator-quota',
+    requestId: 'req-quota',
+    totalChunks: 1,
+    legCount: 1,
+    nextChunkIndex: 0,
+    status: 'uploading',
+    savedAt: Date.now(),
+  };
+  assert.throws(
+    () => saveDailyUploadJournal(entry, failingStorage),
+    DailyImportStorageError
+  );
+});
+
+test('committed daily import journal is retained across reloads until explicitly cleared after authoritative refresh', () => {
+  setupMockStorage();
+  const entry: DailyImportUploadJournalEntry = {
+    operatorId: 'operator-commit-retention',
+    requestId: 'req-commit-999',
+    rawChecksum: 'committed-file-checksum',
+    batchId: 'batch-999',
+    totalChunks: 1,
+    legCount: 10,
+    nextChunkIndex: 1,
+    status: 'committed',
+    committedResult: {
+      status: 'committed',
+      batchId: 'batch-999',
+      affectedDates: ['2026-09-01'],
+      insertedCount: 10,
+      replacedCount: 0,
+      revision: 'rev-999',
+    },
+    savedAt: Date.now(),
+  };
+  saveDailyUploadJournal(entry);
+
+  // Reload 1: journal is still committed with receipt
+  const reload1 = getActiveDailyUploadJournal('operator-commit-retention');
+  assert.ok(reload1);
+  assert.equal(reload1.status, 'committed');
+  assert.equal(reload1.committedResult?.batchId, 'batch-999');
+
+  // Reload 2: journal still retained
+  const reload2 = getActiveDailyUploadJournal('operator-commit-retention');
+  assert.ok(reload2);
+  assert.equal(reload2.status, 'committed');
+
+  // Authoritative clear
+  clearDailyUploadJournal('operator-commit-retention');
+  assert.equal(getActiveDailyUploadJournal('operator-commit-retention'), null);
+  assert.equal(getDailyUploadJournalByFingerprint(entry.operatorId, entry.rawChecksum!), null);
+});
+
+test('signed-out browser rejects explicit old owner in daily import', (t) => {
+  const { mockStorage } = setupMockStorage();
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { localStorage: mockStorage },
+  });
+  t.after(() => {
+    if (descriptor) Object.defineProperty(globalThis, 'window', descriptor);
+    else Reflect.deleteProperty(globalThis, 'window');
+  });
+
+  // Browser is signed out; passing explicit operator cannot bypass
+  assert.equal(resolveOperatorId('old-operator'), null);
+  assert.equal(getActiveDailyUploadJournal('old-operator'), null);
+  assert.equal(getDailyUploadJournalByFingerprint('old-operator', 'some-fp'), null);
+  clearDailyUploadJournal('old-operator');
+});
+
+test('storage failure before first RPC prevents any beginUploadRpc calls (zero server calls)', async () => {
+  let beginCalls = 0;
+  const failingStorage: Storage = {
+    getItem: () => null,
+    setItem: () => {
+      const err = new Error('QuotaExceededError');
+      err.name = 'QuotaExceededError';
+      throw err;
+    },
+    removeItem: () => {},
+    clear: () => {},
+    key: () => null,
+    length: 0,
+  };
+
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: failingStorage,
+    configurable: true,
+    writable: true,
+  });
+
+  const payload: DailyImportStagePayloadV2 = {
+    contractVersion: 2,
+    requestId: 'storage-fail-req',
+    rawChecksum: 'storage-fail-fp',
+    canonicalChecksum: 'checksum',
+    affectedDates: ['2026-09-01'],
+    legs: [],
+  };
+
+  await assert.rejects(
+    uploadDailyImportInChunksV2(payload, {
+      operatorId: 'operator-quota-test',
+      client: {
+        beginDailyScheduleImportUploadV2: async () => {
+          beginCalls++;
+          return { uploadId: 'up-1', batchId: 'b-1', requestId: payload.requestId, chunkCount: 0, legCount: 0, nextChunkIndex: 0, status: 'validated' };
+        },
+        appendDailyScheduleImportUploadV2: async () => { throw new Error('Not reached'); },
+        finalizeDailyScheduleImportUploadV2: async () => { throw new Error('Not reached'); },
+      },
+    }),
+    DailyImportStorageError
+  );
+
+  // Storage refusal caused ZERO server calls!
+  assert.equal(beginCalls, 0);
+});
+
+test('lost begin ACK or network drop retains recoverable request identity in journal', async () => {
+  setupMockStorage();
+  const operatorId = 'operator-lost-ack';
+  const rawChecksum = 'lost-ack-fp';
+  const requestId = 'req-identity-preserve-123';
+
+  const payload: DailyImportStagePayloadV2 = {
+    contractVersion: 2,
+    requestId,
+    rawChecksum,
+    canonicalChecksum: 'checksum',
+    affectedDates: ['2026-09-01'],
+    legs: [],
+  };
+
+  // Simulate network transport failure during beginUploadRpc
+  await assert.rejects(
+    uploadDailyImportInChunksV2(payload, {
+      operatorId,
+      client: {
+        beginDailyScheduleImportUploadV2: async () => {
+          throw new TypeError('Failed to fetch (network drop / lost ACK)');
+        },
+        appendDailyScheduleImportUploadV2: async () => { throw new Error('Not reached'); },
+        finalizeDailyScheduleImportUploadV2: async () => { throw new Error('Not reached'); },
+      },
+    }),
+    /Failed to fetch/
+  );
+
+  // Pre-RPC journal persisted the request BEFORE the server call, so request identity remains recoverable!
+  const journal = getDailyUploadJournalByFingerprint(operatorId, rawChecksum);
+  assert.ok(journal);
+  assert.equal(journal.requestId, requestId);
+  assert.equal(journal.status, 'uploading');
+  assert.equal(journal.nextChunkIndex, 0);
+
+  // Retrying with a new payload instance but same rawChecksum automatically recovers the stored requestId
+  const retryPayload: DailyImportStagePayloadV2 = {
+    contractVersion: 2,
+    requestId: 'different-uuid-that-should-be-superseded-by-journal',
+    rawChecksum,
+    canonicalChecksum: 'checksum',
+    affectedDates: ['2026-09-01'],
+    legs: [],
+  };
+
+  let usedBeginRequestId: string | null = null;
+  await uploadDailyImportInChunksV2(retryPayload, {
+    operatorId,
+    client: {
+      beginDailyScheduleImportUploadV2: async (input) => {
+        usedBeginRequestId = input.importPayload.requestId;
+        return {
+          uploadId: 'up-recovered',
+          batchId: 'batch-recovered',
+          requestId: input.importPayload.requestId,
+          chunkCount: 0,
+          legCount: 0,
+          nextChunkIndex: 0,
+          status: 'validated',
+        };
+      },
+      appendDailyScheduleImportUploadV2: async () => ({
+        uploadId: 'up-recovered',
+        nextChunkIndex: 0,
+        receivedChunks: 0,
+        totalChunks: 0,
+      }),
+      finalizeDailyScheduleImportUploadV2: async () => ({
+        batchId: 'batch-recovered',
+        requestId,
+        status: 'validated',
+        previewHash: 'hash',
+        preview: {
+          importGuardVersion: '2',
+          valid: true,
+          affectedDates: retryPayload.affectedDates,
+          confirmedZeroFlightDates: [],
+          sourceFingerprint: 'recovered-source',
+          legCount: 0,
+          replacedBySource: {},
+          inputHash: 'recovered-input',
+          replacedLegsTruncated: false,
+          rebasedOverridesTruncated: false,
+          replacedLegs: [],
+          rebasedOverrides: [],
+        },
+        diagnostics: [],
+        expiresAt: '2026-10-16T12:00:00Z',
+        result: null,
+      }),
+    },
+  });
+  // Verified: the retry used the original preserved requestId!
+  assert.equal(usedBeginRequestId, requestId);
+  assert.equal(getActiveDailyUploadJournal(operatorId)?.requestId, requestId);
+});
+
+test('same raw checksum with changed confirmation does not reuse the incompatible request ID', async () => {
+  setupMockStorage();
+  const operatorId = 'operator-confirmation-change';
+  const rawChecksum = 'same-file-checksum';
+  const basePayload: DailyImportStagePayloadV2 = {
+    contractVersion: 2,
+    requestId: 'first-request',
+    fileName: 'daily.xlsx',
+    workbookProfile: 'legacy-operationalturns',
+    rawChecksum,
+    canonicalChecksum: 'same-canonical-checksum',
+    resourcePolicyHash: 'same-policy',
+    affectedDates: ['2026-09-01'],
+    confirmedZeroFlightDates: [],
+    legs: [],
+    diagnostics: [],
+  };
+
+  await assert.rejects(uploadDailyImportInChunksV2(basePayload, {
+    operatorId,
+    client: {
+      beginDailyScheduleImportUploadV2: async () => { throw new TypeError('Failed to fetch'); },
+      appendDailyScheduleImportUploadV2: async () => { throw new Error('Not reached'); },
+      finalizeDailyScheduleImportUploadV2: async () => { throw new Error('Not reached'); },
+    },
+  }), /Failed to fetch/);
+
+  const changedPayload = {
+    ...basePayload,
+    requestId: 'confirmed-zero-request',
+    confirmedZeroFlightDates: ['2026-09-01'],
+  };
+  let usedRequestId: string | null = null;
+  await assert.rejects(uploadDailyImportInChunksV2(changedPayload, {
+    operatorId,
+    client: {
+      beginDailyScheduleImportUploadV2: async (input) => {
+        usedRequestId = input.importPayload.requestId;
+        return {
+          uploadId: 'cancelled-upload',
+          batchId: 'cancelled-batch',
+          requestId: input.importPayload.requestId,
+          chunkCount: 0,
+          legCount: 0,
+          nextChunkIndex: 0,
+          status: 'cancelled',
+        };
+      },
+      appendDailyScheduleImportUploadV2: async () => { throw new Error('Not reached'); },
+      finalizeDailyScheduleImportUploadV2: async () => { throw new Error('Not reached'); },
+    },
+  }), /Vui lòng chọn lại tệp/);
+
+  assert.equal(usedRequestId, changedPayload.requestId);
+  assert.notEqual(usedRequestId, basePayload.requestId);
+});
 test('uploadDailyImportInChunksV2 resumes chunked upload from nextChunkIndex when journal exists', async () => {
   const operatorId = 'test-operator-resume';
   const rawChecksum = 'resume-hash-999';
@@ -507,6 +882,12 @@ test('uploadDailyImportInChunksV2 resumes chunked upload from nextChunkIndex whe
     legs,
     diagnostics: [],
   };
+  const priorJournal = getDailyUploadJournalByFingerprint(operatorId, rawChecksum);
+  assert.ok(priorJournal);
+  saveDailyUploadJournal({
+    ...priorJournal,
+    payloadFingerprint: await dailyImportPayloadFingerprint(resumePayload),
+  });
 
   const appendedIndices: number[] = [];
   let beginCalled = false;
@@ -587,9 +968,9 @@ test('uploadDailyImportInChunksV2 resumes chunked upload from nextChunkIndex whe
 });
 
 test('terminal upload clears only its own journal so reselecting the file can start a new request', async (t) => {
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   const memory = new Map<string, string>();
-  Object.defineProperty(globalThis, 'sessionStorage', {
+  Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
     value: {
       getItem: (key: string) => memory.get(key) ?? null,
@@ -598,8 +979,8 @@ test('terminal upload clears only its own journal so reselecting the file can st
     },
   });
   t.after(() => {
-    if (descriptor) Object.defineProperty(globalThis, 'sessionStorage', descriptor);
-    else Reflect.deleteProperty(globalThis, 'sessionStorage');
+    if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
   });
   const payload: DailyImportStagePayloadV2 = {
     contractVersion: 2, requestId: 'terminal-request', rawChecksum: 'terminal-file',

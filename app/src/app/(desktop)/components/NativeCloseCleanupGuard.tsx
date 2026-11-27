@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { clearNativeAppSessionData } from '@/lib/appSessionCleanup';
 import { buildLoadProgress, type LoadProgress } from '@/lib/importProgress';
-import { NATIVE_CLOSE_CONFIRM_COPY } from '@/lib/nativeClosePolicy';
+import { evaluateNativeCloseSafety } from '@/lib/nativeClosePolicy';
 import { formatUiError } from '@/lib/uiDisplayText';
 import { useAppDialog } from './AppDialog';
 import LoadingStatusPanel from './LoadingStatusPanel';
@@ -19,6 +19,7 @@ function timeoutAfter(ms: number): Promise<{ status: 'timeout' }> {
 export default function NativeCloseCleanupGuard() {
   const { dialogNode, showAlert, showConfirm } = useAppDialog();
   const closingRef = useRef(false);
+  const handlingCloseRef = useRef(false);
   const [closeProgress, setCloseProgress] = useState<LoadProgress | null>(null);
 
   useEffect(() => {
@@ -30,50 +31,73 @@ export default function NativeCloseCleanupGuard() {
       if (!active) return;
       const appWindow = getCurrentWindow();
       unlisten = await appWindow.onCloseRequested(async (event) => {
-        if (closingRef.current) {
-          event.preventDefault();
-          return;
-        }
-
-        const confirmed = await showConfirm({
-          ...NATIVE_CLOSE_CONFIRM_COPY,
-          cancelLabel: 'Hủy',
-          tone: 'warning',
-        });
-        if (!confirmed) {
-          event.preventDefault();
-          return;
-        }
-
+        // Prevent close synchronously before awaiting any dialogs or async work
         event.preventDefault();
-        closingRef.current = true;
-        setCloseProgress(buildLoadProgress('Đang xóa dữ liệu phiên...', 35, 'Dữ liệu trên máy chủ không thay đổi', { indeterminate: true }));
+
+        // Prevent duplicate dialogs or concurrent handling
+        if (handlingCloseRef.current || closingRef.current) {
+          return;
+        }
+        handlingCloseRef.current = true;
+
         try {
-          const cleanupResult = await Promise.race([
-            clearNativeAppSessionData({
-              preserveAuth: true,
-              resetUndoSession: true,
-            })
-              .then(() => ({ status: 'cleared' as const }))
-              .catch((error: unknown) => ({ status: 'failed' as const, error })),
-            timeoutAfter(CLOSE_CLEANUP_TIMEOUT_MS),
-          ]);
-          if (cleanupResult.status === 'timeout') {
-            console.warn('[native-close-cleanup] session cleanup timed out; closing app');
-          } else if (cleanupResult.status === 'failed') {
-            console.warn('[native-close-cleanup] session cleanup failed; closing app', cleanupResult.error);
+          let decision = evaluateNativeCloseSafety();
+          while (true) {
+            if (decision.action === 'block') {
+              await showAlert({
+                title: decision.title,
+                message: decision.reason,
+                tone: 'error',
+              });
+              return;
+            }
+            const confirmed = await showConfirm({
+              title: decision.title,
+              message: decision.message,
+              confirmLabel: decision.confirmLabel,
+              cancelLabel: decision.cancelLabel,
+              tone: decision.tone ?? 'warning',
+            });
+            if (!confirmed) return;
+            const current = evaluateNativeCloseSafety();
+            if (current.action === 'confirm' && (
+              current.kind === 'ordinary'
+              || (current.kind === decision.kind && current.message === decision.message)
+            )) break;
+            decision = current;
           }
-          setCloseProgress(buildLoadProgress('Đang đóng ứng dụng...', 100, 'Dữ liệu trên máy chủ không thay đổi'));
-          await appWindow.destroy();
-        } catch (error) {
-          closingRef.current = false;
-          setCloseProgress(null);
-          event.preventDefault();
-          await showAlert({
-            title: 'Không thể dọn dẹp khi đóng ứng dụng',
-            message: formatUiError(error, 'Ứng dụng không thể xóa phiên giao diện. Cửa sổ sẽ được giữ nguyên.'),
-            tone: 'error',
-          });
+          closingRef.current = true;
+          setCloseProgress(buildLoadProgress('Đang xóa dữ liệu phiên...', 35, 'Dữ liệu trên máy chủ không thay đổi', { indeterminate: true }));
+          try {
+            const cleanupResult = await Promise.race([
+              clearNativeAppSessionData({
+                preserveAuth: true,
+                resetUndoSession: true,
+              })
+                .then(() => ({ status: 'cleared' as const }))
+                .catch((error: unknown) => ({ status: 'failed' as const, error })),
+              timeoutAfter(CLOSE_CLEANUP_TIMEOUT_MS),
+            ]);
+            if (cleanupResult.status === 'timeout') {
+              console.warn('[native-close-cleanup] session cleanup timed out; closing app');
+            } else if (cleanupResult.status === 'failed') {
+              console.warn('[native-close-cleanup] session cleanup failed; closing app', cleanupResult.error);
+            }
+            setCloseProgress(buildLoadProgress('Đang đóng ứng dụng...', 100, 'Dữ liệu trên máy chủ không thay đổi'));
+            await appWindow.destroy();
+          } catch (error) {
+            closingRef.current = false;
+            setCloseProgress(null);
+            await showAlert({
+              title: 'Không thể dọn dẹp khi đóng ứng dụng',
+              message: formatUiError(error, 'Ứng dụng không thể xóa phiên giao diện. Cửa sổ sẽ được giữ nguyên.'),
+              tone: 'error',
+            });
+          }
+        } finally {
+          if (!closingRef.current) {
+            handlingCloseRef.current = false;
+          }
         }
       });
     }).catch((error) => {

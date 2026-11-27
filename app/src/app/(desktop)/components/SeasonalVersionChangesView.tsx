@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { getSeasonalVersionChangesPageV1 } from '@/lib/remoteStore';
 import {
   formatFlightNumber,
@@ -37,6 +37,31 @@ interface GroupDaysState {
   error: string | null;
   generation: number;
 }
+function hasDateShift(row: SeasonalVersionChangeRow): boolean {
+  if (typeof row === 'object' && row !== null && 'date_shift' in row && Boolean(row.date_shift)) {
+    return true;
+  }
+  if ((row.change_type as string) !== 'modified') return false;
+  const b = row.before_state;
+  const a = row.after_state;
+  if (!b || typeof b !== 'object' || !a || typeof a !== 'object') return false;
+  const bDate =
+    ('scheduledDate' in b && typeof b.scheduledDate === 'string' && b.scheduledDate) ||
+    ('scheduled_date' in b && typeof b.scheduled_date === 'string' && b.scheduled_date) ||
+    ('date' in b && typeof b.date === 'string' && b.date) ||
+    ('operationalDate' in b && typeof b.operationalDate === 'string' && b.operationalDate) ||
+    ('operational_date' in b && typeof b.operational_date === 'string' && b.operational_date) ||
+    null;
+  const aDate =
+    ('scheduledDate' in a && typeof a.scheduledDate === 'string' && a.scheduledDate) ||
+    ('scheduled_date' in a && typeof a.scheduled_date === 'string' && a.scheduled_date) ||
+    ('date' in a && typeof a.date === 'string' && a.date) ||
+    ('operationalDate' in a && typeof a.operationalDate === 'string' && a.operationalDate) ||
+    ('operational_date' in a && typeof a.operational_date === 'string' && a.operational_date) ||
+    null;
+  return Boolean(bDate && aDate && bDate !== aDate);
+}
+
 
 export default function SeasonalVersionChangesView({
   versionId = '',
@@ -78,6 +103,16 @@ export default function SeasonalVersionChangesView({
   const [filteredOccurrenceCount, setFilteredOccurrenceCount] = useState(0);
   const [baseVersionMeta, setBaseVersionMeta] = useState<SeasonalVersionChangesResult['baseVersion']>(null);
   const [currentVersionMeta, setCurrentVersionMeta] = useState<SeasonalVersionChangesResult['version'] | null>(null);
+  const multiDayGroupsCount = useMemo(() => {
+    if (viewMode !== 'groups') return 0;
+    return entries.filter((r) => r.occurrence_count > 1).length;
+  }, [entries, viewMode]);
+
+  const dateShiftGroupsCount = useMemo(() => {
+    if (viewMode !== 'groups') return 0;
+    return entries.filter((r) => hasDateShift(r)).length;
+  }, [entries, viewMode]);
+
 
   // Row expansion state
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
@@ -646,6 +681,27 @@ export default function SeasonalVersionChangesView({
         )}
 
         {/* Diff Entries Table */}
+        {/* Highlight strip for Groups view */}
+        {viewMode === 'groups' && !loading && !isCustomBasePendingSelection && entries.length > 0 && (
+          <div className="mx-3 my-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-on-surface">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              <span className="flex items-center gap-1 font-semibold text-primary">
+                <span className="material-symbols-outlined text-[16px]">tune</span>
+                Mặc định ưu tiên nhóm ảnh hưởng nhiều ngày khai thác nhất
+              </span>
+              <span className="inline-flex items-center gap-1 rounded bg-surface px-2 py-0.5 text-[11px] font-medium text-on-surface-variant border border-outline-variant">
+                <strong className="text-on-surface">{multiDayGroupsCount}</strong> nhóm lặp nhiều ngày
+              </span>
+              <span className="inline-flex items-center gap-1 rounded bg-surface px-2 py-0.5 text-[11px] font-medium text-on-surface-variant border border-outline-variant">
+                <strong className="text-on-surface">{dateShiftGroupsCount}</strong> nhóm đổi ngày qua mốc 05:00
+              </span>
+            </div>
+            <div className="text-[11px] text-on-surface-variant">
+              Trang hiện tại: {entries.length} nhóm
+            </div>
+          </div>
+        )}
+
         {!loading && !isCustomBasePendingSelection && entries.length > 0 && (
           <table className="w-full border-collapse text-left text-xs">
             <thead className="sticky top-0 bg-surface-variant/50 backdrop-blur border-b border-outline-variant text-[11px] font-bold text-on-surface-variant uppercase z-10">
@@ -686,6 +742,8 @@ export default function SeasonalVersionChangesView({
                                 ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
                                 : row.change_type === 'removed'
                                 ? 'bg-rose-500/10 text-rose-700 dark:text-rose-300'
+                                : (row.change_type as string) === 'ambiguous'
+                                ? 'bg-purple-500/10 text-purple-700 dark:text-purple-300'
                                 : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
                             }`}
                           >
@@ -693,6 +751,8 @@ export default function SeasonalVersionChangesView({
                               ? '+ Thêm mới'
                               : row.change_type === 'removed'
                               ? '- Xóa'
+                              : (row.change_type as string) === 'ambiguous'
+                              ? '! Chưa xác định'
                               : '~ Điều chỉnh'}
                           </span>
                         </div>

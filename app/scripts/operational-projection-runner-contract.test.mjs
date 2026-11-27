@@ -74,6 +74,12 @@ test('fresh state requiring periodic reconcile executes refresh',async()=>{
   const r=await run({statuses:[reconcileDue, fresh]});
   assert.equal(r.exit,0,r.output); assert.equal(r.refreshes,1); assert.equal(r.statusReads,2);
 });
+test('dirty catch-up returns without claiming periodic maintenance completed',async()=>{
+  const r=await run({statuses:[{...stale,needs_reconcile:true},{...fresh,needs_reconcile:true}]});
+  assert.equal(r.exit,0,r.output); assert.equal(r.refreshes,1);
+  assert.match(r.output,/code=projection_maintenance_pending/);
+  assert.doesNotMatch(r.output,/code=projection_refreshed/);
+});
 test('stale projection is refreshed and checked again',async()=>{
   const r=await run({statuses:[stale,fresh]});
   assert.equal(r.exit,0,r.output); assert.equal(r.refreshes,1); assert.equal(r.statusReads,2);

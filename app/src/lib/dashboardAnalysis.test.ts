@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   buildDashboardComparison,
+  formatPaxDisplay,
   formatPct,
   formatPointPct,
   getDashboardOperationalDate,
@@ -195,4 +196,62 @@ test('Excel SanLuong row for date=2026-05-01 schedule 02:30 yields Ops Date in A
   assert.ok(monthSheet, 'Workbook must contain Month summary sheet');
   // Check that cell A2 is "Apr 2026"
   assert.equal(monthSheet['A2']?.v, 'Apr 2026');
+});
+
+test('formatPaxDisplay correctly differentiates 0-pax ferry flights from missing/null pax and formats numbers', () => {
+  // 0 pax should format as '0', never '-'
+  assert.equal(formatPaxDisplay(0), '0');
+  // null and undefined represent unreported/missing pax -> '-'
+  assert.equal(formatPaxDisplay(null), '-');
+  assert.equal(formatPaxDisplay(undefined), '-');
+  // non-finite values -> '-'
+  assert.equal(formatPaxDisplay(Number.NaN), '-');
+  assert.equal(formatPaxDisplay(Number.POSITIVE_INFINITY), '-');
+  // positive pax formatted with locale
+  assert.equal(formatPaxDisplay(180), '180');
+  assert.equal(formatPaxDisplay(1250), '1,250');
+});
+
+test('getDashboardOperationalDate shifts flights between 00:00 and 04:59 to previous day and retains 05:00+', () => {
+  const flight0000 = createFlightRecord({
+    id: 'f-0000',
+    type: 'A',
+    date: '2026-10-18',
+    schedule: '00:00',
+    pax: 0,
+  });
+  const flight0130 = createFlightRecord({
+    id: 'f-0130',
+    type: 'D',
+    date: '2026-10-18',
+    schedule: '01:30',
+    pax: null,
+  });
+  const flight0459 = createFlightRecord({
+    id: 'f-0459',
+    type: 'A',
+    date: '2026-10-18',
+    schedule: '04:59',
+    pax: 200,
+  });
+  const flight0500 = createFlightRecord({
+    id: 'f-0500',
+    type: 'D',
+    date: '2026-10-18',
+    schedule: '05:00',
+    pax: 150,
+  });
+  const flight2355 = createFlightRecord({
+    id: 'f-2355',
+    type: 'A',
+    date: '2026-10-18',
+    schedule: '23:55',
+    pax: 180,
+  });
+
+  assert.equal(getDashboardOperationalDate(flight0000), '2026-10-17');
+  assert.equal(getDashboardOperationalDate(flight0130), '2026-10-17');
+  assert.equal(getDashboardOperationalDate(flight0459), '2026-10-17');
+  assert.equal(getDashboardOperationalDate(flight0500), '2026-10-18');
+  assert.equal(getDashboardOperationalDate(flight2355), '2026-10-18');
 });

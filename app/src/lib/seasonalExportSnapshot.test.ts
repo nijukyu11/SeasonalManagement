@@ -4,6 +4,7 @@ import test from 'node:test';
 import { materializeEffectiveSeasonalLegs } from './effectiveSeasonalLegs.ts';
 import { validateSeasonalExportSelection } from './seasonalExportSelection.ts';
 import {
+  isSeasonalExportSnapshotStaleError,
   materializeSeasonalExportSnapshot,
   parseSeasonalExportSnapshotRows,
 } from './seasonalExportSnapshot.ts';
@@ -139,6 +140,23 @@ test('accepts one complete exact export snapshot', () => {
   assert.equal(parsed.sourceRowCount, 1);
   assert.equal(parsed.totalCount, 1);
   assert.equal(parsed.truncated, false);
+});
+
+test('recognizes only the stale snapshot RPC errors emitted by Legacy and Planning V1', () => {
+  const legacyRpcError = Object.assign(
+    new Error('load strict seasonal export snapshot: Stale Seasonal export snapshot: expected 7, current 8'),
+    { code: 'PT409' },
+  );
+  const planningRpcError = Object.assign(
+    new Error('get seasonal draft export snapshot V1: Draft snapshot changed'),
+    { code: 'PT409' },
+  );
+
+  assert.equal(isSeasonalExportSnapshotStaleError(legacyRpcError, false), true);
+  assert.equal(isSeasonalExportSnapshotStaleError(planningRpcError, true), true);
+  assert.equal(isSeasonalExportSnapshotStaleError(Object.assign(new Error(legacyRpcError.message), { code: 'P0001' }), false), false);
+  assert.equal(isSeasonalExportSnapshotStaleError(Object.assign(new Error('load strict seasonal export snapshot: access denied'), { code: 'PT409' }), false), false);
+  assert.equal(isSeasonalExportSnapshotStaleError(legacyRpcError, true), false);
 });
 
 test('stand overlays accept canonical text and legacy integer values', () => {

@@ -209,6 +209,7 @@ test('Seasonal export reads one strict full server snapshot instead of a window 
   assert.doesNotMatch(exportSource, /buildSeasonalAvailableRecordIds\(flightRecords,\s*modifications\)/, 'seasonal export');
 });
 
+
 test('Fetch data does not submit unsent route-local commits before server reads', () => {
   const dailySource = readFileSync(join(process.cwd(), 'src/app/(desktop)/daily/page.tsx'), 'utf8');
   const dailyFetch = extractFunctionBody(dailySource, 'fetchServerData');

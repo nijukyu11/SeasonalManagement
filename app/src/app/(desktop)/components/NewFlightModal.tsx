@@ -28,7 +28,7 @@ interface NewFlightModalProps {
   prefill?: FlightLeg | null; // Pre-fill from a reference flight
   prefillLinked?: FlightLeg | null; // Linked leg for turnaround pre-fill
   prefillDateSelection?: NewFlightDateSelection; // Pre-fill date vector for detailed mode
-  onSubmitSeasonal?: (row: Omit<ParsedRow, 'rowIndex'>) => void;
+  onSubmitSeasonal?: (row: Omit<ParsedRow, 'rowIndex'>) => void | Promise<void>;
   onSubmitDetailed?: (mods: FlightModification[]) => void | Promise<void>;
 }
 
@@ -96,61 +96,63 @@ function NewFlightModalContent({
 
   const handleSubmit = () => {
     if (submittingRef.current || !canSubmit()) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    setSubmitError(null);
 
-    if (mode === 'seasonal' && onSubmitSeasonal) {
-      const row: Omit<ParsedRow, 'rowIndex'> = {
-        effective,
-        discontinue,
-        airline: airline.trim().toUpperCase(),
-        aircraft: aircraft.trim(),
-        daysOfWeek: opDays,
-        sta: showArr ? arrTime : null,
-        arrFlight: showArr ? arrFlightNum.trim() : null,
-        arrFlightType: showArr ? 'PAX' : null,
-        arrRoute: showArr ? arrRoute.trim().toUpperCase() : null,
-        arrFlightCategory: showArr ? category : null,
-        arrCodeShares: showArr && arrCodeShares.trim() ? arrCodeShares.trim() : null,
-        arrIntDomInd: null,
-        std: showDep ? depTime : null,
-        depFlight: showDep ? depFlightNum.trim() : null,
-        depFlightType: showDep ? 'PAX' : null,
-        depRoute: showDep ? depRoute.trim().toUpperCase() : null,
-        depFlightCategory: showDep ? category : null,
-        depCodeShares: showDep && depCodeShares.trim() ? depCodeShares.trim() : null,
-        depIntDomInd: null,
-      };
-      onSubmitSeasonal(row);
-    }
-
-    if (mode === 'detailed' && onSubmitDetailed) {
-      const mods = buildDetailedNewFlightModifications({
-        dates: normalizeNewFlightDateSelection(undefined, flightDates),
-        airline,
-        flightType,
-        aircraft,
-        category,
-        arrFlightNum,
-        arrRoute,
-        arrTime,
-        arrCodeShares,
-        depFlightNum,
-        depRoute,
-        depTime,
-        depCodeShares,
-      });
-      submittingRef.current = true;
-      setSubmitting(true);
-      setSubmitError(null);
-      void Promise.resolve().then(() => onSubmitDetailed(mods)).then(onClose).catch((error) => {
+    const submit = async () => {
+      try {
+        if (mode === 'seasonal' && onSubmitSeasonal) {
+          const row: Omit<ParsedRow, 'rowIndex'> = {
+            effective,
+            discontinue,
+            airline: airline.trim().toUpperCase(),
+            aircraft: aircraft.trim(),
+            daysOfWeek: opDays,
+            sta: showArr ? arrTime : null,
+            arrFlight: showArr ? arrFlightNum.trim() : null,
+            arrFlightType: showArr ? 'PAX' : null,
+            arrRoute: showArr ? arrRoute.trim().toUpperCase() : null,
+            arrFlightCategory: showArr ? category : null,
+            arrCodeShares: showArr && arrCodeShares.trim() ? arrCodeShares.trim() : null,
+            arrIntDomInd: null,
+            std: showDep ? depTime : null,
+            depFlight: showDep ? depFlightNum.trim() : null,
+            depFlightType: showDep ? 'PAX' : null,
+            depRoute: showDep ? depRoute.trim().toUpperCase() : null,
+            depFlightCategory: showDep ? category : null,
+            depCodeShares: showDep && depCodeShares.trim() ? depCodeShares.trim() : null,
+            depIntDomInd: null,
+          };
+          await onSubmitSeasonal(row);
+        } else if (mode === 'detailed' && onSubmitDetailed) {
+          const mods = buildDetailedNewFlightModifications({
+            dates: normalizeNewFlightDateSelection(undefined, flightDates),
+            airline,
+            flightType,
+            aircraft,
+            category,
+            arrFlightNum,
+            arrRoute,
+            arrTime,
+            arrCodeShares,
+            depFlightNum,
+            depRoute,
+            depTime,
+            depCodeShares,
+          });
+          await onSubmitDetailed(mods);
+        }
+        onClose();
+      } catch (error) {
         setSubmitError(formatUiError(error));
-      }).finally(() => {
+      } finally {
         submittingRef.current = false;
         setSubmitting(false);
-      });
-      return;
-    }
+      }
+    };
 
-    onClose();
+    void submit();
   };
 
   return (

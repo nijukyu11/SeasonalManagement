@@ -72,15 +72,33 @@ export function sumHtmlMetrics(rows: HtmlMetric[], emptyCoverage: HtmlMetric['fl
     return values.length ? values.reduce((a, b) => a + b, 0) : rows.length === 0 && key === 'flights' && emptyCoverage === 'complete' ? 0 : null;
   };
   const count = (key: 'reported_legs' | 'due_legs' | 'missing_due_legs' | 'true_zero_reported_legs') => rows.reduce((a, row) => a + row[key], 0);
-  const flights = sum('flights');
+  const rawFlights = sum('flights');
+  const flight_coverage = !rows.length ? emptyCoverage : rows.some((r) => r.flight_coverage === 'missing') ? 'missing'
+    : rows.some((r) => r.flight_coverage === 'partial') ? 'partial' : 'complete';
+  const flights = rawFlights === 0 && flight_coverage !== 'complete' ? null : rawFlights;
   return { flights, reported_pax: sum('reported_pax'), reported_legs: count('reported_legs'), due_legs: count('due_legs'),
     missing_due_legs: count('missing_due_legs'), true_zero_reported_legs: count('true_zero_reported_legs'),
     unreported_legs: flights == null ? null : flights - count('reported_legs'),
     pax_status: count('reported_legs')===0?'missing':flights===count('reported_legs')?'complete':'partial',
-    flight_coverage: !rows.length ? emptyCoverage : rows.some((r) => r.flight_coverage === 'missing') ? 'missing'
-      : rows.some((r) => r.flight_coverage === 'partial') ? 'partial' : 'complete' };
+    flight_coverage };
 }
 export function compareHtmlMetrics(current: HtmlMetric, baseline: HtmlMetric, key: 'flights' | 'reported_pax') {
+  if (key === 'reported_pax') {
+    if (baseline.flights === 0 && baseline.flight_coverage !== 'missing' && current.reported_legs > 0 && current.reported_pax !== null) {
+      return {
+        delta: current.reported_pax,
+        percent: null,
+        provisional: current.flight_coverage !== 'complete' || current.unreported_legs !== 0,
+      };
+    }
+    if (current.flights === 0 && current.flight_coverage !== 'missing' && baseline.reported_legs > 0 && baseline.reported_pax !== null) {
+      return {
+        delta: -baseline.reported_pax,
+        percent: baseline.reported_pax !== 0 ? -1 : null,
+        provisional: baseline.flight_coverage !== 'complete' || baseline.unreported_legs !== 0,
+      };
+    }
+  }
   const a = current[key], b = baseline[key];
   if (a === null || b === null) return { delta: null, percent: null, provisional: false };
   if (key === 'flights') {
@@ -100,4 +118,21 @@ export function compareHtmlMetrics(current: HtmlMetric, baseline: HtmlMetric, ke
     percent: b !== 0 ? (a - b) / b : null,
     provisional: isProvisional,
   };
+}
+
+export function classifyHtmlChange(current: HtmlMetric, baseline: HtmlMetric, key: 'flights' | 'reported_pax'): 'new' | 'dropped' | 'changed' | 'unchanged' | 'missing' {
+  if (key === 'flights') {
+    if (current.flights === null || baseline.flights === null) return 'missing';
+    if (baseline.flights === 0 && current.flights > 0) return 'new';
+    if (baseline.flights > 0 && current.flights === 0) return 'dropped';
+    if (current.flights === baseline.flights) return 'unchanged';
+    return 'changed';
+  }
+  if (baseline.flights === 0 && baseline.flight_coverage !== 'missing' && current.reported_legs > 0 && (current.reported_pax ?? 0) > 0) return 'new';
+  if (current.flights === 0 && current.flight_coverage !== 'missing' && baseline.reported_legs > 0 && (baseline.reported_pax ?? 0) > 0) return 'dropped';
+  if (current.reported_legs === 0 || baseline.reported_legs === 0 || current.reported_pax === null || baseline.reported_pax === null) return 'missing';
+  if (baseline.reported_pax === 0 && current.reported_pax > 0) return 'new';
+  if (baseline.reported_pax > 0 && current.reported_pax === 0) return 'dropped';
+  if (current.reported_pax === baseline.reported_pax) return 'unchanged';
+  return 'changed';
 }

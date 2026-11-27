@@ -47,46 +47,119 @@ export interface DailyImportUploadJournalEntry {
   legCount: number;
   nextChunkIndex: number;
   status: 'uploading' | 'staged' | 'committed';
+  payloadFingerprint?: string;
   previewHash?: string;
   stagedResult?: DailyImportStageResultV2 | null;
   committedResult?: DailyImportCommittedResultV2 | null;
   savedAt: number;
 }
+export class DailyImportStorageError extends Error {
+  readonly cause: unknown;
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'DailyImportStorageError';
+    this.cause = cause;
+  }
+}
 
-export function resolveOperatorId(explicit?: string): string {
+function getSafeStorage(storageInput?: Storage | null): Storage | null {
+  if (storageInput) return storageInput;
+  if (typeof window !== 'undefined') {
+    try {
+      return window.localStorage ?? null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof localStorage !== 'undefined') {
+    try {
+      return localStorage ?? null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function resolveOperatorId(explicit?: string | null): string | null {
+  if (typeof window !== 'undefined') {
+    const current = getSynchronousOperatorUserId();
+    if (!current || !current.trim()) {
+      return null;
+    }
+    const currentTrimmed = current.trim();
+    if (explicit && explicit.trim() && explicit.trim() !== currentTrimmed) {
+      return null;
+    }
+    return currentTrimmed;
+  }
   if (explicit && explicit.trim()) return explicit.trim();
   const synchronous = getSynchronousOperatorUserId();
   if (synchronous && synchronous.trim()) return synchronous.trim();
-  return 'default-operator';
+  return null;
 }
 
-function getJournalStorageKey(operatorId: string, rawChecksum?: string): string {
+export function requireOperatorId(explicit?: string | null): string {
+  const op = resolveOperatorId(explicit);
+  if (!op) {
+    throw new DailyImportStorageError('An authenticated operator is required for daily import operations.');
+  }
+  return op;
+}
+
+export function getDailyJournalStorageKey(operatorId: string, rawChecksum?: string): string {
   const op = resolveOperatorId(operatorId);
+  if (!op || op === 'default-operator') {
+    throw new DailyImportStorageError('An authenticated operator is required for daily import storage key.');
+  }
   return rawChecksum
     ? `daily:chunked-upload:op:${op}:fp:${rawChecksum}`
     : `daily:chunked-upload:op:${op}:active`;
 }
 
-export function saveDailyUploadJournal(entry: DailyImportUploadJournalEntry): void {
-  if (typeof sessionStorage === 'undefined') return;
+export function saveDailyUploadJournal(
+  entry: DailyImportUploadJournalEntry,
+  storageInput?: Storage | null,
+): void {
+  const op = resolveOperatorId(entry.operatorId);
+  if (!op) {
+    throw new DailyImportStorageError('An authenticated operator is required to persist daily import upload journal.');
+  }
+  const storage = getSafeStorage(storageInput);
+  if (!storage) {
+    throw new DailyImportStorageError('Storage is unavailable. Cannot persist daily import upload journal.');
+  }
+
+  const activeKey = getDailyJournalStorageKey(op);
+  const fpKey = entry.rawChecksum ? getDailyJournalStorageKey(op, entry.rawChecksum) : null;
+  const serialized = JSON.stringify({ ...entry, operatorId: op });
+
   try {
-    const serialized = JSON.stringify(entry);
-    if (entry.rawChecksum) {
-      sessionStorage.setItem(getJournalStorageKey(entry.operatorId, entry.rawChecksum), serialized);
+    if (fpKey) {
+      storage.setItem(fpKey, serialized);
     }
-    sessionStorage.setItem(getJournalStorageKey(entry.operatorId), serialized);
-  } catch {
-    // Ignore session storage sandbox or quota errors
+    storage.setItem(activeKey, serialized);
+  } catch (err) {
+    throw new DailyImportStorageError('Failed to persist daily import upload journal.', err);
   }
 }
 
-export function getDailyUploadJournalByFingerprint(operatorId: string, rawChecksum: string): DailyImportUploadJournalEntry | null {
-  if (typeof sessionStorage === 'undefined') return null;
+export function getDailyUploadJournalByFingerprint(
+  operatorId: string,
+  rawChecksum: string,
+  storageInput?: Storage | null,
+): DailyImportUploadJournalEntry | null {
+  const op = resolveOperatorId(operatorId);
+  if (!op || !rawChecksum) return null;
+
+  const storage = getSafeStorage(storageInput);
+  if (!storage) return null;
+
   try {
-    const raw = sessionStorage.getItem(getJournalStorageKey(operatorId, rawChecksum));
+    const raw = storage.getItem(getDailyJournalStorageKey(op, rawChecksum));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as DailyImportUploadJournalEntry;
-    if (parsed && typeof parsed === 'object' && parsed.rawChecksum === rawChecksum) {
+    if (parsed && typeof parsed === 'object' && parsed.operatorId === op && parsed.rawChecksum === rawChecksum) {
       return parsed;
     }
   } catch {
@@ -95,13 +168,21 @@ export function getDailyUploadJournalByFingerprint(operatorId: string, rawChecks
   return null;
 }
 
-export function getActiveDailyUploadJournal(operatorId: string): DailyImportUploadJournalEntry | null {
-  if (typeof sessionStorage === 'undefined') return null;
+export function getActiveDailyUploadJournal(
+  operatorId: string,
+  storageInput?: Storage | null,
+): DailyImportUploadJournalEntry | null {
+  const op = resolveOperatorId(operatorId);
+  if (!op) return null;
+
+  const storage = getSafeStorage(storageInput);
+  if (!storage) return null;
+
   try {
-    const raw = sessionStorage.getItem(getJournalStorageKey(operatorId));
+    const raw = storage.getItem(getDailyJournalStorageKey(op));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as DailyImportUploadJournalEntry;
-    if (parsed && typeof parsed === 'object' && parsed.requestId) {
+    if (parsed && typeof parsed === 'object' && parsed.operatorId === op && parsed.requestId) {
       return parsed;
     }
   } catch {
@@ -110,15 +191,25 @@ export function getActiveDailyUploadJournal(operatorId: string): DailyImportUplo
   return null;
 }
 
-export function clearDailyUploadJournal(operatorId: string, rawChecksum?: string): void {
-  if (typeof sessionStorage === 'undefined') return;
+export function clearDailyUploadJournal(
+  operatorId: string,
+  rawChecksum?: string,
+  storageInput?: Storage | null,
+): void {
+  const op = resolveOperatorId(operatorId);
+  if (!op) return;
+
+  const storage = getSafeStorage(storageInput);
+  if (!storage) return;
+
   try {
-    if (rawChecksum) {
-      sessionStorage.removeItem(getJournalStorageKey(operatorId, rawChecksum));
+    const active = getActiveDailyUploadJournal(op, storage);
+    const fingerprint = rawChecksum ?? active?.rawChecksum;
+    if (fingerprint) {
+      storage.removeItem(getDailyJournalStorageKey(op, fingerprint));
     }
-    const active = getActiveDailyUploadJournal(operatorId);
     if (!rawChecksum || active?.rawChecksum === rawChecksum) {
-      sessionStorage.removeItem(getJournalStorageKey(operatorId));
+      storage.removeItem(getDailyJournalStorageKey(op));
     }
   } catch {
     // Ignore
@@ -289,10 +380,46 @@ export async function uploadDailyImportInChunksV2(
   const totalChunks = totalLegs === 0 ? 0 : Math.ceil(totalLegs / chunkSize);
   const maxRetries = options?.maxRetriesPerChunk ?? 3;
   const operatorId = resolveOperatorId(options?.operatorId);
-
+  if (!operatorId) {
+    throw new DailyImportStorageError('An authenticated operator is required to upload daily schedule import.');
+  }
   const beginUploadRpc = options?.client?.beginDailyScheduleImportUploadV2 ?? beginDailyScheduleImportUploadV2;
   const appendUploadRpc = options?.client?.appendDailyScheduleImportUploadV2 ?? appendDailyScheduleImportUploadV2;
   const finalizeUploadRpc = options?.client?.finalizeDailyScheduleImportUploadV2 ?? finalizeDailyScheduleImportUploadV2;
+
+  const payloadFingerprintInput = { ...payload, requestId: undefined };
+  const payloadBytes = new TextEncoder().encode(JSON.stringify(payloadFingerprintInput));
+  const payloadDigest = await globalThis.crypto.subtle.digest('SHA-256', payloadBytes);
+  const payloadFingerprint = Array.from(new Uint8Array(payloadDigest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+
+  // Raw file checksums omit user confirmations and fallback scope; resume only
+  // when the exact staged request payload matches.
+  const fingerprintJournal = payload.rawChecksum
+    ? getDailyUploadJournalByFingerprint(operatorId, payload.rawChecksum)
+    : null;
+  const existingJournal = fingerprintJournal?.payloadFingerprint === payloadFingerprint
+    ? fingerprintJournal
+    : null;
+  const requestId = existingJournal?.requestId || payload.requestId;
+  payload.requestId = requestId;
+  const importPayload = { ...metadata, requestId };
+
+  // Persist journal BEFORE first RPC call so storage refusal causes zero server calls
+  // and lost begin ACK/restart retains the recoverable request
+  saveDailyUploadJournal({
+    operatorId,
+    rawChecksum: payload.rawChecksum,
+    requestId,
+    uploadId: existingJournal?.uploadId,
+    batchId: existingJournal?.batchId,
+    fileName: payload.fileName,
+    totalChunks,
+    legCount: totalLegs,
+    nextChunkIndex: existingJournal?.nextChunkIndex ?? 0,
+    status: 'uploading',
+    payloadFingerprint,
+    savedAt: Date.now(),
+  });
 
   options?.onProgress?.({
     phase: 'preparing',
@@ -308,7 +435,7 @@ export async function uploadDailyImportInChunksV2(
 
   // Initialize or resume upload session on backend
   const beginResult = await beginUploadRpc({
-    importPayload: metadata,
+    importPayload,
     legCount: totalLegs,
     chunkCount: totalChunks,
   });
@@ -324,7 +451,7 @@ export async function uploadDailyImportInChunksV2(
   saveDailyUploadJournal({
     operatorId,
     rawChecksum: payload.rawChecksum,
-    requestId: payload.requestId,
+    requestId,
     uploadId,
     batchId: beginResult.batchId,
     fileName: payload.fileName,
@@ -332,6 +459,7 @@ export async function uploadDailyImportInChunksV2(
     legCount: totalLegs,
     nextChunkIndex: startingChunkIndex,
     status: 'uploading',
+    payloadFingerprint,
     savedAt: Date.now(),
   });
 
@@ -361,7 +489,7 @@ export async function uploadDailyImportInChunksV2(
         saveDailyUploadJournal({
           operatorId,
           rawChecksum: payload.rawChecksum,
-          requestId: payload.requestId,
+          requestId,
           uploadId,
           batchId: beginResult.batchId,
           fileName: payload.fileName,
@@ -369,6 +497,7 @@ export async function uploadDailyImportInChunksV2(
           legCount: totalLegs,
           nextChunkIndex: appendResult.nextChunkIndex,
           status: 'uploading',
+          payloadFingerprint,
           savedAt: Date.now(),
         });
         break;
@@ -437,7 +566,7 @@ export async function uploadDailyImportInChunksV2(
     // If transport interrupted during finalize, probe getDailyScheduleImportV2Status
     if (isTransportError(finalizeErr)) {
       try {
-        const recovered = await getDailyScheduleImportV2Status(payload.requestId);
+        const recovered = await getDailyScheduleImportV2Status(requestId);
         if (recovered && (recovered.status === 'validated' || recovered.status === 'committed')) {
           stageResult = recovered;
         } else {
@@ -454,7 +583,7 @@ export async function uploadDailyImportInChunksV2(
   saveDailyUploadJournal({
     operatorId,
     rawChecksum: payload.rawChecksum,
-    requestId: payload.requestId,
+    requestId,
     uploadId,
     batchId: stageResult.batchId,
     fileName: payload.fileName,
@@ -462,6 +591,7 @@ export async function uploadDailyImportInChunksV2(
     legCount: totalLegs,
     nextChunkIndex: totalChunks,
     status: 'staged',
+    payloadFingerprint,
     previewHash: stageResult.previewHash,
     stagedResult: stageResult,
     savedAt: Date.now(),

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { openM0FixtureDb, seedM0OperatorsAndSeasons, M0_FIXTURE } from './seasonal_operational_separation_fixture.mjs';
+import { rollbackChainMigrationsAfter } from './seasonal_operational_separation_test_support.mjs';
 
 const ctx = await openM0FixtureDb();
 const { db, asWriter, asAdmin } = ctx;
@@ -74,6 +75,7 @@ try {
   const windowRollback = await readFile(new URL('../migrations/20260928160000_operational_window_v1.rollback.sql',import.meta.url),'utf8');
   await assert.rejects(()=>db.exec(windowRollback),e=>e.code==='P0001' && e.message.includes('Rollback M4 mutations'));
   await db.exec('rollback');
+  await rollbackChainMigrationsAfter(db, '20260929120000_seasonal_operational_reader_cutover_v1.sql');
   await db.exec(await readFile(new URL('../migrations/20260928210000_seasonal_publish_v1.rollback.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../migrations/20260928200000_seasonal_draft_import_v1.rollback.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../migrations/20260928190000_seasonal_planning_v1.rollback.sql',import.meta.url),'utf8'));

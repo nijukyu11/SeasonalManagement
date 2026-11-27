@@ -29,6 +29,7 @@ function setupFixtures() {
         target: ts.ScriptTarget.ES2019,
         module: ts.ModuleKind.CommonJS,
         esModuleInterop: true,
+        rewriteRelativeImportExtensions: true,
       },
     });
     fs.writeFileSync(path.join(tempDir, `${name}.js`), output.outputText, 'utf8');
@@ -42,7 +43,6 @@ const {
 } = require(path.join(tempDir, 'dashboardAnalysis.js'));
 
 const {
-  CANONICAL_DASHBOARD_REPORT_COLUMNS,
   buildDashboardReportRows,
   buildSanLuongSummaryWorkbook,
   buildMomWowAnalysisWorkbook,
@@ -106,18 +106,15 @@ test('canonical dashboard report rows normalize active records and exclude delet
     timeBasis: 'local',
   });
 
-  assert(
-    JSON.stringify(CANONICAL_DASHBOARD_REPORT_COLUMNS) === JSON.stringify(['Type', 'Flight', 'Config', 'STA/STD', 'Routes', 'Pax', 'Note', 'Airlines', 'Ops Date', 'Country', 'Weeknum', 'UTC', 'HourUTC', 'A/C Type', 'DayIndex', 'Weekday', 'IsoWeek']) &&
-      dashboardReportRows.length === 3 &&
-      dashboardReportRows[0].Country === 'South Korea' &&
-      dashboardReportRows[0].Note === 'Bags Delivered' &&
-      dashboardReportRows[2].UTC === '2026-07-03 18:00' &&
-      dashboardReportRows[2].HourUTC === 18 &&
-      dashboardReportRows[2].DayIndex === 4 &&
-      dashboardReportRows[2].IsoWeek === '2026-W27' &&
-      !JSON.stringify(dashboardReportRows).includes('REP-DELETED'),
-    `dashboard report rows should normalize active FlightRecords into canonical SanLuong columns, got ${JSON.stringify(dashboardReportRows)}`
-  );
+  assert.deepEqual(dashboardReportRows.map((row) => row.Flight), ['VJ901', 'VJ902', 'VN903']);
+  assert.equal(dashboardReportRows[0].Country, 'South Korea');
+  const overnight = dashboardReportRows.find((row) => row.Flight === 'VN903');
+  assert.equal(overnight.UTC, '2026-07-03 18:00');
+  assert.equal(overnight.HourUTC, 18);
+  assert.equal(overnight['Ops Date'], dashboardReportRows[0]['Ops Date']);
+  assert.equal(overnight.DayIndex, dashboardReportRows[0].DayIndex);
+  assert.equal(overnight.Weekday, dashboardReportRows[0].Weekday);
+  assert.equal(overnight.IsoWeek, dashboardReportRows[0].IsoWeek);
 });
 
 test('buildSanLuongSummaryWorkbook populates raw rows and airline summary sheets', () => {

@@ -12,7 +12,7 @@
 // Run: node supabase/tests/seasonal_operational_separation_m1_schema_pglite.mjs
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { createSeasonalOperationalSeparationDb } from './seasonal_operational_separation_test_support.mjs';
+import { createSeasonalOperationalSeparationDb, rollbackChainMigrationsAfter } from './seasonal_operational_separation_test_support.mjs';
 import { M0_FIXTURE, seedM0OperatorsAndSeasons } from './seasonal_operational_separation_fixture.mjs';
 
 const MIGRATION_NAME = '20260928120000_seasonal_operational_separation_schema.sql';
@@ -70,7 +70,7 @@ try {
     applied.includes(MIGRATION_NAME),
     `the migration chain applies ${MIGRATION_NAME} (applied tail: ${applied.slice(-3).join(', ')})`
   );
-  await db.exec(await readFile(new URL('../migrations/20260929120000_seasonal_operational_reader_cutover_v1.rollback.sql',import.meta.url),'utf8'));
+  await rollbackChainMigrationsAfter(db, '20260928210000_seasonal_publish_v1.sql');
   for (const name of ['20260928210000_seasonal_publish_v1.rollback.sql','20260928200000_seasonal_draft_import_v1.rollback.sql','20260928190000_seasonal_planning_v1.rollback.sql','20260928180000_operational_daily_import_v2.rollback.sql','20260928170000_operational_mutations_v1.rollback.sql','20260928160000_operational_window_v1.rollback.sql']) {
     await db.exec(await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8'));
   }

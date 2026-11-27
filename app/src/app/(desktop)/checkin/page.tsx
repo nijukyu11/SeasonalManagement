@@ -6,6 +6,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -14,7 +15,6 @@ import {
 } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  applyOperationalResourceChangesV1,
   getOperationalScheduleAllocationWindowV1,
   getOperationalSettings,
   getSeasons,
@@ -53,6 +53,7 @@ import {
 import { addDaysToLocalDateTime, buildDefaultDailyDateRange, readDailyDateRangeQuery } from '@/lib/dailySchedule';
 import { buildSeasonDisplayLabel } from '@/lib/importSeasonRules';
 import {
+  getCachedOperationalSettings,
   getCachedSeasons,
   publishSeasonWorkspaceChanged,
   setCachedSeasonData,
@@ -81,6 +82,7 @@ import {
   type CheckInPdfExportRange,
   type CheckInPdfPreviewPlan,
 } from '@/lib/checkinPdfExport';
+import { shouldReportOperationalLoadFailure } from '@/lib/operationalLoadFailure';
 import {
   buildOperationalDateRange,
   buildOperationalLegPatchAndPreimage,
@@ -99,6 +101,9 @@ import {
   getPendingOperationalMutation,
   setPendingOperationalMutation,
   clearPendingOperationalMutation,
+  commitOperationalResourceBatch,
+  isAuthoritativeSqlRejection,
+  type OperationalMutationResult,
 } from '@/lib/operationalScheduleAdapter';
 import { getSupabaseClient } from '@/lib/supabase';
 import { appendAuditLogEntry, createFlightActionAuditFromHistory } from '@/lib/auditLog';
@@ -910,6 +915,12 @@ function CheckInAllocationContent() {
   const defaultRange = requestedRange ?? buildDefaultDailyDateRange(todayIso());
   const [fromDateTime, setFromDateTime] = useSessionState('checkin:fromDateTime', defaultRange.from);
   const [toDateTime, setToDateTime] = useSessionState('checkin:toDateTime', defaultRange.to);
+  const isRouteActiveRef = useRef(isRouteActive);
+  const currentRangeRef = useRef({ fromDateTime, toDateTime });
+  useLayoutEffect(() => {
+    isRouteActiveRef.current = isRouteActive;
+    currentRangeRef.current = { fromDateTime, toDateTime };
+  }, [fromDateTime, isRouteActive, toDateTime]);
   const initialCheckInRouteState = readInitialCheckInRouteState({ targetSeasonId, fromDateTime, toDateTime });
 
   const [seasons, setSeasons] = useState<Season[]>(() => initialCheckInRouteState?.seasons ?? []);
@@ -919,7 +930,11 @@ function CheckInAllocationContent() {
     () => initialCheckInRouteState?.modifications ?? new Map()
   );
   const [optimisticAllocationView, setOptimisticAllocationView] = useState<CheckInAllocationView | null>(null);
-  const [settings, setSettings] = useState<OperationalSettings | null>(() => initialCheckInRouteState?.settings ?? null);
+  const [settings, setSettings] = useState<OperationalSettings | null>(() => initialCheckInRouteState?.settings ?? getCachedOperationalSettings() ?? null);
+  const settingsRef = useRef<OperationalSettings | null>(initialCheckInRouteState?.settings ?? getCachedOperationalSettings() ?? null);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
   const [syncSummary, setSyncSummary] = useState<{ pendingCount: number; lastLocalChangeAt: number | null }>(
     () => initialCheckInRouteState?.syncSummary ?? {
       pendingCount: 0,
@@ -967,6 +982,7 @@ function CheckInAllocationContent() {
   const checkInCommitRequestsRef = useRef(new Map<number, PendingCheckInCommitRequest>());
   const checkInCommitRequestSeqRef = useRef(0);
   const checkInUndoStackRef = useRef<CheckInUndoEntry[]>(readStoredCheckInUndoStack());
+  const pendingCheckInUndoRef = useRef<{ requestId: string; undoEntry: CheckInUndoEntry } | null>(null);
   const checkInUndoSeqRef = useRef(0);
   const latestCheckInModificationsRef = useRef(modifications);
   const optimisticAllocationViewRef = useRef<CheckInAllocationView | null>(null);
@@ -993,6 +1009,12 @@ function CheckInAllocationContent() {
   }, []);
   const pendingRevalidateOnSettleRef = useRef(false);
   const operationalRequestIdRef = useRef(0);
+  useEffect(() => {
+    const requestIds = operationalRequestIdRef;
+    return () => {
+      requestIds.current += 1;
+    };
+  }, []);
   const operationalStoreMutating = useOperationalScheduleStore((s) => s.mutating || s.importing || Boolean(s.unresolvedAttempt));
   const unresolvedAttempt = useOperationalScheduleStore((s) => s.unresolvedAttempt);
   useSessionScrollRestoration('checkin:gantt-scroll', ganttScrollRef);
@@ -1117,23 +1139,53 @@ function CheckInAllocationContent() {
       const startDate = fromDateTime.slice(0, 10);
       const endDate = toDateTime.slice(0, 10);
       const requestedRangeKey = `${startDate}:${endDate}`;
-      const operationalResult = await loadFullOperationalScheduleWindow({
-        startDate,
-        endDate,
-        resourceType: 'checkin',
-        fetchWindowFn: (p) => getOperationalScheduleAllocationWindowV1(p),
-      });
-      if (
-        operationalRequestIdRef.current !== requestId ||
-        !isRouteActive ||
-        `${fromDateTime.slice(0, 10)}:${toDateTime.slice(0, 10)}` !== requestedRangeKey
-      ) {
-        return null;
+      try {
+        const settingsPromise = (settingsRef.current && !options.revalidate)
+          ? Promise.resolve(settingsRef.current)
+          : getOperationalSettings({ force: Boolean(options.revalidate) }).catch((err) => {
+              console.warn('Failed to load operational settings', err);
+              return settingsRef.current ?? getCachedOperationalSettings() ?? null;
+            });
+
+        const [loadedSettings, operationalResult] = await Promise.all([
+          settingsPromise,
+          loadFullOperationalScheduleWindow({
+            startDate,
+            endDate,
+            resourceType: 'checkin',
+            fetchWindowFn: (p) => getOperationalScheduleAllocationWindowV1(p),
+          }),
+        ]);
+
+        const currentRangeKey = `${currentRangeRef.current.fromDateTime.slice(0, 10)}:${currentRangeRef.current.toDateTime.slice(0, 10)}`;
+        if (
+          operationalRequestIdRef.current !== requestId ||
+          !isRouteActiveRef.current ||
+          currentRangeKey !== requestedRangeKey
+        ) {
+          return null;
+        }
+
+        const effectiveSettings = loadedSettings ?? settingsRef.current;
+        if (!effectiveSettings) {
+          throw new Error('Không thể tải cấu hình vận hành.');
+        }
+
+        settingsRef.current = effectiveSettings;
+        setSettings(effectiveSettings);
+        operationalSnapshotRef.current = operationalResult.snapshot;
+        useOperationalScheduleStore.setState({ snapshot: operationalResult.snapshot });
+        setFlightRecords(operationalResult.records);
+        replaceCheckInModifications(new Map());
+        setLoadProgress(buildLoadProgress('Đã tải lịch phân bổ quầy vận hành', 100, 'Sẵn sàng'));
+        setLoadError(null);
+        setLoading(false);
+        return operationalResult;
+      } finally {
+        if (operationalRequestIdRef.current === requestId && isRouteActiveRef.current) {
+          setLoading(false);
+        }
       }
-      operationalSnapshotRef.current = operationalResult.snapshot;
-      setFlightRecords(operationalResult.records);
-      replaceCheckInModifications(new Map());
-      return operationalResult;
     }
     if (!season) return;
     const windowKey = buildCheckInWindowKey(fromDateTime, toDateTime);
@@ -1163,7 +1215,7 @@ function CheckInAllocationContent() {
     });
     loadedWindowKeyRef.current = windowKey;
     return snapshot;
-  }, [clearOptimisticAllocationView, fromDateTime, isRouteActive, replaceCheckInModifications, season, toDateTime]);
+  }, [clearOptimisticAllocationView, fromDateTime, isRouteActive, replaceCheckInModifications, season, showAlert, toDateTime]);
 
   const tryApplyCachedCheckInRouteWindow = useCallback((): false | 'fresh' | 'stale' => {
     const storeState = useSeasonWorkspaceStore.getState();
@@ -1402,50 +1454,32 @@ function CheckInAllocationContent() {
     let cancelled = false;
     (async () => {
       if (isOperationalScheduleV1Enabled()) {
-        if (!isRouteActive) return;
+        if (!isRouteActiveRef.current) return;
         setLoading(true);
         setLoadError(null);
-        const requestId = ++operationalRequestIdRef.current;
         const startDate = fromDateTime.slice(0, 10);
         const endDate = toDateTime.slice(0, 10);
-        const requestedRangeKey = `${startDate}:${endDate}`;
+        setLoadProgress(buildLoadProgress('Đang tải khoảng ngày vận hành', 40, `${startDate}..${endDate}`));
+        const refreshPromise = refreshCheckInWindow();
+        const requestId = operationalRequestIdRef.current;
         try {
-          const loadedSettings = await getOperationalSettings().catch(() => null);
-          if (cancelled || operationalRequestIdRef.current !== requestId || !isRouteActive) return;
-          if (loadedSettings) setSettings(loadedSettings);
-          setLoadProgress(buildLoadProgress('Đang tải khoảng ngày vận hành', 40, `${startDate}..${endDate}`));
-          const operationalResult = await loadFullOperationalScheduleWindow({
-            startDate,
-            endDate,
-            resourceType: 'checkin',
-            fetchWindowFn: (p) => getOperationalScheduleAllocationWindowV1(p),
-          });
-          if (
-            cancelled ||
-            operationalRequestIdRef.current !== requestId ||
-            !isRouteActive ||
-            `${fromDateTime.slice(0, 10)}:${toDateTime.slice(0, 10)}` !== requestedRangeKey
-          ) {
-            return;
-          }
-          operationalSnapshotRef.current = operationalResult.snapshot;
-          setFlightRecords(operationalResult.records);
-          replaceCheckInModifications(new Map());
-          setLoading(false);
-          return;
+          await refreshPromise;
         } catch (err) {
-          console.error('Error loading operational checkin schedule', err);
-          if (!cancelled && operationalRequestIdRef.current === requestId && isRouteActive) {
+          const currentRangeKey = `${currentRangeRef.current.fromDateTime.slice(0, 10)}:${currentRangeRef.current.toDateTime.slice(0, 10)}`;
+          if (shouldReportOperationalLoadFailure({
+            requestId,
+            currentRequestId: operationalRequestIdRef.current,
+            cancelled,
+            routeActive: isRouteActiveRef.current,
+            requestRangeKey: `${startDate}:${endDate}`,
+            currentRangeKey,
+          })) {
             const message = formatUiError(err, 'Không thể tải Lịch phân bổ quầy vận hành.');
             setLoadError(message);
             void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
           }
-          return;
-        } finally {
-          if (!cancelled && operationalRequestIdRef.current === requestId) {
-            setLoading(false);
-          }
         }
+        return;
       }
       const cachedState = tryApplyCachedCheckInRouteWindow();
       if (cachedState === 'fresh') return;
@@ -1560,8 +1594,9 @@ function CheckInAllocationContent() {
 
     return () => {
       cancelled = true;
+      ++operationalRequestIdRef.current;
     };
-  }, [clearCheckInUndoStack, clearOptimisticAllocationView, fromDateTime, isRouteActive, replaceCheckInModifications, router, showAlert, targetSeasonId, toDateTime, tryApplyCachedCheckInRouteWindow]);
+  }, [clearCheckInUndoStack, clearOptimisticAllocationView, fromDateTime, isRouteActive, refreshCheckInWindow, replaceCheckInModifications, router, showAlert, targetSeasonId, toDateTime, tryApplyCachedCheckInRouteWindow]);
   useEffect(() => {
     if (!isOperationalScheduleV1Enabled() || !isRouteActive) return;
     const client = getSupabaseClient();
@@ -1579,8 +1614,9 @@ function CheckInAllocationContent() {
           pendingRevalidateOnSettleRef.current = true;
           return;
         }
-
-        void refreshCheckInWindow({ revalidate: true });
+        void refreshCheckInWindow({ revalidate: true }).catch((err) => {
+          console.error('Error refreshing checkin window on date invalidated', err);
+        });
       },
       onReconnect: () => {
         const storeState = useOperationalScheduleStore.getState();
@@ -1588,7 +1624,9 @@ function CheckInAllocationContent() {
           pendingRevalidateOnSettleRef.current = true;
           return;
         }
-        void refreshCheckInWindow({ revalidate: true });
+        void refreshCheckInWindow({ revalidate: true }).catch((err) => {
+          console.error('Error refreshing checkin window on reconnect', err);
+        });
       },
     });
     return () => {
@@ -1601,7 +1639,9 @@ function CheckInAllocationContent() {
     if (operationalMutating || operationalStoreMutating) return;
     if (pendingRevalidateOnSettleRef.current) {
       pendingRevalidateOnSettleRef.current = false;
-      void refreshCheckInWindow({ revalidate: true });
+      void refreshCheckInWindow({ revalidate: true }).catch((err) => {
+        console.error('Error refreshing checkin window after settle', err);
+      });
     }
   }, [isRouteActive, operationalMutating, operationalStoreMutating, refreshCheckInWindow]);
 
@@ -2167,25 +2207,49 @@ function CheckInAllocationContent() {
     shouldHandleWorkspaceChange: shouldHandleCheckInWorkspaceChange,
     onRefresh: async (event) => {
       await flushPendingCheckInLocalCommit();
-      await refreshCheckInWindow({ revalidate: event.refreshMode === 'revalidate' });
+      await refreshCheckInWindow({ revalidate: event.refreshMode === 'revalidate' }).catch(() => undefined);
     },
   });
 
   const handleRetryPendingMutation = useCallback(async () => {
     setOperationalMutating(true);
     try {
+      const pending = getPendingOperationalMutation();
+      const pendingRequestId = pending?.requestId;
       const outcome = await useOperationalScheduleStore.getState().retryPendingMutation();
+      if (outcome && 'receipt' in outcome && outcome.receipt) {
+        if (outcome.receipt.status === 'committed') {
+          if (outcome.receipt.revision) {
+            operationalSnapshotRef.current = {
+              revision: outcome.receipt.revision,
+              token: '',
+            };
+            useOperationalScheduleStore.setState({
+              snapshot: { revision: outcome.receipt.revision, token: '' },
+            });
+          }
+          if (pendingRequestId && pendingCheckInUndoRef.current && pendingCheckInUndoRef.current.requestId === pendingRequestId) {
+            pushCheckInUndoEntry(pendingCheckInUndoRef.current.undoEntry);
+            pendingCheckInUndoRef.current = null;
+          }
+        }
+      }
       if (outcome && 'refreshError' in outcome && outcome.refreshError) {
         void showAlert({ title: 'Đã lưu nhưng chưa tải lại được', message: formatUiError(outcome.refreshError), tone: 'warning' });
       } else {
         await refreshCheckInWindow({ revalidate: true });
       }
     } catch (err) {
+      if (isAuthoritativeSqlRejection(err)) {
+        pendingCheckInUndoRef.current = null;
+        clearOptimisticAllocationView();
+        void refreshCheckInWindow().catch(() => undefined);
+      }
       void showAlert({ title: 'Thử lại thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       setOperationalMutating(false);
     }
-  }, [refreshCheckInWindow, setOperationalMutating, showAlert]);
+  }, [clearOptimisticAllocationView, pushCheckInUndoEntry, refreshCheckInWindow, setOperationalMutating, showAlert]);
 
   const commitCheckInModificationBatch = useCallback(async (
     mods: FlightModification[],
@@ -2194,7 +2258,17 @@ function CheckInAllocationContent() {
   ) => {
     if (isOperationalScheduleV1Enabled()) {
       if (mods.length === 0) return;
-      if (operationalMutatingRef.current || useOperationalScheduleStore.getState().mutating || useOperationalScheduleStore.getState().importing) {
+      if (
+        operationalMutatingRef.current ||
+        useOperationalScheduleStore.getState().mutating ||
+        useOperationalScheduleStore.getState().importing ||
+        Boolean(useOperationalScheduleStore.getState().unresolvedAttempt)
+      ) {
+        void showAlert({
+          title: 'Thao tác đang bị tạm khóa',
+          message: 'Thao tác vận hành trước đó chưa được xác nhận trên máy chủ hoặc đang được xử lý. Vui lòng bấm Thử lại ở thanh cảnh báo trước khi thực hiện thao tác mới.',
+          tone: 'warning',
+        });
         return;
       }
       const patches = mods
@@ -2219,120 +2293,109 @@ function CheckInAllocationContent() {
         return;
       }
 
-      const currentPayload = JSON.stringify(patches);
-      let requestId = crypto.randomUUID();
-      let expectedRevision = operationalSnapshotRef.current?.revision ?? '0';
-
-      const pending = getPendingOperationalMutation();
-      if (pending && pending.kind === 'apply_resource' && pending.serializedPayload === currentPayload) {
-        requestId = pending.requestId;
-        expectedRevision = pending.expectedRevision;
-      } else if (pending) {
-        throw new Error('Thao tác vận hành trước đó chưa được xác nhận. Hãy thử lại yêu cầu đó trước khi thực hiện thao tác mới.');
-      } else {
-        setPendingOperationalMutation({
-          kind: 'apply_resource',
-          requestId,
-          expectedRevision,
-          serializedPayload: currentPayload,
-        });
-      }
-
+      const requestId = crypto.randomUUID();
+      const expectedRevision = operationalSnapshotRef.current?.revision ?? '0';
       const undoEntry = options.trackUndo !== false ? buildCheckInUndoEntry(mods, description) : null;
+      if (undoEntry) {
+        pendingCheckInUndoRef.current = { requestId, undoEntry };
+      }
 
       operationalMutatingRef.current = true;
       setOperationalMutating(true);
-      useOperationalScheduleStore.setState({ mutating: true });
 
       const previousModifications = new Map(latestCheckInModificationsRef.current);
       applyOptimisticCheckInModifications(mods);
 
       try {
-        let receipt: OperationalMutationReceipt;
+        let result: OperationalMutationResult;
         try {
-          const request = {
-            requestId,
-            expectedRevision,
+          result = await commitOperationalResourceBatch({
             changes: patches,
-          };
-          rememberOperationalMutationRequestId(request.requestId);
-          let unknownFailureCount = 0;
-          while (true) {
-            try {
-              receipt = await applyOperationalResourceChangesV1(request);
-              break;
-            } catch (error) {
-              const rawCode = error && typeof error === 'object' && 'code' in error ? error.code : null;
-              const code = typeof rawCode === 'string' ? rawCode : null;
-              if (code && /^[0-9A-Z]{5}$/i.test(code) && !code.toUpperCase().startsWith('08') && !code.toUpperCase().startsWith('57')) {
-                throw error;
-              }
-              unknownFailureCount += 1;
-              if (unknownFailureCount > 1) {
-                await showAlert({
-                  title: 'Chưa rõ trạng thái cập nhật quầy',
-                  message: 'Không thể xác định kết quả cập nhật do gián đoạn kết nối. Bấm OK để gửi lại đúng yêu cầu này.',
-                  tone: 'warning',
-                });
-              }
-            }
-          }
+            expectedRevision,
+            requestId,
+          });
         } catch (rpcErr) {
-          const rawCode = rpcErr && typeof rpcErr === 'object' && 'code' in rpcErr ? rpcErr.code : null;
-          const code = typeof rawCode === 'string' ? rawCode : null;
-          if (code && /^[0-9A-Z]{5}$/i.test(code) && !code.toUpperCase().startsWith('08') && !code.toUpperCase().startsWith('57')) {
-            clearPendingOperationalMutation(requestId);
+          const pending = getPendingOperationalMutation();
+          if (isAuthoritativeSqlRejection(rpcErr) || !pending) {
+            pendingCheckInUndoRef.current = null;
+            latestCheckInModificationsRef.current = previousModifications;
+            setModifications(previousModifications);
+            clearOptimisticAllocationView();
+            void refreshCheckInWindow().catch(() => undefined);
+            void showAlert({
+              title: 'Cập nhật phân bổ quầy thất bại',
+              message: formatUiError(rpcErr),
+              tone: 'error',
+            });
+            if (options.trackUndo === false) {
+              throw rpcErr;
+            }
+            return;
           }
-          latestCheckInModificationsRef.current = previousModifications;
-          setModifications(previousModifications);
-          clearOptimisticAllocationView();
-          void refreshCheckInWindow().catch(() => undefined);
-          void showAlert({
-            title: 'Cập nhật phân bổ quầy thất bại',
-            message: formatUiError(rpcErr),
-            tone: 'error',
-          });
+          // Transport error / unconfirmed write:
+          // Active mutating released in finally.
+          // unresolvedAttempt is preserved in store journal for banner retry.
+          // Keep optimistic modifications so user work is not falsely discarded.
+          if (options.trackUndo === false) {
+            throw rpcErr;
+          }
           return;
         }
 
+        const receipt = result.receipt;
         if (receipt.status !== 'committed') {
-          clearPendingOperationalMutation(requestId);
+          pendingCheckInUndoRef.current = null;
           latestCheckInModificationsRef.current = previousModifications;
           setModifications(previousModifications);
           clearOptimisticAllocationView();
           void refreshCheckInWindow().catch(() => undefined);
+          const failureMessage = formatUiError(receipt.message || `Thao tác ${receipt.status}`);
           void showAlert({
             title: 'Cập nhật phân bổ quầy thất bại',
-            message: formatUiError(receipt.message || `Thao tác ${receipt.status}`),
+            message: failureMessage,
             tone: 'error',
           });
+          if (options.trackUndo === false) {
+            throw new Error(failureMessage);
+          }
           return;
         }
 
-        clearPendingOperationalMutation(requestId);
+        pendingCheckInUndoRef.current = null;
         if (receipt.revision) {
           operationalSnapshotRef.current = {
             revision: receipt.revision,
             token: operationalSnapshotRef.current?.token ?? '',
           };
+          useOperationalScheduleStore.setState({
+            snapshot: { revision: receipt.revision, token: '' },
+          });
         }
         if (undoEntry) {
           pushCheckInUndoEntry(undoEntry);
         }
 
-        try {
-          await refreshCheckInWindow({ revalidate: true });
-        } catch (refreshErr) {
-          console.error('Failed to refresh checkin window after commit', refreshErr);
+        if (result.refreshError) {
           void showAlert({
-            title: 'Tải lại giao diện thất bại',
-            message: `Các thay đổi đã được lưu (phiên bản ${receipt.revision}), nhưng không thể tải lại màn hình phân bổ quầy: ${formatUiError(refreshErr)}`,
+            title: 'Đã lưu nhưng chưa tải lại được',
+            message: formatUiError(result.refreshError),
             tone: 'warning',
           });
+        } else {
+          try {
+            await refreshCheckInWindow({ revalidate: true });
+          } catch (refreshErr) {
+            console.error('Failed to refresh checkin window after commit', refreshErr);
+            void showAlert({
+              title: 'Tải lại giao diện thất bại',
+              message: `Các thay đổi đã được lưu (phiên bản ${receipt.revision}), nhưng không thể tải lại màn hình phân bổ quầy: ${formatUiError(refreshErr)}`,
+              tone: 'warning',
+            });
+          }
         }
       } finally {
+        operationalMutatingRef.current = false;
         setOperationalMutating(false);
-        useOperationalScheduleStore.setState({ mutating: false });
       }
       return;
     }
@@ -2358,7 +2421,10 @@ function CheckInAllocationContent() {
   }, [commitCheckInModificationBatch]);
 
   const handleUndoCheckInAllocation = useCallback(async () => {
-    if (isWriteInProgress) return;
+    if (
+      isWriteInProgress ||
+      Boolean(useOperationalScheduleStore.getState().unresolvedAttempt)
+    ) return;
     const entry = checkInUndoStackRef.current.pop();
     persistCheckInUndoStack(checkInUndoStackRef.current);
     if (!entry) return;
@@ -2505,7 +2571,13 @@ function CheckInAllocationContent() {
   const fetchServerData = useCallback(async () => {
     if (isWriteInProgress) return;
     if (isOperationalScheduleV1Enabled()) {
-      await refreshCheckInWindow({ revalidate: true });
+      try {
+        await refreshCheckInWindow({ revalidate: true });
+      } catch (err) {
+        const message = formatUiError(err, 'Không thể tải lại Lịch phân bổ quầy vận hành.');
+        setLoadError(message);
+        void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
+      }
       return;
     }
     if (!season || fetchingServerData || syncInProgress) return;

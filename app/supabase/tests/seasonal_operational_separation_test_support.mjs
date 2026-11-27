@@ -46,6 +46,20 @@ export function stripPsqlMetaCommands(sql) {
   return sql.replace(/^\s*\\[a-z]+.*$/gm, '');
 }
 
+// Historical milestone suites assert rollback contracts as they stood when that
+// milestone shipped. Unwind every later chain migration newest-first through its
+// shipped rollback file; a migration without one fails here instead of silently
+// leaving later definitions in place.
+export async function rollbackChainMigrationsAfter(db, lastKeptMigration) {
+  const migrationsUrl = new URL('../migrations/', import.meta.url);
+  const later = (await listChainMigrations()).filter((name) => name > lastKeptMigration).reverse();
+  for (const name of later) {
+    if (SKIPPED_CHAIN_MIGRATIONS.has(name)) continue;
+    const rollbackUrl = new URL(name.replace(/\.sql$/, '.rollback.sql'), migrationsUrl);
+    await db.exec(stripPsqlMetaCommands(await readFile(rollbackUrl, 'utf8')));
+  }
+}
+
 // A supplied DB implements exec/query/close, allowing the same chain to prove
 // behavior against real PostgreSQL as well as the default isolated PGlite.
 export async function createSeasonalOperationalSeparationDb(db = null) {

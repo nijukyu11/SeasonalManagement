@@ -311,6 +311,7 @@ const ENUM_VALUE_LABELS: Record<string, string> = {
   // Daily workbook profiles
   'legacy-operationalturns': 'Mẫu lịch vận hành cũ',
   'compact-lb': 'Mẫu lịch bay rút gọn',
+  'summary-19': 'Mẫu tổng hợp khai thác 19 cột',
   'position-compatible-unknown': 'Mẫu cột tương thích chưa xác định',
 
   // Link types

@@ -3,11 +3,73 @@ import {
   canonicalizeSeasonalImportSourceRows,
 } from './seasonalImportRpcContract.ts';
 import type { ParsedRow } from './types.ts';
+import { getSynchronousOperatorUserId } from './seasonalRestoreJournal.ts';
 
+export class SeasonalDraftImportStorageError extends Error {
+  readonly cause: unknown;
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'SeasonalDraftImportStorageError';
+    this.cause = cause;
+  }
+}
+
+export const SEASONAL_DRAFT_IMPORT_RECOVERY_STORAGE_PREFIX = 'planning:seasonalDraftImportRecoveryReceipt:v4';
 export const SEASONAL_DRAFT_IMPORT_RECOVERY_STORAGE_KEY = 'planning:seasonalDraftImportRecoveryReceipt:v4';
 export const LEGACY_SEASONAL_IMPORT_V3_STORAGE_KEY = 'settings:seasonalImportRecoveryReceipt:v3';
 export const LEGACY_SEASONAL_IMPORT_V1_STORAGE_KEY = 'settings:seasonRepairRecoveryReceipt:v1';
 
+export function getSeasonalDraftImportRecoveryStorageKey(operatorId: string): string {
+  const op = operatorId.trim();
+  if (!op) {
+    throw new SeasonalDraftImportStorageError('An authorized operator session is required for seasonal draft import storage key.');
+  }
+  return `${SEASONAL_DRAFT_IMPORT_RECOVERY_STORAGE_PREFIX}:${op}`;
+}
+
+function getSafeStorage(storageInput?: Storage | null): Storage | null {
+  if (storageInput) return storageInput;
+  if (typeof window !== 'undefined') {
+    try {
+      return window.localStorage ?? null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof localStorage !== 'undefined') {
+    try {
+      return localStorage ?? null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function resolveSeasonalDraftImportOperator(
+  scopeOwner?: string | null,
+  receiptOwner?: string | null,
+): string | null {
+  if (typeof window !== 'undefined') {
+    const current = getSynchronousOperatorUserId();
+    if (!current || !current.trim()) {
+      return null;
+    }
+    const currentTrimmed = current.trim();
+    if (scopeOwner && scopeOwner.trim() && scopeOwner.trim() !== currentTrimmed) {
+      return null;
+    }
+    if (receiptOwner && receiptOwner.trim() && receiptOwner.trim() !== currentTrimmed) {
+      return null;
+    }
+    return currentTrimmed;
+  }
+  if (scopeOwner && scopeOwner.trim()) return scopeOwner.trim();
+  if (receiptOwner && receiptOwner.trim()) return receiptOwner.trim();
+  const synchronous = getSynchronousOperatorUserId();
+  if (synchronous && synchronous.trim()) return synchronous.trim();
+  return null;
+}
 export interface SeasonalDraftImportCounts {
   sourceRowCount: number;
   generatedOccurrenceCount: number;
@@ -306,10 +368,11 @@ export function buildSeasonalDraftImportRecoveryReceipt(
   preview: SeasonalDraftImportPreviewResult,
   ownerUserId = '',
 ): SeasonalDraftImportRecoveryReceipt {
+  const resolvedOwner = ownerUserId.trim() || getSynchronousOperatorUserId() || '';
   return {
     contractVersion: 4,
     pipeline: 'seasonal_draft_v1',
-    ownerUserId,
+    ownerUserId: resolvedOwner,
     requestId: preview.requestId,
     batchId: preview.batchId,
     seasonId: preview.seasonId,
@@ -385,6 +448,7 @@ export function isSeasonalDraftImportRecoveryReceipt(
     receipt.contractVersion === 4
     && receipt.pipeline === 'seasonal_draft_v1'
     && typeof receipt.ownerUserId === 'string'
+    && receipt.ownerUserId.trim().length > 0
     && typeof receipt.requestId === 'string'
     && typeof receipt.batchId === 'string'
     && typeof receipt.seasonId === 'string'
@@ -399,20 +463,44 @@ export function isSeasonalDraftImportRecoveryReceipt(
 }
 
 export function persistSeasonalDraftImportRecoveryReceipt(
-  storage: { setItem(key: string, value: string): void },
+  storageInput: Storage | { setItem(key: string, value: string): void } | null | undefined,
   receipt: SeasonalDraftImportRecoveryReceipt,
+  scope?: { ownerUserId?: string | null },
 ): void {
   if (!isSeasonalDraftImportRecoveryReceipt(receipt)) {
-    throw new Error('Seasonal draft import recovery receipt is malformed.');
+    throw new SeasonalDraftImportStorageError('Seasonal draft import recovery receipt is malformed.');
   }
-  storage.setItem(SEASONAL_DRAFT_IMPORT_RECOVERY_STORAGE_KEY, JSON.stringify(receipt));
+  const ownerUserId = resolveSeasonalDraftImportOperator(scope?.ownerUserId, receipt.ownerUserId);
+  if (!ownerUserId) {
+    throw new SeasonalDraftImportStorageError('An authenticated operator is required to persist seasonal draft import recovery receipt.');
+  }
+  if (receipt.ownerUserId.trim() !== ownerUserId) {
+    throw new SeasonalDraftImportStorageError('Receipt owner does not match the active authenticated operator.');
+  }
+  const storage = getSafeStorage(storageInput as Storage | null);
+  if (!storage) {
+    throw new SeasonalDraftImportStorageError('Storage is unavailable. Cannot persist seasonal draft import recovery receipt.');
+  }
+  const key = getSeasonalDraftImportRecoveryStorageKey(ownerUserId);
+  try {
+    storage.setItem(key, JSON.stringify(receipt));
+  } catch (err) {
+    throw new SeasonalDraftImportStorageError('Failed to persist seasonal draft import recovery receipt.', err);
+  }
 }
 
 export function clearSeasonalDraftImportRecoveryReceipt(
-  storage: { removeItem(key: string): void },
+  storageInput?: Storage | { removeItem(key: string): void } | null,
+  scope: { ownerUserId?: string | null } = {},
 ): boolean {
+  const ownerUserId = resolveSeasonalDraftImportOperator(scope.ownerUserId);
+  if (!ownerUserId) return false;
+
+  const storage = getSafeStorage(storageInput as Storage | null);
+  if (!storage) return false;
+  const key = getSeasonalDraftImportRecoveryStorageKey(ownerUserId);
   try {
-    storage.removeItem(SEASONAL_DRAFT_IMPORT_RECOVERY_STORAGE_KEY);
+    storage.removeItem(key);
     return true;
   } catch {
     return false;
@@ -420,28 +508,55 @@ export function clearSeasonalDraftImportRecoveryReceipt(
 }
 
 export function loadSeasonalDraftImportRecoveryReceipt(
-  storage: { getItem(key: string): string | null; removeItem(key: string): void },
-  scope: { expectedSeasonId?: string | null; ownerUserId?: string } = {},
+  storageInput?: Storage | { getItem(key: string): string | null; removeItem?(key: string): void } | null,
+  scope: { expectedSeasonId?: string | null; ownerUserId?: string | null } = {},
 ): SeasonalDraftImportRecoveryReceipt | null {
-  const raw = storage.getItem(SEASONAL_DRAFT_IMPORT_RECOVERY_STORAGE_KEY);
+  const ownerUserId = resolveSeasonalDraftImportOperator(scope.ownerUserId);
+  if (!ownerUserId) {
+    return null;
+  }
+
+  const storage = getSafeStorage(storageInput as Storage | null);
+  if (!storage) return null;
+
+  const key = getSeasonalDraftImportRecoveryStorageKey(ownerUserId);
+  let raw: string | null = null;
+  try {
+    raw = storage.getItem(key);
+  } catch {
+    return null;
+  }
   if (!raw) return null;
+
   try {
     const receipt = JSON.parse(raw) as unknown;
     if (!isSeasonalDraftImportRecoveryReceipt(receipt)) {
-      clearSeasonalDraftImportRecoveryReceipt(storage);
+      if (typeof (storage as Storage).removeItem === 'function') {
+        try {
+          (storage as Storage).removeItem(key);
+        } catch {
+          // ignore
+        }
+      }
       return null;
     }
+    // Strict ownership verification: cannot hydrate another operator's journal, never delete another operator's key
+    if (receipt.ownerUserId !== ownerUserId) {
+      return null;
+    }
+    // Scope season check: if expectedSeasonId provided and doesn't match, return null without deleting
     if (scope.expectedSeasonId && receipt.seasonId !== scope.expectedSeasonId) {
-      clearSeasonalDraftImportRecoveryReceipt(storage);
-      return null;
-    }
-    if (scope.ownerUserId !== undefined && receipt.ownerUserId !== scope.ownerUserId) {
-      clearSeasonalDraftImportRecoveryReceipt(storage);
       return null;
     }
     return receipt;
   } catch {
-    clearSeasonalDraftImportRecoveryReceipt(storage);
+    if (typeof (storage as Storage).removeItem === 'function') {
+      try {
+        (storage as Storage).removeItem(key);
+      } catch {
+        // ignore
+      }
+    }
     return null;
   }
 }

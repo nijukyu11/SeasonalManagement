@@ -3,7 +3,8 @@ import type { HtmlEnvelope, HtmlMetric, HtmlRow, HtmlPeriod, Direction, sumHtmlM
 // Embedded verbatim after TypeScript erasure. All runtime dependencies are passed explicitly.
 export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
   sum: typeof sumHtmlMetrics; compare: typeof compareHtmlMetrics; summary: (tab?: string, search?: string) => void;
-  syncState?: { summaryTab?: string; lastTab?: string; lastSearch?: string; fromMode?: string };
+  syncState?: { summaryTab?: string; pivotTab?: string; lastTab?: string; lastSearch?: string; direction?: string; metric?: string; filters?: Record<string, string[]>; fromMode?: string };
+  cleanup?: () => void;
 }) {
   type BaseMetric = 'flights' | 'reported_pax';
   type Metric = BaseMetric | 'flights_per_day' | 'pax_per_flight';
@@ -29,6 +30,8 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
   const fmt = (n: number | null | undefined, decimal = false) => typeof n === 'number' && Number.isFinite(n) ? new Intl.NumberFormat('vi-VN',{maximumFractionDigits:decimal?2:0}).format(n) : '—';
   const date = (s: string) => `${s.slice(8,10)}/${s.slice(5,7)}/${s.slice(0,4)}`;
   const range = (p: {from:string;to:string}) => `${date(p.from)} – ${date(p.to)}`;
+  const signed = (v: number | null, decimal = false) => typeof v === 'number' && Number.isFinite(v) ? `${v > 0 ? '+' : ''}${fmt(v, decimal)}` : '—';
+  const pct = (v: number | null) => typeof v === 'number' && Number.isFinite(v) ? `${v > 0 ? '+' : ''}${new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 }).format(v * 100)}%` : '—';
   const name = (field: string, value: unknown) => {
     if (value == null || value === '') return 'Chưa xác định';
     if (field === 'date') {
@@ -279,13 +282,13 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     return {
       metric:savedCfg.metric ?? (tab.analysis?'flights':'both'),
       direction:savedCfg.direction ?? (tab.id==='days'?'each':'all'),
-      period:savedCfg.period ?? 'current',
+      period:savedCfg.period ?? (tab.id==='days'?'all':'current'),
       time:savedCfg.time ?? (tab.viewType==='week_horizon'?'business_week':(weekly || data.normalized_request.period_mode==='month'?'period':'month')),
-      search:'',filters:{},depth:savedCfg.depth ?? (tab.id==='days'?1:0),
+      search:'',filters:{},depth:savedCfg.depth ?? 0,
       open:new Set(),closed:new Set(),page:0,pageSize:savedCfg.pageSize ?? (tab.id==='days'?0:20),
       levels:savedCfg.levels ? [...savedCfg.levels] : [...tab.levels],
-      sort:savedCfg.sort ?? (tab.levels.some(f=>['airline','country','route'].includes(f))?'flights':'name'),
-      showBars:savedCfg.showBars ?? true
+      sort:savedCfg.sort ?? (tab.analysis ? 'ctg' : tab.levels.some(f=>['airline','country','route'].includes(f))?'flights':'name'),
+      showBars:savedCfg.showBars ?? false
     };
   };
   const states=new Map(tabs.map(t=>[t.id,defaults(t)])); let active=tabs[0];
@@ -300,9 +303,16 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     const matched = tabs.find(t => t.id === targetTabId);
     if(matched) active = matched;
   }
-  if(helpers.syncState?.lastSearch) {
-    const curState = states.get(active.id);
-    if(curState) curState.search = helpers.syncState.lastSearch;
+  const curState = states.get(active.id);
+  if(curState && helpers.syncState) {
+    if(helpers.syncState.lastSearch !== undefined) curState.search = helpers.syncState.lastSearch;
+    if(helpers.syncState.direction && ['all','A','D','each'].includes(helpers.syncState.direction)) curState.direction = helpers.syncState.direction;
+    if(helpers.syncState.metric && ['both','flights','reported_pax'].includes(helpers.syncState.metric)) curState.metric = helpers.syncState.metric;
+    if(helpers.syncState.filters) {
+      for(const [k, arr] of Object.entries(helpers.syncState.filters)) {
+        if(Array.isArray(arr) && arr.length) curState.filters[k] = new Set(arr);
+      }
+    }
   }
   const panelsMap=new Map<string,HTMLElement>();
   const tabScrolls=new Map<string,{win:number;tables:Array<{top:number;left:number}>}>();
@@ -312,31 +322,32 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
   const header=el('header');
   const topRow=el('div',undefined,'header-main');
   const titleBox=el('div',undefined,'header-title-box');
-  titleBox.append(el('h1',bao?'Báo cáo sản lượng':weekly?'Báo cáo tuần':data.normalized_request.report_type==='MASTER_OPERATIONS'?'Báo cáo tổng hợp khai thác':'Báo cáo khai thác'));
+  const pivotTitle = bao
+    ? 'Báo cáo sản lượng'
+    : weekly
+      ? 'Báo cáo tuần chi tiết'
+      : data.normalized_request.report_type==='MONTHLY_OVERVIEW_L2'
+        ? `Tổng quan khai thác tháng ${Number(current.from.slice(5,7))}/${current.from.slice(0,4)}`
+        : data.normalized_request.report_type==='MASTER_OPERATIONS'
+          ? 'Báo cáo tổng hợp khai thác'
+          : 'Báo cáo khai thác';
+  titleBox.append(el('h1',pivotTitle));
   titleBox.append(el('span',`${range(current)} · ${data.normalized_request.time_basis==='utc'?'Giờ UTC':'Giờ địa phương'}`,'header-sub'));
   topRow.append(titleBox);
-  const printBtn=button('In báo cáo',()=>window.print());printBtn.classList.add('controls','btn-print');
-  topRow.append(printBtn);
   header.append(topRow);
   const metaRow=el('div',undefined,'header-meta-row');
   const fixed=[['Hãng',data.normalized_request.airlines],['Thị trường',data.normalized_request.countries],['Chặng',data.normalized_request.routes]] as const;
   const scope=fixed.filter(([,v])=>v.length).map(([k,v])=>`${k}: ${v.join(', ')}`).join(' · ');
   if(scope){const s=el('span',`Phạm vi: ${scope}`,'meta-item meta-scope');s.title=`Phạm vi: ${scope}`;metaRow.append(s);}
   if(completedOpsDate)metaRow.append(el('span',`Chốt Ops Date: ${date(completedOpsDate)}`,'meta-item meta-badge'));
-  metaRow.append(el('span','—: chưa có số liệu. *: khách còn thiếu. Ngày tương lai là lịch bay dự kiến.','meta-item meta-note'));
+  metaRow.append(el('span','—: chưa có số liệu. *: khách còn thiếu. Ngày tương lai là lịch bay dự kiến.','meta-item meta-note notice'));
   header.append(metaRow);
   const nav=el('nav',undefined,'tabs controls');nav.setAttribute('aria-label','Các bảng theo mẫu');
-  if(!bao) {
-    const sumBtn = button('Tóm tắt và phân tích',()=>{
-      observers.forEach(o=>o.disconnect());window.onbeforeprint=null;window.onafterprint=null;
-      helpers.summary(helpers.syncState?.summaryTab || active.id, states.get(active.id)?.search);
-    });
-    sumBtn.classList.add('tab-mode-switch');
-    nav.append(sumBtn);
-    const div = el('span', undefined, 'tab-divider');
-    div.setAttribute('aria-hidden', 'true');
-    nav.append(div);
-  }
+  helpers.cleanup = () => {
+    observers.forEach(o=>o.disconnect());
+    window.onbeforeprint=null;
+    window.onafterprint=null;
+  };
   for(const tab of tabs){
     const b=button(tab.label,()=>{
       if(active.id !== tab.id) {
@@ -345,13 +356,35 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
           tables: Array.from(content.querySelectorAll<HTMLElement>('.table-scroll')).map(t => ({ top: t.scrollTop, left: t.scrollLeft }))
         });
         active=tab;
+        if(helpers.syncState) helpers.syncState.summaryTab = tab.id;
         render();
       }
     });
     b.dataset.tab=tab.id;
     nav.append(b);
   }
-  const main=el('main');main.id='main';const content=el('div');
+  const main=el('main');main.id='main';
+  if(!bao){
+    const kpiRes=resources.get('current/kpi');const kpiRow=kpiRes?.rows.find(r=>r.direction==='all');
+    if(kpiRow){
+      const strip=el('div',undefined,'pivot-exec-strip controls');strip.setAttribute('role','region');strip.setAttribute('aria-label','Tóm tắt tổng quan');
+      const compP=ordinary.find(p=>p.id!=='current');const baseKpi=compP?resources.get(`${compP.id}/kpi`)?.rows.find(r=>r.direction==='all'):null;
+      const mkItem=(label:string,val:string,sub?:string)=>{
+        const item=el('div',undefined,'pivot-exec-item');item.append(el('span',label,'pivot-exec-label'),el('span',val,'pivot-exec-value'));
+        if(sub)item.append(el('span',sub,'pivot-exec-sub'));return item;
+      };
+      let fltSub='';if(baseKpi&&kpiRow.flights!==null&&baseKpi.flights!==null){const c=compare(kpiRow,baseKpi,'flights');fltSub=`So ${compP!.label.split(' · ')[0]}: ${signed(c.delta)} (${pct(c.percent)})`;}
+      strip.append(mkItem('Tổng chuyến',fmt(kpiRow.flights),fltSub));
+      let paxSub='';if(baseKpi&&kpiRow.reported_pax!==null&&baseKpi.reported_pax!==null){const c=compare(kpiRow,baseKpi,'reported_pax');paxSub=`So ${compP!.label.split(' · ')[0]}: ${signed(c.delta)} (${pct(c.percent)})`;}
+      strip.append(mkItem('Tổng khách',fmt(kpiRow.reported_pax),paxSub));
+      const ppf=(kpiRow.reported_legs>0&&kpiRow.reported_pax!==null)?Math.round(kpiRow.reported_pax/kpiRow.reported_legs):null;
+      strip.append(mkItem('Khách / chuyến',fmt(ppf),ppf!==null?'khách/chuyến':'—'));
+      const ppd=(kpiRow.reported_pax!==null&&current.calendar_days>0)?Math.round(kpiRow.reported_pax/current.calendar_days):null;
+      strip.append(mkItem('TB khách / ngày',fmt(ppd),ppd!==null?`khách/ngày (${current.calendar_days} ngày)`:'—'));
+      main.append(strip);
+    }
+  }
+  const content=el('div');
   if(helpers.syncState?.fromMode === 'summary') {
     const clueBanner = el('aside', undefined, 'pivot-clue-banner controls');
     clueBanner.setAttribute('role', 'status');clueBanner.setAttribute('aria-live', 'polite');
@@ -479,23 +512,17 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
       val=m.flights!==null?m.flights/daysCount:null;
       tip=val!==null?`TB ${fmt(val,true)} chuyến/ngày (${m.flights} chuyến / ${daysCount} ngày)`:'';
     }else if(key==='pax_per_flight'){
-      if(m.pax_status==='complete' && m.flight_coverage==='complete'){
-        val=(m.flights&&m.reported_pax!==null)?m.reported_pax/m.flights:null;
-        tip=val!==null?`Bình quân ${fmt(val,true)} khách/chuyến (${m.reported_pax} khách / ${m.flights} chuyến)`:'';
-      }else if(m.reported_pax!==null && m.reported_legs && m.flights){
+      if(m.reported_pax!==null && m.reported_legs > 0){
         val=m.reported_pax/m.reported_legs;
-        tip=`Bình quân ${fmt(val,true)} khách/chuyến trên ${m.reported_legs}/${m.flights} chuyến bay (${m.due_legs} chuyến đến hạn).`;
+        tip=`Bình quân ${fmt(val,true)} khách/chuyến (${m.reported_pax} khách / ${m.reported_legs} chuyến ghi nhận khách).`;
       }else{val=null;tip='Chưa đủ dữ liệu khách để tính bình quân.';}
     }else if(key==='flights'||key==='reported_pax'){
       val=m[key];
     }
     const td=el('td',undefined,'number');td.dataset.metric=key;
     const curState = states.get(active.id);
-    if((curState?.showBars ?? true) && !tr.classList.contains('grand-total') && !tr.classList.contains('month-total') && (key==='flights'||key==='reported_pax') && val !== null && val > 0){
-      const denom=Math.max(1, colMax ?? (key==='flights'?500:80000));
-      const pct=Math.min(100,Math.max(2,Math.round(val/denom*100)));
-      td.style.backgroundImage=`linear-gradient(to right, rgba(37,99,235,0.14) ${pct}%, transparent ${pct}%)`;
-      td.dataset.barPercent=String(pct);
+    if((curState?.showBars ?? false) && tr.classList.contains('pivot-leaf') && !tr.classList.contains('grand-total') && !tr.classList.contains('month-total') && (key==='flights'||key==='reported_pax') && val !== null && val > 0 && colMax && colMax > 0 && val >= colMax * 0.85){
+      td.classList.add('is-peak');
     }
     const spanVal = el('span', fmt(val,key==='flights_per_day'||key==='pax_per_flight'), 'pivot-cell-val');
     td.append(spanVal);
@@ -628,9 +655,21 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
 
   function matches(node:Tree,q:string):boolean{return !q||node.label.toLocaleLowerCase('vi').includes(q)||node.children.some(n=>matches(n,q));}
 
-  function sorted(nodes:Tree[],s:State,period=current):Tree[]{
+  function sorted(nodes:Tree[],s:State,period=current,basePeriod?:(typeof ordinary)[number],dir:Direction='all',keyOverride?:BaseMetric):Tree[]{
     return [...nodes].sort((a,b)=>{
-      if(s.sort!=='name'){
+      if(s.sort==='ctg'){
+        const pCur=period??(ordinary.find(p=>p.id===current.id)??current),pBase=basePeriod??ordinary.find(p=>p.id!=='current');
+        if(pBase){
+          const k:BaseMetric=keyOverride??(s.metric==='reported_pax'?'reported_pax':'flights');
+          const maOld=measure(a.rows,periodCol(pBase),dir),maNow=measure(a.rows,periodCol(pCur),dir);
+          const mbOld=measure(b.rows,periodCol(pBase),dir),mbNow=measure(b.rows,periodCol(pCur),dir);
+          const deltaA=compare(maNow,maOld,k).delta,deltaB=compare(mbNow,mbOld,k).delta;
+          const scoreA=deltaA===null?null:Math.abs(deltaA),scoreB=deltaB===null?null:Math.abs(deltaB);
+          if(scoreA!==scoreB)return scoreA===null?1:scoreB===null?-1:scoreB-scoreA;
+          const av=k==='reported_pax'&&maNow.unreported_legs!==0?null:maNow[k],bv=k==='reported_pax'&&mbNow.unreported_legs!==0?null:mbNow[k];
+          if(av!==bv)return av===null?1:bv===null?-1:bv-av;
+        }
+      }else if(s.sort!=='name'){
         const k=s.sort as BaseMetric,c=periodCol(active.id==='days'?ordinary.find(p=>p.id===s.period)!:period),ma=measure(a.rows,c,'all'),mb=measure(b.rows,c,'all');
         const av=k==='reported_pax'&&ma.unreported_legs!==0?null:ma[k],bv=k==='reported_pax'&&mb.unreported_legs!==0?null:mb[k];
         if(av!==bv)return av===null?1:bv===null?-1:bv-av;
@@ -670,7 +709,7 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     const colHasData=(c:Column)=>rows.some(r=>r.period===c.period&&(r.flights!==null||r.reported_pax!==null)&&(!r.grain.date||(c.dateSet?c.dateSet.has(String(r.grain.date)):(String(r.grain.date)>=c.from&&String(r.grain.date)<=c.to))));
     const colsShown=active.id==='days'?cols:cols.filter(c=>c.period===current.id||colHasData(c));
     const {section,head,body,foot}=frame(content,title);
-    section.querySelector('.table-scroll')!.before(controls(s));
+    if(!bao)section.querySelector('.table-scroll')!.before(controls(s));
     printColumns=colsShown;printWidth=keys(s).length*dirs(s).length;
     const band=el('tr'),sub=el('tr');th(band,s.levels.map(f=>labels[f]??f).join(' → '),1,2,true);
     let firstBlock=true;
@@ -690,6 +729,21 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
       }
       firstBlock=false;
     }
+    const shownPeriodIds=[...new Set(colsShown.map(c=>c.period))];
+    const showComp=!bao&&!weekly&&active.id!=='days'&&s.time==='period'&&shownPeriodIds.length>=2;
+    const curCol=showComp?periodCol(current):undefined;
+    const basePeriodId=showComp?([data.comparison_pairs[0]?.baseline_period,...[...shownPeriodIds].reverse()].find(id=>id&&id!==current.id&&id!=='next'&&shownPeriodIds.includes(id))??[...shownPeriodIds].reverse().find(id=>id!==current.id)):undefined;
+    const basePeriodObj=basePeriodId?ordinary.find(p=>p.id===basePeriodId):undefined;
+    const baseCol=basePeriodObj?periodCol(basePeriodObj):undefined;
+    const hasCompCol=!!(showComp&&curCol&&baseCol);
+    if(hasCompCol){
+      th(band,`So với ${baseCol!.label.split(' · ')[0]}`,keys(s).length*3);
+      for(const k of keys(s)){
+        const pfx=keys(s).length>1?`${metricLabels[k]} · `:'';
+        const hD=th(sub,`${pfx}Δ`);hD.classList.add('period-start');
+        th(sub,`${pfx}%`);th(sub,`${pfx}CTG (%)`);
+      }
+    }
     head.append(band,sub);
     if(active.id==='days'){
       rows=[...rows.filter(r=>r.period===s.period),...data.calendar.filter(d=>d.period_id===s.period).map(d=>({
@@ -699,8 +753,16 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     const query=s.search.toLocaleLowerCase('vi'),nodes=sorted(tree(rows,s.levels),s).filter(n=>matches(n,query));
     const limit=s.pageSize===0?Math.max(1,nodes.length):(s.pageSize||20);
     s.page=Math.min(s.page,Math.max(0,Math.ceil(nodes.length/limit)-1));
+    const leafNodes: Tree[] = [];
+    const collectLeaves = (list: Tree[]) => {
+      for (const item of list) {
+        if (item.children.length) collectLeaves(item.children);
+        else leafNodes.push(item);
+      }
+    };
+    collectLeaves(nodes);
     const colMaxMap = new Map<string, number>();
-    for(const n of nodes){
+    for(const n of (leafNodes.length ? leafNodes : nodes)){
       for(const c of colsShown)for(const k of keys(s))for(const d of dirs(s)){
         const kId = `${c.id}/${k}/${d}`;
         const m = measure(n.rows.filter(r=>r.flights!==null), c, d);
@@ -708,22 +770,48 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
         if(v !== null && v > (colMaxMap.get(kId) ?? 0)) colMaxMap.set(kId, v);
       }
     }
-    const values=(tr:HTMLTableRowElement,rs:Row[],nodeParts?:unknown[])=>{let firstValBlock=true;for(const c of colsShown){const valStart=!firstValBlock&&!c.total;const valCur=c.period===current.id&&!c.total;firstValBlock=false;for(const k of keys(s))for(const d of dirs(s)){
-      const intersects=active.id!=='days'||rs.some(r=>r.period===c.period&&String(r.grain.date)>=c.from&&String(r.grain.date)<=c.to);
-      const m=intersects?measure(rs.filter(r=>r.flights!==null),c,d):sum([],coverage(c,d));
-      const drillFilter = (nodeParts && nodeParts.length) ? (r:HtmlRow) => {
-        const field=String(nodeParts.at(-2)),val=nodeParts.at(-1);
-        const matchField = field==='date' ? String(r.grain.date)===String(val) : String(r.grain[field])===String(val);
-        const matchPeriod = (!c || !r.grain.date) ? true : (String(r.grain.date)>=c.from && String(r.grain.date)<=c.to);
-        const matchDir = d==='all' || r.direction===d;
-        return matchField && matchPeriod && matchDir;
-      } : undefined;
-      const td=cell(tr,m,k,c,drillFilter,colMaxMap.get(`${c.id}/${k}/${d}`));if(c.total)td.classList.add('period-total');
-      if(valStart&&k===keys(s)[0]&&d===dirs(s)[0])td.classList.add('period-start');
-      if(valCur)td.classList.add('period-current');
-    }}};
+    const values=(tr:HTMLTableRowElement,rs:Row[],nodeParts?:unknown[],isFoot=false)=>{
+      let firstValBlock=true;for(const c of colsShown){const valStart=!firstValBlock&&!c.total;const valCur=c.period===current.id&&!c.total;firstValBlock=false;for(const k of keys(s))for(const d of dirs(s)){
+        const intersects=active.id!=='days'||rs.some(r=>r.period===c.period&&String(r.grain.date)>=c.from&&String(r.grain.date)<=c.to);
+        const m=intersects?measure(rs.filter(r=>r.flights!==null),c,d):sum([],coverage(c,d));
+        const drillFilter = (nodeParts && nodeParts.length) ? (r:HtmlRow) => {
+          const field=String(nodeParts.at(-2)),val=nodeParts.at(-1);
+          const matchField = field==='date' ? String(r.grain.date)===String(val) : String(r.grain[field])===String(val);
+          const matchPeriod = (!c || !r.grain.date) ? true : (String(r.grain.date)>=c.from && String(r.grain.date)<=c.to);
+          const matchDir = d==='all' || r.direction===d;
+          return matchField && matchPeriod && matchDir;
+        } : undefined;
+        const td=cell(tr,m,k,c,drillFilter,colMaxMap.get(`${c.id}/${k}/${d}`));if(c.total)td.classList.add('period-total');
+        if(valStart&&k===keys(s)[0]&&d===dirs(s)[0])td.classList.add('period-start');
+        if(valCur)td.classList.add('period-current');
+      }}
+      if(hasCompCol){
+        for(const k of keys(s)){
+          const km:'flights'|'reported_pax'=k==='reported_pax'?'reported_pax':'flights';
+          const curM=measure(rs.filter(r=>r.flights!==null),curCol!,'all');
+          const baseM=measure(rs.filter(r=>r.flights!==null),baseCol!,'all');
+          const delta=compare(curM,baseM,km);
+          const diffCls=delta.delta===null?'':delta.delta>0?'diff-pos':delta.delta<0?'diff-neg':'diff-zero';
+          let pctCls=delta.percent===null?'':delta.percent>0?'diff-pos':delta.percent<0?'diff-neg':'diff-zero';
+          const diffText=delta.delta===null?'—':`${delta.delta>0?'+':''}${fmt(delta.delta)}`;
+          let pctText=delta.percent===null?'—':`${delta.percent>0?'+':''}${fmt(delta.percent*100,true)}%`;
+          if(delta.delta!==null&&delta.delta>0&&delta.percent===null){pctText='Mới';pctCls='diff-pos';}
+          else if(delta.delta!==null&&delta.delta<0&&(curM[km]===0||(km==='reported_pax'&&curM.flights===0&&curM.flight_coverage!=='missing'))){pctText='−100% (Ngừng)';pctCls='diff-neg';}
+          const totalBaseM=measure(rows,baseCol!,'all');
+          const baseTotalVal=totalBaseM[km];
+          const totalComp=compare(measure(rows,curCol!,'all'),totalBaseM,km);
+          const ctg=(delta.delta===null||totalComp.delta===null||baseTotalVal===null||baseTotalVal===0)?null:(delta.delta/baseTotalVal*100);
+          const ctgCls=ctg===null?'':ctg>0?'diff-pos':ctg<0?'diff-neg':'diff-zero';
+          const ctgText=ctg===null?'—':`${ctg>0?'+':''}${fmt(ctg,true)}%`;
+          const tag=isFoot?'th':'td';
+          tr.append(el(tag,diffText,`number period-start ${diffCls}`),el(tag,pctText,`number ${pctCls}`),el(tag,ctgText,`number ${ctgCls}`));
+        }
+      }
+    };
     const append=(node:Tree,depth:number,ancestorMatch=false)=>{
-      if(!ancestorMatch&&!matches(node,query))return;const tr=el('tr',undefined,depth===0?'pivot-group':'pivot-child');tr.dataset.node=node.id;
+      if(!ancestorMatch&&!matches(node,query))return;
+      const cls=depth===0?`pivot-group ${node.children.length?'pivot-has-children':'pivot-leaf'}`:`pivot-child ${node.children.length?'pivot-subgroup pivot-has-children':'pivot-leaf'}`;
+      const tr=el('tr',undefined,cls);tr.dataset.node=node.id;
       const idParts=JSON.parse(node.id) as unknown[];
       if(completedOpsDate){
         const field=String(idParts.at(-2)),val=String(idParts.at(-1));
@@ -735,6 +823,7 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
       const label=el('th',undefined,'name');label.scope='row';label.style.paddingInlineStart=`${10+depth*18}px`;
       label.dataset.exportText=node.label;
       const open=!!query||(!s.closed.has(node.id)&&(s.depth>depth||s.open.has(node.id)));
+      if(open&&node.children.length)tr.classList.add('is-expanded');
       const btnText=`${open?'−':'+'} ${node.label}`;
       if(node.children.length){const b=button(btnText,()=>{
         if(open){s.open.delete(node.id);s.closed.add(node.id);}else{s.open.add(node.id);s.closed.delete(node.id);}panelsMap.delete(active.id);renderContent();
@@ -743,11 +832,11 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
       if(query){b.textContent='';b.append(document.createTextNode(`${open?'−':'+'} `));highlight(b,node.label,query);}
       label.append(b);
       }else if(query){highlight(label,node.label,query);}else label.textContent=node.label;
-      tr.append(label);values(tr,node.rows,idParts);body.append(tr);
+      tr.append(label);values(tr,node.rows,idParts,false);body.append(tr);
       if(open)for(const child of sorted(node.children,s))append(child,depth+1,ancestorMatch||!!query&&node.label.toLocaleLowerCase('vi').includes(query));
     };
     nodes.slice(s.page*limit,s.pageSize===0?nodes.length:(s.page+1)*limit).forEach(n=>append(n,0));
-    const total=el('tr',undefined,'grand-total');const totalLabel=el('th','Grand Total','name');totalLabel.dataset.exportText='Grand Total';total.append(totalLabel);values(total,rows);foot.append(total);
+    const total=el('tr',undefined,'grand-total');const totalLabel=el('th','Grand Total','name');totalLabel.dataset.exportText='Grand Total';total.append(totalLabel);values(total,rows,undefined,true);foot.append(total);
     if(!nodes.length)section.append(el('p','Không có nhóm phù hợp. Xóa tìm kiếm hoặc về bố cục mẫu.','notice'));
     pagination(section,nodes.length,s);
     section.append(el('p','Tổng tính toàn bộ bộ lọc; tìm kiếm, thu gọn và phân trang không thay đổi tổng.','pivot-note'));
@@ -787,12 +876,15 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
 
     for(const m of months){
       const days=data.calendar.filter(d=>d.period_id==='current'&&d.month===m).map(d=>d.date).sort();
+      let firstInMonth=true;
       for(const day of days){
         const dayName = new Intl.DateTimeFormat('vi-VN',{weekday:'short',timeZone:'UTC'}).format(new Date(day));
         if(q && !day.includes(q) && !date(day).includes(q) && !dayName.toLocaleLowerCase('vi').includes(q)) continue;
-        const tr=el('tr');tr.dataset.date=day;
+        const tr=el('tr',undefined,'pivot-leaf');tr.dataset.date=day;
         if(completedOpsDate && day>completedOpsDate){tr.classList.add('future-row');tr.title='Lịch bay dự kiến (chưa hoàn tất Ops Date)';}
-        tr.append(el('td',m.slice(5)),el('td',date(day)),el('td',dayName));
+        const monthCell=el('td',firstInMonth?m.slice(5):'');monthCell.dataset.exportText=m.slice(5);
+        firstInMonth=false;
+        tr.append(monthCell,el('td',date(day)),el('td',dayName));
         six(tr,rows,{id:day,period:'current',from:day,to:day,label:day},day,dailyMaxMap);body.append(tr);
       }
       const subtotal=el('tr',undefined,'month-total'),subLabel=el('th',`${monthNames[Number(m.slice(5))-1]} Total`);subLabel.colSpan=3;subLabel.scope='row';subtotal.append(subLabel);
@@ -821,7 +913,7 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     for(const [week,dates] of buckets){
       dates.sort();const c={id:week,period:'current',from:dates[0],to:dates.at(-1)!,label:week};
       if(q && !date(c.from).includes(q) && !date(c.to).includes(q) && !week.includes(q)) continue;
-      const tr=el('tr');tr.dataset.week=week;
+      const tr=el('tr',undefined,'pivot-leaf');tr.dataset.week=week;
       tr.append(el('td',date(c.from)),el('td',date(c.to)));six(tr,rows,c,undefined,weeklyMaxMap);body.append(tr);
     }
     const tr=el('tr',undefined,'grand-total'),totLabel=el('th','Grand Total');totLabel.colSpan=2;tr.append(totLabel);six(tr,rows,periodCol(current));foot.append(tr);
@@ -854,18 +946,29 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     s.page=Math.min(s.page,Math.max(0,Math.ceil(matching.length/limit)-1));
     for(let i=1;i<weeks.length;i++)for(const key of analysisKeys(s))for(const dir of (active.analysis?[s.direction as Direction]:dirs(s))){
       const a=periodCol(weeks[i]),b=periodCol(weeks[i-1]),{section,head,body,foot}=frame(content,`${weeks[i-1].label} → ${weeks[i].label} · ${metricLabels[key]} · ${dirLabels[dir]}`);
-      const visible=sorted(matching,s,weeks[i]);
+      const visible=sorted(matching,s,weeks[i],weeks[i-1],dir,key);
       const h=el('tr');for(const [j,title] of [field==='airline'?'Airline':'Country',b.label,a.label,'Difference','% Difference','CTG (%)'].entries())th(h,title,1,1,j===0);head.append(h);
-      const baseTotal=measure(rows,b,dir),newTotal=measure(rows,a,dir),totalComparison=compare(newTotal,baseTotal,key);
+      const baseTotal=measure(rows,b,dir),newTotal=measure(rows,a,dir),totalCompRaw=compare(newTotal,baseTotal,key);
+      const totalComparison=key==='reported_pax'&&totalCompRaw.provisional?{delta:null,percent:null,provisional:false}:totalCompRaw;
       const append=(label:string,group:Row[],total=false)=>{
         const tr=el('tr',undefined,total?'grand-total':'analysis-group');const thCell=el('th',label,'name');thCell.dataset.exportText=label;tr.append(thCell);
-        const old=measure(group,b,dir),now=measure(group,a,dir),delta=compare(now,old,key);
+        const old=measure(group,b,dir),now=measure(group,a,dir),deltaRaw=compare(now,old,key);
+        const delta=key==='reported_pax'&&deltaRaw.provisional?{delta:null,percent:null,provisional:false}:deltaRaw;
         const diffCls=delta.delta===null?'':delta.delta>0?'diff-pos':delta.delta<0?'diff-neg':'diff-zero';
-        const pctCls=delta.percent===null?'':delta.percent>0?'diff-pos':delta.percent<0?'diff-neg':'diff-zero';
+        let pctCls=delta.percent===null?'':delta.percent>0?'diff-pos':delta.percent<0?'diff-neg':'diff-zero';
         const contribution=delta.delta===null||totalComparison.delta===null||baseTotal[key]===null||baseTotal[key]===0?null:delta.delta/baseTotal[key]!*100;
         const ctgCls=contribution===null?'':contribution>0?'diff-pos':contribution<0?'diff-neg':'diff-zero';
         cell(tr,old,key,b);cell(tr,now,key,a);
-        tr.append(el('td',fmt(delta.delta),`number ${diffCls}`),el('td',delta.percent===null?'—':`${fmt(delta.percent*100,true)}%`,`number ${pctCls}`));
+        const diffText = delta.delta === null ? '—' : fmt(delta.delta);
+        let pctText = delta.percent === null ? '—' : `${fmt(delta.percent * 100, true)}%`;
+        if (delta.delta !== null && delta.delta > 0 && delta.percent === null) {
+          pctText = 'Mới';
+          pctCls = 'diff-pos';
+        } else if (delta.delta !== null && delta.delta < 0 && (now[key] === 0 || (key === 'reported_pax' && now.flights === 0 && now.flight_coverage !== 'missing'))) {
+          pctText = '−100% (Ngừng)';
+          pctCls = 'diff-neg';
+        }
+        tr.append(el('td', diffText, `number ${diffCls}`), el('td', pctText, `number ${pctCls}`));
         const ctg=el('td',contribution===null?'—':`${fmt(contribution,true)}%`,`number ${ctgCls}`);ctg.dataset.ctg='true';tr.append(ctg);(total?foot:body).append(tr);
       };
       visible.slice(s.page*limit,s.pageSize===0?matching.length:(s.page+1)*limit).forEach(g=>append(g.label,g.rows));append('Grand Total',rows,true);
@@ -878,7 +981,8 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
   // Peak Hours View (hours dataset)
   function renderHoursView(s: State) {
     const {section,head,body,foot} = frame(content, `Khung giờ cao điểm · Kỳ hiện tại ${range(current)}`);
-    const hRows = resources.get('current/hours')?.rows ?? [];
+    if(!bao)section.querySelector('.table-scroll')!.before(controls(s));
+    const hRows = (resources.get('current/hours')?.rows ?? []).filter(r => s.direction==='all' || s.direction==='each' || r.direction===s.direction);
     const bRow = el('tr'), sRow = el('tr');
     th(bRow, 'Khung giờ', 1, 2, true);
     th(bRow, 'Chuyến bay', 4);
@@ -899,11 +1003,13 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
       hourMap.set(h, e);
     }
     const maxHourF = Math.max(1, ...Array.from(hourMap.values()).map(v => v.fA + v.fD));
+    const q = s.search.toLocaleLowerCase('vi');
     for(let h=0; h<24; h++) {
+      const hourLabel = `${String(h).padStart(2,'0')}:00 – ${String(h).padStart(2,'0')}:59`;
+      if(q && !hourLabel.toLocaleLowerCase('vi').includes(q)) continue;
       const v = hourMap.get(h)!;
       const fTot = v.fA + v.fD, pTot = v.pA + v.pD;
-      const tr = el('tr');
-      const hourLabel = `${String(h).padStart(2,'0')}:00 – ${String(h).padStart(2,'0')}:59`;
+      const tr = el('tr', undefined, 'pivot-leaf');
       const thH = el('th', hourLabel, 'name'); thH.scope = 'row'; tr.append(thH);
       const ratio = fTot / maxHourF;
       const hotClass = ratio > 0.8 ? 'hot-5' : ratio > 0.6 ? 'hot-4' : ratio > 0.4 ? 'hot-3' : ratio > 0.2 ? 'hot-2' : ratio > 0 ? 'hot-1' : '';
@@ -933,7 +1039,8 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
   // Aircraft Mix View (aircraft dataset)
   function renderAircraftView(s: State) {
     const {section,head,body,foot} = frame(content, `Cơ cấu đội tàu bay (Aircraft Mix) · Kỳ hiện tại ${range(current)}`);
-    const aRows = resources.get('current/aircraft')?.rows ?? [];
+    if(!bao)section.querySelector('.table-scroll')!.before(controls(s));
+    const aRows = (resources.get('current/aircraft')?.rows ?? []).filter(r => s.direction==='all' || s.direction==='each' || r.direction===s.direction);
     const bRow = el('tr'), sRow = el('tr');
     th(bRow, 'Nhóm / Loại tàu bay', 1, 2, true);
     th(bRow, 'Chuyến bay', 3);
@@ -953,11 +1060,14 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
       typeMap.set(key, e);
     }
     let totF = 0, totP = 0;
+    const q = s.search.toLocaleLowerCase('vi');
     for(const [t, v] of typeMap) {
+      const labelText = `${v.group} · ${t}`;
       const fTot = v.fA + v.fD, pTot = v.pA + v.pD;
       totF += fTot; totP += pTot;
-      const tr = el('tr');
-      const thT = el('th', `${v.group} · ${t}`, 'name'); thT.scope = 'row'; tr.append(thT);
+      if(q && !labelText.toLocaleLowerCase('vi').includes(q)) continue;
+      const tr = el('tr', undefined, 'pivot-leaf');
+      const thT = el('th', labelText, 'name'); thT.scope = 'row'; tr.append(thT);
       const paxPerFlt = fTot > 0 && pTot > 0 ? fmt(pTot / fTot, true) : '—';
       tr.append(
         el('td', fmt(v.fA), 'number'), el('td', fmt(v.fD), 'number'), el('td', fmt(fTot), 'number'),
@@ -984,12 +1094,24 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
   // Frequency View (frequency dataset)
   function renderFrequencyView(s: State) {
     const {section,head,body} = frame(content, `Tần suất khai thác định kỳ (Frequency Matrix) · Kỳ hiện tại ${range(current)}`);
-    const fRows = resources.get('current/frequency')?.rows ?? [];
+    if(!bao)section.querySelector('.table-scroll')!.before(controls(s));
+    const q = s.search.toLocaleLowerCase('vi');
+    const fRows = (resources.get('current/frequency')?.rows ?? []).filter(r => {
+      if (s.direction !== 'all' && s.direction !== 'each' && r.direction !== s.direction) return false;
+      for (const [f, set] of Object.entries(s.filters)) {
+        if (set && set.size > 0 && r.grain[f] !== undefined && !set.has(JSON.stringify(r.grain[f] ?? null))) return false;
+      }
+      if (q) {
+        const text = [r.grain.airline, name('airline', r.grain.airline), r.grain.route, name('route', r.grain.route), r.grain.flight_number, r.typical_time].join(' ').toLocaleLowerCase('vi');
+        if (!text.includes(q)) return false;
+      }
+      return true;
+    });
     const bRow = el('tr');
     for(const l of ['Hãng bay', 'Chặng bay', 'Số hiệu', 'Giờ điển hình', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN', 'Tần suất/tuần', 'Độ ổn định']) th(bRow, l);
     head.append(bRow);
     for(const r of fRows) {
-      const tr = el('tr');
+      const tr = el('tr', undefined, 'pivot-leaf');
       const opDays = (r.operating_days as number[] ?? []);
       tr.append(
         el('th', String(r.grain.airline ?? '—'), 'name'),
@@ -1008,6 +1130,7 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
       );
       body.append(tr);
     }
+    if(!fRows.length) section.append(el('p','Không có lịch định kỳ phù hợp với bộ lọc / tìm kiếm hiện tại.','notice'));
     section.append(el('p', 'Tần suất khai thác định kỳ theo các ngày trong tuần (●: có chuyến).', 'pivot-note'));
   }
 
@@ -1028,6 +1151,13 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
 
     observers.forEach(o=>o.disconnect());observers=[];content.replaceChildren();
     const s=states.get(active.id)!,rows=filtered(s);
+    if(helpers.syncState){
+      if(!helpers.syncState.summaryTab) helpers.syncState.summaryTab=active.id;
+      helpers.syncState.pivotTab=active.id;helpers.syncState.lastTab=active.id;
+      helpers.syncState.lastSearch=s.search;helpers.syncState.direction=s.direction;helpers.syncState.metric=s.metric;
+      const fObj:Record<string,string[]>={};for(const [k,v] of Object.entries(s.filters))if(v&&v.size)fObj[k]=[...v];
+      helpers.syncState.filters=fObj;
+    }
     content.classList.remove('print-ready');
 
     if(bao)content.append(controls(s));
@@ -1039,7 +1169,26 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     else if(bao&&active.month){
       const grid=el('div',undefined,'bao-total bao-month');content.append(grid);daily(grid,rows,active.month);
       monthChart(grid,rows,active.month,s.metric==='reported_pax'?'reported_pax':'flights');
-    } else if(bao){const grid=el('div',undefined,'bao-total');content.append(grid);daily(grid,rows);weeklyTable(grid,rows);}
+    } else if(bao){
+      const curKpi=resources.get('current/kpi')?.rows.find(r=>r.direction==='all');
+      if(curKpi){
+        const seasonStrip=el('div',undefined,'pivot-exec-strip season-summary-strip');
+        const mkItem=(label:string,val:string,sub?:string)=>{
+          const item=el('div',undefined,'pivot-exec-item');item.append(el('span',label,'pivot-exec-label'),el('span',val,'pivot-exec-value'));
+          if(sub)item.append(el('span',sub,'pivot-exec-sub'));return item;
+        };
+        const ppf=(curKpi.reported_legs>0&&curKpi.reported_pax!==null)?Math.round(curKpi.reported_pax/curKpi.reported_legs):null;
+        const ppd=(curKpi.reported_pax!==null&&current.calendar_days>0)?Math.round(curKpi.reported_pax/current.calendar_days):null;
+        seasonStrip.append(
+          mkItem('Toàn mùa · Tổng chuyến',fmt(curKpi.flights),'chuyến bay'),
+          mkItem('Toàn mùa · Tổng khách',fmt(curKpi.reported_pax),'hành khách'),
+          mkItem('Toàn mùa · Khách/chuyến',fmt(ppf),ppf!==null?'khách/chuyến':'—'),
+          mkItem('Toàn mùa · TB khách/ngày',fmt(ppd),ppd!==null?`khách/ngày (${current.calendar_days} ngày)`:'—')
+        );
+        content.append(seasonStrip);
+      }
+      const grid=el('div',undefined,'bao-total');content.append(grid);daily(grid,rows);weeklyTable(grid,rows);
+    }
     else if(active.id==='days'){
       const activePeriods=ordinary.filter(p=>rows.some(r=>r.period===p.id&&(r.flights!==null||r.reported_pax!==null)));
       const periodsToShow=activePeriods.length>0?activePeriods:[current];
@@ -1113,14 +1262,14 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     const metricOptions = active.analysis
       ? [['flights','Chuyến bay'],['reported_pax','Hành khách'],['both','Chuyến bay và Hành khách']]
       : [['both','Chuyến bay và Hành khách'],['flights','Chuyến bay'],['reported_pax','Hành khách'],['flights_per_day','TB Chuyến / Ngày'],['pax_per_flight','Khách / Chuyến']];
-    if(!bao||active.analysis||active.viewType==='week_horizon')toolbar.append(
+    if(!bao||active.analysis||active.viewType==='week_horizon'||active.viewType==='frequency'||active.viewType==='aircraft')toolbar.append(
       select('Chỉ tiêu',metricOptions,s.metric,v=>{s.metric=v;panelsMap.delete(active.id);renderContent();}),
       select('Chiều',[['all','Tổng Đến + Đi'],['A','Đến'],['D','Đi'],['each','Đến / Đi / Tổng']],s.direction,v=>{s.direction=v;panelsMap.delete(active.id);renderContent();})
     );
     else if(active.month)toolbar.append(select('Biểu đồ',[['flights','Chuyến bay'],['reported_pax','Hành khách']],s.metric==='reported_pax'?s.metric:'flights',v=>{s.metric=v;panelsMap.delete(active.id);renderContent();}));
     
     const display=el('details',undefined,'pivot-display');display.append(el('summary','Hiển thị'));const displayBody=el('div',undefined,'pivot-display-body');display.append(displayBody);
-    if(!bao && !active.analysis && active.id !== 'days'){
+    if((!bao && !active.analysis && active.id !== 'days') || active.viewType === 'week_horizon'){
       displayBody.append(select('Mẫu Pivot nhanh',[
         ['custom','Tùy chọn tự do'],
         ['country_month','1-Click: Thị trường × Tháng'],
@@ -1134,21 +1283,19 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
         else if(v==='route_dir'){s.levels=['route','airline'];s.time='period';s.direction='each';}
         s.page=0;s.open.clear();s.closed.clear();panelsMap.delete(active.id);renderContent();
       }));
-      const alternatives=[active.levels,...[['country','route','airline'],['airline','route'],['route','airline'],['country','airline']]];
+      const alternatives=[active.levels,...[['country','route','airline'],['country','route'],['country','airline'],['airline','route'],['route','airline']]];
       const unique=[...new Map(alternatives.map(a=>[a.join(','),a])).values()];
       displayBody.append(select('Cấp nhóm',unique.map(a=>[a.join(','),a.map(f=>labels[f]??f).join(' → ')]),s.levels.join(','),v=>{s.levels=v.split(',');s.page=0;s.open.clear();s.closed.clear();panelsMap.delete(active.id);renderContent();}));
-      displayBody.append(select('Trục cột',[
+      displayBody.append(select('Trục cột',active.viewType==='week_horizon'?[
+        ['business_week','Tuần T6–T5 (Nghiệp vụ)'],
+        ['iso_week','Tuần ISO'],
+        ['month','Theo Tháng'],
+        ['weekday','Thứ trong tuần (T2–CN)']
+      ]:[
         ['month','Theo Tháng'],
         ['period','Toàn kỳ'],
         ['business_week','Tuần T6–T5 (Nghiệp vụ)'],
         ['iso_week','Tuần ISO'],
-        ['weekday','Thứ trong tuần (T2–CN)']
-      ],s.time,v=>{s.time=v;panelsMap.delete(active.id);renderContent();}));
-    } else if (active.viewType==='week_horizon') {
-      displayBody.append(select('Trục cột',[
-        ['business_week','Tuần T6–T5 (Nghiệp vụ)'],
-        ['iso_week','Tuần ISO'],
-        ['month','Theo Tháng'],
         ['weekday','Thứ trong tuần (T2–CN)']
       ],s.time,v=>{s.time=v;panelsMap.delete(active.id);renderContent();}));
     }
@@ -1211,10 +1358,20 @@ export function mountTrafficHtmlPivot(data: HtmlEnvelope, helpers: {
     const wrap=el('label','Tìm trong bảng'),searchInput=el('input');searchInput.type='search';searchInput.value=s.search;searchInput.setAttribute('aria-label','Tìm trong bảng');
     searchInput.oninput=()=>{s.search=searchInput.value;s.page=0;panelsMap.delete(active.id);renderContent();};wrap.append(searchInput);toolbar.append(wrap);
 
-    if(!bao && active.id !== 'days')displayBody.append(select('Sắp xếp',[['name','Tên / thời gian'],['flights','Chuyến bay giảm dần'],['reported_pax','Hành khách giảm dần']],s.sort,v=>{s.sort=v;panelsMap.delete(active.id);renderContent();}));
+    if((!bao || active.analysis || active.viewType === 'analysis' || active.viewType === 'week_horizon' || active.viewType === 'frequency' || active.viewType === 'aircraft') && active.id !== 'days'){
+      const sortOpts: Array<[string, string]> = [
+        ['name', 'Tên / thời gian'],
+        ['flights', 'Chuyến bay giảm dần'],
+        ['reported_pax', 'Hành khách giảm dần'],
+      ];
+      if (active.analysis || active.viewType === 'analysis' || ordinary.length >= 2) {
+        sortOpts.push(['ctg', 'Biến động |CTG| lớn nhất']);
+      }
+      displayBody.append(select('Sắp xếp', sortOpts, s.sort, v => { s.sort = v; panelsMap.delete(active.id); renderContent(); }));
+    }
     
     if(!bao || active.viewType==='week_horizon')toolbar.append(button('Mở tất cả',()=>{s.depth=10;s.closed.clear();panelsMap.delete(active.id);renderContent();}),button('Thu gọn',()=>{s.depth=0;s.open.clear();s.closed.clear();panelsMap.delete(active.id);renderContent();}));
-    const barsLabel=el('label','Thanh tỷ trọng (Data Bars)','pivot-toggle-label');
+    const barsLabel=el('label','Đánh dấu đỉnh cao điểm (≥85%)','pivot-toggle-label');
     const barsCheck=el('input');barsCheck.type='checkbox';barsCheck.checked=s.showBars;
     barsCheck.onchange=()=>{s.showBars=barsCheck.checked;panelsMap.delete(active.id);renderContent();};
     barsLabel.prepend(barsCheck);

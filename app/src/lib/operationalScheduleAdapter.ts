@@ -15,6 +15,7 @@ import {
   createOperationalFlightLegsV1,
 } from './remoteStore';
 import { registerOperatorSessionCacheClearer } from './operatorSessionCacheRegistry';
+import { registerOperationalScheduleCloseReader } from './nativeClosePolicy';
 
 export interface OperationalMutationResult {
   receipt: OperationalMutationReceipt;
@@ -45,7 +46,7 @@ export interface OperationalScheduleWindowState {
   loadWindow: (options?: { force?: boolean }) => Promise<FlightRecord[]>;
   applyMutations: (
     changes: OperationalLegChangeInput[],
-    options?: { requestId?: string },
+    options?: { requestId?: string; expectedRevision?: string },
   ) => Promise<OperationalMutationResult>;
   createFlightLegs: (
     legs: Array<Record<string, unknown>>,
@@ -246,10 +247,12 @@ export function isRecentOperationalMutationRequestId(requestId: string): boolean
   return recentMutationRequestIds.has(requestId);
 }
 
-function isAuthoritativeSqlRejection(err: unknown): boolean {
-  return !!err && typeof err === 'object' && 'code' in err
-    && typeof err.code === 'string' && /^[0-9A-Z]{5}$/.test(err.code)
-    && !err.code.startsWith('08') && !err.code.startsWith('57');
+export function isAuthoritativeSqlRejection(err: unknown): boolean {
+  if (!err || typeof err !== 'object' || !('code' in err) || typeof err.code !== 'string') {
+    return false;
+  }
+  const code = err.code.trim().toUpperCase();
+  return /^[0-9A-Z]{5}$/.test(code) && !code.startsWith('08') && !code.startsWith('57');
 }
 export const useOperationalScheduleStore = create<OperationalScheduleWindowState>((set, get) => ({
   startDate: initialDates.startDate,
@@ -372,7 +375,7 @@ export const useOperationalScheduleStore = create<OperationalScheduleWindowState
 
   applyMutations: async (
     changes: OperationalLegChangeInput[],
-    options?: { requestId?: string },
+    options?: { requestId?: string; expectedRevision?: string },
   ): Promise<OperationalMutationResult> => {
     if (changes.length === 0) {
       throw new Error('At least one operational leg change is required');
@@ -415,7 +418,7 @@ export const useOperationalScheduleStore = create<OperationalScheduleWindowState
       if (unresolvedAttempt && unresolvedAttempt.requestId === explicitRequestId) {
         expectedRevision = unresolvedAttempt.expectedRevision;
       } else {
-        expectedRevision = state.snapshot.revision;
+        expectedRevision = options?.expectedRevision ?? state.snapshot.revision;
       }
     } else if (
       unresolvedAttempt &&
@@ -426,7 +429,7 @@ export const useOperationalScheduleStore = create<OperationalScheduleWindowState
       expectedRevision = unresolvedAttempt.expectedRevision;
     } else {
       requestId = globalThis.crypto.randomUUID();
-      expectedRevision = state.snapshot.revision;
+      expectedRevision = options?.expectedRevision ?? state.snapshot.revision;
     }
 
     setPendingOperationalMutation({
@@ -648,3 +651,29 @@ export const useOperationalScheduleStore = create<OperationalScheduleWindowState
 }));
 
 registerOperatorSessionCacheClearer('operational-schedule', () => useOperationalScheduleStore.getState().reset());
+registerOperationalScheduleCloseReader(() => {
+  const state = useOperationalScheduleStore.getState();
+  return {
+    mutating: state.mutating,
+    importing: state.importing,
+    unresolvedAttempt: Boolean(state.unresolvedAttempt),
+  };
+});
+
+export async function commitOperationalResourceBatch(input: {
+  changes: OperationalLegChangeInput[];
+  expectedRevision: string;
+  requestId?: string;
+}): Promise<OperationalMutationResult> {
+  const { changes, expectedRevision, requestId } = input;
+  if (changes.length === 0) {
+    throw new Error('At least one operational resource change is required');
+  }
+
+  const store = useOperationalScheduleStore.getState();
+  if (store.mutating || store.importing || store.unresolvedAttempt) {
+    throw new Error('Thao tác vận hành trước đó chưa được xác nhận hoặc đang được xử lý. Vui lòng chờ hoặc thử lại.');
+  }
+
+  return store.applyMutations(changes, { requestId, expectedRevision });
+}

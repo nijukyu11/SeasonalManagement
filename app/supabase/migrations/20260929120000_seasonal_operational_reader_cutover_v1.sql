@@ -15,6 +15,53 @@
 begin;
 set local lock_timeout = '15s';
 set local statement_timeout = '300s';
+-- 6.9 Dedicated preimage capture for M10 functions to preserve runtime definitions, owner, and ACLs
+create table if not exists reporting.operational_projection_migration_preimages_v1 (
+  migration_tag text not null,
+  function_schema text not null,
+  function_name text not null,
+  function_signature text not null,
+  function_definition text not null,
+  function_owner text not null,
+  function_acl text,
+  captured_at timestamp with time zone not null default clock_timestamp(),
+  primary key (migration_tag, function_schema, function_name, function_signature)
+);
+
+revoke all on reporting.operational_projection_migration_preimages_v1 from public, anon, authenticated;
+
+insert into reporting.operational_projection_migration_preimages_v1 (
+  migration_tag,
+  function_schema,
+  function_name,
+  function_signature,
+  function_definition,
+  function_owner,
+  function_acl
+)
+select
+  '20260929120000',
+  n.nspname,
+  p.proname,
+  pg_catalog.oidvectortypes(p.proargtypes),
+  pg_catalog.pg_get_functiondef(p.oid),
+  r.rolname,
+  p.proacl::text
+from pg_catalog.pg_proc p
+join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+join pg_catalog.pg_roles r on r.oid = p.proowner
+where (n.nspname = 'public' and p.proname in (
+    'get_public_traffic_report_v2',
+    'get_public_annual_passenger_kpi_version_v1',
+    'get_public_annual_passenger_kpi_v1',
+    'publish_public_dashboard_daily_v1'
+  ))
+  or (n.nspname = 'reporting' and p.proname in (
+    'get_public_traffic_canonical_bounds_v1',
+    'select_public_dashboard_candidate_v1',
+    'refresh_public_traffic_canonical_legs_v1'
+  ))
+on conflict (migration_tag, function_schema, function_name, function_signature) do nothing;
 
 -- 1. Create cutover state table
 create table if not exists reporting.operational_reader_cutover_state (
@@ -566,6 +613,7 @@ $function$;
 
 revoke execute on function reporting.refresh_public_traffic_canonical_legs_v1() from public, anon, authenticated;
 grant execute on function reporting.refresh_public_traffic_canonical_legs_v1() to service_role;
+
 -- 7. Accelerated get_public_traffic_report_v2: exact 662-line contract with cutover freshness gate and combined generation watermark
 CREATE OR REPLACE FUNCTION public.get_public_traffic_report_v2(
   p_from_date date DEFAULT NULL::date,

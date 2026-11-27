@@ -3,21 +3,26 @@ import test from 'node:test';
 import {
   applyModificationsToFlightRecords,
   buildAuthoritativeDraftUndoChanges,
+  clearSeasonalPlanningRouteGuard,
   composeSeasonalDraftUndoChanges,
   createInitialDraftSaveState,
   executeSeasonalPlanningDraftSave,
   getSeasonalPlanningExportLegs,
-  isDraftWorkspaceNotFoundError,
+  getSeasonalPlanningRouteGuard,
+  isSeasonalPlanningBlockedSync,
   loadFullSeasonalDraftRecords,
   retrySeasonalPlanningDraft,
+  reconcileRecoveredDraftUndoStack,
   saveSeasonalPlanningDraft,
   seasonalDraftExportSnapshotToFlightRecords,
+  setSeasonalPlanningRouteGuard,
+  subscribeSeasonalPlanningGuard,
 } from './seasonalPlanningSaveManager.ts';
 import type {
   SeasonalDraftChangeInput,
   SeasonalDraftMutationReceipt,
 } from './seasonalPlanningContract.ts';
-import type { FlightModification, FlightRecord } from './types.ts';
+import type { FlightModification, FlightRecord, ModHistoryEntry } from './types.ts';
 
 const BASE_RECORD: FlightRecord = {
   id: 'REC_PLAN_001',
@@ -443,15 +448,6 @@ test('loadFullSeasonalDraftRecords pages across batches and sends expectedEpoch 
   assert.equal(result.revision, '6');
   assert.equal(result.epoch, 'ep1');
   assert.equal(result.records.length, 2);
-});
-
-test('isDraftWorkspaceNotFoundError identifies P0002 and season not found errors', () => {
-  assert.equal(isDraftWorkspaceNotFoundError({ code: 'P0002', message: 'Season not found' }), true);
-  assert.equal(isDraftWorkspaceNotFoundError(new Error('Season not found')), true);
-  assert.equal(isDraftWorkspaceNotFoundError('Season not found'), true);
-  assert.equal(isDraftWorkspaceNotFoundError({ code: '22023', message: 'Invalid draft page' }), false);
-  assert.equal(isDraftWorkspaceNotFoundError(new Error('Network timeout')), false);
-  assert.equal(isDraftWorkspaceNotFoundError(null), false);
 });
 
 test('createInitialDraftSaveState initializes idle unconfirmed-free state', () => {
@@ -1115,5 +1111,320 @@ test('composeSeasonalDraftUndoChanges prevents stale preimage across successive 
   // Earliest undo target is original 08:00
   assert.equal(composed[0]?.patch.schedule, '08:00');
   assert.equal(composed[0]?.patch.scheduled_time, '08:00');
+});
+
+test('seasonal planning route guard: blocks navigation when saving, unconfirmed, or canonical reload error exists', () => {
+  clearSeasonalPlanningRouteGuard();
+
+  // Initially idle -> not blocked
+  assert.equal(isSeasonalPlanningBlockedSync(), false);
+  assert.equal(isSeasonalPlanningBlockedSync('seasonal'), false);
+  assert.equal(isSeasonalPlanningBlockedSync('detailed'), false);
+
+  // 1. Saving state blocks
+  setSeasonalPlanningRouteGuard('seasonal', {
+    status: 'saving',
+    hasUnconfirmedChanges: false,
+    canonicalReloadError: null,
+    seasonId: 'season-1',
+  });
+  assert.equal(isSeasonalPlanningBlockedSync(), true);
+  assert.equal(isSeasonalPlanningBlockedSync('seasonal'), true);
+  assert.equal(isSeasonalPlanningBlockedSync('detailed'), false);
+
+  // 2. Unconfirmed changes block
+  setSeasonalPlanningRouteGuard('seasonal', {
+    status: 'error',
+    hasUnconfirmedChanges: true,
+    canonicalReloadError: null,
+    seasonId: 'season-1',
+  });
+  assert.equal(isSeasonalPlanningBlockedSync(), true);
+  assert.equal(isSeasonalPlanningBlockedSync('seasonal'), true);
+
+  // 3. Canonical reload error blocks
+  setSeasonalPlanningRouteGuard('seasonal', {
+    status: 'saved',
+    hasUnconfirmedChanges: false,
+    canonicalReloadError: 'Network failed while reloading draft after save',
+    seasonId: 'season-1',
+  });
+  assert.equal(isSeasonalPlanningBlockedSync(), true);
+  assert.equal(isSeasonalPlanningBlockedSync('seasonal'), true);
+
+  // 4. Stale authoritative reload releases the fence
+  setSeasonalPlanningRouteGuard('seasonal', {
+    status: 'idle',
+    hasUnconfirmedChanges: false,
+    canonicalReloadError: null,
+    seasonId: 'season-1',
+    pendingRequest: null,
+  });
+  assert.equal(isSeasonalPlanningBlockedSync(), false);
+  assert.equal(isSeasonalPlanningBlockedSync('seasonal'), false);
+});
+
+test('seasonal planning route guard: season scoping isolates different seasons', () => {
+  clearSeasonalPlanningRouteGuard();
+
+  setSeasonalPlanningRouteGuard('detailed', {
+    status: 'error',
+    hasUnconfirmedChanges: true,
+    canonicalReloadError: null,
+    seasonId: 'season-w26',
+  });
+
+  // Blocked for matching season or general check
+  assert.equal(isSeasonalPlanningBlockedSync(undefined, 'season-w26'), true);
+  assert.equal(isSeasonalPlanningBlockedSync('detailed', 'season-w26'), true);
+
+  // NOT blocked for different season
+  assert.equal(isSeasonalPlanningBlockedSync(undefined, 'season-s27'), false);
+  assert.equal(isSeasonalPlanningBlockedSync('detailed', 'season-s27'), false);
+
+  clearSeasonalPlanningRouteGuard();
+});
+
+test('seasonal planning route guard: pending state persists across unmount and notifies subscribers', () => {
+  clearSeasonalPlanningRouteGuard();
+
+  let notifications = 0;
+  const unsubscribe = subscribeSeasonalPlanningGuard(() => {
+    notifications++;
+  });
+
+  setSeasonalPlanningRouteGuard('seasonal', {
+    status: 'saving',
+    hasUnconfirmedChanges: true,
+    canonicalReloadError: null,
+    seasonId: 'season-persisted',
+    pendingRequest: {
+      seasonId: 'season-persisted',
+      requestId: 'req-1',
+      expectedRevision: 5,
+      changes: [],
+      applyFn: async () => ({
+        status: 'committed',
+        requestId: 'req-1',
+        revision: '6',
+        events: [],
+      }),
+      currentRecords: [],
+      baseRecords: [],
+    },
+  });
+
+  assert.ok(notifications > 0);
+
+  // Simulate unmount: component state unmounts, but route guard in registry remains intact
+  const retrieved = getSeasonalPlanningRouteGuard('seasonal');
+  assert.notEqual(retrieved, null);
+  assert.equal(retrieved?.status, 'saving');
+  assert.equal(retrieved?.hasUnconfirmedChanges, true);
+  assert.equal(retrieved?.pendingRequest?.requestId, 'req-1');
+
+  assert.equal(isSeasonalPlanningBlockedSync(), true);
+  assert.equal(isSeasonalPlanningBlockedSync('seasonal'), true);
+
+  unsubscribe();
+  clearSeasonalPlanningRouteGuard();
+});
+
+test('recovery after lost ACK delete: retry succeeds and reconcileRecoveredDraftUndoStack restores authoritative Undo capability', async () => {
+  clearSeasonalPlanningRouteGuard();
+
+  const flight1: FlightRecord = {
+    ...BASE_RECORD,
+    id: 'REC_STAGE_DEL_1',
+    flightNumber: '101',
+  };
+  const flight2: FlightRecord = {
+    ...BASE_RECORD,
+    id: 'REC_STAGE_SURV_2',
+    flightNumber: '102',
+  };
+
+  const historyEntry: ModHistoryEntry = {
+    id: 'LOCAL_DEL_101',
+    timestamp: Date.now(),
+    description: 'Đã xóa chuyến bay VN101',
+    changes: [],
+    recordChanges: [{
+      recordId: 'REC_STAGE_DEL_1',
+      previousRecord: flight1,
+      newRecord: null,
+    }],
+  };
+
+  let callCount = 0;
+  const receipt: SeasonalDraftMutationReceipt = {
+    status: 'committed',
+    requestId: 'REQ_DELETE_LOST_ACK',
+    revision: '15',
+    events: [{
+      serverSeq: '15',
+      draftId: 'REC_STAGE_DEL_1',
+      after: {
+        draft_id: 'REC_STAGE_DEL_1',
+        status: 'deleted',
+        deletion_reason: 'planning_removed',
+      } as unknown as Record<string, unknown>,
+    }],
+  };
+
+  // Step 1: Initial delete attempt - server processed (200 on DB) but client lost ACK (network throws)
+  const firstRun = await executeSeasonalPlanningDraftSave({
+    seasonId: 'W26',
+    requestId: 'REQ_DELETE_LOST_ACK',
+    currentRecords: [flight2],
+    baseRecords: [flight1, flight2],
+    expectedRevision: 14,
+    historyEntry,
+    recoveryAction: {
+      kind: 'mutation',
+      historyEntry,
+    },
+    applyFn: async () => {
+      callCount++;
+      if (callCount === 1) {
+        throw new Error('TypeError: Failed to fetch (lost ACK)');
+      }
+      return receipt;
+    },
+  });
+
+  // Verifications on failed first run:
+  assert.equal(firstRun.result.status, 'error');
+  assert.equal(firstRun.state.status, 'error');
+  assert.equal(firstRun.state.hasUnconfirmedChanges, true);
+  assert.ok(firstRun.state.pendingRequest);
+  assert.equal(firstRun.state.pendingRequest.baseRecords.length, 2);
+
+  // Step 2: Simulate unmount/remount - route guard retains pending state with baseRecords and modHistory
+  setSeasonalPlanningRouteGuard('seasonal', {
+    status: firstRun.state.status,
+    hasUnconfirmedChanges: firstRun.state.hasUnconfirmedChanges,
+    canonicalReloadError: null,
+    seasonId: 'W26',
+    pendingRequest: firstRun.state.pendingRequest,
+    modHistory: [],
+  });
+
+  const guard = getSeasonalPlanningRouteGuard('seasonal');
+  assert.ok(guard);
+  assert.equal(guard.pendingRequest?.requestId, 'REQ_DELETE_LOST_ACK');
+  assert.equal(guard.pendingRequest?.baseRecords.length, 2);
+  assert.equal(guard.pendingRequest?.baseRecords[0]?.id, 'REC_STAGE_DEL_1');
+
+  // Step 3: User clicks "Thử lại" -> retrySeasonalPlanningDraft succeeds
+  const retryRun = await retrySeasonalPlanningDraft(firstRun.state);
+  assert.equal(retryRun.state.status, 'saved');
+  assert.equal(retryRun.result?.status, 'saved');
+  assert.ok(retryRun.result?.receipt);
+
+  // Step 4: reconcileRecoveredDraftUndoStack restores Undo entry with authoritative preimages
+  const recoveredHistory = reconcileRecoveredDraftUndoStack({
+    receipt: retryRun.result.receipt,
+    pendingRequest: firstRun.state.pendingRequest,
+    currentHistory: guard.modHistory ?? [],
+  });
+
+  assert.equal(recoveredHistory.length, 1);
+  const recovered = recoveredHistory[0];
+  assert.ok(recovered);
+  assert.equal(recovered.id, 'LOCAL_DEL_101');
+  assert.equal(recovered.description, 'Đã xóa chuyến bay VN101');
+
+  // Crucial: draftUndoChanges must have the exact preimage to restore REC_STAGE_DEL_1
+  const undoChanges = (recovered as ModHistoryEntry & { draftUndoChanges?: SeasonalDraftChangeInput[] }).draftUndoChanges;
+  assert.ok(undoChanges);
+  assert.equal(undoChanges.length, 1);
+  assert.equal(undoChanges[0]?.draftId, 'REC_STAGE_DEL_1');
+  assert.equal(undoChanges[0]?.expected?.status, 'deleted');
+  assert.equal(undoChanges[0]?.expected?.deletion_reason, 'planning_removed');
+  assert.equal(undoChanges[0]?.patch?.status, 'active');
+  assert.equal(undoChanges[0]?.patch?.deletion_reason, null);
+
+  clearSeasonalPlanningRouteGuard();
+});
+
+test('reconcileRecoveredDraftUndoStack avoids duplicate stack on canonical reload/replay', () => {
+  const existingEntry: ModHistoryEntry = {
+    id: 'LOCAL_EDIT_200',
+    timestamp: 1000,
+    description: 'Đã sửa lịch bay',
+    changes: [],
+    recordChanges: [],
+  };
+
+  const pendingRequest = {
+    seasonId: 'W26',
+    requestId: 'REQ_200',
+    expectedRevision: 5,
+    changes: [],
+    applyFn: async () => ({ status: 'committed' as const, requestId: 'REQ_200', revision: '6', events: [] }),
+    currentRecords: [BASE_RECORD],
+    baseRecords: [BASE_RECORD],
+    historyEntry: existingEntry,
+  };
+
+  const receipt: SeasonalDraftMutationReceipt = {
+    status: 'committed',
+    requestId: 'REQ_200',
+    revision: '6',
+    events: [],
+  };
+
+  // Current history already contains LOCAL_EDIT_200
+  const currentHistory: ModHistoryEntry[] = [existingEntry];
+
+  const result = reconcileRecoveredDraftUndoStack({
+    receipt,
+    pendingRequest,
+    currentHistory,
+  });
+
+  // Must not duplicate the entry
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.id, 'LOCAL_EDIT_200');
+});
+
+test('reconcileRecoveredDraftUndoStack handles recovery of Undo itself by removing undone entries', () => {
+  const entry1: ModHistoryEntry = { id: 'HIST_1', timestamp: 100, description: 'Step 1', changes: [], recordChanges: [] };
+  const entry2: ModHistoryEntry = { id: 'HIST_2', timestamp: 200, description: 'Step 2', changes: [], recordChanges: [] };
+  const entry3: ModHistoryEntry = { id: 'HIST_3', timestamp: 300, description: 'Step 3', changes: [], recordChanges: [] };
+
+  const currentHistory = [entry3, entry2, entry1];
+
+  const pendingRequest = {
+    seasonId: 'W26',
+    requestId: 'REQ_UNDO_SAVE',
+    expectedRevision: 8,
+    changes: [],
+    applyFn: async () => ({ status: 'committed' as const, requestId: 'REQ_UNDO_SAVE', revision: '9', events: [] }),
+    currentRecords: [BASE_RECORD],
+    baseRecords: [BASE_RECORD],
+    recoveryAction: {
+      kind: 'undo' as const,
+      undoneEntryIds: ['HIST_3', 'HIST_2'],
+    },
+  };
+
+  const receipt: SeasonalDraftMutationReceipt = {
+    status: 'committed',
+    requestId: 'REQ_UNDO_SAVE',
+    revision: '9',
+    events: [],
+  };
+
+  const result = reconcileRecoveredDraftUndoStack({
+    receipt,
+    pendingRequest,
+    currentHistory,
+  });
+
+  // HIST_3 and HIST_2 removed, only HIST_1 remains, no duplicate entries created
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.id, 'HIST_1');
 });
 

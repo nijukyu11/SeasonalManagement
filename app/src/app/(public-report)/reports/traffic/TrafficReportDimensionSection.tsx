@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/cn';
 import {
   buildDimensionUrl,
@@ -8,6 +8,7 @@ import {
   type NormalizedTrafficReportFilter,
   type TrafficDimension,
   type TrafficDimensionResponse,
+  type TrafficDimensionRow,
   type TrafficDimensionSort,
   type TrafficMarketDimension,
   type TrafficType,
@@ -70,7 +71,7 @@ function legacyDimensionShare(
   };
 }
 
-export function TrafficReportDimensionSection({ kind, filter, scope, marketDimension = 'route', readVersion = 'v1', expectedWatermark, readVersionToken, onScopeChange, onMarketDimensionChange, onVersionChanged }: {
+export function TrafficReportDimensionSection({ kind, filter, scope, marketDimension = 'route', readVersion = 'v1', expectedWatermark, readVersionToken, comparisonRange, onScopeChange, onMarketDimensionChange, onVersionChanged }: {
   kind: 'market' | 'airline';
   filter: NormalizedTrafficReportFilter;
   scope: TrafficType;
@@ -78,6 +79,7 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
   readVersion?: 'v1' | 'v2';
   expectedWatermark?: number;
   readVersionToken?: string;
+  comparisonRange?: { from: string; to: string; mode?: string } | null;
   onScopeChange: (scope: TrafficType) => void;
   onMarketDimensionChange?: (dimension: TrafficMarketDimension) => void;
   onVersionChanged?: () => void;
@@ -93,6 +95,8 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
   const [shareLoading, setShareLoading] = useState(true);
   const [flightShareError, setFlightShareError] = useState<string | null>(null);
   const [paxShareError, setPaxShareError] = useState<string | null>(null);
+  const [comparisonMap, setComparisonMap] = useState<Record<string, TrafficDimensionRow> | null>(null);
+  const [comparisonTotals, setComparisonTotals] = useState<{ flights: number; pax: number } | null>(null);
   const tableControllerRef = useRef<AbortController | null>(null);
   const shareControllerRef = useRef<AbortController | null>(null);
 
@@ -103,18 +107,64 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     setLoading(true);
     setError(null);
     try {
-      const payload = readVersion === 'v2'
-        ? expectedWatermark === undefined || !readVersionToken
-          ? (() => { throw new Error('Phiên bản dữ liệu mới nhất chưa sẵn sàng.'); })()
-          : await fetchTrafficReportV2DimensionPage(filter, dimension, scope, sort, page, 20, expectedWatermark, readVersionToken, { signal: controller.signal })
-        : await (async () => {
-          const response = await fetch(buildDimensionUrl(filter, dimension, scope, sort, page, 20), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
-          const result: unknown = await response.json().catch(() => null);
-          if (!response.ok) throw new Error('Không thể tải bảng dữ liệu. Vui lòng thử lại.');
-          if (!isTrafficDimensionResponse(result)) throw new Error('Bảng dữ liệu chưa sẵn sàng.');
-          return result;
-        })();
-      if (!controller.signal.aborted) setData(payload);
+      const loadMain = async () => {
+        if (readVersion === 'v2') {
+          if (expectedWatermark === undefined || !readVersionToken) {
+            throw new Error('Phiên bản dữ liệu mới nhất chưa sẵn sàng.');
+          }
+          return fetchTrafficReportV2DimensionPage(filter, dimension, scope, sort, page, 20, expectedWatermark, readVersionToken, { signal: controller.signal });
+        }
+        const response = await fetch(buildDimensionUrl(filter, dimension, scope, sort, page, 20), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+        const result: unknown = await response.json().catch(() => null);
+        if (!response.ok) throw new Error('Không thể tải bảng dữ liệu. Vui lòng thử lại.');
+        if (!isTrafficDimensionResponse(result)) throw new Error('Bảng dữ liệu chưa sẵn sàng.');
+        return result;
+      };
+
+      const loadComp = async (): Promise<TrafficDimensionResponse | null> => {
+        if (!comparisonRange || !comparisonRange.from || !comparisonRange.to) return null;
+        const compFilter: NormalizedTrafficReportFilter = {
+          ...filter,
+          from: comparisonRange.from,
+          to: comparisonRange.to,
+          comp: 'none',
+        };
+        if (readVersion === 'v2') {
+          if (expectedWatermark === undefined || !readVersionToken) return null;
+          return fetchTrafficReportV2DimensionPage(compFilter, dimension, scope, 'flights', 1, 732, expectedWatermark, readVersionToken, { signal: controller.signal });
+        }
+        const response = await fetch(buildDimensionUrl(compFilter, dimension, scope, 'flights', 1, 732), { credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+        const result: unknown = await response.json().catch(() => null);
+        if (!response.ok || !isTrafficDimensionResponse(result)) return null;
+        return result;
+      };
+
+      const [mainResult, compResult] = await Promise.allSettled([loadMain(), loadComp()]);
+      if (controller.signal.aborted) return;
+
+      if (mainResult.status === 'fulfilled') {
+        setData(mainResult.value);
+      } else {
+        if (mainResult.reason instanceof TrafficReportVersionChangedError) onVersionChanged?.();
+        setError(formatUiError(mainResult.reason, 'Không thể tải bảng dữ liệu.'));
+      }
+
+      if (compResult.status === 'fulfilled' && compResult.value) {
+        const rows = compResult.value.rows ?? [];
+        const map: Record<string, TrafficDimensionRow> = {};
+        let totalFlights = 0;
+        let totalPax = 0;
+        for (const row of rows) {
+          map[row.key] = row;
+          if (row.flights != null && Number.isFinite(row.flights)) totalFlights += row.flights;
+          if (row.reported_pax != null && Number.isFinite(row.reported_pax)) totalPax += row.reported_pax;
+        }
+        setComparisonMap(map);
+        setComparisonTotals({ flights: totalFlights, pax: totalPax });
+      } else {
+        setComparisonMap(null);
+        setComparisonTotals(null);
+      }
     } catch (reason) {
       if (!controller.signal.aborted) {
         if (reason instanceof TrafficReportVersionChangedError) onVersionChanged?.();
@@ -123,7 +173,7 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
-  }, [dimension, expectedWatermark, filter, onVersionChanged, page, readVersion, readVersionToken, scope, sort]);
+  }, [comparisonRange, dimension, expectedWatermark, filter, onVersionChanged, page, readVersion, readVersionToken, scope, sort]);
 
   const loadShares = useCallback(async () => {
     shareControllerRef.current?.abort();
@@ -172,6 +222,39 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
     : 'Đối chiếu tỷ trọng chuyến bay và sản lượng khách giữa các hãng. Sản lượng khách chỉ tính số khách đã báo cáo.';
   const groupLabel = dimension === 'route' ? 'Chặng bay' : dimension === 'country' ? 'Quốc gia' : 'Hãng hàng không';
   const visibleRows = data?.rows ?? [];
+  const hasComparison = Boolean(comparisonRange && comparisonMap && comparisonTotals);
+  const hotspots = useMemo(() => {
+    if (!comparisonMap || !data?.rows || data.rows.length === 0) return null;
+    const items: Array<{
+      key: string;
+      label: string;
+      deltaPax: number | null;
+      deltaFlights: number;
+      pct: number | null;
+    }> = [];
+    for (const row of data.rows) {
+      const prev = comparisonMap[row.key];
+      const curFlights = row.flights ?? 0;
+      const prevFlights = prev?.flights ?? 0;
+      const deltaFlights = curFlights - prevFlights;
+      const curPax = row.reported_pax ?? (curFlights === 0 ? 0 : null);
+      const prevPax = prev?.reported_pax ?? (prevFlights === 0 ? 0 : null);
+      const deltaPax = (curPax != null && prevPax != null) ? curPax - prevPax : null;
+      const pct = (deltaPax != null && prevPax && prevPax > 0)
+        ? (deltaPax / prevPax) * 100
+        : (prevFlights > 0 ? (deltaFlights / prevFlights) * 100 : null);
+      if (deltaPax != null && deltaPax !== 0) {
+        items.push({ key: row.key, label: row.label, deltaPax, deltaFlights, pct });
+      } else if (deltaFlights !== 0) {
+        items.push({ key: row.key, label: row.label, deltaPax: null, deltaFlights, pct });
+      }
+    }
+    const score = (item: (typeof items)[number]) => item.deltaPax != null ? item.deltaPax : item.deltaFlights;
+    const sorted = [...items].sort((a, b) => score(b) - score(a));
+    const topGainers = sorted.filter((item) => score(item) > 0).slice(0, 3);
+    const topDecliners = [...sorted].reverse().filter((item) => score(item) < 0).slice(0, 3);
+    return { topGainers, topDecliners };
+  }, [comparisonMap, data?.rows]);
   const topTitle = dimension === 'route' ? 'Top 10 chặng bay' : dimension === 'country' ? 'Top 10 Quốc gia' : 'Top 10 hãng hàng không';
   const exportHref = readVersion === 'v2' && expectedWatermark !== undefined && readVersionToken
     ? buildTrafficReportV2DimensionUrl(filter, dimension, scope, sort, 1, 732, expectedWatermark, readVersionToken, true)
@@ -229,6 +312,46 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
           </div>
 
           {error ? <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900" role="alert"><p className="font-semibold">Không thể tải bảng dữ liệu</p><p className="mt-1">{error}</p><button className="report-focus mt-3 min-h-11 rounded-lg bg-rose-800 px-4 font-bold text-white focus-visible:outline-blue-900 focus-visible:ring-2 focus-visible:ring-blue-900 focus-visible:ring-offset-2" type="button" onClick={() => void loadTable()}>Thử lại</button></div> : null}
+          {hasComparison && hotspots && (hotspots.topGainers.length > 0 || hotspots.topDecliners.length > 0) ? (
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">Điểm nóng biến động</h4>
+                <span className="text-[11px] text-slate-500">So với kỳ đối chiếu</span>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-emerald-200 bg-white p-3">
+                  <p className="text-xs font-bold text-emerald-800">Top 3 tăng trưởng</p>
+                  <ul className="mt-2 space-y-1.5 text-xs">
+                    {hotspots.topGainers.map((item) => (
+                      <li key={item.key} className="flex items-center justify-between text-slate-700">
+                        <span className="max-w-[65%] truncate font-medium" title={item.label}>{item.label}</span>
+                        <span className="tabular-nums font-semibold text-emerald-700">
+                          +{formatNumber(item.deltaPax != null ? item.deltaPax : item.deltaFlights)} {item.deltaPax != null ? 'khách' : 'chuyến'}
+                          {item.pct != null ? ` (+${percentFormat.format(item.pct)}%)` : ''}
+                        </span>
+                      </li>
+                    ))}
+                    {hotspots.topGainers.length === 0 ? <li className="text-slate-400">Không có biến động tăng</li> : null}
+                  </ul>
+                </div>
+                <div className="rounded-lg border border-rose-200 bg-white p-3">
+                  <p className="text-xs font-bold text-rose-800">Top 3 suy giảm</p>
+                  <ul className="mt-2 space-y-1.5 text-xs">
+                    {hotspots.topDecliners.map((item) => (
+                      <li key={item.key} className="flex items-center justify-between text-slate-700">
+                        <span className="max-w-[65%] truncate font-medium" title={item.label}>{item.label}</span>
+                        <span className="tabular-nums font-semibold text-rose-700">
+                          {formatNumber(item.deltaPax != null ? item.deltaPax : item.deltaFlights)} {item.deltaPax != null ? 'khách' : 'chuyến'}
+                          {item.pct != null ? ` (${percentFormat.format(item.pct)}%)` : ''}
+                        </span>
+                      </li>
+                    ))}
+                    {hotspots.topDecliners.length === 0 ? <li className="text-slate-400">Không có biến động giảm</li> : null}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          ) : null}
           <p id={tableScrollHintId} className="mt-4 text-xs text-slate-600 sm:sr-only print:hidden report-no-print">Vuốt ngang để xem đầy đủ các cột.</p>
           <div
             className="report-focus mt-2 overflow-x-auto rounded-lg focus-visible:outline-blue-900 focus-visible:ring-2 focus-visible:ring-blue-900 focus-visible:ring-offset-2 sm:mt-4 lg:overflow-visible"
@@ -243,25 +366,102 @@ export function TrafficReportDimensionSection({ kind, filter, scope, marketDimen
                 <tr className="border-b border-slate-300 bg-white text-slate-600 shadow-[0_1px_0_0_#cbd5e1]">
                   <th className="bg-white p-2">{groupLabel}</th>
                   <th className="w-28 bg-white p-2 text-right tabular-nums">Chuyến bay</th>
+                  {hasComparison ? <th className="w-28 bg-white p-2 text-right tabular-nums">Kỳ đối chiếu (CB)</th> : null}
+                  {hasComparison ? <th className="w-32 bg-white p-2 text-right tabular-nums">Chênh lệch CB</th> : null}
                   <th className="w-36 bg-white p-2 text-right tabular-nums">Tỷ trọng chuyến bay</th>
                   <th className="w-32 bg-white p-2 text-right tabular-nums">Sản lượng khách</th>
+                  {hasComparison ? <th className="w-32 bg-white p-2 text-right tabular-nums">Kỳ đối chiếu (Khách)</th> : null}
+                  {hasComparison ? <th className="w-40 bg-white p-2 text-right tabular-nums">Chênh lệch khách &amp; CTG</th> : null}
                   <th className="w-40 bg-white p-2 text-right tabular-nums">Tỷ trọng sản lượng khách</th>
+                  {hasComparison ? <th className="w-32 bg-white p-2 text-right tabular-nums">Δ tỷ trọng khách</th> : null}
                 </tr>
               </thead>
               <tbody>
                 {!loading && !error && visibleRows.map((row) => {
                   const displayLabel = /^unknown$/i.test(row.label.trim()) ? 'Chưa xác định' : row.label;
+                  const prev = comparisonMap ? comparisonMap[row.key] : undefined;
+                  const prevFlights = prev?.flights ?? 0;
+                  const curFlights = row.flights ?? 0;
+                  const deltaFlights = curFlights - prevFlights;
+                  const flightPct = prevFlights > 0 ? (deltaFlights / prevFlights) * 100 : null;
+                  const isNewFlight = (!prev || prev.flights === 0) && curFlights > 0;
+                  const isDroppedFlight = curFlights === 0 && prevFlights > 0;
+
+                  const prevPax = prev?.reported_pax ?? (prev?.flights === 0 ? 0 : null);
+                  const curPax = row.reported_pax;
+                  const deltaPax = (curPax != null && prevPax != null) ? curPax - prevPax : null;
+                  const paxPct = (deltaPax != null && prevPax && prevPax > 0) ? (deltaPax / prevPax) * 100 : null;
+                  const ctgPts = (deltaPax != null && comparisonTotals && comparisonTotals.pax > 0)
+                    ? (deltaPax / comparisonTotals.pax) * 100
+                    : null;
+
+                  const curPaxShare = row.pax_share;
+                  const prevPaxShare = prev?.pax_share;
+                  const deltaSharePts = (curPaxShare != null && prevPaxShare != null)
+                    ? (curPaxShare - prevPaxShare) * 100
+                    : null;
+
                   return (
                     <tr key={row.key} className="border-b border-slate-100">
                       <td className="p-2 font-semibold text-slate-800" title={displayLabel}>{displayLabel}</td>
                       <td className="w-28 p-2 text-right tabular-nums">{formatNumber(row.flights)}</td>
+                      {hasComparison ? (
+                        <td className="w-28 p-2 text-right tabular-nums text-slate-600">{formatNumber(prevFlights)}</td>
+                      ) : null}
+                      {hasComparison ? (
+                        <td className="w-32 p-2 text-right tabular-nums">
+                          {isNewFlight ? (
+                            <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800">Mới</span>
+                          ) : isDroppedFlight ? (
+                            <span className="inline-flex rounded-full bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-800">Ngừng</span>
+                          ) : deltaFlights === 0 ? (
+                            <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">0%</span>
+                          ) : (
+                            <span className={cn('inline-flex rounded-full px-2 py-0.5 text-xs font-semibold', deltaFlights > 0 ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800')}>
+                              {deltaFlights > 0 ? '+' : ''}{formatNumber(deltaFlights)} ({deltaFlights > 0 ? '+' : ''}{flightPct != null ? `${percentFormat.format(flightPct)}%` : ''})
+                            </span>
+                          )}
+                        </td>
+                      ) : null}
                       <td className="w-36 p-2 text-right tabular-nums">{formatShare(row.flight_share)}</td>
                       <td className="w-32 p-2 text-right tabular-nums">{formatNumber(row.reported_pax)}</td>
+                      {hasComparison ? (
+                        <td className="w-32 p-2 text-right tabular-nums text-slate-600">{formatNumber(prevPax)}</td>
+                      ) : null}
+                      {hasComparison ? (
+                        <td className="w-40 p-2 text-right tabular-nums">
+                          {deltaPax == null ? (
+                            '—'
+                          ) : (
+                            <div>
+                              <span className={cn('inline-flex rounded-full px-2 py-0.5 text-xs font-semibold', deltaPax > 0 ? 'bg-emerald-50 text-emerald-800' : deltaPax < 0 ? 'bg-rose-50 text-rose-800' : 'bg-slate-100 text-slate-700')}>
+                                {deltaPax > 0 ? '+' : ''}{formatNumber(deltaPax)} ({prevPax === 0 && curPax && curPax > 0 ? 'Mới' : `${deltaPax > 0 ? '+' : ''}${paxPct != null ? percentFormat.format(paxPct) : 0}%`})
+                              </span>
+                              {ctgPts != null && Number.isFinite(ctgPts) ? (
+                                <span className="mt-0.5 block text-[11px] text-slate-500 tabular-nums">
+                                  CTG {ctgPts > 0 ? '+' : ''}{percentFormat.format(ctgPts)}%
+                                </span>
+                              ) : null}
+                            </div>
+                          )}
+                        </td>
+                      ) : null}
                       <td className="w-40 p-2 text-right tabular-nums">{formatShare(row.pax_share)}</td>
+                      {hasComparison ? (
+                        <td className="w-32 p-2 text-right tabular-nums">
+                          {deltaSharePts == null || !Number.isFinite(deltaSharePts) ? (
+                            '—'
+                          ) : (
+                            <span className={cn('font-semibold', deltaSharePts > 0 ? 'text-emerald-700' : deltaSharePts < 0 ? 'text-rose-700' : 'text-slate-600')}>
+                              {deltaSharePts > 0 ? '+' : ''}{percentFormat.format(deltaSharePts)} điểm %
+                            </span>
+                          )}
+                        </td>
+                      ) : null}
                     </tr>
                   );
                 })}
-                {!loading && !error && visibleRows.length === 0 ? <tr><td className="p-4 text-sm text-slate-600" colSpan={5}>Chưa có dữ liệu trong phạm vi này.</td></tr> : null}
+                {!loading && !error && visibleRows.length === 0 ? <tr><td className="p-4 text-sm text-slate-600" colSpan={hasComparison ? 10 : 5}>Chưa có dữ liệu trong phạm vi này.</td></tr> : null}
               </tbody>
             </table>
           </div>

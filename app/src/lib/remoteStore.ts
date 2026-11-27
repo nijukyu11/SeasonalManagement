@@ -57,6 +57,15 @@ import {
   type OperatorSessionCheckpointOptions,
   type OperatorSessionRemoteOptions,
 } from './operatorSessionCacheRegistry';
+import {
+  setSeasonalDraftImportCommitting,
+  setSeasonalDraftImportUnknownCommit,
+  setSeasonalDraftImportUploading,
+  setSeasonalPublishActive,
+} from './seasonalMutationFences.ts';
+import { isTransportError } from './dailyImportChunkedUpload.ts';
+import { isStatementTimeoutError } from './supabaseErrorPolicy.ts';
+import { getSynchronousOperatorUserId } from './seasonalRestoreJournal.ts';
 
 export interface RemoteActor {
   uid?: string | null;
@@ -922,39 +931,57 @@ export function getSeasonalDraftExportSnapshotV1(
   });
 }
 
-export function stageSeasonalDraftImportV1(
+export async function stageSeasonalDraftImportV1(
   input: SeasonalDraftImportStageInput,
   options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
 ): Promise<SeasonalDraftImportResponse> {
-  return runOperatorSessionResourceOperation({
-    operatorSessionEpoch: options.operatorSessionEpoch,
-    acquire: getRemoteStore,
-    execute: (store) => {
-      if (!store.stageSeasonalDraftImportV1) throw new Error('stageSeasonalDraftImportV1 is unavailable in current store');
-      return store.stageSeasonalDraftImportV1(input);
-    },
-  });
+  setSeasonalDraftImportUploading(true);
+  try {
+    return await runOperatorSessionResourceOperation({
+      operatorSessionEpoch: options.operatorSessionEpoch,
+      acquire: getRemoteStore,
+      execute: (store) => {
+        if (!store.stageSeasonalDraftImportV1) throw new Error('stageSeasonalDraftImportV1 is unavailable in current store');
+        return store.stageSeasonalDraftImportV1(input);
+      },
+    });
+  } finally {
+    setSeasonalDraftImportUploading(false);
+  }
 }
 
-export function commitSeasonalDraftImportV1(
+export async function commitSeasonalDraftImportV1(
   input: { batchId: string; previewHash: string },
   options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
 ): Promise<SeasonalDraftImportResponse> {
-  return runOperatorSessionResourceOperation({
-    operatorSessionEpoch: options.operatorSessionEpoch,
-    acquire: getRemoteStore,
-    execute: (store) => {
-      if (!store.commitSeasonalDraftImportV1) throw new Error('commitSeasonalDraftImportV1 is unavailable in current store');
-      return store.commitSeasonalDraftImportV1(input);
-    },
-  });
+  const operatorId = getSynchronousOperatorUserId();
+  setSeasonalDraftImportCommitting(true);
+  try {
+    const res = await runOperatorSessionResourceOperation({
+      operatorSessionEpoch: options.operatorSessionEpoch,
+      acquire: getRemoteStore,
+      execute: (store) => {
+        if (!store.commitSeasonalDraftImportV1) throw new Error('commitSeasonalDraftImportV1 is unavailable in current store');
+        return store.commitSeasonalDraftImportV1(input);
+      },
+    });
+    setSeasonalDraftImportUnknownCommit(operatorId, false);
+    return res;
+  } catch (error) {
+    if (isTransportError(error) || isStatementTimeoutError(error)) {
+      setSeasonalDraftImportUnknownCommit(operatorId, true);
+    }
+    throw error;
+  } finally {
+    setSeasonalDraftImportCommitting(false);
+  }
 }
 
-export function getSeasonalDraftImportStatusV1(
+export async function getSeasonalDraftImportStatusV1(
   requestId: string,
   options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
 ): Promise<SeasonalDraftImportResponse> {
-  return runOperatorSessionResourceOperation({
+  const res = await runOperatorSessionResourceOperation({
     operatorSessionEpoch: options.operatorSessionEpoch,
     acquire: getRemoteStore,
     execute: (store) => {
@@ -962,13 +989,14 @@ export function getSeasonalDraftImportStatusV1(
       return store.getSeasonalDraftImportStatusV1(requestId);
     },
   });
+  setSeasonalDraftImportUnknownCommit(getSynchronousOperatorUserId(), false);
+  return res;
 }
-
-export function cancelSeasonalDraftImportV1(
+export async function cancelSeasonalDraftImportV1(
   batchId: string,
   options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
 ): Promise<SeasonalDraftImportResponse> {
-  return runOperatorSessionResourceOperation({
+  const res = await runOperatorSessionResourceOperation({
     operatorSessionEpoch: options.operatorSessionEpoch,
     acquire: getRemoteStore,
     execute: (store) => {
@@ -976,6 +1004,8 @@ export function cancelSeasonalDraftImportV1(
       return store.cancelSeasonalDraftImportV1(batchId);
     },
   });
+  setSeasonalDraftImportUnknownCommit(getSynchronousOperatorUserId(), false);
+  return res;
 }
 
 export function getSeasonalDraftImportPreviewV1(
@@ -1020,7 +1050,7 @@ export function getSeasonalPublishPreviewPageV1(
   });
 }
 
-export function commitSeasonalPublishV1(
+export async function commitSeasonalPublishV1(
   input: {
     seasonId: string;
     previewId: string;
@@ -1030,14 +1060,19 @@ export function commitSeasonalPublishV1(
   },
   options: OperatorSessionRemoteOptions = { operatorSessionEpoch: getOperatorSessionEpoch() },
 ): Promise<SeasonalPublishCommitResult> {
-  return runOperatorSessionResourceOperation({
-    operatorSessionEpoch: options.operatorSessionEpoch,
-    acquire: getRemoteStore,
-    execute: (store) => {
-      if (!store.commitSeasonalPublishV1) throw new Error('commitSeasonalPublishV1 is unavailable in current store');
-      return store.commitSeasonalPublishV1(input);
-    },
-  });
+  setSeasonalPublishActive(true);
+  try {
+    return await runOperatorSessionResourceOperation({
+      operatorSessionEpoch: options.operatorSessionEpoch,
+      acquire: getRemoteStore,
+      execute: (store) => {
+        if (!store.commitSeasonalPublishV1) throw new Error('commitSeasonalPublishV1 is unavailable in current store');
+        return store.commitSeasonalPublishV1(input);
+      },
+    });
+  } finally {
+    setSeasonalPublishActive(false);
+  }
 }
 
 export function getSeasonalPublishOperationalImpactPageV1(

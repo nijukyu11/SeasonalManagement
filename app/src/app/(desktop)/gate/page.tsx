@@ -1,9 +1,8 @@
 'use client';
 
-import { Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  applyOperationalResourceChangesV1,
   getOperationalScheduleAllocationWindowV1,
   getOperationalSettings,
   getSeasons,
@@ -28,6 +27,7 @@ import {
   type GateTimelineTicks,
 } from '@/lib/gateAllocation';
 import {
+  getCachedOperationalSettings,
   getCachedSeasons,
   patchCachedSeasonData,
   publishSeasonWorkspaceChanged,
@@ -44,6 +44,7 @@ import {
   findLatestSequencedModificationPatch,
   ganttInteractionArbiter,
 } from '@/lib/ganttInteractionArbiter';
+import { shouldReportOperationalLoadFailure } from '@/lib/operationalLoadFailure';
 import {
   buildOperationalDateRange,
   buildOperationalLegPatchAndPreimage,
@@ -62,6 +63,9 @@ import {
   getPendingOperationalMutation,
   setPendingOperationalMutation,
   clearPendingOperationalMutation,
+  commitOperationalResourceBatch,
+  isAuthoritativeSqlRejection,
+  type OperationalMutationResult,
 } from '@/lib/operationalScheduleAdapter';
 import { getSupabaseClient } from '@/lib/supabase';
 import type { SeasonChangeEvent } from '@/lib/seasonChangeEvents';
@@ -479,6 +483,12 @@ function GateAllocationContent() {
   const defaultRange = requestedRange ?? buildDefaultDailyDateRange(todayIso());
   const [fromDateTime, setFromDateTime] = useSessionState('gate:fromDateTime', defaultRange.from);
   const [toDateTime, setToDateTime] = useSessionState('gate:toDateTime', defaultRange.to);
+  const isRouteActiveRef = useRef(isRouteActive);
+  const currentRangeRef = useRef({ fromDateTime, toDateTime });
+  useLayoutEffect(() => {
+    isRouteActiveRef.current = isRouteActive;
+    currentRangeRef.current = { fromDateTime, toDateTime };
+  }, [fromDateTime, isRouteActive, toDateTime]);
   const initialGateRouteState = readInitialGateRouteState({ targetSeasonId, fromDateTime, toDateTime });
   const [seasons, setSeasons] = useState<Season[]>(() => initialGateRouteState?.seasons ?? []);
   const [season, setSeason] = useState<Season | null>(() => initialGateRouteState?.season ?? null);
@@ -487,7 +497,11 @@ function GateAllocationContent() {
     () => initialGateRouteState?.modifications ?? new Map()
   );
   const [optimisticGateAllocationView, setOptimisticGateAllocationView] = useState<GateAllocationView | null>(null);
-  const [settings, setSettings] = useState<OperationalSettings | null>(() => initialGateRouteState?.settings ?? null);
+  const [settings, setSettings] = useState<OperationalSettings | null>(() => initialGateRouteState?.settings ?? getCachedOperationalSettings() ?? null);
+  const settingsRef = useRef<OperationalSettings | null>(initialGateRouteState?.settings ?? getCachedOperationalSettings() ?? null);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
   const [loading, setLoading] = useState(() => !initialGateRouteState);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadProgress, setLoadProgress] = useState<LoadProgress>(() =>
@@ -536,6 +550,12 @@ function GateAllocationContent() {
   }, []);
   const pendingRevalidateOnSettleRef = useRef(false);
   const operationalRequestIdRef = useRef(0);
+  useEffect(() => {
+    const requestIds = operationalRequestIdRef;
+    return () => {
+      requestIds.current += 1;
+    };
+  }, []);
   const operationalStoreMutating = useOperationalScheduleStore((s) => s.mutating || s.importing || Boolean(s.unresolvedAttempt));
   const unresolvedAttempt = useOperationalScheduleStore((s) => s.unresolvedAttempt);
   const historySeqRef = useRef(0);
@@ -644,23 +664,53 @@ function GateAllocationContent() {
       const startDate = fromDateTime.slice(0, 10);
       const endDate = toDateTime.slice(0, 10);
       const requestedRangeKey = `${startDate}:${endDate}`;
-      const operationalResult = await loadFullOperationalScheduleWindow({
-        startDate,
-        endDate,
-        resourceType: 'gate',
-        fetchWindowFn: (p) => getOperationalScheduleAllocationWindowV1(p),
-      });
-      if (
-        operationalRequestIdRef.current !== requestId ||
-        !isRouteActive ||
-        `${fromDateTime.slice(0, 10)}:${toDateTime.slice(0, 10)}` !== requestedRangeKey
-      ) {
-        return null;
+      try {
+        const settingsPromise = (settingsRef.current && !options.revalidate)
+          ? Promise.resolve(settingsRef.current)
+          : getOperationalSettings({ force: Boolean(options.revalidate) }).catch((err) => {
+              console.warn('Failed to load operational settings', err);
+              return settingsRef.current ?? getCachedOperationalSettings() ?? null;
+            });
+
+        const [loadedSettings, operationalResult] = await Promise.all([
+          settingsPromise,
+          loadFullOperationalScheduleWindow({
+            startDate,
+            endDate,
+            resourceType: 'gate',
+            fetchWindowFn: (p) => getOperationalScheduleAllocationWindowV1(p),
+          }),
+        ]);
+
+        const currentRangeKey = `${currentRangeRef.current.fromDateTime.slice(0, 10)}:${currentRangeRef.current.toDateTime.slice(0, 10)}`;
+        if (
+          operationalRequestIdRef.current !== requestId ||
+          !isRouteActiveRef.current ||
+          currentRangeKey !== requestedRangeKey
+        ) {
+          return null;
+        }
+
+        const effectiveSettings = loadedSettings ?? settingsRef.current;
+        if (!effectiveSettings) {
+          throw new Error('Không thể tải cấu hình vận hành.');
+        }
+
+        settingsRef.current = effectiveSettings;
+        setSettings(effectiveSettings);
+        operationalSnapshotRef.current = operationalResult.snapshot;
+        useOperationalScheduleStore.setState({ snapshot: operationalResult.snapshot });
+        setFlightRecords(operationalResult.records);
+        replaceGateModifications(new Map());
+        setLoadProgress(buildLoadProgress('Đã tải lịch phân bổ cửa vận hành', 100, 'Sẵn sàng'));
+        setLoadError(null);
+        setLoading(false);
+        return operationalResult;
+      } finally {
+        if (operationalRequestIdRef.current === requestId && isRouteActiveRef.current) {
+          setLoading(false);
+        }
       }
-      operationalSnapshotRef.current = operationalResult.snapshot;
-      setFlightRecords(operationalResult.records);
-      replaceGateModifications(new Map());
-      return operationalResult;
     }
     if (!season) return;
     const windowKey = buildGateWindowKey(fromDateTime, toDateTime);
@@ -684,7 +734,7 @@ function GateAllocationContent() {
     });
     loadedWindowKeyRef.current = windowKey;
     return snapshot;
-  }, [clearOptimisticGateAllocationView, fromDateTime, isRouteActive, replaceGateModifications, season, toDateTime]);
+  }, [clearOptimisticGateAllocationView, fromDateTime, isRouteActive, replaceGateModifications, season, showAlert, toDateTime]);
 
   const tryApplyCachedGateRouteWindow = useCallback((): false | 'fresh' | 'stale' => {
     const storeState = useSeasonWorkspaceStore.getState();
@@ -717,7 +767,7 @@ function GateAllocationContent() {
     policy: 'on-activation',
     source: 'gate',
     onRefresh: async (event) => {
-      await refreshGateWindow({ revalidate: event.refreshMode === 'revalidate' });
+      await refreshGateWindow({ revalidate: event.refreshMode === 'revalidate' }).catch(() => undefined);
     },
   });
 
@@ -725,50 +775,32 @@ function GateAllocationContent() {
     let cancelled = false;
     (async () => {
       if (isOperationalScheduleV1Enabled()) {
-        if (!isRouteActive) return;
+        if (!isRouteActiveRef.current) return;
         setLoading(true);
         setLoadError(null);
-        const requestId = ++operationalRequestIdRef.current;
         const startDate = fromDateTime.slice(0, 10);
         const endDate = toDateTime.slice(0, 10);
-        const requestedRangeKey = `${startDate}:${endDate}`;
+        setLoadProgress(buildLoadProgress('Đang tải khoảng ngày vận hành', 40, `${startDate}..${endDate}`));
+        const refreshPromise = refreshGateWindow();
+        const requestId = operationalRequestIdRef.current;
         try {
-          const loadedSettings = await getOperationalSettings().catch(() => null);
-          if (cancelled || operationalRequestIdRef.current !== requestId || !isRouteActive) return;
-          if (loadedSettings) setSettings(loadedSettings);
-          setLoadProgress(buildLoadProgress('Đang tải khoảng ngày vận hành', 40, `${startDate}..${endDate}`));
-          const operationalResult = await loadFullOperationalScheduleWindow({
-            startDate,
-            endDate,
-            resourceType: 'gate',
-            fetchWindowFn: (p) => getOperationalScheduleAllocationWindowV1(p),
-          });
-          if (
-            cancelled ||
-            operationalRequestIdRef.current !== requestId ||
-            !isRouteActive ||
-            `${fromDateTime.slice(0, 10)}:${toDateTime.slice(0, 10)}` !== requestedRangeKey
-          ) {
-            return;
-          }
-          operationalSnapshotRef.current = operationalResult.snapshot;
-          setFlightRecords(operationalResult.records);
-          replaceGateModifications(new Map());
-          setLoading(false);
-          return;
+          await refreshPromise;
         } catch (err) {
-          console.error('Error loading operational gate schedule', err);
-          if (!cancelled && operationalRequestIdRef.current === requestId && isRouteActive) {
+          const currentRangeKey = `${currentRangeRef.current.fromDateTime.slice(0, 10)}:${currentRangeRef.current.toDateTime.slice(0, 10)}`;
+          if (shouldReportOperationalLoadFailure({
+            requestId,
+            currentRequestId: operationalRequestIdRef.current,
+            cancelled,
+            routeActive: isRouteActiveRef.current,
+            requestRangeKey: `${startDate}:${endDate}`,
+            currentRangeKey,
+          })) {
             const message = formatUiError(err, 'Không thể tải Lịch phân bổ cửa vận hành.');
             setLoadError(message);
             void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
           }
-          return;
-        } finally {
-          if (!cancelled && operationalRequestIdRef.current === requestId) {
-            setLoading(false);
-          }
         }
+        return;
       }
       const cachedState = tryApplyCachedGateRouteWindow();
       if (cachedState === 'fresh') return;
@@ -864,8 +896,9 @@ function GateAllocationContent() {
     })();
     return () => {
       cancelled = true;
+      ++operationalRequestIdRef.current;
     };
-  }, [clearOptimisticGateAllocationView, fromDateTime, isRouteActive, replaceGateModifications, router, showAlert, targetSeasonId, toDateTime, tryApplyCachedGateRouteWindow]);
+  }, [clearOptimisticGateAllocationView, fromDateTime, isRouteActive, refreshGateWindow, replaceGateModifications, router, showAlert, targetSeasonId, toDateTime, tryApplyCachedGateRouteWindow]);
   useEffect(() => {
     if (!isOperationalScheduleV1Enabled() || !isRouteActive) return;
     const client = getSupabaseClient();
@@ -883,8 +916,9 @@ function GateAllocationContent() {
           pendingRevalidateOnSettleRef.current = true;
           return;
         }
-
-        void refreshGateWindow({ revalidate: true });
+        void refreshGateWindow({ revalidate: true }).catch((err) => {
+          console.error('Error refreshing gate window on date invalidated', err);
+        });
       },
       onReconnect: () => {
         const storeState = useOperationalScheduleStore.getState();
@@ -892,7 +926,9 @@ function GateAllocationContent() {
           pendingRevalidateOnSettleRef.current = true;
           return;
         }
-        void refreshGateWindow({ revalidate: true });
+        void refreshGateWindow({ revalidate: true }).catch((err) => {
+          console.error('Error refreshing gate window on reconnect', err);
+        });
       },
     });
     return () => {
@@ -905,7 +941,9 @@ function GateAllocationContent() {
     if (operationalMutating || operationalStoreMutating) return;
     if (pendingRevalidateOnSettleRef.current) {
       pendingRevalidateOnSettleRef.current = false;
-      void refreshGateWindow({ revalidate: true });
+      void refreshGateWindow({ revalidate: true }).catch((err) => {
+        console.error('Error refreshing gate window after settle', err);
+      });
     }
   }, [isRouteActive, operationalMutating, operationalStoreMutating, refreshGateWindow]);
 
@@ -1386,23 +1424,50 @@ function GateAllocationContent() {
     setOperationalMutating(true);
     try {
       const outcome = await useOperationalScheduleStore.getState().retryPendingMutation();
+      if (outcome && 'receipt' in outcome && outcome.receipt) {
+        if (outcome.receipt.status === 'committed') {
+          if (outcome.receipt.revision) {
+            operationalSnapshotRef.current = {
+              revision: outcome.receipt.revision,
+              token: '',
+            };
+            useOperationalScheduleStore.setState({
+              snapshot: { revision: outcome.receipt.revision, token: '' },
+            });
+          }
+        }
+      }
       if (outcome && 'refreshError' in outcome && outcome.refreshError) {
         void showAlert({ title: 'Đã lưu nhưng chưa tải lại được', message: formatUiError(outcome.refreshError), tone: 'warning' });
       } else {
         await refreshGateWindow({ revalidate: true });
       }
     } catch (err) {
+      if (isAuthoritativeSqlRejection(err)) {
+        clearOptimisticGateAllocationView();
+        void refreshGateWindow().catch(() => undefined);
+      }
       void showAlert({ title: 'Thử lại thất bại', message: formatUiError(err), tone: 'error' });
     } finally {
       setOperationalMutating(false);
     }
-  }, [refreshGateWindow, setOperationalMutating, showAlert]);
+  }, [clearOptimisticGateAllocationView, refreshGateWindow, setOperationalMutating, showAlert]);
 
 
   const commitGateModificationBatch = useCallback(async (mods: FlightModification[], description: string) => {
     if (isOperationalScheduleV1Enabled()) {
       if (mods.length === 0) return;
-      if (operationalMutatingRef.current || useOperationalScheduleStore.getState().mutating || useOperationalScheduleStore.getState().importing) {
+      if (
+        operationalMutatingRef.current ||
+        useOperationalScheduleStore.getState().mutating ||
+        useOperationalScheduleStore.getState().importing ||
+        Boolean(useOperationalScheduleStore.getState().unresolvedAttempt)
+      ) {
+        void showAlert({
+          title: 'Thao tác đang bị tạm khóa',
+          message: 'Thao tác vận hành trước đó chưa được xác nhận trên máy chủ hoặc đang được xử lý. Vui lòng bấm Thử lại ở thanh cảnh báo trước khi thực hiện thao tác mới.',
+          tone: 'warning',
+        });
         return;
       }
       const patches = mods
@@ -1416,28 +1481,12 @@ function GateAllocationContent() {
         .filter((p): p is NonNullable<typeof p> => p !== null);
 
       if (patches.length === 0) return;
-      const currentPayload = JSON.stringify(patches);
-      let requestId = crypto.randomUUID();
-      let expectedRevision = operationalSnapshotRef.current?.revision ?? '0';
 
-      const pending = getPendingOperationalMutation();
-      if (pending && pending.kind === 'apply_resource' && pending.serializedPayload === currentPayload) {
-        requestId = pending.requestId;
-        expectedRevision = pending.expectedRevision;
-      } else if (pending) {
-        throw new Error('Thao tác vận hành trước đó chưa được xác nhận. Hãy thử lại thao tác đó trước khi thực hiện thao tác mới.');
-      } else {
-        setPendingOperationalMutation({
-          kind: 'apply_resource',
-          requestId,
-          expectedRevision,
-          serializedPayload: currentPayload,
-        });
-      }
+      const requestId = crypto.randomUUID();
+      const expectedRevision = operationalSnapshotRef.current?.revision ?? '0';
 
       operationalMutatingRef.current = true;
       setOperationalMutating(true);
-      useOperationalScheduleStore.setState({ mutating: true });
 
       const previousModifications = new Map(latestGateModificationsRef.current);
       for (const mod of mods) {
@@ -1452,68 +1501,36 @@ function GateAllocationContent() {
       }
 
       try {
-        let receipt: OperationalMutationReceipt;
+        let result: OperationalMutationResult;
         try {
-          const request = {
-            requestId,
-            expectedRevision,
+          result = await commitOperationalResourceBatch({
             changes: patches,
-          };
-          rememberOperationalMutationRequestId(request.requestId);
-          let unknownFailureCount = 0;
-          while (true) {
-            try {
-              receipt = await applyOperationalResourceChangesV1(request);
-              break;
-            } catch (error) {
-              const rawCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
-                ? error.code.trim().toUpperCase()
-                : null;
-              const isAuthoritativeSql = rawCode !== null
-                && /^[0-9A-Z]{5}$/.test(rawCode)
-                && !rawCode.startsWith('08')
-                && !rawCode.startsWith('57');
-
-              if (isAuthoritativeSql) {
-                throw error;
-              }
-
-              unknownFailureCount += 1;
-              if (unknownFailureCount > 1) {
-                const message = formatUiError(error);
-                await showAlert({
-                  title: 'Chưa rõ trạng thái cập nhật cửa',
-                  message: `Đã xảy ra lỗi kết nối khi lưu thay đổi cửa (${message}). Không thể xác định kết quả trên máy chủ. Chọn OK để thử xác nhận lại thay đổi.`,
-                  tone: 'warning',
-                });
-              }
-            }
-          }
-        } catch (rpcErr) {
-          const rawCode = rpcErr && typeof rpcErr === 'object' && 'code' in rpcErr && typeof rpcErr.code === 'string'
-            ? rpcErr.code.trim().toUpperCase()
-            : null;
-          const isAuthoritativeSql = rawCode !== null
-            && /^[0-9A-Z]{5}$/.test(rawCode)
-            && !rawCode.startsWith('08')
-            && !rawCode.startsWith('57');
-          if (isAuthoritativeSql) {
-            clearPendingOperationalMutation(requestId);
-          }
-          latestGateModificationsRef.current = previousModifications;
-          setModifications(previousModifications);
-          clearOptimisticGateAllocationView();
-          void refreshGateWindow().catch(() => undefined);
-          void showAlert({
-            title: 'Cập nhật phân bổ cửa thất bại',
-            message: formatUiError(rpcErr),
-            tone: 'error',
+            expectedRevision,
+            requestId,
           });
+        } catch (rpcErr) {
+          const pending = getPendingOperationalMutation();
+          if (isAuthoritativeSqlRejection(rpcErr) || !pending) {
+            latestGateModificationsRef.current = previousModifications;
+            setModifications(previousModifications);
+            clearOptimisticGateAllocationView();
+            void refreshGateWindow().catch(() => undefined);
+            void showAlert({
+              title: 'Cập nhật phân bổ cửa thất bại',
+              message: formatUiError(rpcErr),
+              tone: 'error',
+            });
+            return;
+          }
+          // Transport error / unconfirmed write:
+          // Active mutating released in finally.
+          // unresolvedAttempt preserved in store journal for banner retry.
+          // Optimistic modifications preserved.
           return;
         }
 
+        const receipt = result.receipt;
         if (receipt.status !== 'committed') {
-          clearPendingOperationalMutation(requestId);
           latestGateModificationsRef.current = previousModifications;
           setModifications(previousModifications);
           clearOptimisticGateAllocationView();
@@ -1526,27 +1543,37 @@ function GateAllocationContent() {
           return;
         }
 
-        clearPendingOperationalMutation(requestId);
         if (receipt.revision) {
           operationalSnapshotRef.current = {
             revision: receipt.revision,
             token: operationalSnapshotRef.current?.token ?? '',
           };
-        }
-
-        try {
-          await refreshGateWindow({ revalidate: true });
-        } catch (refreshErr) {
-          console.error('Failed to refresh gate window after commit', refreshErr);
-          void showAlert({
-            title: 'Tải lại giao diện thất bại',
-            message: `Các thay đổi đã được lưu (phiên bản ${receipt.revision}), nhưng không thể tải lại màn hình phân bổ cửa: ${formatUiError(refreshErr)}`,
-            tone: 'warning',
+          useOperationalScheduleStore.setState({
+            snapshot: { revision: receipt.revision, token: '' },
           });
         }
+
+        if (result.refreshError) {
+          void showAlert({
+            title: 'Đã lưu nhưng chưa tải lại được',
+            message: formatUiError(result.refreshError),
+            tone: 'warning',
+          });
+        } else {
+          try {
+            await refreshGateWindow({ revalidate: true });
+          } catch (refreshErr) {
+            console.error('Failed to refresh gate window after commit', refreshErr);
+            void showAlert({
+              title: 'Tải lại giao diện thất bại',
+              message: `Các thay đổi đã được lưu (phiên bản ${receipt.revision}), nhưng không thể tải lại màn hình phân bổ cửa: ${formatUiError(refreshErr)}`,
+              tone: 'warning',
+            });
+          }
+        }
       } finally {
+        operationalMutatingRef.current = false;
         setOperationalMutating(false);
-        useOperationalScheduleStore.setState({ mutating: false });
       }
       return;
     }
@@ -1846,7 +1873,13 @@ function GateAllocationContent() {
   const fetchServerData = useCallback(async () => {
     if (isWriteInProgress) return;
     if (isOperationalScheduleV1Enabled()) {
-      await refreshGateWindow({ revalidate: true });
+      try {
+        await refreshGateWindow({ revalidate: true });
+      } catch (err) {
+        const message = formatUiError(err, 'Không thể tải lại Lịch phân bổ cửa vận hành.');
+        setLoadError(message);
+        void showAlert({ title: 'Tải dữ liệu thất bại', message, tone: 'error' });
+      }
       return;
     }
     if (!season || fetchingServerData || syncInProgress) return;

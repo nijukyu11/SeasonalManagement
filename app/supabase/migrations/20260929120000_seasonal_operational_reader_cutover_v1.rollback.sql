@@ -24,6 +24,7 @@ begin
 end;
 $$;
 
+
 -- 2. Drop legacy writer fencing triggers and trigger function
 drop trigger if exists guard_legacy_writer_cutover on public.season_flight_records;
 drop trigger if exists guard_legacy_writer_cutover on public.season_modifications;
@@ -176,6 +177,8 @@ begin
     v_fn := replace(v_fn, 'FUNCTION reporting.legacy_get_public_traffic_canonical_bounds_v1', 'FUNCTION reporting.get_public_traffic_canonical_bounds_v1');
     execute v_fn;
     drop function reporting.legacy_get_public_traffic_canonical_bounds_v1();
+    revoke execute on function reporting.get_public_traffic_canonical_bounds_v1() from public, anon, authenticated, service_role;
+    alter function reporting.get_public_traffic_canonical_bounds_v1() owner to postgres;
   end if;
 end;
 $$;
@@ -962,8 +965,8 @@ begin
           'aircraft_group_key', lower(replace(grouped.aircraft_group, ' ', '-')),
           'aircraft_group', grouped.aircraft_group,
           'flights', grouped.flights,
-          'arrivals', arrivals,
-          'departures', departures,
+          'arrivals', grouped.arrivals,
+          'departures', grouped.departures,
           'reported_pax', grouped.reported_pax,
           'share', grouped.flights::numeric / nullif(totals.flights, 0),
           'suppressed', false
@@ -1082,7 +1085,71 @@ grant execute on function public.get_public_annual_passenger_kpi_version_v1(inte
 revoke execute on function public.get_public_annual_passenger_kpi_v1(integer, date) from public, anon, authenticated;
 grant execute on function public.get_public_annual_passenger_kpi_v1(integer, date) to service_role;
 revoke execute on function reporting.select_public_dashboard_candidate_v1(timestamptz) from public, anon, authenticated, service_role;
-grant execute on function reporting.select_public_dashboard_candidate_v1(timestamptz) to service_role;
 revoke execute on function public.publish_public_dashboard_daily_v1(integer, date, bigint, text, text, text) from public, anon, authenticated;
 grant execute on function public.publish_public_dashboard_daily_v1(integer, date, bigint, text, text, text) to service_role;
+-- 1.5 Restore captured preimage definitions, owners, and exact ACLs
+do $$
+declare
+  r record;
+  v_sql text;
+  v_acl record;
+  v_identity text;
+  v_role text;
+begin
+  if exists (
+    select 1 from information_schema.tables
+    where table_schema = 'reporting' and table_name = 'operational_projection_migration_preimages_v1'
+  ) then
+    for r in
+      select function_schema, function_name, function_signature, function_definition, function_owner, function_acl
+      from reporting.operational_projection_migration_preimages_v1
+      where migration_tag = '20260929120000'
+      order by function_name
+    loop
+      -- Execute the exact captured source text
+      execute r.function_definition;
+
+      -- Restore owner
+      v_sql := format('alter function %I.%I(%s) owner to %I', r.function_schema, r.function_name, r.function_signature, r.function_owner);
+      execute v_sql;
+
+      v_identity := format('%I.%I(%s)', r.function_schema, r.function_name, r.function_signature);
+      for v_acl in
+        select distinct a.grantee
+        from pg_proc p
+        cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+        where p.oid = v_identity::regprocedure
+      loop
+        v_role := case when v_acl.grantee = 0 then 'PUBLIC' else quote_ident(pg_get_userbyid(v_acl.grantee)) end;
+        execute format('revoke all on function %s from %s', v_identity, v_role);
+      end loop;
+      for v_acl in
+        select a.* from pg_roles owner_role
+        cross join lateral aclexplode(coalesce(r.function_acl::aclitem[], acldefault('f', owner_role.oid))) a
+        where owner_role.rolname = r.function_owner
+      loop
+        v_role := case when v_acl.grantee = 0 then 'PUBLIC' else quote_ident(pg_get_userbyid(v_acl.grantee)) end;
+        execute format('grant %s on function %s to %s%s', v_acl.privilege_type, v_identity, v_role,
+          case when v_acl.is_grantable then ' with grant option' else '' end);
+      end loop;
+    end loop;
+  end if;
+end;
+$$;
+
+-- 11. Cleanup M10 migration preimages
+do $$
+begin
+  if exists (
+    select 1 from information_schema.tables
+    where table_schema = 'reporting' and table_name = 'operational_projection_migration_preimages_v1'
+  ) then
+    delete from reporting.operational_projection_migration_preimages_v1
+    where migration_tag = '20260929120000';
+    if not exists (select 1 from reporting.operational_projection_migration_preimages_v1) then
+      drop table reporting.operational_projection_migration_preimages_v1;
+    end if;
+  end if;
+end;
+$$;
 commit;

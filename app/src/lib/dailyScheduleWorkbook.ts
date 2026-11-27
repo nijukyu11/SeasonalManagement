@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 
 export type DailyImportRawRow = Record<string, unknown>;
 
-export type DailyWorkbookProfile = 'legacy-operationalturns' | 'compact-lb' | 'position-compatible-unknown';
+export type DailyWorkbookProfile = 'legacy-operationalturns' | 'compact-lb' | 'summary-19' | 'position-compatible-unknown';
 
 export interface DailyWorkbookDiagnostic {
   severity: 'blocking' | 'warning';
@@ -56,6 +56,9 @@ const ANCHORS: Array<{ index: number; aliases: string[] }> = [
   { index: 38, aliases: ['CheckInDesk', 'Counters'] },
   { index: 40, aliases: ['DEPStand', 'Dep Stand'] },
 ];
+
+const SUMMARY_HEADERS = ['Type', 'Flight', 'Config', 'STA/STD', 'Routes', 'TTL Pax', 'Load Factor',
+  'Airlines', 'Ops Date', 'Country', 'A/C Type', 'Stand', 'Carousel', 'Gate', 'Counters', 'MCT', 'FB', 'LB', 'GHS'];
 
 function normalizedHeader(value: unknown): string {
   return String(value ?? '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '');
@@ -113,6 +116,41 @@ function findSheetCandidate(
     blankrows: true,
   });
   const sheetRange = XLSX.utils.decode_range(sheet['!ref'] ?? 'A1:A1');
+  for (let headerRowIndex = 0; headerRowIndex < Math.min(HEADER_SCAN_ROWS, matrix.length); headerRowIndex += 1) {
+    const header = matrix[headerRowIndex] ?? [];
+    for (let start = 0; start <= header.length - SUMMARY_HEADERS.length; start += 1) {
+      if (!SUMMARY_HEADERS.every((name, index) => matches(header[start + index], [name]))) continue;
+      const rows = matrix.slice(headerRowIndex + 1)
+        .filter(row => row.some(value => value != null && String(value).trim() !== ''))
+        .map(row => {
+          const value = (index: number) => row[start + index] ?? null;
+          const type = String(value(0) ?? '').trim().toUpperCase();
+          const side = type === 'D' ? 'DEP' : 'ARR';
+          const result: DailyImportRawRow = {
+            'Summary-Type': type,
+            [`${side}-OperationalDate`]: canonicalCellValue(value(8), 'ARR-Scheduled', date1904),
+            AIRCRAFT_SERIES: value(10),
+            [`${side}-AIRLINE_FLIGHT_SUFFIX`]: value(1),
+            [`${side}-Scheduled`]: canonicalCellValue(value(3), `${side}-Scheduled`, date1904),
+            [`${side}-ORIG_DEST_AIRPORT_CODE`]: value(4),
+            [`${side}-PAX_TOTAL`]: value(5),
+            [`${side}Stand`]: value(11),
+            [`${side}-MCT`]: canonicalCellValue(value(15), `${side}-MCT`, date1904),
+          };
+          if (side === 'ARR') {
+            result.ARRReclaimBelt = value(12);
+            result['ARR-BagFirst'] = canonicalCellValue(value(16), 'ARR-BagFirst', date1904);
+            result['ARR-BagLast'] = canonicalCellValue(value(17), 'ARR-BagLast', date1904);
+          } else {
+            result.DEPGate = value(13);
+            result.CheckInDesk = value(14);
+          }
+          return result;
+        });
+      return { sheetName, headerRowIndex: sheetRange.s.r + headerRowIndex,
+        firstLogicalColumnIndex: sheetRange.s.c + start, profile: 'summary-19', score: SUMMARY_HEADERS.length, rows };
+    }
+  }
   let best: Omit<DailyWorkbookSheetCandidate, 'sheetName' | 'profile' | 'rows'> | null = null;
   for (let headerRowIndex = 0; headerRowIndex < Math.min(HEADER_SCAN_ROWS, matrix.length); headerRowIndex += 1) {
     const row = matrix[headerRowIndex] ?? [];
@@ -185,7 +223,7 @@ export function analyzeDailyScheduleWorkbook(workbook: XLSX.WorkBook): DailyWork
       diagnostics: [{
         severity: 'blocking',
         code: 'DAILY_WORKBOOK_LAYOUT_NOT_FOUND',
-        message: 'Không tìm thấy bảng Daily Schedule có đúng vị trí 43 trường nghiệp vụ.',
+        message: 'Không tìm thấy bảng Daily Schedule 43 trường hoặc bảng Summary 19 cột hợp lệ.',
         sheetName: null,
         rowNumber: null,
         cellAddress: null,

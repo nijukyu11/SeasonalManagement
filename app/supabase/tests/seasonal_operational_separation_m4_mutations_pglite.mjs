@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { buildM0Fixture, M0_FIXTURE } from './seasonal_operational_separation_fixture.mjs';
+import { rollbackChainMigrationsAfter } from './seasonal_operational_separation_test_support.mjs';
 const ctx = await buildM0Fixture();
 const { db, asWriter, asAdmin } = ctx;
 const migration = new URL('../migrations/20260928170000_operational_mutations_v1.sql',import.meta.url);
@@ -12,6 +13,7 @@ const apply = async (request,revision,changes) => (await result(`select public.a
 const reject = async (fn,code) => assert.rejects(fn,e=>e.code===code);
 try {
   // Empty-table rollback/reapply restores prior functions and retains legacy data.
+  await rollbackChainMigrationsAfter(db, '20260929120000_seasonal_operational_reader_cutover_v1.sql');
   await db.exec(await readFile(new URL('../migrations/20260928210000_seasonal_publish_v1.rollback.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../migrations/20260928200000_seasonal_draft_import_v1.rollback.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../migrations/20260928190000_seasonal_planning_v1.rollback.sql',import.meta.url),'utf8'));

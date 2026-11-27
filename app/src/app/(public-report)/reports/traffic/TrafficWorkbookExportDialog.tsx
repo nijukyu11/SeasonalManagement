@@ -23,7 +23,7 @@ type ExportStage = 'idle' | 'normalizing' | 'capturing' | 'rendering' | 'done';
 
 const dateFormat = new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
 const enabledReportTypes = new Set((process.env.NEXT_PUBLIC_TRAFFIC_WORKBOOK_ENABLED_REPORT_TYPES ?? '').split(',').map((value) => value.trim()).filter(Boolean));
-const reportTypeOrder: TrafficWorkbookReportType[] = ['MASTER_OPERATIONS', 'MONTHLY_OVERVIEW_L2', 'WEEKLY_DETAIL', 'PERIOD_ANALYSIS', 'BAO_CAO_SAN_LUONG'];
+const reportTypeOrder: TrafficWorkbookReportType[] = ['MONTHLY_OVERVIEW_L2', 'WEEKLY_DETAIL', 'PERIOD_ANALYSIS', 'BAO_CAO_SAN_LUONG'];
 const htmlEnabled = process.env.NEXT_PUBLIC_TRAFFIC_HTML_EXPORT_ENABLED === 'true';
 
 function formatDate(value: string): string {
@@ -40,7 +40,7 @@ function CloseIcon() {
 
 function initialDraft(filter: NormalizedTrafficReportFilter): TrafficWorkbookExportDraft {
   const month = filter.to.slice(0, 7);
-  const reportType = reportTypeOrder.find((value) => enabledReportTypes.size === 0 || enabledReportTypes.has(value)) ?? 'MASTER_OPERATIONS';
+  const reportType = (enabledReportTypes.size > 0 ? reportTypeOrder.find((value) => enabledReportTypes.has(value)) : reportTypeOrder[0]) ?? 'MONTHLY_OVERVIEW_L2';
   return {
     reportType,
     periodMode: reportType === 'MONTHLY_OVERVIEW_L2' ? 'month' : reportType === 'BAO_CAO_SAN_LUONG' ? 'season' : 'custom',
@@ -264,7 +264,7 @@ export function TrafficWorkbookExportDialog({ filter, minOpsDate, maxOpsDate }: 
                   ['WEEKLY_DETAIL', 'Báo cáo tuần chi tiết', '8 sheet; tự động kèm 7 ngày trước và 7 ngày sau kỳ đã chọn.'],
                   ['PERIOD_ANALYSIS', 'Phân tích theo kỳ', '7 sheet; chọn tháng, nhiều tháng, mùa, năm hoặc khoảng ngày và nhiều năm cùng kỳ.'],
                   ['BAO_CAO_SAN_LUONG', 'Báo cáo sản lượng theo mẫu', '11 sheet theo bố cục BaoCaoSanLuong.'],
-                ] as const).filter(([value]) => enabledReportTypes.size === 0 || enabledReportTypes.has(value)).map(([value, label, description]) => <label key={value} className={cn('cursor-pointer rounded-xl border p-4', draft.reportType === value ? 'border-blue-800 bg-blue-50' : 'border-slate-300 bg-white')}>
+                ] as const).filter(([value]) => enabledReportTypes.size > 0 ? enabledReportTypes.has(value) : reportTypeOrder.includes(value)).map(([value, label, description]) => <label key={value} className={cn('cursor-pointer rounded-xl border p-4', draft.reportType === value ? 'border-blue-800 bg-blue-50' : 'border-slate-300 bg-white')}>
                   <input className="report-focus mr-2" type="radio" name="report-type" value={value} checked={draft.reportType === value} onChange={() => updateReportType(value)} />
                   <span className="font-bold text-blue-950">{label}</span>
                   <span className="mt-1 block text-pretty text-xs leading-5 text-slate-600">{output === 'html' ? value === 'WEEKLY_DETAIL' ? 'Bảng tương tác với kỳ chọn, 7 ngày trước và 7 ngày sau.' : value === 'BAO_CAO_SAN_LUONG' ? 'Tổng hợp, tuần, tháng và hai bảng Analysis.' : 'Bảng tương tác theo thời gian, hãng, thị trường, chặng, tàu bay, giờ và tần suất.' : description}</span>

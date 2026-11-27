@@ -284,3 +284,27 @@ test('dimension section uses sticky thead with filter bar offset and fixed numer
   assert.match(dimensionSource, /w-40 bg-white p-2 text-right tabular-nums/);
   assert.match(dimensionSource, /lg:overflow-visible/);
 });
+
+test('overview renders executive verdict banner with average pax per flight and market insights', () => {
+  assert.match(clientSource, /report-verdict-banner/);
+  assert.match(clientSource, /Nhận định tổng quan kỳ báo cáo/);
+  assert.match(clientSource, /current\?\.reported_legs \?\? bundle\?\.kpis\.pax_coverage\.reported_legs \?\? null/);
+  assert.match(clientSource, /Math\.round\(current\.reported_pax \/ currentReportedLegs\)/);
+  assert.match(clientSource, /Khách TB\/chuyến/);
+});
+
+test('client tracks dynamic sticky filter bar height via ResizeObserver', () => {
+  assert.match(clientSource, /data-report-sticky-bar/);
+  assert.match(clientSource, /--report-filter-bar-height/);
+  assert.match(clientSource, /new ResizeObserver/);
+});
+
+test('workbook dialog defaults to MONTHLY_OVERVIEW_L2 and hides MASTER_OPERATIONS unless enabled', () => {
+  assert.match(workbookDialogSource, /reportTypeOrder:\s*TrafficWorkbookReportType\[\]\s*=\s*\['MONTHLY_OVERVIEW_L2'/);
+  assert.match(workbookDialogSource, /enabledReportTypes\.size > 0 \? enabledReportTypes\.has\(value\) : reportTypeOrder\.includes\(value\)/);
+});
+
+test('monthly trend table supports print preload and full expansion', () => {
+  assert.match(trendTableSource, /Mở toàn bộ chi tiết tháng/);
+  assert.match(trendTableSource, /window\.addEventListener\('beforeprint', handleBeforePrint\)/);
+});

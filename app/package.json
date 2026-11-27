@@ -1,6 +1,6 @@
 {
   "name": "app",
-  "version": "0.1.33",
+  "version": "0.1.34",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,11 +8,12 @@
     "build": "next build",
     "build:traffic-report": "node scripts/build-traffic-report-only.mjs",
     "generate:kpi-pin-hash": "node scripts/generate-annual-kpi-pin-hash.mjs",
-    "test:dashboard-contract": "node --experimental-strip-types --test src/lib/operationalDashboardAnalysis.test.ts \"src/app/(desktop)/dashboard/components/TrafficReportModePanel.source.test.ts\" && node --test scripts/dashboard-reporting-behavioral.cjs",
+    "test:dashboard-contract": "node --experimental-strip-types --test src/lib/operationalDashboardAnalysis.test.ts && node --test scripts/dashboard-reporting-behavioral.cjs",
+    "test:checkin-behavioral": "node --test scripts/checkin-workspace-refresh-behavioral.cjs",
     "test:traffic-report-contract": "node --experimental-strip-types --test src/lib/trafficReportContract.test.ts src/lib/trafficReportV2Contract.test.ts src/lib/trafficReportDataAdapter.test.ts src/lib/annualPassengerKpiContract.test.ts && node --experimental-strip-types --test \"src/app/(public-report)/reports/traffic/TrafficReportPresentation.source.test.ts\" \"src/app/(public-report)/reports/traffic/dashboard/AnnualPassengerKpiDashboard.source.test.ts\" && node --experimental-strip-types --test src/lib/trafficReportOperationalHours.test.ts && node supabase/tests/public_traffic_report_v1_pglite.mjs && node scripts/traffic-report-edge-contract.test.mjs && node scripts/traffic-report-isolation-test.mjs && node --test scripts/dashboard-runner-contract.test.mjs",
     "test:canonical-acceleration": "node supabase/tests/canonical_flight_legs_acceleration_pglite.mjs",
     "test:traffic-pivot-improvements": "node --experimental-strip-types scripts/test-traffic-pivot-improvements.mjs",
-    "test:rules": "node scripts/rule-regression-tests.cjs",
+    "test:rules": "node scripts/rule-regression-tests.cjs && npm run test:checkin-behavioral",
     "test:daily-import": "node --experimental-strip-types --test src/lib/dailyScheduleWorkbook.test.ts src/lib/dailyImportV1Contract.test.ts src/lib/dailyImportRpcContract.source.test.ts src/lib/dailyPaxAutosaveContract.test.ts src/lib/dailyImportCoverage.test.cjs",
     "test:atomic-flight": "node --experimental-strip-types --test src/lib/effectiveSeasonalLegs.test.ts src/lib/seasonalAtomicFlightContract.source.test.ts",
     "test:daily-import-sql": "node supabase/tests/daily_schedule_import_v1_pglite.mjs",
@@ -24,6 +25,7 @@
     "test:duplicate-flight-day-repair": "node supabase/tests/duplicate_flight_day_repair_pglite.mjs",
     "test:seasonal-import-daily-duplicate-guard": "node supabase/tests/seasonal_import_daily_duplicate_guard_pglite.mjs",
     "test:seasonal-import-duplicate-resolution": "node supabase/tests/seasonal_import_duplicate_resolution_pglite.mjs",
+    "test:seasonal-import-daily-authority-layering": "node supabase/tests/seasonal_import_daily_authority_layering_pglite.mjs",
     "test:seasonal-canonical-authority": "node supabase/tests/seasonal_rebuild_daily_authority_pglite.mjs",
     "shadow:daily-import-v1": "node scripts/daily-import-v1-shadow.cjs",
     "test:seasonal-import-sql": "node supabase/tests/seasonal_source_import_v2_pglite.mjs",
@@ -64,7 +66,9 @@
     "test:seasonal-operational-m7-publish": "node supabase/tests/seasonal_operational_separation_m7_publish_pglite.mjs",
     "test:seasonal-operational-m9-schedule": "node supabase/tests/seasonal_operational_separation_m9_schedule_pglite.mjs",
     "test:seasonal-operational-m10-cutover": "node supabase/tests/seasonal_operational_separation_m10_cutover_pglite.mjs",
-    "test:operational-projection-runner": "node --test scripts/operational-projection-runner-contract.test.mjs"
+    "test:seasonal-operational-html-cutover": "node supabase/tests/seasonal_operational_html_cutover_pglite.mjs",
+    "test:operational-projection-runner": "node --test scripts/operational-projection-runner-contract.test.mjs",
+    "test:production-inventory-reconciliation": "node supabase/tests/production_readiness_inventory_reconciliation_pglite.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.4",

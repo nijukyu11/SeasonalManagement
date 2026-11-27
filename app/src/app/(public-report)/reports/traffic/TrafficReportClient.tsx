@@ -57,7 +57,17 @@ function comparisonDelta(current: number | null, previous: number | null, availa
   return ((current - previous) / previous) * 100;
 }
 
-function DeltaPill({ value, label }: { value: ComparisonDelta; label: string }) {
+function DeltaPill({
+  value,
+  label,
+  absDelta,
+  isDropped,
+}: {
+  value: ComparisonDelta;
+  label: string;
+  absDelta?: number | null;
+  isDropped?: boolean;
+}) {
   if (value == null) return null;
   if (value === 'new') {
     return (
@@ -73,7 +83,13 @@ function DeltaPill({ value, label }: { value: ComparisonDelta; label: string }) 
       ? 'bg-emerald-50 text-emerald-800'
       : 'bg-rose-50 text-rose-800';
   const prefix = isZero ? '' : value > 0 ? '+' : '';
-  const formatted = `${prefix}${percentFormat.format(value)}%`;
+  const formattedPct = `${prefix}${percentFormat.format(value)}%`;
+  const absPart = absDelta != null && Number.isFinite(absDelta)
+    ? `${absDelta > 0 ? '+' : ''}${formatNumber(absDelta)}`
+    : null;
+  const formatted = absPart
+    ? `${absPart} (${formattedPct}${isDropped ? ' · Ngừng' : ''})`
+    : formattedPct;
   return (
     <span className={cn('inline-flex min-h-7 max-w-full items-center rounded-full px-2.5 text-pretty text-xs font-semibold leading-4', colorClass)}>
       {label ? `${formatted} · ${label}` : formatted}
@@ -81,23 +97,45 @@ function DeltaPill({ value, label }: { value: ComparisonDelta; label: string }) 
   );
 }
 
-function KpiMetric({ label, value, delta, comparisonLabel, divided = false }: {
+function KpiMetric({
+  label,
+  value,
+  delta,
+  comparisonLabel,
+  divided = false,
+  absDelta,
+  isDropped,
+}: {
   label: string;
   value: number | null;
   delta: ComparisonDelta;
   comparisonLabel: string;
   divided?: boolean;
+  absDelta?: number | null;
+  isDropped?: boolean;
 }) {
   return (
     <div className={cn('min-w-0', divided && 'border-l border-slate-200 pl-4')}>
       <dt className="text-pretty text-xs font-semibold leading-5 text-slate-600">{label}</dt>
       <dd className="mt-1 text-2xl font-bold text-slate-950 tabular-nums sm:text-3xl">{formatNumber(value)}</dd>
-      {delta != null ? <div className="mt-3"><DeltaPill value={delta} label={comparisonLabel} /></div> : null}
+      {delta != null ? <div className="mt-3"><DeltaPill value={delta} label={comparisonLabel} absDelta={absDelta} isDropped={isDropped} /></div> : null}
     </div>
   );
 }
 
-function KpiCard({ label, flights, pax, flightDelta, paxDelta, comparisonLabel, insight }: {
+function KpiCard({
+  label,
+  flights,
+  pax,
+  flightDelta,
+  paxDelta,
+  comparisonLabel,
+  insight,
+  flightAbsDelta,
+  paxAbsDelta,
+  flightDropped,
+  paxDropped,
+}: {
   label: string;
   flights: number | null;
   pax: number | null;
@@ -105,14 +143,18 @@ function KpiCard({ label, flights, pax, flightDelta, paxDelta, comparisonLabel, 
   paxDelta: ComparisonDelta;
   comparisonLabel: string;
   insight?: string | null;
+  flightAbsDelta?: number | null;
+  paxAbsDelta?: number | null;
+  flightDropped?: boolean;
+  paxDropped?: boolean;
 }) {
   return (
     <article className="report-card flex min-w-0 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" aria-label={`${label}: ${formatNumber(flights)} chuyến bay, sản lượng khách ${formatNumber(pax)}`}>
       <div>
         <h3 className="text-balance text-lg font-bold text-blue-950">{label}</h3>
         <dl className="mt-4 grid grid-cols-2 gap-4">
-          <KpiMetric label="Sản lượng chuyến bay" value={flights} delta={flightDelta} comparisonLabel={comparisonLabel} />
-          <KpiMetric label="Sản lượng khách" value={pax} delta={paxDelta} comparisonLabel={comparisonLabel} divided />
+          <KpiMetric label="Sản lượng chuyến bay" value={flights} delta={flightDelta} comparisonLabel={comparisonLabel} absDelta={flightAbsDelta} isDropped={flightDropped} />
+          <KpiMetric label="Sản lượng khách" value={pax} delta={paxDelta} comparisonLabel={comparisonLabel} divided absDelta={paxAbsDelta} isDropped={paxDropped} />
         </dl>
       </div>
       {insight ? (
@@ -314,6 +356,17 @@ export default function TrafficReportClient() {
   const comparisonLabel = comparison?.mode === 'year_ago' ? 'cùng kỳ năm trước' : 'kỳ trước liền kề';
   const comparisonAvailable = current?.status === 'complete' && comparison?.status === 'complete';
   const insights = bundle ? buildInsights(bundle) : null;
+  const currentReportedLegs = current?.reported_legs ?? bundle?.kpis.pax_coverage.reported_legs ?? null;
+  const avgPaxCurrent = currentReportedLegs && currentReportedLegs > 0 && current?.reported_pax != null
+    ? Math.round(current.reported_pax / currentReportedLegs)
+    : null;
+  const comparisonReportedLegs = comparison?.reported_legs ?? null;
+  const avgPaxComparison = comparisonReportedLegs && comparisonReportedLegs > 0 && comparison?.reported_pax != null
+    ? Math.round(comparison.reported_pax / comparisonReportedLegs)
+    : null;
+  const comparisonRange = comparison && normalizedFilter?.comp !== 'none' && comparison.from && comparison.to
+    ? { from: comparison.from, to: comparison.to, mode: comparison.mode }
+    : null;
   const fleetRows = useMemo(() => {
     if (!bundle) return [];
     const aircraftTypes = bundle.breakdowns.aircraft_type ?? [];
@@ -370,6 +423,19 @@ export default function TrafficReportClient() {
       window.removeEventListener('afterprint', handleAfterPrint);
     };
   }, []);
+  useEffect(() => {
+    const bar = document.querySelector<HTMLElement>('[data-report-sticky-bar]');
+    if (!bar) return;
+    const updateHeight = () => {
+      document.documentElement.style.setProperty('--report-filter-bar-height', `${bar.offsetHeight}px`);
+    };
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(bar);
+    return () => {
+      observer.disconnect();
+    };
+  }, [bundle]);
   return (
     <>
       <h1 className="sr-only">Báo cáo sản lượng khai thác</h1>
@@ -416,6 +482,28 @@ export default function TrafficReportClient() {
                 {typeof bundle.source_watermark === 'number' ? <p>Nguồn {readVersion === 'v2' ? 'mới nhất' : 'bản lưu'} · điểm mốc {numberFormat.format(bundle.source_watermark)}</p> : null}
               </div>
             </div>
+            <div className="report-verdict-banner mt-6 rounded-2xl border border-blue-200 bg-blue-50/70 p-4 sm:p-5">
+              <div className="flex items-start gap-3">
+                <div className="shrink-0 rounded-lg bg-blue-900 p-2 text-white shadow-sm">
+                  <svg className="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3v18h18" /><path d="m19 9-5 5-4-4-3 3" /></svg>
+                </div>
+                <div className="min-w-0 flex-1 text-sm leading-6 text-slate-800">
+                  <p className="font-bold text-blue-950">Nhận định tổng quan kỳ báo cáo</p>
+                  <p className="mt-1">
+                    Toàn mạng đạt <strong className="font-semibold text-slate-950">{formatNumber(current?.flights)}</strong> chuyến bay
+                    {comparisonAvailable && current?.flights != null && comparison?.flights != null ? (
+                      <span className="text-slate-600"> ({current.flights - comparison.flights >= 0 ? '+' : ''}{formatNumber(current.flights - comparison.flights)} chuyến bay{comparison.flights > 0 ? `, ${current.flights >= comparison.flights ? '+' : ''}${percentFormat.format(((current.flights - comparison.flights) / comparison.flights) * 100)}%` : ''} so với {comparisonLabel})</span>
+                    ) : null}
+                    {' '}và <strong className="font-semibold text-slate-950">{formatNumber(current?.reported_pax)}</strong> lượt khách
+                    {comparisonAvailable && current?.reported_pax != null && comparison?.reported_pax != null ? (
+                      <span className="text-slate-600"> ({current.reported_pax - comparison.reported_pax >= 0 ? '+' : ''}{formatNumber(current.reported_pax - comparison.reported_pax)} khách{comparison.reported_pax > 0 ? `, ${current.reported_pax >= comparison.reported_pax ? '+' : ''}${percentFormat.format(((current.reported_pax - comparison.reported_pax) / comparison.reported_pax) * 100)}%` : ''} so với {comparisonLabel})</span>
+                    ) : null}
+                    {avgPaxCurrent != null ? <>. Khách TB/chuyến: <strong className="font-semibold text-slate-950">{formatNumber(avgPaxCurrent)}</strong> khách/chuyến</> : null}
+                    .{insights?.topAirlineNote ? ` ${insights.topAirlineNote}` : ''}
+                  </p>
+                </div>
+              </div>
+            </div>
             <div className="mt-6 grid gap-4 lg:grid-cols-3">
               <KpiCard
                 label="Tổng"
@@ -423,6 +511,10 @@ export default function TrafficReportClient() {
                 pax={current?.reported_pax ?? null}
                 flightDelta={comparisonDelta(current?.flights ?? null, comparison?.flights ?? null, comparisonAvailable)}
                 paxDelta={comparisonDelta(current?.reported_pax ?? null, comparison?.reported_pax ?? null, comparisonAvailable)}
+                flightAbsDelta={comparisonAvailable && current?.flights != null && comparison?.flights != null ? current.flights - comparison.flights : null}
+                paxAbsDelta={comparisonAvailable && current?.reported_pax != null && comparison?.reported_pax != null ? current.reported_pax - comparison.reported_pax : null}
+                flightDropped={comparisonAvailable && (comparison?.flights ?? 0) > 0 && current?.flights === 0}
+                paxDropped={comparisonAvailable && (comparison?.reported_pax ?? 0) > 0 && current?.reported_pax === 0}
                 comparisonLabel={comparisonLabel}
                 insight={insights?.peakDayNote}
               />
@@ -432,6 +524,10 @@ export default function TrafficReportClient() {
                 pax={current?.arrival_reported_pax ?? null}
                 flightDelta={comparisonDelta(current?.arrivals ?? null, comparison?.arrivals ?? null, comparisonAvailable)}
                 paxDelta={comparisonDelta(current?.arrival_reported_pax ?? null, comparison?.arrival_reported_pax ?? null, comparisonAvailable)}
+                flightAbsDelta={comparisonAvailable && current?.arrivals != null && comparison?.arrivals != null ? current.arrivals - comparison.arrivals : null}
+                paxAbsDelta={comparisonAvailable && current?.arrival_reported_pax != null && comparison?.arrival_reported_pax != null ? current.arrival_reported_pax - comparison.arrival_reported_pax : null}
+                flightDropped={comparisonAvailable && (comparison?.arrivals ?? 0) > 0 && current?.arrivals === 0}
+                paxDropped={comparisonAvailable && (comparison?.arrival_reported_pax ?? 0) > 0 && current?.arrival_reported_pax === 0}
                 comparisonLabel={comparisonLabel}
                 insight={insights?.arrivalPeakNote}
               />
@@ -441,6 +537,10 @@ export default function TrafficReportClient() {
                 pax={current?.departure_reported_pax ?? null}
                 flightDelta={comparisonDelta(current?.departures ?? null, comparison?.departures ?? null, comparisonAvailable)}
                 paxDelta={comparisonDelta(current?.departure_reported_pax ?? null, comparison?.departure_reported_pax ?? null, comparisonAvailable)}
+                flightAbsDelta={comparisonAvailable && current?.departures != null && comparison?.departures != null ? current.departures - comparison.departures : null}
+                paxAbsDelta={comparisonAvailable && current?.departure_reported_pax != null && comparison?.departure_reported_pax != null ? current.departure_reported_pax - comparison.departure_reported_pax : null}
+                flightDropped={comparisonAvailable && (comparison?.departures ?? 0) > 0 && current?.departures === 0}
+                paxDropped={comparisonAvailable && (comparison?.departure_reported_pax ?? 0) > 0 && current?.departure_reported_pax === 0}
                 comparisonLabel={comparisonLabel}
                 insight={insights?.departurePeakNote}
               />
@@ -500,6 +600,7 @@ export default function TrafficReportClient() {
               readVersion={readVersion}
               expectedWatermark={expectedWatermark}
               readVersionToken={readVersionToken}
+              comparisonRange={comparisonRange}
               onVersionChanged={reloadVersionedBundle}
               onScopeChange={(marketType) => updateViewState({ marketType })}
               onMarketDimensionChange={(marketDimension) => updateViewState({ marketDimension })}
@@ -515,11 +616,11 @@ export default function TrafficReportClient() {
               readVersion={readVersion}
               expectedWatermark={expectedWatermark}
               readVersionToken={readVersionToken}
+              comparisonRange={comparisonRange}
               onVersionChanged={reloadVersionedBundle}
               onScopeChange={(airlineType) => updateViewState({ airlineType })}
             />
           </div>
-
 
           <section>
             <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">

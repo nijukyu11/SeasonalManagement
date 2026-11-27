@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   computePlanningKpi,
+  loadDashboardOverviewSource,
   loadSeasonalPlanningSource,
   loadFullSeasonalDraftSource,
   loadFullSeasonalPublishedSource,
 } from './planningDashboardSource.ts';
 import type { SeasonalDraftRecord } from './seasonalPlanningContract.ts';
+import type { FlightRecord, FlightModification } from './types.ts';
 
 function makeFlight(override: Partial<SeasonalDraftRecord>): SeasonalDraftRecord {
   return {
@@ -281,4 +283,93 @@ test('loadSeasonalPlanningSource handles published vs draft dispatch cleanly', a
   assert.equal(loadResult.identity.sourceKind, 'draft');
   assert.equal(loadResult.identity.draftRevision, '5');
   assert.equal(loadResult.flights.length, 1);
+});
+
+test('legacy dashboard mode reads effective workspace records without calling planning V1', async () => {
+  const legacyRecord = {
+    id: 'legacy-1',
+    draftId: 'legacy-draft-1',
+    linkId: 'link-1',
+    type: 'D',
+    airline: 'VN',
+    flightNumber: '101',
+    rawFlightNumber: 'VN101',
+    requestStatusCode: null,
+    route: 'SGN-HAN',
+    schedule: '10:00',
+    aircraft: 'A321',
+    category: 'J',
+    flightType: 'PAX',
+    codeShares: null,
+    intDomInd: 'D',
+    pax: 10,
+    gate: null,
+    stand: null,
+    counter: null,
+    carousel: null,
+    mct: null,
+    fb: null,
+    lb: null,
+    bhs: null,
+    ghs: null,
+    date: '2026-10-15',
+    scheduledDate: '2026-10-15',
+    scheduledTime: '10:00',
+    dayOfWeek: 4,
+    action: null,
+    sourceRowIndex: 1,
+    sourceKind: 'seasonal',
+    sourceSide: 'DEP',
+    status: 'active',
+  } as FlightRecord;
+  const deletedRecord = { ...legacyRecord, id: 'deleted', draftId: undefined };
+  const modifications = new Map<string, FlightModification>([
+    ['legacy-1', { legId: 'legacy-1', action: 'modified', schedule: '11:00', pax: 25 }],
+    ['deleted', { legId: 'deleted', action: 'deleted' }],
+  ]);
+  let legacyCalls = 0;
+  let planningCalls = 0;
+
+  const result = await loadDashboardOverviewSource({
+    seasonId: 'season-1',
+    planningV1Enabled: false,
+    sourceKind: 'draft',
+    legacyTransportFn: async () => {
+      legacyCalls += 1;
+      return { records: [legacyRecord, deletedRecord], modifications };
+    },
+    draftTransportFn: async () => {
+      planningCalls += 1;
+      throw new Error('must not call planning V1 in legacy mode');
+    },
+  });
+
+  assert.equal(legacyCalls, 1);
+  assert.equal(planningCalls, 0);
+  assert.equal(result.status, 'success');
+  assert.equal(result.identity.sourceKind, 'draft');
+  assert.equal(result.flights.length, 1);
+  assert.equal(result.flights[0]?.schedule, '11:00');
+  assert.equal(result.flights[0]?.pax, 25);
+  assert.equal(result.flights[0]?.status, 'active');
+});
+
+test('planning V1 dashboard mode never falls back to legacy workspace on RPC errors', async () => {
+  let legacyCalls = 0;
+  await assert.rejects(
+    loadDashboardOverviewSource({
+      seasonId: 'season-1',
+      planningV1Enabled: true,
+      sourceKind: 'draft',
+      draftTransportFn: async () => {
+        throw new Error('permission denied');
+      },
+      legacyTransportFn: async () => {
+        legacyCalls += 1;
+        return { records: [], modifications: new Map() };
+      },
+    }),
+    /permission denied/,
+  );
+  assert.equal(legacyCalls, 0);
 });

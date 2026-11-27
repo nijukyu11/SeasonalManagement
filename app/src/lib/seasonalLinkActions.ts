@@ -16,9 +16,10 @@ export interface SeasonalLinkCandidateGroup extends SeasonalLinkGroup {
   recordIds: Iterable<string>;
 }
 
-export interface SeasonalLinkFilters {
-  dateFrom?: string;
-  dateTo?: string;
+export interface DetailedRouteSelection {
+  token: string;
+  dateFrom: string;
+  dateTo: string;
 }
 
 export interface SeasonalLinkCandidate {
@@ -169,7 +170,7 @@ export function buildSeasonalLinkCandidates(
 export function buildSeasonalLinkRoute(
   seasonId: string,
   group: SeasonalLinkGroup,
-  filters: SeasonalLinkFilters = {}
+  selection: DetailedRouteSelection
 ): string {
   const params = new URLSearchParams();
   params.set('season', seasonId);
@@ -180,8 +181,9 @@ export function buildSeasonalLinkRoute(
   if (group.depFlightNumber) {
     params.set('depFlight', `${group.airline}${cleanRouteFlightNumber(group.depFlightNumber)}`);
   }
-  if (filters.dateFrom) params.set('dateFrom', filters.dateFrom);
-  if (filters.dateTo) params.set('dateTo', filters.dateTo);
+  params.set('scope', selection.token);
+  params.set('dateFrom', selection.dateFrom);
+  params.set('dateTo', selection.dateTo);
 
   return `/detailed?${params.toString()}`;
 }

@@ -79,6 +79,11 @@ export function formatPointPct(value: number | null | undefined): string {
   return `${prefix}${pts.toFixed(2)} pts`;
 }
 
+export function formatPaxDisplay(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '-';
+  return Number(value).toLocaleString('en-US');
+}
+
 export interface DashboardOverviewInput {
   records: FlightRecord[];
   routeCountries?: RouteCountryMapping[];

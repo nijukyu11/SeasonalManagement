@@ -2,9 +2,9 @@
 
 import { Suspense, useState, useEffect, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { TrafficReportModePanel } from '@/app/(desktop)/dashboard/components/TrafficReportModePanel';
 import {
   buildDashboardComparison,
+  formatPaxDisplay,
   formatPct,
   formatPointPct,
   getDashboardOperationalDate,
@@ -266,10 +266,7 @@ function ReportsContent() {
   const searchParams = useSearchParams();
   const seasonParam = searchParams?.get('season') ?? null;
 
-  // Active sub-tab in Reports
-  const [activeTab, setActiveTab] = useState<'traffic-report' | 'comparison'>('traffic-report');
-
-  // Seasons & Records state for Comparison tab
+  // Seasons & Records state for Comparison
   const [seasons, setSeasons] = useState<Season[]>([]);
   const [selectedSeasonId, setSelectedSeasonId] = useState<string>('');
   const [loadedSeasonId, setLoadedSeasonId] = useState<string | null>(null);
@@ -571,7 +568,7 @@ function ReportsContent() {
         (periodKey(record, comparisonMode, comparisonGranularityForBuild) === activeCurrentPeriod || periodKey(record, comparisonMode, comparisonGranularityForBuild) === activePreviousPeriod) &&
         dimensionValue(record, dimension, timeBasis, routeCountries) === selectedDriver.key
       ))
-      .sort((a, b) => a.date.localeCompare(b.date) || a.schedule.localeCompare(b.schedule));
+      .sort((a, b) => getDashboardOperationalDate(a).localeCompare(getDashboardOperationalDate(b)) || a.schedule.localeCompare(b.schedule));
   }, [
     activeCurrentPeriod,
     activePreviousPeriod,
@@ -692,7 +689,7 @@ function ReportsContent() {
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-100 print:h-auto print:overflow-visible">
-      {/* Top Header & Sub-tab Switcher */}
+      {/* Top Header */}
       <header className="flex-none border-b border-slate-200 bg-white px-5 py-3 shadow-sm dark:border-slate-800 dark:bg-slate-900 print:hidden">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -705,41 +702,11 @@ function ReportsContent() {
             </div>
           </div>
 
-          {/* Sub-tab navigation */}
-          <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-100 p-1 dark:border-slate-700 dark:bg-slate-800">
-            <button
-              type="button"
-              onClick={() => setActiveTab('traffic-report')}
-              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                activeTab === 'traffic-report'
-                  ? 'bg-white text-primary shadow-sm dark:bg-slate-900 dark:text-primary-light'
-                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
-              }`}
-            >
-              <span className="material-symbols-outlined text-[16px]">bar_chart</span>
-              <span>Báo cáo sản lượng</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('comparison')}
-              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
-                activeTab === 'comparison'
-                  ? 'bg-white text-primary shadow-sm dark:bg-slate-900 dark:text-primary-light'
-                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
-              }`}
-            >
-              <span className="material-symbols-outlined text-[16px]">compare_arrows</span>
-              <span>So sánh sản lượng (MoM / WoW / YoY)</span>
-            </button>
-          </div>
         </div>
       </header>
 
       {/* Main Body */}
       <main className="flex-1 overflow-y-auto p-4 sm:p-5 print:h-auto print:overflow-visible">
-        {activeTab === 'traffic-report' ? (
-          <TrafficReportModePanel />
-        ) : (
           <div className="space-y-4">
             {/* Season & Control Bar for Comparison */}
             <section className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm dark:border-slate-800 dark:bg-slate-900 print:hidden">
@@ -989,13 +956,39 @@ function ReportsContent() {
               </div>
             )}
 
+            {/* Executive Verdict banner */}
+            {comparison && (
+              <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 text-xs sm:text-sm text-slate-700 dark:text-slate-200 leading-relaxed">
+                <div>
+                  Kỳ hiện tại ({comparison.periodLabels.current}) đạt <span className="font-bold text-slate-900 dark:text-white">{formatValue(comparison.current.total)}</span> {metric === 'pax' ? 'khách' : 'chuyến'} ({formatDelta(comparison.delta)}, {formatPct(comparison.deltaPct)} so với {comparison.periodLabels.previous}).
+                  {topGain ? (
+                    <> Tăng mạnh nhất: <span className="font-semibold text-emerald-700 dark:text-emerald-400">{topGain.label}</span> ({formatDelta(topGain.delta)}).</>
+                  ) : null}
+                  {topDrag ? (
+                    <> Kéo giảm nhất: <span className="font-semibold text-rose-700 dark:text-rose-400">{topDrag.label}</span> ({formatDelta(topDrag.delta)}).</>
+                  ) : null}
+                </div>
+                {metric === 'pax' ? (() => {
+                  const currentReportedLegs = comparison.current.recordCount - comparison.current.missingPaxCount;
+                  const previousReportedLegs = comparison.previous.recordCount - comparison.previous.missingPaxCount;
+                  const currentAvgPax = currentReportedLegs > 0 && comparison.current.total !== null ? Math.round(comparison.current.total / currentReportedLegs) : null;
+                  const previousAvgPax = previousReportedLegs > 0 && comparison.previous.total !== null ? Math.round(comparison.previous.total / previousReportedLegs) : null;
+                  return (
+                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      Khách TB/chuyến (chặng có khách): hiện tại <span className="font-semibold text-slate-700 dark:text-slate-300">{currentAvgPax !== null ? `${currentAvgPax.toLocaleString('en-US')} khách/chuyến` : '-'}</span> so với kỳ trước <span className="font-semibold text-slate-700 dark:text-slate-300">{previousAvgPax !== null ? `${previousAvgPax.toLocaleString('en-US')} khách/chuyến` : '-'}</span>.
+                    </div>
+                  );
+                })() : null}
+              </section>
+            )}
+
             {/* 7 KPI Cards */}
             <section className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
               {[
                 { label: 'Hiện tại', value: formatValue(comparison?.current.total ?? 0), sub: comparison?.periodLabels.current ?? '-' },
                 { label: 'Kỳ trước', value: formatValue(comparison?.previous.total ?? 0), sub: comparison?.periodLabels.previous ?? '-' },
-                { label: 'Chênh lệch', value: formatDelta(comparison?.delta ?? 0), sub: comparison?.periodLabels.current ?? '-' },
-                { label: 'Chênh lệch %', value: formatPct(comparison?.deltaPct ?? null), sub: comparison?.periodLabels.previous ?? '-' },
+                { label: 'Chênh lệch', value: formatDelta(comparison?.delta ?? 0), sub: 'Hiện tại − Kỳ trước' },
+                { label: 'Chênh lệch %', value: formatPct(comparison?.deltaPct ?? null), sub: comparison?.periodLabels.previous ? `So với ${comparison.periodLabels.previous}` : '-' },
                 { label: 'Tăng mạnh nhất', value: topGain ? topGain.label : '-', sub: topGain ? formatDelta(topGain.delta) : '-' },
                 { label: 'Kéo giảm nhất', value: topDrag ? topDrag.label : '-', sub: topDrag ? formatDelta(topDrag.delta) : '-' },
                 { label: 'Top CTG', value: topCtg ? topCtg.label : '-', sub: topCtg ? formatPointPct(topCtg.ctgPct) : '-' },
@@ -1363,26 +1356,51 @@ function ReportsContent() {
                         <thead className="sticky top-0 bg-slate-100 text-[10px] font-bold uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                           <tr>
                             <th className="px-2 py-1.5 text-left">Ngày</th>
+                            <th className="px-2 py-1.5 text-left">Kỳ</th>
                             <th className="px-2 py-1.5 text-left">Chuyến</th>
-                            <th className="px-2 py-1.5 text-left">Loại</th>
+                            <th className="px-2 py-1.5 text-center">Loại</th>
                             <th className="px-2 py-1.5 text-left">Tuyến</th>
-                            <th className="px-2 py-1.5 text-left">Giờ</th>
-                            <th className="px-2 py-1.5 text-left">Tàu bay</th>
+                            <th className="px-2 py-1.5 text-center">Giờ</th>
+                            <th className="px-2 py-1.5 text-center">Tàu bay</th>
                             <th className="px-2 py-1.5 text-right">Khách</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                          {displayedSelectedRecords.map((r, i) => (
-                            <tr key={`${r.id}-${i}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                              <td className="px-2 py-1 text-slate-600 dark:text-slate-400">{r.date}</td>
-                              <td className="px-2 py-1 font-bold text-slate-900 dark:text-white">{r.flightNumber}</td>
-                              <td className="px-2 py-1">{r.type === 'A' ? 'Đến' : 'Đi'}</td>
-                              <td className="px-2 py-1 text-slate-600 dark:text-slate-400">{r.route}</td>
-                              <td className="px-2 py-1">{r.schedule}</td>
-                              <td className="px-2 py-1 text-slate-500">{r.aircraft}</td>
-                              <td className="px-2 py-1 text-right font-medium">{r.pax || '-'}</td>
-                            </tr>
-                          ))}
+                          {displayedSelectedRecords.map((r, i) => {
+                            const isCurrent = periodKey(r, comparisonMode, comparisonGranularityForBuild) === activeCurrentPeriod;
+                            const opsDate = getDashboardOperationalDate(r);
+                            return (
+                              <tr key={`${r.id}-${i}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                <td className="px-2 py-1 text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                                  {opsDate}
+                                  {opsDate !== r.date ? (
+                                    <span className="ml-1 text-[10px] text-slate-400 dark:text-slate-500">
+                                      (lịch {r.date})
+                                    </span>
+                                  ) : null}
+                                </td>
+                                <td className="px-2 py-1 whitespace-nowrap">
+                                  <span
+                                    className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                      isCurrent
+                                        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
+                                        : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                                    }`}
+                                  >
+                                    {isCurrent ? 'Hiện tại' : 'Kỳ trước'}
+                                  </span>
+                                </td>
+                                <td className="px-2 py-1 font-bold text-slate-900 dark:text-white">{r.flightNumber}</td>
+                                <td className="px-2 py-1 text-center">{r.type === 'A' ? 'Đến' : 'Đi'}</td>
+                                <td className="px-2 py-1 text-slate-600 dark:text-slate-400">{r.route}</td>
+                                <td className="px-2 py-1 text-center">{r.schedule}</td>
+                                <td className="px-2 py-1 text-center text-slate-500">{r.aircraft}</td>
+                                <td className="px-2 py-1 text-right font-medium">
+                                  {formatPaxDisplay(r.pax)}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -1402,7 +1420,6 @@ function ReportsContent() {
               </section>
             )}
           </div>
-        )}
       </main>
     </div>
   );

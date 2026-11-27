@@ -4,7 +4,48 @@
 
 begin;
 
--- 1. Capture preimage for select_public_dashboard_correction_candidate_v1
+-- 1. Dynamic preimage capture for select_public_dashboard_correction_candidate_v1
+create table if not exists reporting.operational_projection_migration_preimages_v1 (
+  migration_tag text not null,
+  function_schema text not null,
+  function_name text not null,
+  function_signature text not null,
+  function_definition text not null,
+  function_owner text not null,
+  function_acl text,
+  captured_at timestamp with time zone not null default clock_timestamp(),
+  primary key (migration_tag, function_schema, function_name, function_signature)
+);
+
+revoke all on reporting.operational_projection_migration_preimages_v1 from public, anon, authenticated;
+grant select, insert, update, delete on reporting.operational_projection_migration_preimages_v1 to service_role;
+
+insert into reporting.operational_projection_migration_preimages_v1 (
+  migration_tag,
+  function_schema,
+  function_name,
+  function_signature,
+  function_definition,
+  function_owner,
+  function_acl
+)
+select
+  '20261008110000',
+  n.nspname,
+  p.proname,
+  pg_catalog.oidvectortypes(p.proargtypes),
+  pg_catalog.pg_get_functiondef(p.oid),
+  r.rolname,
+  p.proacl::text
+from pg_catalog.pg_proc p
+join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+join pg_catalog.pg_roles r on r.oid = p.proowner
+where n.nspname = 'reporting'
+  and p.proname = 'select_public_dashboard_correction_candidate_v1'
+on conflict (migration_tag, function_schema, function_name, function_signature)
+do nothing;
+
+-- Legacy helper capture for gate-OFF runtime delegation
 do $$
 declare
   v_fn text;

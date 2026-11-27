@@ -779,6 +779,7 @@ body:has(.kpi-admin-dialog[open]) {
   tr,
   figure,
   .report-card,
+  .report-verdict-banner,
   article,
   section {
     break-inside: avoid !important;

@@ -11,12 +11,14 @@ import {
   getSeasonalVersionChangesPageV1,
   getSeasonalDraftWindowV1,
   getSeasonalPublishedSnapshotPageV1,
+  getDashboardSeasonData,
 } from '@/lib/remoteStore';
+import { isSeasonalPlanningV1Enabled } from '@/lib/seasonalPlanningContract';
 import { useSeasonWorkspaceStore } from '@/lib/seasonWorkspaceStore';
 import type { Season } from '@/lib/types';
 import type { SeasonalPublishVersionSummary } from '@/lib/seasonalPlanningContract';
 import {
-  loadSeasonalPlanningSource,
+  loadDashboardOverviewSource,
   type PlanningSourceKind,
   type PlanningSourceLoadResult,
 } from '@/lib/planningDashboardSource';
@@ -47,7 +49,8 @@ function PlanningDashboardContent() {
 
   // Tabs: 'overview' | 'changes' (supports legacy view strings via normalizer)
   const [dashboardViewState, setDashboardView] = useSessionState<DashboardView>('dashboard:view', 'overview');
-  const activeTab = normalizeDashboardTab(dashboardViewState);
+  const planningV1Enabled = isSeasonalPlanningV1Enabled();
+  const activeTab = planningV1Enabled ? normalizeDashboardTab(dashboardViewState) : 'overview';
 
   // Seasons state
   const [seasons, setSeasons] = useState<Season[]>([]);
@@ -189,7 +192,12 @@ function PlanningDashboardContent() {
 
   // 2. Load Published Versions for Selected Season
   useEffect(() => {
-    if (!selectedSeasonId) return;
+    if (!planningV1Enabled || !selectedSeasonId) {
+      setRawPublishVersions([]);
+      setLoadedVersionsSeasonId(selectedSeasonId || null);
+      setSelectedBaseVersionId('');
+      return;
+    }
 
     let active = true;
     getSeasonalPublishVersionsV1({ seasonId: selectedSeasonId, pageSize: 100 })
@@ -197,11 +205,7 @@ function PlanningDashboardContent() {
         if (!active) return;
         setRawPublishVersions(res.versions);
         setLoadedVersionsSeasonId(selectedSeasonId);
-        if (res.versions.length > 0) {
-          setSelectedBaseVersionId(res.versions[0].version_id);
-        } else {
-          setSelectedBaseVersionId('');
-        }
+        setSelectedBaseVersionId(res.versions[0]?.version_id ?? '');
       })
       .catch(() => {
         if (!active) return;
@@ -213,21 +217,24 @@ function PlanningDashboardContent() {
     return () => {
       active = false;
     };
-  }, [selectedSeasonId]);
+  }, [planningV1Enabled, selectedSeasonId]);
 
-  // 3. Load Source Flights (Draft or Published Snapshot)
+  // 3. Load the source supported by the selected client/backend contract.
   useEffect(() => {
+    const requestSourceKind = planningV1Enabled ? sourceKind : 'draft';
     if (!selectedSeasonId) return;
-    if (sourceKind === 'published' && !selectedVersionId) return;
+    if (planningV1Enabled && requestSourceKind === 'published' && !selectedVersionId) return;
 
     let active = true;
     const generation = ++sourceLoadGeneration.current;
-    loadSeasonalPlanningSource({
+    loadDashboardOverviewSource({
       seasonId: selectedSeasonId,
-      sourceKind,
-      versionId: sourceKind === 'published' ? selectedVersionId : undefined,
+      planningV1Enabled,
+      sourceKind: requestSourceKind,
+      versionId: requestSourceKind === 'published' ? selectedVersionId : undefined,
       draftTransportFn: getSeasonalDraftWindowV1,
       publishedTransportFn: getSeasonalPublishedSnapshotPageV1,
+      legacyTransportFn: getDashboardSeasonData,
     })
       .then((result) => {
         if (!active || generation !== sourceLoadGeneration.current) return;
@@ -239,8 +246,8 @@ function PlanningDashboardContent() {
         setLoadedSourceResult({
           identity: {
             seasonId: selectedSeasonId,
-            sourceKind,
-            versionId: sourceKind === 'published' ? selectedVersionId : undefined,
+            sourceKind: requestSourceKind,
+            versionId: requestSourceKind === 'published' ? selectedVersionId : undefined,
           },
           seasonId: selectedSeasonId,
           flights: [],
@@ -258,20 +265,22 @@ function PlanningDashboardContent() {
     return () => {
       active = false;
     };
-  }, [selectedSeasonId, sourceKind, selectedVersionId]);
+  }, [planningV1Enabled, selectedSeasonId, sourceKind, selectedVersionId]);
 
-  // Manual refresh of planning source data using authoritative fences
+  // Manual refresh uses the same explicit contract selection as initial load.
   const handleRefreshSource = useCallback(async () => {
     if (!selectedSeasonId) return;
     const generation = ++sourceLoadGeneration.current;
     setIsRefreshing(true);
     try {
-      const result = await loadSeasonalPlanningSource({
+      const result = await loadDashboardOverviewSource({
         seasonId: selectedSeasonId,
-        sourceKind,
-        versionId: sourceKind === 'published' ? selectedVersionId : undefined,
+        planningV1Enabled,
+        sourceKind: planningV1Enabled ? sourceKind : 'draft',
+        versionId: planningV1Enabled && sourceKind === 'published' ? selectedVersionId : undefined,
         draftTransportFn: getSeasonalDraftWindowV1,
         publishedTransportFn: getSeasonalPublishedSnapshotPageV1,
+        legacyTransportFn: getDashboardSeasonData,
       });
       if (generation !== sourceLoadGeneration.current) return;
       setLoadedSourceResult(result);
@@ -286,8 +295,7 @@ function PlanningDashboardContent() {
     } finally {
       if (generation === sourceLoadGeneration.current) setIsRefreshing(false);
     }
-  }, [selectedSeasonId, sourceKind, selectedVersionId]);
-
+  }, [planningV1Enabled, selectedSeasonId, sourceKind, selectedVersionId]);
   useSeasonWorkspaceRefresh({
     seasonId: sourceKind === 'draft' ? selectedSeasonId : null,
     policy: 'background',
@@ -296,7 +304,7 @@ function PlanningDashboardContent() {
   });
 
   useEffect(() => {
-    if (!selectedSeasonId) return;
+    if (!planningV1Enabled || !selectedSeasonId) return;
     if (sourceData.status !== 'success' || loadedVersionsSeasonId !== selectedSeasonId) return;
 
     let active = true;
@@ -356,7 +364,7 @@ function PlanningDashboardContent() {
     return () => {
       active = false;
     };
-  }, [selectedSeasonId, sourceKind, selectedVersionId, publishVersions, selectedBaseVersionId, sourceData.identity.draftEpoch, sourceData.identity.draftRevision, sourceData.status, loadedVersionsSeasonId, comparisonKey]);
+  }, [planningV1Enabled, selectedSeasonId, sourceKind, selectedVersionId, publishVersions, selectedBaseVersionId, sourceData.identity.draftEpoch, sourceData.identity.draftRevision, sourceData.status, loadedVersionsSeasonId, comparisonKey]);
 
   // Available operational dates extracted from loaded source flights
   const availableDates = useMemo(() => {
@@ -382,12 +390,11 @@ function PlanningDashboardContent() {
     return availableDates[0] ?? '';
   }, [selectedOpsDateOverride, availableDates]);
 
-  // Drilldown handler: opens Detailed schedule for Draft (never opens Daily live)
-  const handleDrilldownDetailed = useCallback(() => {
+  const openSeasonal = useCallback(() => {
     if (!selectedSeasonId) return;
-    const dateQuery = selectedOpsDate ? `&date=${encodeURIComponent(selectedOpsDate)}` : '';
-    router.push(`/detailed?season=${encodeURIComponent(selectedSeasonId)}${dateQuery}`);
-  }, [router, selectedSeasonId, selectedOpsDate]);
+    sessionStorage.setItem('activeSeasonId', selectedSeasonId);
+    router.push('/seasonal');
+  }, [router, selectedSeasonId]);
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-100">
@@ -399,7 +406,7 @@ function PlanningDashboardContent() {
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-[24px] text-primary">dashboard</span>
               <span className="text-base font-bold text-slate-900 dark:text-white">
-                Tổng quan kế hoạch
+                {planningV1Enabled ? 'Tổng quan kế hoạch' : 'Tổng quan lịch mùa'}
               </span>
             </div>
 
@@ -433,65 +440,69 @@ function PlanningDashboardContent() {
               </select>
             </div>
 
-            {/* Source Selector: Draft vs Published Version */}
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                Nguồn kế hoạch:
-              </label>
-              <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 dark:border-slate-700 dark:bg-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setSourceKind('draft')}
-                  className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
-                    sourceKind === 'draft'
-                      ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
-                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
-                  }`}
-                >
-                  Bản nháp (hiện hành)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSourceKind('published')}
-                  disabled={publishVersions.length === 0}
-                  className={`rounded-md px-2.5 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                    sourceKind === 'published'
-                      ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
-                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
-                  }`}
-                >
-                  Đã công bố ({publishVersions.length})
-                </button>
-              </div>
-
-              {sourceKind === 'published' && publishVersions.length > 0 && (
-                <select
-                  value={selectedVersionId}
-                  onChange={(e) => setSelectedVersionIdOverride(e.target.value)}
-                  className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                >
-                  {publishVersions.map((v) => (
-                    <option key={v.version_id} value={v.version_id}>
-                      {v.version_tag} ({v.published_at.slice(0, 10)})
-                    </option>
-                  ))}
-                </select>
-              )}
-
-              {/* Manual Refresh Button */}
-              <button
-                type="button"
-                onClick={handleRefreshSource}
-                disabled={isRefreshing || sourceData.status === 'loading'}
-                title="Làm mới dữ liệu nguồn kế hoạch"
-                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-              >
-                <span className={`material-symbols-outlined text-[16px] ${isRefreshing ? 'animate-spin' : ''}`}>
-                  refresh
-                </span>
-                <span>Làm mới</span>
-              </button>
-            </div>
+            {planningV1Enabled ? (
+              <>
+                <div className="flex items-center gap-1.5">
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                  Nguồn kế hoạch:
+                </label>
+                <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 dark:border-slate-700 dark:bg-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setSourceKind('draft')}
+                    className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
+                      sourceKind === 'draft'
+                        ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
+                        : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
+                    }`}
+                  >
+                    Bản nháp (hiện hành)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSourceKind('published')}
+                    disabled={publishVersions.length === 0}
+                    className={`rounded-md px-2.5 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                      sourceKind === 'published'
+                        ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
+                        : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
+                    }`}
+                  >
+                    Đã công bố ({publishVersions.length})
+                  </button>
+                </div>
+                {sourceKind === 'published' && publishVersions.length > 0 && (
+                  <select
+                    value={selectedVersionId}
+                    onChange={(e) => setSelectedVersionIdOverride(e.target.value)}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-900 focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  >
+                    {publishVersions.map((v) => (
+                      <option key={v.version_id} value={v.version_id}>
+                        {v.version_tag} ({v.published_at.slice(0, 10)})
+                      </option>
+                    ))}
+                  </select>
+                )}
+                </div>
+              </>
+            ) : (
+              <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                Nguồn: Lịch mùa hiện hành (workspace cũ). Công bố và so sánh chỉ có ở Planning V1.
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={handleRefreshSource}
+              disabled={isRefreshing || sourceData.status === 'loading'}
+              title="Làm mới dữ liệu nguồn"
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+            >
+              <span className={`material-symbols-outlined text-[16px] ${isRefreshing ? 'animate-spin' : ''}`}>
+                refresh
+              </span>
+              <span>Làm mới</span>
+            </button>
             {/* Date Range Controls */}
             <div className="flex items-center gap-1 text-xs">
               <span className="font-semibold text-slate-500 dark:text-slate-400">Từ:</span>
@@ -516,12 +527,12 @@ function PlanningDashboardContent() {
             {sourceKind === 'draft' ? (
               <button
                 type="button"
-                onClick={handleDrilldownDetailed}
+                onClick={openSeasonal}
                 disabled={!selectedSeasonId}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-primary/90 disabled:opacity-50"
               >
                 <span className="material-symbols-outlined text-[16px]">calendar_month</span>
-                <span>Mở Lịch chi tiết</span>
+                <span>Chọn chuyến tại Lịch mùa</span>
               </button>
             ) : (
               <button
@@ -549,8 +560,9 @@ function PlanningDashboardContent() {
               }`}
             >
               <span className="material-symbols-outlined text-[16px]">overview</span>
-              <span>Tổng quan kế hoạch</span>
+              <span>{planningV1Enabled ? 'Tổng quan kế hoạch' : 'Tổng quan lịch mùa'}</span>
             </button>
+            {planningV1Enabled && (
             <button
               type="button"
               onClick={() => setDashboardView('changes')}
@@ -563,6 +575,7 @@ function PlanningDashboardContent() {
               <span className="material-symbols-outlined text-[16px]">compare_arrows</span>
               <span>Thay đổi kế hoạch</span>
             </button>
+            )}
             <button
               type="button"
               onClick={() => setDashboardView('slot-report')}
@@ -597,7 +610,7 @@ function PlanningDashboardContent() {
             loading={sourceData.status === 'loading'}
             error={sourceData.error}
             isStale={sourceData.isStale}
-            diffSummary={overviewDiffSummary}
+            diffSummary={planningV1Enabled ? overviewDiffSummary : null}
             onViewChangesTab={() => setDashboardView('changes')}
           />
         ) : activeTab === 'slot-report' ? (

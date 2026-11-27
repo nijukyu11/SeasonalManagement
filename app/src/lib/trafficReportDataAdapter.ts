@@ -565,6 +565,8 @@ export function toTrafficReportPresentationBundle(bundle: TrafficV2Bundle): Traf
         reported_pax: current.reportedPax,
         arrival_reported_pax: current.arrivalReportedPax ?? null,
         departure_reported_pax: current.departureReportedPax ?? null,
+        reported_legs: current.reportedLegs,
+        due_legs: current.dueLegs,
         status: current.status,
       },
       comparison: {
@@ -577,6 +579,8 @@ export function toTrafficReportPresentationBundle(bundle: TrafficV2Bundle): Traf
         reported_pax: comparison.reportedPax,
         arrival_reported_pax: comparison.arrivalReportedPax ?? null,
         departure_reported_pax: comparison.departureReportedPax ?? null,
+        reported_legs: comparison.reportedLegs,
+        due_legs: comparison.dueLegs,
         status: comparison.status,
       },
       peak_day: report.peakDay,

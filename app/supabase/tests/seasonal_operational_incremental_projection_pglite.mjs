@@ -20,6 +20,11 @@ const INCREMENTAL_ROLLBACK_NAME = '20261009100000_operational_incremental_projec
 
 const INCREMENTAL_MIGRATION_URL = new URL(`../migrations/${INCREMENTAL_MIGRATION_NAME}`, import.meta.url);
 const INCREMENTAL_ROLLBACK_URL = new URL(`../migrations/${INCREMENTAL_ROLLBACK_NAME}`, import.meta.url);
+const MVCC_MIGRATION_NAME = '20261106090000_operational_projection_mvcc_refresh_v1.sql';
+const MVCC_ROLLBACK_NAME = '20261106090000_operational_projection_mvcc_refresh_v1.rollback.sql';
+
+const MVCC_MIGRATION_URL = new URL(`../migrations/${MVCC_MIGRATION_NAME}`, import.meta.url);
+const MVCC_ROLLBACK_URL = new URL(`../migrations/${MVCC_ROLLBACK_NAME}`, import.meta.url);
 
 const { db, asWriter, asAdmin } = await buildM0Fixture();
 
@@ -90,6 +95,7 @@ try {
   // 1. Rollback & Reapply Idempotency and Preimage Cleanliness
   // =========================================================================
   // A repeated apply must preserve the original callable rollback target.
+  const earlierPreimages = (await db.query("select * from reporting.operational_projection_migration_preimages_v1 where migration_tag <> '20261009100000' order by migration_tag, function_schema, function_name, function_signature")).rows;
   await execFile(INCREMENTAL_MIGRATION_URL);
   await execFile(INCREMENTAL_ROLLBACK_URL);
 
@@ -99,11 +105,11 @@ try {
   `);
   assert.equal(dirtyTableGone.c, 0, 'Dirty scope table cleanly removed on rollback');
 
-  const preimagesGone = await scalar(`
-    select count(*)::integer as c from information_schema.tables
-    where table_schema = 'reporting' and table_name = 'operational_projection_migration_preimages_v1'
-  `);
-  assert.equal(preimagesGone.c, 0, 'Preimages capture table cleanly dropped on rollback');
+  assert.deepEqual(
+    (await db.query("select * from reporting.operational_projection_migration_preimages_v1 where migration_tag <> '20261009100000' order by migration_tag, function_schema, function_name, function_signature")).rows,
+    earlierPreimages,
+    'Incremental rollback preserves rollback data owned by other migrations'
+  );
   await query('select reporting.refresh_operational_canonical_legs_v1()');
   assert.equal((await scalar('select is_fresh from reporting.operational_projection_status_v1()')).is_fresh, true, 'Rollback after repeated apply restores a working original refresh');
 
@@ -368,6 +374,81 @@ try {
   const afterReconciledRunDue = (await scalar('select reporting.operational_projection_reconcile_due_v1() as due')).due;
   assert.equal(afterReconciledRunStatus.is_fresh, true, 'Refresh resolves full reconciliation');
   assert.equal(afterReconciledRunDue, false, 'Refresh resets reconcile_due');
+
+  // =========================================================================
+  // 11. Forward MVCC Migration, Rollback & Transaction Lock Non-Exclusive Safety
+  // =========================================================================
+  // Apply MVCC forward migration
+  await execFile(MVCC_MIGRATION_URL);
+
+  // Idempotency: re-applying MVCC migration succeeds without drift error
+  await execFile(MVCC_MIGRATION_URL);
+
+  // Rollback restores preimage cleanly
+  await execFile(MVCC_ROLLBACK_URL);
+
+  // Verify function restored and workable
+  await query('select reporting.refresh_operational_canonical_legs_v1(true)');
+  assert.equal((await scalar('select is_fresh from reporting.operational_projection_status_v1()')).is_fresh, true, 'Rollback restored operational refresh');
+
+  // Re-apply forward migration
+  await execFile(MVCC_MIGRATION_URL);
+
+  // Behavioral test 1: Full reconcile acquires NO AccessExclusiveLock on read-facing tables
+  // In a transaction, execute full refresh and check pg_locks for AccessExclusiveLock
+  await asAdmin();
+  await db.exec('begin;');
+  await db.query('select reporting.refresh_operational_canonical_legs_v1(true);');
+  const accessExclusiveLocks = await query(`
+    select c.relname, l.mode
+    from pg_locks l
+    join pg_class c on c.oid = l.relation
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'reporting'
+      and c.relname in (
+        'operational_canonical_flight_legs',
+        'operational_canonical_flight_legs_quarantine',
+        'canonical_flight_legs',
+        'canonical_flight_legs_quarantine',
+        'operational_projection_dirty_scope_v1'
+      )
+      and l.mode = 'AccessExclusiveLock'
+  `);
+  assert.equal(accessExclusiveLocks.length, 0, 'No AccessExclusiveLock held on projection tables during full reconcile');
+
+  // Verify that RowExclusiveLock IS held (confirming MVCC delete/insert took place)
+  const rowExclusiveLocks = await query(`
+    select c.relname
+    from pg_locks l
+    join pg_class c on c.oid = l.relation
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'reporting'
+      and c.relname in (
+        'operational_canonical_flight_legs',
+        'canonical_flight_legs'
+      )
+      and l.mode = 'RowExclusiveLock'
+  `);
+  assert.ok(rowExclusiveLocks.length > 0, 'RowExclusiveLock held indicating concurrent-safe MVCC write');
+  await db.exec('commit;');
+
+  // Behavioral test 2: Empty-branch full reconciliation behaves identically under MVCC delete
+  await asAdmin();
+  await db.exec("update public.operational_flight_legs set status='deleted', deletion_reason='mvcc_empty_scope_test', linked_leg_id=null, link_type=null, pair_anchor_date=null;");
+  await query('select reporting.refresh_operational_canonical_legs_v1(true)');
+  const emptyOperationalCount = (await scalar('select count(*)::integer as c from reporting.operational_canonical_flight_legs')).c;
+  const emptyCanonicalCount = (await scalar('select count(*)::integer as c from reporting.canonical_flight_legs')).c;
+  const emptyQuarantineCount = (await scalar('select count(*)::integer as c from reporting.operational_canonical_flight_legs_quarantine')).c;
+  const emptyDirtyCount = (await scalar('select count(*)::integer as c from reporting.operational_projection_dirty_scope_v1')).c;
+  const emptyState = await scalar('select is_fresh, leg_count, quarantine_count from reporting.operational_projection_status_v1()');
+
+  assert.equal(emptyOperationalCount, 0, 'Empty branch clears operational canonical legs');
+  assert.equal(emptyCanonicalCount, 0, 'Empty branch clears canonical flight legs mirror');
+  assert.equal(emptyQuarantineCount, 0, 'Empty branch clears quarantine table');
+  assert.equal(emptyDirtyCount, 0, 'Empty branch drains dirty scope queue');
+  assert.equal(emptyState.is_fresh, true, 'Empty branch marks state fresh');
+  assert.equal(emptyState.leg_count, 0, 'Empty branch state leg_count is 0');
+  assert.equal(emptyState.quarantine_count, 0, 'Empty branch state quarantine_count is 0');
   console.log('Operational Incremental Projection Behavioral Suite PASS: replacement/removal/zero, NULL/0 pax, date move/year, counterpart dirty propagation, quarantine parity, rollback/reapply, fail-closed concurrency races, gate OFF/ON parity, and periodic reconcile.');
 } finally {
   await db.close();

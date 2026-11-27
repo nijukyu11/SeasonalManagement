@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { buildM0Fixture, M0_FIXTURE } from './seasonal_operational_separation_fixture.mjs';
+import { rollbackChainMigrationsAfter, stripPsqlMetaCommands } from './seasonal_operational_separation_test_support.mjs';
 
 const MIGRATION_NAME = '20260929120000_seasonal_operational_reader_cutover_v1.sql';
 const MIGRATION_URL = new URL(`../migrations/${MIGRATION_NAME}`, import.meta.url);
@@ -21,11 +22,11 @@ const ctx = await buildM0Fixture();
 const { db } = ctx;
 
 try {
-  await db.exec(await readFile(new URL('../migrations/20261009100000_operational_incremental_projection_v1.rollback.sql', import.meta.url), 'utf8'));
+  await rollbackChainMigrationsAfter(db, MIGRATION_NAME);
   // --- 0. Rollback Clean State Check ---------------------------------------
   console.log('Testing rollback cleanliness prior to applying migration...');
   await db.exec(await readFile(MIGRATION_URL, 'utf8'));
-  await db.exec(await readFile(ROLLBACK_URL, 'utf8'));
+  await db.exec(stripPsqlMetaCommands(await readFile(ROLLBACK_URL, 'utf8')));
 
   const stateTableAbsent = (
     await db.query(`select to_regclass('reporting.operational_reader_cutover_state') is null as absent`)
@@ -572,13 +573,14 @@ try {
   console.log('Phase 8: Executing rollback migration...');
   const rollbackCtx = await buildM0Fixture();
   try {
+    await rollbackChainMigrationsAfter(rollbackCtx.db, MIGRATION_NAME);
     const consumerQuery = `
       select public.get_public_annual_passenger_kpi_version_v1(2026) as version,
              public.get_public_annual_passenger_kpi_v1(2026, date '2026-06-30') as kpi,
              reporting.select_public_dashboard_candidate_v1(timestamptz '2026-07-01 09:00:00+07') as candidate
     `;
     const consumersBeforeRollback = (await rollbackCtx.db.query(consumerQuery)).rows[0];
-    await rollbackCtx.db.exec(await readFile(ROLLBACK_URL, 'utf8'));
+    await rollbackCtx.db.exec(stripPsqlMetaCommands(await readFile(ROLLBACK_URL, 'utf8')));
     assert.deepEqual(
       (await rollbackCtx.db.query(consumerQuery)).rows[0],
       consumersBeforeRollback,

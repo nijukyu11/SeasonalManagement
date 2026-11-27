@@ -352,7 +352,7 @@ try {
   // --------------------------------------------------------------------------
   const rollbackUrl = new URL('../migrations/20261011120000_seasonal_version_changes_v1.rollback.sql', import.meta.url);
   const migrationUrl = new URL('../migrations/20261011120000_seasonal_version_changes_v1.sql', import.meta.url);
-
+  const impactSortMigrationUrl = new URL('../migrations/20261018120000_seasonal_version_changes_impact_sort_v1.sql', import.meta.url);
   await asAdmin();
   await db.exec(await readFile(rollbackUrl, 'utf8'));
 
@@ -361,13 +361,13 @@ try {
 
   // Reapply migration
   await db.exec(await readFile(migrationUrl, 'utf8'));
-
+  await db.exec(await readFile(impactSortMigrationUrl, 'utf8'));
   // Functional after reapply
   await asWriter();
   const postReapply = await rpc('get_seasonal_version_changes_page_v1', '$1::uuid,$2::uuid', [v2Id, v1Id]);
   assert.equal(postReapply.summary.totalChanges, 6, 'Reapplied migration works identically');
   assert.equal(postReapply.totalRows, 3);
-
+  assert.ok(postReapply.entries[0].occurrence_count >= postReapply.entries[1].occurrence_count, 'Groups sorted by occurrence_count DESC');
   console.log('seasonal_version_changes_pglite: ALL BEHAVIORAL CHECKS PASSED');
 } catch (e) {
   throw new Error(`${e.message} [${e.code ?? ''}] ${e.where ?? ''}\n${e.stack ?? ''}`, { cause: e });

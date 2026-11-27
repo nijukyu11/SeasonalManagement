@@ -6,7 +6,7 @@ import type { sumHtmlMetrics, compareHtmlMetrics } from './trafficHtmlReportCont
 export function mountTrafficHtmlReport(data: HtmlEnvelope, helpers: {
   sum: typeof sumHtmlMetrics; compare: typeof compareHtmlMetrics;
   pivot?: (tab?: string, search?: string) => void;
-  syncState?: { summaryTab?: string; lastTab?: string; lastSearch?: string; fromMode?: string };
+  syncState?: { summaryTab?: string; pivotTab?: string; lastTab?: string; lastSearch?: string; direction?: string; metric?: string; filters?: Record<string, string[]>; fromMode?: string };
 }) {
   type Tab = { id:string; label:string; dataset:HtmlResource['dataset']; levels:string[]; filters:string[]; analysis?:boolean; frequency?:boolean; peaks?:boolean };
   type State = { metric:string; direction:string; pairs:string[]; filters:Record<string,string>; search:string; sort:string; order:string; expanded:Set<string>; collapsed:Set<string>; depth:number; page:number; time:string };
@@ -16,7 +16,7 @@ export function mountTrafficHtmlReport(data: HtmlEnvelope, helpers: {
   const el=<K extends keyof HTMLElementTagNameMap>(tag:K,text?:string,cls?:string)=>{
     const node=document.createElement(tag); if(text!==undefined) node.textContent=text; if(cls) node.className=cls; return node;
   };
-  const fmt=(value:number|null|undefined,decimal=false)=>value==null?'—':new Intl.NumberFormat('vi-VN',{maximumFractionDigits:decimal?2:0}).format(value);
+  const fmt=(value:number|null|undefined,decimal=false)=>typeof value === 'number' && Number.isFinite(value)?new Intl.NumberFormat('vi-VN',{maximumFractionDigits:decimal?2:0}).format(value):'—';
   const date=(value:string)=>`${value.slice(8,10)}/${value.slice(5,7)}/${value.slice(0,4)}`;
   const range=(p:HtmlPeriod)=>`${date(p.from)} – ${date(p.to)} (${p.calendar_days} ngày)`;
   const titles:Record<string,string>={WEEKLY_DETAIL:'Báo cáo tuần chi tiết',MASTER_OPERATIONS:'Báo cáo tổng hợp khai thác',MONTHLY_OVERVIEW_L2:'Tổng quan khai thác tháng',PERIOD_ANALYSIS:'Phân tích theo kỳ',BAO_CAO_SAN_LUONG:'Báo cáo sản lượng'};
@@ -62,17 +62,32 @@ export function mountTrafficHtmlReport(data: HtmlEnvelope, helpers: {
     const matched = tabs.find(t => t.id === targetTabId);
     if(matched) active = matched;
   }
-  if(helpers.syncState?.lastSearch) {
-    const curState = states.get(active.id);
-    if(curState) curState.search = helpers.syncState.lastSearch;
+  const curState = states.get(active.id);
+  if(curState && helpers.syncState) {
+    if(helpers.syncState.lastSearch !== undefined) curState.search = helpers.syncState.lastSearch;
+    if(helpers.syncState.direction && ['all','A','D','each'].includes(helpers.syncState.direction)) curState.direction = helpers.syncState.direction;
+    if(helpers.syncState.metric && ['both','flights','reported_pax'].includes(helpers.syncState.metric)) curState.metric = helpers.syncState.metric;
+    if(helpers.syncState.filters) {
+      for(const [k, arr] of Object.entries(helpers.syncState.filters)) {
+        if(Array.isArray(arr) && arr.length === 1 && active.filters.includes(k)) curState.filters[k] = arr[0];
+      }
+    }
   }
   const root=document.getElementById('report')!;
-  const header=el('header'); header.append(el('h1',titles[report]));
-  header.append(el('p',`${range(periods.get('current')!)} · ${data.normalized_request.time_basis==='utc'?'Giờ UTC':'Giờ địa phương'}`));
+  const header=el('header');
+  const topRow=el('div',undefined,'header-main');
+  const titleBox=el('div',undefined,'header-title-box');
+  titleBox.append(el('h1',titles[report]),el('span',`${range(periods.get('current')!)} · ${data.normalized_request.time_basis==='utc'?'Giờ UTC':'Giờ địa phương'}`,'header-sub'));
+  topRow.append(titleBox);
+  header.append(topRow);
+  const metaRow=el('div',undefined,'header-meta-row');
   const fixedFilters=[['Hãng',data.normalized_request.airlines],['Chặng',data.normalized_request.routes],['Quốc gia',data.normalized_request.countries]] as const;
   const fixedText=fixedFilters.filter(([,values])=>values.length).map(([label,values])=>`${label}: ${values.join(', ')}`).join(' · ');
-  if(fixedText) header.append(el('p',`Phạm vi đã xuất: ${fixedText}`));
-  header.append(el('p','Hành khách là số đã ghi nhận. Dấu — nghĩa là chưa có số liệu; kỳ lịch bay tương lai không phải sản lượng đã thực hiện.','notice'));
+  if(fixedText){const s=el('span',`Phạm vi đã xuất: ${fixedText}`,'meta-item meta-scope');s.title=s.textContent!;metaRow.append(s);}
+  const completedOpsDate=data.data_as_of?data.data_as_of.slice(0,10):'';
+  if(completedOpsDate)metaRow.append(el('span',`Chốt Ops Date: ${date(completedOpsDate)}`,'meta-item meta-badge'));
+  metaRow.append(el('span','Hành khách là số đã ghi nhận. Dấu — nghĩa là chưa có số liệu; kỳ lịch bay tương lai không phải sản lượng đã thực hiện.','meta-item meta-note notice'));
+  header.append(metaRow);
   const nav=el('nav',undefined,'tabs controls'); nav.setAttribute('aria-label','Các bảng báo cáo');
   const main=el('main'); main.id='main';
   root.replaceChildren(header,nav,main);
@@ -222,6 +237,12 @@ export function mountTrafficHtmlReport(data: HtmlEnvelope, helpers: {
   }
   function render() {
     const s=states.get(active.id)!;const focused=document.activeElement as HTMLElement|null;const savedFocus=focused?.dataset.group;
+    if(helpers.syncState){
+      helpers.syncState.summaryTab=active.id;helpers.syncState.lastTab=active.id;helpers.syncState.lastSearch=s.search;
+      helpers.syncState.direction=s.direction;helpers.syncState.metric=s.metric;
+      const fObj:Record<string,string[]>={};for(const [k,v] of Object.entries(s.filters))if(v)fObj[k]=[v];
+      helpers.syncState.filters=fObj;
+    }
     const savedLabel=main.contains(focused)?focused?.getAttribute('aria-label'):null;
     const savedFold=focused?.dataset.fold;const restoreFold=()=>{if(savedFold)[...main.querySelectorAll<HTMLButtonElement>('button[data-fold]')].find(b=>b.dataset.fold===savedFold)?.focus({preventScroll:true});};
     nav.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.tab===active.id)));
@@ -316,7 +337,16 @@ export function mountTrafficHtmlReport(data: HtmlEnvelope, helpers: {
     const kpi=(period:string,d:Direction)=>resources.get(`${period}/kpi`)!.rows.find(r=>r.direction===d)!;
     const overview=(target:HTMLElement,p:HtmlPeriod,b:HtmlPeriod)=>{
       const section=el('section',undefined,'weekly-summary');pairNote(section,p,b);
-      const body=tableFrame(section,['Chỉ tiêu',b.id==='current'?'Tuần báo cáo':'Tuần trước',p.id==='next'?'Tuần kế tiếp':'Tuần báo cáo','Chênh lệch','Thay đổi','Bình quân/ngày']);
+      const aAll=kpi(p.id,'all'),bMetric=kpi(b.id,'all');const sentences:string[]=[];
+      for(const key of ['flights','reported_pax'] as const){
+        const isFuturePax = p.id==='next' && p.contains_future && key==='reported_pax';
+        const c=isFuturePax ? { delta: null, percent: null, provisional: false } : compare(aAll,bMetric,key),label=key==='flights'?'Tổng chuyến':'Tổng khách';
+        if(c.percent!==null)sentences.push(`${label} ${c.percent===0?'không đổi':`${c.percent>0?'tăng':'giảm'} ${percentageFormat.format(Math.abs(c.percent)*100)}%`} so với ${b.id==='current'?'tuần báo cáo':'tuần trước'}${p.id==='next'?' (theo lịch bay dự kiến)':''}.`);
+        else if(c.delta!==null && c.delta>0)sentences.push(`${label} mới khai thác (${signed(c.delta)}) so với ${b.id==='current'?'tuần báo cáo':'tuần trước'}.`);
+        else sentences.push(isFuturePax ? 'Tổng khách: tuần kế tiếp có lịch bay tương lai, chưa thực hiện.' : `${label}: chưa đủ cơ sở tính % thay đổi.`);
+      }
+      section.append(el('p',sentences.join(' '),'weekly-reading'));
+      const body=tableFrame(section,['Chỉ tiêu',b.id==='current'?'Tuần báo cáo':'Tuần trước',p.id==='next'?'Tuần kế tiếp':'Tuần báo cáo','Chênh lệch','Thay đổi','TB/ngày kỳ trước','TB/ngày kỳ này']);
       for(const d of ['A','D','all'] as Direction[])for(const key of ['flights','reported_pax'] as const){
         const a=kpi(p.id,d),base=kpi(b.id,d);
         const isFuturePax = p.id==='next' && p.contains_future && key==='reported_pax';
@@ -325,20 +355,33 @@ export function mountTrafficHtmlReport(data: HtmlEnvelope, helpers: {
         const label=key==='flights'?(d==='all'?'Tổng chuyến':`Chuyến ${d==='A'?'đến':'đi'}`):(d==='all'?'Tổng khách':`Khách ${d==='A'?'đến':'đi'}`);
         tr.dataset.measure=`${d}-${key}`;const th=el('th',label,'name');th.scope='row';tr.append(th);
         const diffCls=change.delta===null?'':change.delta>0?'diff-pos':change.delta<0?'diff-neg':'diff-zero';
-        const pctCls=change.percent===null?'':change.percent>0?'diff-pos':change.percent<0?'diff-neg':'diff-zero';
-        numberCell(tr,base[key]);numberCell(tr,a[key]);tr.append(el('td',signed(change.delta),`number ${diffCls}`),el('td',pct(change.percent),`number ${pctCls}`));
+        let pctText=pct(change.percent);
+        let pctCls=change.percent===null?'':change.percent>0?'diff-pos':change.percent<0?'diff-neg':'diff-zero';
+        if(change.delta!==null && change.delta>0 && change.percent===null){pctText='Mới';pctCls='diff-pos';}
+        else if(change.delta!==null && change.delta<0 && (a[key]===0 || (key==='reported_pax' && a.flights===0 && a.flight_coverage!=='missing'))){pctText='Ngừng (-100%)';pctCls='diff-neg';}
+        numberCell(tr,base[key]);numberCell(tr,a[key]);tr.append(el('td',signed(change.delta),`number ${diffCls}`),el('td',pctText,`number ${pctCls}`));
+        numberCell(tr,base[key]===null?null:Math.round(base[key]!/b.calendar_days));
         numberCell(tr,a[key]===null?null:Math.round(a[key]!/p.calendar_days));body.append(tr);
       }
-      section.append(el('p',`Bình quân = sản lượng / ${p.calendar_days} ngày lịch, làm tròn sau khi tính. Ngày thiếu dữ liệu vẫn nằm trong mẫu số.`,'weekly-footnote'));
+      const paxPerFlight=(m:HtmlMetric)=>m.reported_legs>0&&m.reported_pax!==null?Math.round(m.reported_pax/m.reported_legs):null;
+      const basePaxPerFlt=paxPerFlight(bMetric),isFutureNextPax=p.id==='next'&&p.contains_future;
+      const aPaxPerFlt=isFutureNextPax?null:paxPerFlight(aAll);
+      const paxDelta=(aPaxPerFlt!==null&&basePaxPerFlt!==null)?(aPaxPerFlt-basePaxPerFlt):null;
+      const paxPct=(paxDelta!==null&&basePaxPerFlt!==null&&basePaxPerFlt!==0)?paxDelta/basePaxPerFlt:null;
+      const diffClsPax=paxDelta===null?'':paxDelta>0?'diff-pos':paxDelta<0?'diff-neg':'diff-zero';
+      let pctTextPax=pct(paxPct);
+      let pctClsPax=paxPct===null?'':paxPct>0?'diff-pos':paxPct<0?'diff-neg':'diff-zero';
+      if(paxDelta!==null&&paxDelta>0&&paxPct===null){pctTextPax='Mới';pctClsPax='diff-pos';}
+      else if(paxDelta!==null&&paxDelta<0&&aPaxPerFlt===0){pctTextPax='Ngừng (-100%)';pctClsPax='diff-neg';}
+      const trPax=el('tr',undefined,'grand-total');trPax.dataset.measure='all-pax_per_flight';
+      const thPax=el('th','Khách/chuyến','name');thPax.scope='row';trPax.append(thPax);
+      numberCell(trPax,basePaxPerFlt);numberCell(trPax,aPaxPerFlt);
+      trPax.append(el('td',signed(paxDelta),`number ${diffClsPax}`),el('td',pctTextPax,`number ${pctClsPax}`));
+      trPax.append(el('td','—','number'),el('td','—','number'));
+      const foot=el('tfoot');foot.append(trPax);(body.parentElement as HTMLTableElement).append(foot);
+      section.append(el('p',`Bình quân = sản lượng / số ngày lịch, làm tròn sau khi tính. Ngày thiếu dữ liệu vẫn nằm trong mẫu số.`,'weekly-footnote'));
       if(p.calendar_days!==b.calendar_days)section.append(el('p','Hai kỳ khác số ngày; chênh lệch đang so tổng sản lượng, không phải bình quân/ngày.','weekly-footnote'));
-      const a=kpi(p.id,'all'),bMetric=kpi(b.id,'all');const sentences:string[]=[];
-      for(const key of ['flights','reported_pax'] as const){
-        const isFuturePax = p.id==='next' && p.contains_future && key==='reported_pax';
-        const c=isFuturePax ? { delta: null, percent: null, provisional: false } : compare(a,bMetric,key),label=key==='flights'?'Tổng chuyến':'Tổng khách';
-        if(c.percent!==null)sentences.push(`${label} ${c.percent===0?'không đổi':`${c.percent>0?'tăng':'giảm'} ${percentageFormat.format(Math.abs(c.percent)*100)}%`} so với ${b.id==='current'?'tuần báo cáo':'tuần trước'}${p.id==='next'?' (theo lịch bay dự kiến)':''}.`);
-        else sentences.push(isFuturePax ? 'Tổng khách: tuần kế tiếp có lịch bay tương lai, chưa thực hiện.' : `${label}: chưa đủ cơ sở tính % thay đổi.`);
-      }
-      section.append(el('p',sentences.join(' '),'weekly-reading'));target.append(section);
+      target.append(section);
     };
     const controls=el('div',undefined,'weekly-tools controls');
     controls.append(button('In bảng đang xem',()=>window.print()));
@@ -346,8 +389,37 @@ export function mountTrafficHtmlReport(data: HtmlEnvelope, helpers: {
     if(active.dataset==='kpi'){
       main.append(el('p','Sản lượng trong kỳ · Chuyến đến / Chuyến đi / Tổng sản lượng','print-context'));
       overview(main,current,previous);
+      const airlineTab = tabs.find(t=>t.id==='airline');
+      if(airlineTab && previous){
+        const airlineRows=rawRows(airlineTab);
+        const nodes=tree(airlineRows,['airline']);
+        const scores=nodes.map(n=>({
+          label:n.label,
+          deltaPax:compare(measure(n.rows,current.id,'all',airlineTab),measure(n.rows,previous.id,'all',airlineTab),'reported_pax').delta,
+          deltaFlights:compare(measure(n.rows,current.id,'all',airlineTab),measure(n.rows,previous.id,'all',airlineTab),'flights').delta
+        }));
+        const hasPax=scores.some(s=>s.deltaPax!==null&&s.deltaPax!==0);
+        const k=hasPax?'deltaPax':'deltaFlights';
+        const unit=hasPax?'khách':'chuyến';
+        const valid=scores.filter((s):s is typeof s & {[P in typeof k]:number}=>s[k]!==null&&s[k]!==0);
+        const dec=[...valid].filter(s=>s[k]<0).sort((a,b)=>a[k]-b[k]).slice(0,3);
+        const inc=[...valid].filter(s=>s[k]>0).sort((a,b)=>b[k]-a[k]).slice(0,3);
+        if(dec.length||inc.length){
+          const box=el('div',undefined,'weekly-impact weekly-overview-highlights');
+          if(dec.length){
+            const sec=el('section');sec.append(el('h4',`Top hãng giảm ${unit} nhiều nhất`));
+            const ul=el('ul');dec.forEach(item=>ul.append(el('li',`${item.label}: ${signed(item[k])} ${unit}`)));
+            sec.append(ul);box.append(sec);
+          }
+          if(inc.length){
+            const sec=el('section');sec.append(el('h4',`Top hãng tăng ${unit} nhiều nhất`));
+            const ul=el('ul');inc.forEach(item=>ul.append(el('li',`${item.label}: ${signed(item[k])} ${unit}`)));
+            sec.append(ul);box.append(sec);
+          }
+          main.append(box);
+        }
+      }
       const drill=el('div',undefined,'weekly-drill controls');drill.append(el('span','Xem nhóm ảnh hưởng:'));
-      for(const id of ['airline','market','route']){const tab=tabs.find(t=>t.id===id)!;drill.append(button(`Xem ${tab.label.toLocaleLowerCase('vi')}`,()=>{active=tab;render();}));}main.append(drill);
       const upcoming=disclosure('Đối chiếu tuần kế tiếp','overview-next');
       upcoming.append(el('p',next.contains_future?'Có lịch bay tương lai; không xem đây là sản lượng đã thực hiện.':'Số liệu theo phạm vi tuần kế tiếp.','notice'));
       overview(upcoming,next,current);main.append(upcoming);
@@ -408,8 +480,11 @@ export function mountTrafficHtmlReport(data: HtmlEnvelope, helpers: {
       const name=el('th','Chỉ tiêu','name');name.scope='col';band.append(name);for(const label of ['Chuyến bay','Hành khách']){const th=el('th',label);th.colSpan=4;th.scope='colgroup';band.append(th);}head.prepend(band);
       const cells=(tr:HTMLTableRowElement,items:Row[],d:Direction)=>{for(const key of ['flights','reported_pax'] as const){const a=measure(items,p,d,active),base=measure(items,b,d,active),c=compare(a,base,key);
         const diffCls=c.delta===null?'':c.delta>0?'diff-pos':c.delta<0?'diff-neg':'diff-zero';
-        const pctCls=c.percent===null?'':c.percent>0?'diff-pos':c.percent<0?'diff-neg':'diff-zero';
-        numberCell(tr,base[key]);numberCell(tr,a[key]);tr.append(el('td',signed(c.delta),`number ${diffCls}`),el('td',pct(c.percent),`number ${pctCls}`));}};
+        let pctText=pct(c.percent);
+        let pctCls=c.percent===null?'':c.percent>0?'diff-pos':c.percent<0?'diff-neg':'diff-zero';
+        if(c.delta!==null && c.delta>0 && c.percent===null){pctText='Mới';pctCls='diff-pos';}
+        else if(c.delta!==null && c.delta<0 && (a[key]===0 || (key==='reported_pax' && a.flights===0 && a.flight_coverage!=='missing'))){pctText='Ngừng (-100%)';pctCls='diff-neg';}
+        numberCell(tr,base[key]);numberCell(tr,a[key]);tr.append(el('td',signed(c.delta),`number ${diffCls}`),el('td',pctText,`number ${pctCls}`));}};
       const grand=el('tr',undefined,'grand-total');grand.append(el('th','Tổng phạm vi đang lọc','name'));cells(grand,source,direction);body.append(grand);
       const nodes=sorted(tree(source,active.levels),p,b).filter(n=>visibleSearch(n,s.search.toLocaleLowerCase('vi'))),page=Math.min(s.page,Math.max(0,Math.ceil(nodes.length/20)-1));
       const append=(node:Tree,depth:number,parentMatch=false)=>{const query=s.search.toLocaleLowerCase('vi');if(!parentMatch&&!visibleSearch(node,query))return;

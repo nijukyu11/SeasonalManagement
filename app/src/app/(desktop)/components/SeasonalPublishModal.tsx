@@ -8,6 +8,7 @@ import {
   commitSeasonalPublishV1,
 } from '@/lib/remoteStore';
 import { useOperationalScheduleStore } from '@/lib/operationalScheduleAdapter';
+import { setSeasonalPublishActive } from '@/lib/seasonalMutationFences';
 import {
   formatFlightState,
   formatDiffSummary,
@@ -136,12 +137,16 @@ export default function SeasonalPublishModal({
 
   useEffect(() => {
     if (stage !== 'committing') return;
+    setSeasonalPublishActive(true);
     const preventUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', preventUnload);
-    return () => window.removeEventListener('beforeunload', preventUnload);
+    return () => {
+      setSeasonalPublishActive(false);
+      window.removeEventListener('beforeunload', preventUnload);
+    };
   }, [stage]);
 
   const loadNextDiffPage = async () => {

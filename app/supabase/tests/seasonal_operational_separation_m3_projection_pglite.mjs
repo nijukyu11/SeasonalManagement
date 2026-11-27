@@ -23,6 +23,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { buildM0Fixture, captureM0ReadSurfaces, M0_FIXTURE } from './seasonal_operational_separation_fixture.mjs';
+import { rollbackChainMigrationsAfter } from './seasonal_operational_separation_test_support.mjs';
 
 const MIGRATION_NAME = '20260928150000_operational_canonical_projection_v1.sql';
 const MIGRATION_URL = new URL(`../migrations/${MIGRATION_NAME}`, import.meta.url);
@@ -46,6 +47,7 @@ const readProjection = async (table, order = 'ops_date, business_leg_key') =>
   (await request(`select ${LEG_COLUMNS.join(', ')} from reporting.${table} order by ${order}`)).rows;
 
 try {
+  await rollbackChainMigrationsAfter(db, MIGRATION_NAME);
   // --- Rollback drops the whole shadow surface -----------------------------
   await db.exec(await readFile(ROLLBACK_URL, 'utf8'));
   assert.equal(

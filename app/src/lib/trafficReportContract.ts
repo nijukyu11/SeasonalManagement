@@ -45,6 +45,8 @@ export interface TrafficMetricSet {
 export interface TrafficKpiMetricSet extends TrafficMetricSet {
   arrival_reported_pax?: number | null;
   departure_reported_pax?: number | null;
+  reported_legs?: number | null;
+  due_legs?: number | null;
 }
 
 /** Distinct entities with at least one flight inside the filtered period. */

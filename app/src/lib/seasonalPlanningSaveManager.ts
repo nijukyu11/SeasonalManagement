@@ -7,7 +7,7 @@ import {
   type SeasonalDraftRecord,
   type SeasonalDraftWindowResult,
 } from './seasonalPlanningContract.ts';
-import type { FlightLeg, FlightModification, FlightRecord } from './types.ts';
+import type { FlightLeg, FlightModification, FlightRecord, ModHistoryEntry } from './types.ts';
 import { withOperationalFlightMetadata } from './iataSeason.ts';
 import {
   fromFlightRecordRows,
@@ -15,6 +15,109 @@ import {
   type FlightRecordRelationalRow,
   type FlightRecordWindowRelationalRow,
 } from './supabaseRelationalMappers.ts';
+import { useSyncExternalStore } from 'react';
+import { registerOperatorSessionCacheClearer } from './operatorSessionCacheRegistry.ts';
+import { filterUiUndoEntriesForSession, trimUiUndoEntries } from './uiUndoMemory.ts';
+
+export interface SeasonalPlanningRouteGuardState {
+  status: SeasonalDraftSaveStatus;
+  hasUnconfirmedChanges: boolean;
+  canonicalReloadError: string | null;
+  seasonId?: string | null;
+  pendingRequest?: SeasonalDraftPendingRequest | null;
+  lastSavedAt?: number | null;
+  error?: string | null;
+  errorCode?: string | null;
+  modHistory?: ModHistoryEntry[] | null;
+}
+
+const routeGuards = new Map<string, SeasonalPlanningRouteGuardState>();
+const guardListeners = new Set<() => void>();
+
+function notifyGuardListeners(): void {
+  for (const listener of guardListeners) {
+    try {
+      listener();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export function subscribeSeasonalPlanningGuard(listener: () => void): () => void {
+  guardListeners.add(listener);
+  return () => {
+    guardListeners.delete(listener);
+  };
+}
+
+export function isSeasonalPlanningBlockedSync(route?: string, seasonId?: string | null): boolean {
+  if (route) {
+    const state = routeGuards.get(route);
+    if (!state) return false;
+    if (seasonId && state.seasonId && state.seasonId !== seasonId) return false;
+    return state.status === 'saving' || state.hasUnconfirmedChanges || Boolean(state.canonicalReloadError);
+  }
+  for (const state of routeGuards.values()) {
+    if (seasonId && state.seasonId && state.seasonId !== seasonId) continue;
+    if (state.status === 'saving' || state.hasUnconfirmedChanges || Boolean(state.canonicalReloadError)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+
+export function getSeasonalPlanningRouteGuard(route: string): SeasonalPlanningRouteGuardState | null {
+  const state = routeGuards.get(route);
+  return state ? { ...state } : null;
+}
+
+export function getAllSeasonalPlanningRouteGuards(): SeasonalPlanningRouteGuardState[] {
+  return Array.from(routeGuards.values()).map((state) => ({ ...state }));
+}
+
+export function setSeasonalPlanningRouteGuard(
+  route: string,
+  patch: Partial<SeasonalPlanningRouteGuardState> | null,
+): void {
+  if (patch === null) {
+    routeGuards.delete(route);
+  } else {
+    const existing = routeGuards.get(route) ?? {
+      status: 'idle',
+      hasUnconfirmedChanges: false,
+      canonicalReloadError: null,
+      pendingRequest: null,
+      error: null,
+      errorCode: null,
+      modHistory: null,
+    };
+    routeGuards.set(route, { ...existing, ...patch });
+  }
+  notifyGuardListeners();
+}
+
+export function clearSeasonalPlanningRouteGuard(route?: string): void {
+  if (route) {
+    routeGuards.delete(route);
+  } else {
+    routeGuards.clear();
+  }
+  notifyGuardListeners();
+}
+
+export function useSeasonalPlanningBlocked(route?: string, seasonId?: string | null): boolean {
+  return useSyncExternalStore(
+    subscribeSeasonalPlanningGuard,
+    () => isSeasonalPlanningBlockedSync(route, seasonId),
+    () => false,
+  );
+}
+
+registerOperatorSessionCacheClearer('seasonal-planning-guard', () => {
+  clearSeasonalPlanningRouteGuard();
+});
 
 export type SeasonalDraftSaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'stale';
 
@@ -26,6 +129,16 @@ export interface SeasonalDraftSaveResult {
   errorCode?: string | null;
 }
 
+export type SeasonalDraftRecoveryAction =
+  | {
+      kind: 'mutation';
+      historyEntry?: ModHistoryEntry | null;
+    }
+  | {
+      kind: 'undo';
+      undoneEntryIds: string[];
+    };
+
 export interface SeasonalDraftPendingRequest {
   seasonId: string;
   requestId: string;
@@ -34,6 +147,9 @@ export interface SeasonalDraftPendingRequest {
   applyFn: SeasonalDraftApplyFn;
   currentRecords: FlightRecord[];
   baseRecords: FlightRecord[];
+  historyEntry?: ModHistoryEntry | null;
+  recoveryAction?: SeasonalDraftRecoveryAction | null;
+  description?: string | null;
 }
 
 export interface SeasonalDraftSaveState {
@@ -82,6 +198,24 @@ export async function executeSeasonalPlanningDraftSave(
     applyFn: input.applyFn,
     currentRecords: input.currentRecords.map((r) => ({ ...r })),
     baseRecords: input.baseRecords.map((r) => ({ ...r })),
+    historyEntry: input.historyEntry
+      ? { ...input.historyEntry }
+      : (input.recoveryAction?.kind === 'mutation' && input.recoveryAction.historyEntry
+          ? { ...input.recoveryAction.historyEntry }
+          : null),
+    recoveryAction: input.recoveryAction
+      ? (input.recoveryAction.kind === 'undo'
+          ? { kind: 'undo', undoneEntryIds: [...input.recoveryAction.undoneEntryIds] }
+          : {
+              kind: 'mutation',
+              historyEntry: input.recoveryAction.historyEntry
+                ? { ...input.recoveryAction.historyEntry }
+                : (input.historyEntry ? { ...input.historyEntry } : null),
+            })
+      : (input.historyEntry
+          ? { kind: 'mutation', historyEntry: { ...input.historyEntry } }
+          : null),
+    description: input.description ?? input.historyEntry?.description ?? null,
   };
 
   const result = await saveSeasonalPlanningDraft(stableInput);
@@ -118,11 +252,15 @@ export async function executeSeasonalPlanningDraftSave(
 
 export async function retrySeasonalPlanningDraft(
   currentState: SeasonalDraftSaveState,
+  overrideApplyFn?: SeasonalDraftApplyFn,
 ): Promise<{ state: SeasonalDraftSaveState; result: SeasonalDraftSaveResult | null }> {
   if (!currentState.pendingRequest) {
     return { state: currentState, result: null };
   }
-  const saveResult = await executeSeasonalPlanningDraftSave(currentState.pendingRequest);
+  const pendingRequest: SeasonalDraftPendingRequest = overrideApplyFn
+    ? { ...currentState.pendingRequest, applyFn: overrideApplyFn }
+    : currentState.pendingRequest;
+  const saveResult = await executeSeasonalPlanningDraftSave(pendingRequest);
   return {
     state: {
       ...saveResult.state,
@@ -153,6 +291,9 @@ export interface SaveSeasonalPlanningDraftInput {
   requestId?: string;
   applyFn: SeasonalDraftApplyFn;
   changes?: SeasonalDraftChangeInput[];
+  historyEntry?: ModHistoryEntry | null;
+  recoveryAction?: SeasonalDraftRecoveryAction | null;
+  description?: string | null;
 }
 
 
@@ -205,17 +346,6 @@ export function applyModificationsToFlightRecords(
     }
     return record;
   });
-}
-export function isDraftWorkspaceNotFoundError(error: unknown): boolean {
-  if (!error) return false;
-  if (typeof error === 'object') {
-    const err = error as { code?: string; message?: string; details?: string };
-    if (err.code === 'P0002') return true;
-    if (typeof err.message === 'string' && /season not found|P0002/i.test(err.message)) return true;
-    if (typeof err.details === 'string' && /season not found|P0002/i.test(err.details)) return true;
-  }
-  if (typeof error === 'string' && /season not found|P0002/i.test(error)) return true;
-  return false;
 }
 
 export interface SeasonalDraftRecordsSnapshot {
@@ -633,4 +763,73 @@ export function composeSeasonalDraftUndoChanges(
     }
   }
   return result;
+}
+
+export interface ReconcileRecoveredDraftUndoStackOptions {
+  receipt: SeasonalDraftMutationReceipt;
+  pendingRequest: SeasonalDraftPendingRequest;
+  currentHistory: ModHistoryEntry[];
+}
+
+/**
+ * Reconcile undo stack after retrying a previously failed or unconfirmed draft save.
+ * Handles normal mutation recovery (attaching authoritative undo preimages from baseRecords)
+ * as well as recovery of Undo itself (removing undone entries without duplicate stacks).
+ */
+export function reconcileRecoveredDraftUndoStack(
+  options: ReconcileRecoveredDraftUndoStackOptions,
+): ModHistoryEntry[] {
+  const { receipt, pendingRequest, currentHistory } = options;
+
+  if (pendingRequest.recoveryAction?.kind === 'undo') {
+    const undoneIds = new Set(pendingRequest.recoveryAction.undoneEntryIds);
+    return currentHistory.filter((entry) => !undoneIds.has(entry.id));
+  }
+
+  const draftUndoChanges = buildAuthoritativeDraftUndoChanges(
+    receipt,
+    pendingRequest.baseRecords,
+  );
+
+  const historyEntry = pendingRequest.historyEntry ?? (
+    pendingRequest.recoveryAction?.kind === 'mutation'
+      ? pendingRequest.recoveryAction.historyEntry
+      : null
+  );
+
+  const baseRecordsById = new Map(pendingRequest.baseRecords.map((r) => [r.id, r]));
+  const currentRecordsById = new Map(pendingRequest.currentRecords.map((r) => [r.id, r]));
+
+  const entryToRecord: ModHistoryEntry & { draftUndoChanges?: SeasonalDraftChangeInput[] } = historyEntry
+    ? {
+        ...historyEntry,
+        draftUndoChanges,
+      }
+    : {
+        id: `RECOVERED_${pendingRequest.requestId}`,
+        timestamp: Date.now(),
+        description: pendingRequest.description || (
+          pendingRequest.changes.some((c) => c.patch?.status === 'deleted')
+            ? 'Đã xóa lượt bay'
+            : 'Thay đổi kế hoạch mùa'
+        ),
+        changes: [],
+        recordChanges: pendingRequest.changes.map((c) => {
+          const before = baseRecordsById.get(c.draftId) ?? null;
+          const after = currentRecordsById.get(c.draftId) ?? null;
+          return {
+            recordId: c.draftId,
+            previousRecord: before,
+            newRecord: after,
+          };
+        }),
+        draftUndoChanges,
+      };
+
+  // Avoid duplicate stack on canonical reload/replay
+  if (currentHistory.some((entry) => entry.id === entryToRecord.id)) {
+    return currentHistory;
+  }
+
+  return trimUiUndoEntries(filterUiUndoEntriesForSession([entryToRecord, ...currentHistory]));
 }

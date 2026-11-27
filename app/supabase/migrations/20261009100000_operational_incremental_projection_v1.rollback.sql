@@ -85,7 +85,8 @@ begin
 end;
 $$;
 
-drop table if exists reporting.operational_projection_migration_preimages_v1;
+delete from reporting.operational_projection_migration_preimages_v1
+where migration_tag = '20261009100000';
 
 -- 6. Drop added columns from state table
 alter table reporting.operational_canonical_flight_legs_state

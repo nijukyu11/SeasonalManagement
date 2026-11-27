@@ -244,12 +244,20 @@ try {
   await rejected(async () => db.exec(await readFile(safetyRollback, 'utf8')), '55000');
   await db.exec('rollback');
 
-  // Clean up published versions for this test season to test clean rollback
+  // Clean up published versions for this test season to test clean rollback.
+  // Published history is immutable by design; only this admin fixture cleanup bypasses the row guards.
+  const immutableGuards = [
+    ['seasonal_publish_snapshots', 'seasonal_publish_snapshots_guard_trigger'],
+    ['seasonal_published_snapshot_flights', 'seasonal_published_snapshot_flights_guard_trigger'],
+    ['seasonal_publish_versions', 'seasonal_publish_versions_guard_trigger'],
+  ];
+  for (const [table, trigger] of immutableGuards) await db.query(`alter table public.${table} disable trigger ${trigger}`);
   await db.query("delete from public.operational_flight_legs where source_season_id = $1", [season]);
   await db.query("delete from public.seasonal_publish_snapshots where season_id = $1", [season]);
   await db.query("delete from public.seasonal_publish_diff_entries where season_id = $1", [season]);
   await db.query("delete from public.seasonal_publish_previews where season_id = $1", [season]);
   await db.query("delete from public.seasonal_publish_versions where season_id = $1", [season]);
+  for (const [table, trigger] of immutableGuards) await db.query(`alter table public.${table} enable trigger ${trigger}`);
   // Rollback executes cleanly
   await db.exec(await readFile(safetyRollback, 'utf8'));
 

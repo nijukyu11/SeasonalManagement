@@ -431,8 +431,20 @@ function DailyScheduleContent() {
   const [dailyImportCommitting, setDailyImportCommitting] = useState(false);
   const [importProgress, setImportProgress] = useState<DailyImportUploadProgress | null>(null);
   const importAbortControllerRef = useRef<AbortController | null>(null);
-  const [pendingCommittedReceipt, setPendingCommittedReceipt] = useSessionState<DailyImportCommittedResultV2 | null>('daily:committed-receipt-v2', null);
-  const [dailyImportPreviewV2, setDailyImportPreviewV2] = useSessionState<DailyImportStageResultV2 | null>('daily:operational-import-preview', null);
+  const [pendingCommittedReceipt, setPendingCommittedReceipt] = useState<DailyImportCommittedResultV2 | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const operatorId = resolveOperatorId();
+    if (!operatorId) return null;
+    const journal = getActiveDailyUploadJournal(operatorId);
+    return journal?.status === 'committed' && journal.committedResult ? journal.committedResult : null;
+  });
+  const [dailyImportPreviewV2, setDailyImportPreviewV2] = useState<DailyImportStageResultV2 | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const operatorId = resolveOperatorId();
+    if (!operatorId) return null;
+    const journal = getActiveDailyUploadJournal(operatorId);
+    return journal?.status === 'staged' && journal.stagedResult ? journal.stagedResult : null;
+  });
   const [operationalMutating, setOperationalMutatingState] = useState(false);
   const operationalMutatingRef = useRef(false);
   const setOperationalMutating = useCallback((value: boolean) => {
@@ -839,17 +851,21 @@ function DailyScheduleContent() {
   useEffect(() => {
     if (!isOperationalScheduleV1Enabled() || !isActiveRoute) return;
     const operatorId = resolveOperatorId();
+    if (!operatorId) return;
     const activeJournal = getActiveDailyUploadJournal(operatorId);
     if (activeJournal?.status === 'committed' && activeJournal.committedResult) {
       setPendingCommittedReceipt(activeJournal.committedResult);
     } else if (activeJournal?.status === 'staged' && activeJournal.requestId && !dailyImportPreviewV2) {
+      if (activeJournal.stagedResult) {
+        setDailyImportPreviewV2(activeJournal.stagedResult);
+      }
       void getDailyScheduleImportV2Status(activeJournal.requestId).then((staged) => {
-        if (staged && staged.status === 'validated') {
+        if (staged) {
           setDailyImportPreviewV2(staged);
         }
       }).catch(() => undefined);
     }
-  }, [isActiveRoute, dailyImportPreviewV2, setDailyImportPreviewV2, setPendingCommittedReceipt]);
+  }, [isActiveRoute, dailyImportPreviewV2]);
   const rows = useMemo(() => buildDailyScheduleRows({
     records: flightRecords,
     modifications,
@@ -1129,11 +1145,18 @@ function DailyScheduleContent() {
       return;
     }
     if (dailyImporting || operationalWritePending || useOperationalScheduleStore.getState().importing) return;
+    const operatorId = resolveOperatorId();
+    if (!operatorId) {
+      void showAlert({
+        title: 'Yêu cầu đăng nhập',
+        message: 'Vui lòng đăng nhập để thực hiện nhập Lịch ngày.',
+        tone: 'warning',
+      });
+      return;
+    }
     setDailyImporting(true);
     const abortController = new AbortController();
     importAbortControllerRef.current = abortController;
-    const operatorId = resolveOperatorId();
-
     try {
       const parseResult = await parseDailyWorkbookWithWorker(file, {
         onProgress: (p) => setImportProgress(p),
@@ -1142,11 +1165,6 @@ function DailyScheduleContent() {
       });
 
       const { payload } = parseResult;
-
-      const existingSession = payload.rawChecksum ? getDailyUploadJournalByFingerprint(operatorId, payload.rawChecksum) : null;
-      if (existingSession && existingSession.requestId) {
-        payload.requestId = existingSession.requestId;
-      }
 
       const legDates = new Set(payload.legs.map((leg) => leg.operationalDate));
       const zeroDates = payload.affectedDates.filter((date) => !legDates.has(date));
@@ -1793,7 +1811,7 @@ function DailyScheduleContent() {
                 try {
                   await refreshDailyWindow({ revalidate: true });
                   const operatorId = resolveOperatorId();
-                  clearDailyUploadJournal(operatorId);
+                  if (operatorId) clearDailyUploadJournal(operatorId);
                   setPendingCommittedReceipt(null);
                 } catch (err) {
                   void showAlert({ title: 'Tải lại thất bại', message: formatUiError(err), tone: 'error' });
@@ -2158,23 +2176,37 @@ function DailyScheduleContent() {
           result={dailyImportPreviewV2}
           commitEnabled={!operationalWritePending}
           committing={dailyImporting}
-          onCancel={() => {
-            if (useOperationalScheduleStore.getState().importing) return;
+          onCancel={async () => {
+            if (useOperationalScheduleStore.getState().importing || dailyImporting) return;
             const batchId = dailyImportPreviewV2.batchId;
-            const operatorId = resolveOperatorId();
-            clearDailyUploadJournal(operatorId);
-            setDailyImportPreviewV2(null);
             if (dailyImportPreviewV2.status !== 'committed') {
-              void cancelDailyScheduleImportV2(batchId).catch((error) => {
+              setDailyImporting(true);
+              try {
+                await cancelDailyScheduleImportV2(batchId);
+              } catch (error) {
                 void showAlert({ title: 'Hủy thao tác chưa được xác nhận', message: formatUiError(error), tone: 'warning' });
-              });
+                return;
+              } finally {
+                setDailyImporting(false);
+              }
             }
+            const operatorId = resolveOperatorId();
+            if (operatorId) clearDailyUploadJournal(operatorId);
+            setDailyImportPreviewV2(null);
           }}
           onCommit={async () => {
             const pending = useOperationalScheduleStore.getState();
             if (pending.importing || pending.mutating || pending.unresolvedAttempt || dailyImportPreviewV2.status !== 'validated') return;
-            setDailyImporting(true);
             const operatorId = resolveOperatorId();
+            if (!operatorId) {
+              void showAlert({
+                title: 'Yêu cầu đăng nhập',
+                message: 'Vui lòng đăng nhập để lưu đợt nhập.',
+                tone: 'warning',
+              });
+              return;
+            }
+            setDailyImporting(true);
             try {
               let receipt;
               try {
@@ -2193,11 +2225,15 @@ function DailyScheduleContent() {
 
               const activeJournal = getActiveDailyUploadJournal(operatorId);
               if (activeJournal) {
-                saveDailyUploadJournal({
-                  ...activeJournal,
-                  status: 'committed',
-                  committedResult: receipt,
-                });
+                try {
+                  saveDailyUploadJournal({
+                    ...activeJournal,
+                    status: 'committed',
+                    committedResult: receipt,
+                  });
+                } catch {
+                  // Storage failure after committed RPC must NOT overwrite status as failure or delete precommit request.
+                }
               }
 
               setDailyImportPreviewV2(null);
@@ -2205,7 +2241,7 @@ function DailyScheduleContent() {
               setSelectedRowIds(new Set());
               try {
                 await refreshDailyWindow({ revalidate: true });
-                clearDailyUploadJournal(operatorId);
+                if (operatorId) clearDailyUploadJournal(operatorId);
                 setPendingCommittedReceipt(null);
                 void showAlert({ title: 'Hoàn tất nhập Lịch ngày', message: `Đã lưu thành công đợt ${receipt.batchId}.`, tone: 'success' });
               } catch (refreshError) {

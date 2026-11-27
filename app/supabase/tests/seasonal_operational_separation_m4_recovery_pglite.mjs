@@ -26,8 +26,10 @@ for (const name of moduleNames) {
   writeFileSync(path.join(tempDir, `${name}.js`), output.outputText);
 }
 writeFileSync(path.join(tempDir, 'remoteStore.js'), 'module.exports = globalThis.__operationalRecoveryRpc;\n');
+// Native close policy is a Tauri UI concern; the recovery contract only needs its registration hook.
+writeFileSync(path.join(tempDir, 'nativeClosePolicy.js'), 'exports.registerOperationalScheduleCloseReader = () => () => {};\n');
 const loadAdapter = () => {
-  for (const name of [...moduleNames, 'remoteStore']) delete require.cache[path.join(tempDir, `${name}.js`)];
+  for (const name of [...moduleNames, 'remoteStore', 'nativeClosePolicy']) delete require.cache[path.join(tempDir, `${name}.js`)];
   return require(path.join(tempDir, 'operationalScheduleAdapter.js'));
 };
 const storage = (data) => ({
