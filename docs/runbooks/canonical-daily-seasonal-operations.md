@@ -111,3 +111,21 @@ mất khi Replace; bỏ chặn sẽ để file và dòng Add Flight cùng tồn 
 - Overlay `deleted` là nguồn của Undo: không xoá overlay bằng tay để "trả chuyến về". Dùng Undo trong app hoặc `remove_canonical_season_modification_v1`; xoá overlay qua `modificationDelete` sẽ chạy đúng semantics canonical (`manual_undo` cho overlay `added`, phục hồi row cho overlay `deleted`).
 - Row bị import xoá (`daily_replacement`, `daily_authority`, `removed_from_source`), row đã supersede hoặc nằm trong replacement scope reset sẽ không được hồi sinh bởi op — muốn cho bay lại phải dùng flow repair/import tương ứng.
 - Kiểm tra sức khoẻ read-only: `select count(*) from public.season_flight_records r join public.season_modifications m on m.season_id=r.season_id and m.leg_id=r.record_id and m.action='deleted' where public.is_canonical_flight_leg_active_v1(r.status,r.action);` phải trả `0`.
+
+## 9. Seasonal Publish: preview bị hủy do timeout
+
+**Dấu hiệu:** Publish/preview mùa báo `canceling statement due to statement timeout`. PostgREST áp `statement_timeout` của chính hàm (`preview_seasonal_publish_v1` 30s, `commit_seasonal_publish_v1` 45s, `apply_seasonal_draft_changes_v1` 15s), thay cho giá trị 8s của role `authenticated`.
+
+- Khi probe RPC bằng psql, đặt `set local role authenticated; set local statement_timeout='<giá trị của hàm>'`. Probe ở 8s sẽ báo timeout giả.
+- Đo bằng `auto_explain` (`log_nested_statements=on`) trong transaction `ROLLBACK`. Trong hàm SQL, CTE `materialized` được ước lượng khoảng 1 dòng, nên planner chọn nested loop quét lại nhiều lần. Không join CTE với CTE; join set-based hoặc dùng predicate có index trên bảng thật.
+
+### 9.1 Sửa W26 trên production ngày 28/11/2026
+
+- Migration `20261128090000_seasonal_publish_performance_v1.sql`: bước dò va chạm khóa Operations trong `seasonal_publish_operations_v1` từng mất khoảng 11 phút. Migration chuyển sang join set-based, tính tác động một lần và dùng lại kết quả cho preview/commit. Tập draft và kết quả preview không đổi (đã đối chiếu trên bản sao).
+- Đã áp bằng `supabase_admin`. ACL giữ nguyên; preimage trong `reporting.operational_projection_migration_preimages_v1` (tag `20261128090000`) khớp digest gốc. File rollback đã được diễn tập trên production trong transaction `ROLLBACK` và khôi phục digest/ACL byte-exact.
+- Dữ liệu: hoàn tác các sửa tay Detailed ngày 18/11 qua `apply_seasonal_draft_changes_v1`. 12 chuyến về giờ chuẩn (NX977 16:30, NX985 20:20); khôi phục NX977/978 và NX985/986 ngày 29/01, 12/02/2027. Workspace revision 8 → 28.
+- Kiểm chứng: preview W26 trả `ready`, 0 diagnostic, khoảng 8,2s. Tác động: thêm 8, xóa 6 (VZ962/963 ngày 05, 10, 14/12, đã xóa trong Planning từ trước), sửa 4.345.
+- Trong 4.345 dòng sửa có 4.333 dòng `counter_token`: Operations đang lưu nhãn `'grouped'`/`'broken'`. Đây có thể là lỗi do bước backfill cũ coalesce `check_in_allocation_mode`; chưa kiểm chứng. Publish sẽ ghi lại danh sách quầy. `app/src` không đọc cột này; quầy thật nằm ở `operational_leg_counters`.
+- Màn check-in Operations (`apply_operational_resource_changes_v1`) chỉ ghi quầy, giờ check-in và BHS; đã probe trong transaction `ROLLBACK`, ngày/giờ bay không đổi.
+- Chưa publish W26; việc publish do operator quyết định.
+- Migration, rollback, batch sửa, `pre_drafts.json`, receipt và `SHA256SUMS` tại `/home/ops/w26-publish-perf-20261128/`; kiểm SHA256 trên host đã PASS.
