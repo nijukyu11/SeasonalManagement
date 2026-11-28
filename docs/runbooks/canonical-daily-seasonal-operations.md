@@ -127,5 +127,8 @@ mất khi Replace; bỏ chặn sẽ để file và dòng Add Flight cùng tồn 
 - Kiểm chứng: preview W26 trả `ready`, 0 diagnostic, khoảng 8,2s. Tác động: thêm 8, xóa 6 (VZ962/963 ngày 05, 10, 14/12, đã xóa trong Planning từ trước), sửa 4.345.
 - Trong 4.345 dòng sửa có 4.333 dòng `counter_token`: Operations đang lưu nhãn `'grouped'`/`'broken'`. Đây có thể là lỗi do bước backfill cũ coalesce `check_in_allocation_mode`; chưa kiểm chứng. Publish sẽ ghi lại danh sách quầy. `app/src` không đọc cột này; quầy thật nằm ở `operational_leg_counters`.
 - Màn check-in Operations (`apply_operational_resource_changes_v1`) chỉ ghi quầy, giờ check-in và BHS; đã probe trong transaction `ROLLBACK`, ngày/giờ bay không đổi.
-- Chưa publish W26; việc publish do operator quyết định.
+- Đã publish W26 cùng ngày: version `W26-28NOV26` (`02ec714e-9978-48e1-a9dd-50f698c010f5`), preview 8,3s, commit 16,8s, operational revision 2014 → 2024. Planning: thêm 8, xóa 6, sửa 12. Operations: write 17.524, retire 6; bỏ qua 36 ngày Daily authority (20/10–24/11).
+- Sau publish, preview lần hai trả `ready`, 0 thay đổi. NX977/978/985/986 ngày 29/01, 30/01, 12/02 đúng giờ file; VZ962/963 ngày 05, 10, 14/12 có `deletion_reason='seasonal_publish_removed'`.
+- Còn 236 chuyến ngày 25–28/11 giữ `counter_token='grouped'`. Đây là các chuyến có override quầy của operator (`operational_resource_overrides.fields ? 'counters'`) và `operational_leg_counters` vẫn đầy đủ; publish không coi là thay đổi.
+- Tiền trạng Operations (`pre_legs`/`pre_counters`/`pre_windows.jsonl`), SQL publish/verify, log, receipt và `SHA256SUMS` tại `/home/ops/w26-publish-20261128/`; kiểm SHA256 trên host đã PASS.
 - Migration, rollback, batch sửa, `pre_drafts.json`, receipt và `SHA256SUMS` tại `/home/ops/w26-publish-perf-20261128/`; kiểm SHA256 trên host đã PASS.
